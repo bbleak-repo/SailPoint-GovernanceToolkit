@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Runtime output (regenerated each run)
+Logs/
+Evidence/
+Reports/
+*.jsonl
+
+# Large runtime log files
+GovernanceToolkit_*.json
+
+# Vault data (encrypted credentials)
+Data/*.enc
+
+# Keep directory structure with .gitkeep
+!Logs/.gitkeep
+!Evidence/.gitkeep
+!Reports/.gitkeep
+!Data/.gitkeep

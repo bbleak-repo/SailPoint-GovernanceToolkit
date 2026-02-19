@@ -1,0 +1,53 @@
+{
+    "Global": {
+        "EnvironmentName": "CHANGE_ME",
+        "DebugMode": false,
+        "ToolkitVersion": "1.0.0"
+    },
+    "Authentication": {
+        "Mode": "ConfigFile",
+        "ConfigFile": {
+            "TenantUrl": "https://CHANGE_ME.api.identitynow.com",
+            "OAuthTokenUrl": "https://CHANGE_ME.identitynow.com/oauth/token",
+            "ClientId": "CHANGE_ME",
+            "ClientSecret": "CHANGE_ME_DO_NOT_USE_IN_PRODUCTION"
+        },
+        "Vault": {
+            "VaultPath": ".\\Data\\sp-vault.enc",
+            "Pbkdf2Iterations": 600000,
+            "CredentialKey": "sailpoint-isc"
+        }
+    },
+    "Logging": {
+        "Path": ".\\Logs",
+        "FilePrefix": "GovernanceToolkit",
+        "MinimumSeverity": "INFO",
+        "RetentionDays": 30
+    },
+    "Api": {
+        "BaseUrl": "https://CHANGE_ME.api.identitynow.com/v3",
+        "TimeoutSeconds": 60,
+        "RetryCount": 3,
+        "RetryDelaySeconds": 5,
+        "RateLimitRequestsPerWindow": 95,
+        "RateLimitWindowSeconds": 10
+    },
+    "Testing": {
+        "IdentitiesCsvPath": ".\\Config\\test-identities.csv",
+        "CampaignsCsvPath": ".\\Config\\test-campaigns.csv",
+        "EvidencePath": ".\\Evidence",
+        "ReportsPath": ".\\Reports",
+        "DecisionBatchSize": 250,
+        "ReassignSyncMax": 50,
+        "ReassignAsyncMax": 500,
+        "CampaignActivationTimeoutSeconds": 300,
+        "CampaignCompleteTimeoutSeconds": 600,
+        "DefaultDecision": "APPROVE",
+        "WhatIfByDefault": false
+    },
+    "Safety": {
+        "MaxCampaignsPerRun": 10,
+        "RequireWhatIfOnProd": true,
+        "AllowCompleteCampaign": false
+    }
+}

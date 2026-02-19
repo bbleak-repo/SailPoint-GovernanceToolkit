@@ -1,0 +1,5 @@
+IdentityId,DisplayName,Email,Role,CertifierFor,IsReassignTarget
+id-alice-001,Alice Johnson,alice.johnson@lab.local,CertificationOwner,SOURCE_OWNER,false
+id-bob-002,Bob Smith,bob.smith@lab.local,Manager,MANAGER,true
+id-carol-003,Carol White,carol.white@lab.local,Certifier,SEARCH,false
+id-admin-999,Test Admin,testadmin@lab.local,Admin,,true

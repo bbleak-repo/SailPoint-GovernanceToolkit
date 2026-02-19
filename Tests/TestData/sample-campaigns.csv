@@ -1,0 +1,5 @@
+TestId,TestName,CampaignType,CampaignName,CertifierIdentityId,ReassignTargetIdentityId,SourceId,SearchFilter,RoleId,DecisionToMake,ReassignBeforeDecide,ValidateRemediation,ExpectCampaignStatus,Priority,Tags
+TC-001,Source Owner Approve All,SOURCE_OWNER,UAT-SourceOwner-001,id-alice-001,,src-ad-001,,,APPROVE,false,false,COMPLETED,1,smoke
+TC-002,Manager Revoke Subset,MANAGER,UAT-Manager-001,id-bob-002,id-carol-003,,,,REVOKE,true,false,ACTIVE,2,regression
+TC-003,Search Campaign Sign-Off,SEARCH,UAT-Search-001,id-alice-001,,,"attributes.department eq ""HR""",,APPROVE,false,false,COMPLETED,1,regression
+TC-004,Role Composition Test,ROLE_COMPOSITION,UAT-Role-001,id-bob-002,,,,role-id-xyz,APPROVE,false,true,COMPLETED,3,full
