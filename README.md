@@ -107,6 +107,14 @@ The toolkit uses a single `Config\settings.json` file. A complete annotated stru
     "MaxCampaignsPerRun": 10,
     "RequireWhatIfOnProd": true,
     "AllowCompleteCampaign": false
+  },
+  "Audit": {
+    "OutputPath": ".\\Audit",
+    "DefaultDaysBack": 30,
+    "DefaultIdentityEventDays": 2,
+    "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+    "IncludeCampaignReports": true,
+    "IncludeIdentityEvents": true
   }
 }
 ```
@@ -146,6 +154,83 @@ OutputMode options:
 - `JSON` - machine-parseable result object
 - `Both` - console output followed by JSON
 
+### Audit: Invoke-SPCampaignAudit.ps1
+
+Post-campaign audit reporting for certification campaigns. Queries completed or active
+campaigns, collects all certifications and review item decisions, fetches identity lifecycle
+events for revoked identities, and produces per-campaign HTML and text reports plus a
+combined summary and a JSONL audit trail.
+
+**Requirements:** At least one campaign filter must be specified. Without a filter the script
+exits with code 2.
+
+```powershell
+# Audit all campaigns completed in the last 7 days
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7
+
+# Audit a specific campaign by exact name
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Q1 2026 Access Review'
+
+# Audit all campaigns whose name begins with a prefix
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameStartsWith 'Q1'
+
+# Audit active and completed campaigns, write JSON result
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status ACTIVE, COMPLETED -DaysBack 30 -OutputMode JSON
+
+# Use a locally exported campaign report CSV instead of the API
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Annual Review' -CampaignReportCsvPath 'C:\Reports\annual.csv'
+
+# Write output to a custom directory
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -OutputPath 'D:\AuditReports'
+```
+
+**Output structure (default: .\Audit\):**
+
+```
+Audit\
+    <CampaignName>\
+        <CampaignName>_audit.html     # Per-campaign HTML report
+        <CampaignName>_summary.txt    # Per-campaign text summary
+    CampaignAudit_<CorrelationID>.html  # Combined HTML report (all campaigns)
+    CampaignAudit_<CorrelationID>.jsonl # JSONL audit trail
+```
+
+**Per-campaign HTML report sections:**
+- Campaign metadata (status, dates, certifier count)
+- Decision summary table (Approved / Revoked / Pending counts)
+- Reviewer action log (primary certifiers and reassignments, with sign-off proof)
+- Identity lifecycle events for revoked identities (provisioning removals)
+- Correlation ID footer for cross-referencing toolkit logs
+
+**JSONL audit trail format (one JSON object per line):**
+
+```json
+{"CorrelationID":"...","CampaignId":"camp-abc","CampaignName":"Q1 Review","AuditedAt":"...","ApproveCount":45,"RevokeCount":12,"PendingCount":0}
+```
+
+**Configuration (settings.json Audit section):**
+
+```json
+"Audit": {
+    "OutputPath": ".\\Audit",
+    "DefaultDaysBack": 30,
+    "DefaultIdentityEventDays": 2,
+    "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+    "IncludeCampaignReports": true,
+    "IncludeIdentityEvents": true
+}
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Audit completed successfully |
+| 1 | No campaigns matched the filter criteria |
+| 2 | Parameter error (no campaign filter specified) |
+| 3 | Authentication or API error |
+| 4 | Configuration error (settings.json missing or invalid) |
+
 ### Vault: New-SPVault.ps1
 
 One-time setup to store OAuth credentials in an encrypted vault (recommended for non-development environments).
@@ -175,10 +260,11 @@ Launches the WPF interactive dashboard (Windows only, requires .NET Framework 4.
 .\Scripts\Show-SPDashboard.ps1 -ConfigPath 'C:\Toolkit\Config\settings.json'
 ```
 
-The dashboard provides three tabs:
+The dashboard provides four tabs:
 - **Campaigns** - load CSV data, select and run tests, view progress and results
 - **Evidence** - browse Evidence/ folder, view JSONL events in a grid
 - **Settings** - edit all settings.json fields with form validation, test connectivity
+- **Audit** - query campaigns, select for audit, generate HTML compliance reports
 
 ---
 
@@ -251,6 +337,7 @@ JSONL format (one event per line):
 SailPoint-GovernanceToolkit/
     Scripts/                             # Thin-wrapper CLI entry points
         Invoke-GovernanceTest.ps1        # Primary test runner
+        Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting
         Test-SPConnectivity.ps1          # Quick smoke test (config -> token -> API)
         New-SPVault.ps1                  # One-time vault setup
         Show-SPDashboard.ps1             # WPF GUI launcher
@@ -270,6 +357,10 @@ SailPoint-GovernanceToolkit/
             SP.TestLoader.psm1           # CSV ingestion and cross-validation
             (SP.TestRunner.psm1)         # Test suite execution engine
 
+        SP.Audit/                        # Post-campaign audit reporting layer
+            SP.AuditQueries.psm1         # Campaign/cert/item/event API queries
+            SP.AuditReport.psm1          # Decision grouping, HTML/text/JSONL export
+
         SP.Gui/                          # WPF presentation layer
             SP.GuiBridge.psm1            # GUI-to-module bridge adapter
             SP.MainWindow.psm1           # WPF window host + event wiring
@@ -279,6 +370,7 @@ SailPoint-GovernanceToolkit/
         CampaignTab.xaml
         EvidenceTab.xaml
         SettingsTab.xaml
+        AuditTab.xaml
 
     Config/
         settings.json                    # Runtime configuration
@@ -295,7 +387,8 @@ SailPoint-GovernanceToolkit/
 - `SP.Core` has no dependencies on other toolkit modules
 - `SP.Api` depends on `SP.Core` only
 - `SP.Testing` depends on `SP.Core` and `SP.Api`
-- `SP.Gui` depends on all three lower layers
+- `SP.Audit` depends on `SP.Core` and `SP.Api` only (same level as SP.Testing)
+- `SP.Gui` depends on SP.Core, SP.Api, SP.Testing, and SP.Audit (Audit tab bridge functions)
 - Scripts are thin wrappers: module load -> config -> WhatIf guard -> dispatch
 
 ---

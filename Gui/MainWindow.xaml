@@ -403,6 +403,231 @@
                 </Grid>
             </TabItem>
 
+            <!-- Audit Tab -->
+            <TabItem Header="Audit" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="AuditTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Query filters -->
+                        <RowDefinition Height="*"/>     <!-- Row 1: Campaign results DataGrid -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 2: Audit options + run buttons -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent audit reports -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Query filters -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="Campaign:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <TextBox Grid.Column="1" x:Name="TxtAuditCampaignName"
+                                 Width="200" Background="#2D2D44" Foreground="#888899"
+                                 BorderBrush="#3D3D5C" BorderThickness="1"
+                                 Padding="6,4" FontSize="12"
+                                 Text="Filter by name..."
+                                 Margin="0,0,8,0"/>
+
+                        <TextBlock Grid.Column="2" Text="Status:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <ComboBox Grid.Column="3" x:Name="CboAuditStatus"
+                                  Width="120" Background="#2D2D44"
+                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                  SelectedIndex="0" Margin="0,0,8,0" FontSize="12">
+                            <ComboBoxItem Content="(All)" IsSelected="True"/>
+                            <ComboBoxItem Content="COMPLETED"/>
+                            <ComboBoxItem Content="ACTIVE"/>
+                            <ComboBoxItem Content="STAGED"/>
+                            <ComboBoxItem Content="COMPLETING"/>
+                        </ComboBox>
+
+                        <TextBlock Grid.Column="4" Text="Timespan:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <ComboBox Grid.Column="5" x:Name="CboAuditTimespan"
+                                  Width="90" Background="#2D2D44"
+                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                  SelectedIndex="2" Margin="0,0,8,0" FontSize="12">
+                            <ComboBoxItem Content="1 day"  Tag="1"/>
+                            <ComboBoxItem Content="2 days" Tag="2"/>
+                            <ComboBoxItem Content="3 days" Tag="3" IsSelected="True"/>
+                            <ComboBoxItem Content="5 days" Tag="5"/>
+                        </ComboBox>
+
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="6"/>
+
+                        <Button Grid.Column="7" x:Name="BtnQueryCampaigns"
+                                Content="Query Campaigns"
+                                Style="{StaticResource ToolkitButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="8" x:Name="BtnClearFilter"
+                                Content="Clear"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 1: Campaign results DataGrid -->
+                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                        <DataGrid x:Name="AuditCampaignGrid"
+                                  AutoGenerateColumns="False"
+                                  Background="#2D2D44"
+                                  Foreground="#E0E0E0"
+                                  BorderThickness="0"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#3D3D5C"
+                                  RowBackground="#2D2D44"
+                                  AlternatingRowBackground="#252538"
+                                  SelectionMode="Extended"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  IsReadOnly="False"
+                                  HeadersVisibility="Column"
+                                  ColumnHeaderHeight="32"
+                                  RowHeight="28"
+                                  Margin="2">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="Background"      Value="#252538"/>
+                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
+                                    <Setter Property="FontWeight"      Value="SemiBold"/>
+                                    <Setter Property="Padding"         Value="8,4"/>
+                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header=""
+                                                        Binding="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                        Width="55"/>
+                                <DataGridTextColumn Header="Campaign Name"
+                                                    Binding="{Binding CampaignName}"
+                                                    Width="*"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Status"
+                                                    Binding="{Binding Status}"
+                                                    Width="100"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Created"
+                                                    Binding="{Binding Created}"
+                                                    Width="140"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Completed"
+                                                    Binding="{Binding Completed}"
+                                                    Width="140"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Certs"
+                                                    Binding="{Binding TotalCertifications}"
+                                                    Width="55"
+                                                    IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+
+                    <!-- Row 2: Audit options + run buttons -->
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <CheckBox Grid.Column="0" x:Name="ChkCampaignReports"
+                                  Content="Include Campaign Reports"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
+
+                        <CheckBox Grid.Column="1" x:Name="ChkIdentityEvents"
+                                  Content="Include Identity Events"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="True" Margin="0,0,8,0" FontSize="12"/>
+
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="2"/>
+
+                        <Button Grid.Column="3" x:Name="BtnRunAudit"
+                                Content="Run Audit"
+                                Style="{StaticResource ToolkitButton}"
+                                IsEnabled="False"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="4" x:Name="BtnOpenAuditFolder"
+                                Content="Open Reports Folder"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 3: Progress bar + status label -->
+                    <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="AuditStatusLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="0,0,12,0"/>
+
+                        <ProgressBar Grid.Column="1" x:Name="AuditProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     Visibility="Collapsed" CornerRadius="4"/>
+
+                        <TextBlock Grid.Column="2" x:Name="AuditProgressPercent"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="8,0,0,0"/>
+                    </Grid>
+
+                    <!-- Row 4: Recent audit reports -->
+                    <Grid Grid.Row="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Recent Audit Reports"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                            <Button Grid.Column="1" x:Name="BtnRefreshAuditReports"
+                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                    Padding="10,4" FontSize="11"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1">
+                            <ListBox x:Name="AuditReportList"
+                                     MaxHeight="120"
+                                     Background="#2D2D44"
+                                     Foreground="#E0E0E0"
+                                     BorderThickness="0"
+                                     Margin="4"
+                                     FontSize="12"/>
+                        </Border>
+                    </Grid>
+
+                </Grid>
+            </TabItem>
+
         </TabControl>
 
         <!-- Status Bar -->

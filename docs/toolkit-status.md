@@ -1,7 +1,7 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-02-19
-**Status:** IMPLEMENTATION COMPLETE -- Pending Windows PS 5.1 Validation
+**Last Updated:** 2026-02-20
+**Status:** IMPLEMENTATION COMPLETE -- SP.Audit + GUI Audit Tab added; Pending Windows PS 5.1 Validation
 **Plan File:** `/Users/xand/.claude/plans/cheeky-brewing-hellman.md`
 
 ---
@@ -9,7 +9,7 @@
 ## Quick Start (New Session)
 
 ```
-Read this file. All 45 files are implemented.
+Read this file. All 52 files are implemented.
 Next step: Run Pester tests on Windows PS 5.1 to validate mock-scoping fixes.
 ```
 
@@ -33,14 +33,15 @@ SP.Core (Config, Logging, Auth, Vault)
     v
 SP.Api (ApiClient, Campaigns, Certifications, Decisions)
     |
-    v
-SP.Testing (TestLoader, BatchRunner, Assertions, Evidence)
+    +----------+
+    v          v
+SP.Testing    SP.Audit (AuditQueries, AuditReport)
     |
     v
 SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 ```
 
-4 modules, 15 .psm1 files, 4 .psd1 manifests, 4 Scripts, 4 XAML files, 11 Pester test files.
+5 modules, 17 .psm1 files, 5 .psd1 manifests, 5 Scripts, 5 XAML files, 13 Pester test files, Config + Docs.
 
 ---
 
@@ -65,20 +66,25 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | SP.Assertions.psm1 | DONE | C |
 | | SP.Evidence.psm1 | DONE (fixed JSONL encoding) | C |
 | | SP.Testing.psd1 | DONE (fixed RequiredModules) | C |
-| **SP.Gui** | SP.MainWindow.psm1 | DONE | D |
-| | SP.GuiBridge.psm1 | DONE | D |
-| | SP.Gui.psd1 | DONE (fixed RequiredModules/Assemblies) | D |
+| **SP.Gui** | SP.MainWindow.psm1 | DONE (added Audit tab wiring) | D |
+| | SP.GuiBridge.psm1 | DONE (added Audit bridge functions) | D |
+| | SP.Gui.psd1 | DONE (fixed RequiredModules/Assemblies, added Audit exports) | D |
+| **SP.Audit** | SP.AuditQueries.psm1 | DONE | C |
+| | SP.AuditReport.psm1 | DONE | C |
+| | SP.Audit.psd1 | DONE | C |
 | **Scripts** | Invoke-GovernanceTest.ps1 | DONE | D |
 | | New-SPVault.ps1 | DONE (fixed SecureString coercion) | D |
 | | Show-SPDashboard.ps1 | DONE | D |
 | | Test-SPConnectivity.ps1 | DONE | D |
+| | Invoke-SPCampaignAudit.ps1 | DONE | C |
 | **Config** | settings.json | DONE | A |
 | | test-identities.csv | DONE | C |
 | | test-campaigns.csv | DONE | C |
-| **GUI XAML** | MainWindow.xaml | DONE | D |
+| **GUI XAML** | MainWindow.xaml | DONE (added Audit tab inline) | D |
 | | CampaignTab.xaml | DONE | D |
 | | EvidenceTab.xaml | DONE | D |
 | | SettingsTab.xaml | DONE | D |
+| | AuditTab.xaml | DONE (design reference) | A/B |
 | **Tests** | SP.Config.Tests.ps1 | DONE - 20/20 PASS | A |
 | | SP.Auth.Tests.ps1 | DONE - needs PS 5.1 | A |
 | | SP.Vault.Tests.ps1 | DONE - 15/15 PASS | A |
@@ -90,14 +96,16 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | SP.BatchRunner.Tests.ps1 | DONE - partial PS 5.1 | C |
 | | SP.Assertions.Tests.ps1 | DONE - needs PS 5.1 | C |
 | | SP.Evidence.Tests.ps1 | DONE - 12/12 PASS | C |
+| | SP.AuditQueries.Tests.ps1 | DONE - 25/25 PASS | C |
+| | SP.AuditReport.Tests.ps1 | DONE - 32/32 PASS | C |
 | | TestData/valid-settings.json | DONE | A |
 | | TestData/sample-identities.csv | DONE | C |
 | | TestData/sample-campaigns.csv | DONE | C |
 | **Docs** | README.md | DONE | D |
 
-### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-19)
+### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-20)
 
-**95 PASS / 55 FAIL / 150 total (63%)**
+**152 PASS / 55 FAIL / 207 total (73%)**
 
 | Test File | Pass | Fail | Notes |
 |-----------|------|------|-------|
@@ -105,6 +113,8 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | SP.Vault.Tests | 15 | 0 | 100% |
 | SP.TestLoader.Tests | 13 | 0 | 100% |
 | SP.Evidence.Tests | 12 | 0 | 100% |
+| SP.AuditQueries.Tests | 25 | 0 | 100% |
+| SP.AuditReport.Tests | 32 | 0 | 100% |
 | SP.ApiClient.Tests | 11 | 2 | Mock-scoping |
 | SP.Auth.Tests | 3 | 6 | Mock-scoping |
 | SP.Assertions.Tests | 6 | 4 | Mock-scoping |
@@ -122,13 +132,58 @@ intercept cross-module function calls (e.g., `Invoke-SPApiRequest` called from w
 SP.TestLoader, SP.Evidence) contain the modules that DON'T make cross-module calls that
 need mocking, confirming the production code works correctly.
 
+### SP.Audit Module (Added 2026-02-20)
+
+**Purpose:** Post-campaign audit reporting. Queries completed or active certification campaigns,
+retrieves all certifications and review items, fetches identity lifecycle events for revoked
+identities, and produces HTML/text/JSONL reports.
+
+**Files:**
+
+| File | Role |
+|------|------|
+| `Modules/SP.Audit/SP.AuditQueries.psm1` | API query functions (Get-SPAuditCampaigns, Get-SPAuditCertifications, Get-SPAuditCertificationItems, Get-SPAuditCampaignReport, Import-SPAuditCampaignReport, Get-SPAuditIdentityEvents) |
+| `Modules/SP.Audit/SP.AuditReport.psm1` | Reporting functions (Group-SPAuditDecisions, Group-SPReviewerActions, Group-SPAuditIdentityEvents, Export-SPAuditHtml, Export-SPAuditText, Export-SPAuditJsonl) |
+| `Modules/SP.Audit/SP.Audit.psd1` | Module manifest (NestedModules: AuditQueries + AuditReport) |
+| `Scripts/Invoke-SPCampaignAudit.ps1` | CLI thin wrapper (loads SP.Core -> SP.Api -> SP.Audit) |
+| `Tests/SP.AuditQueries.Tests.ps1` | 7 Pester tests (AQ-001 to AQ-007) |
+| `Tests/SP.AuditReport.Tests.ps1` | 6 Pester tests (AR-001 to AR-006) |
+
+**Config section added to settings.json:**
+
+```json
+"Audit": {
+    "OutputPath": ".\\Audit",
+    "DefaultDaysBack": 30,
+    "DefaultIdentityEventDays": 2,
+    "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+    "IncludeCampaignReports": true,
+    "IncludeIdentityEvents": true
+}
+```
+
+**Layering:** SP.Audit sits at the same level as SP.Testing (depends on SP.Core + SP.Api only).
+SP.Gui depends on SP.Audit for the Audit tab bridge functions (Get-SPGuiAuditCampaigns, Invoke-SPGuiAudit, Get-SPGuiAuditReports).
+
+**Exit codes for Invoke-SPCampaignAudit.ps1:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Audit completed successfully |
+| 1 | No campaigns matched the filter criteria |
+| 2 | Parameter error (missing required filter) |
+| 3 | Authentication or API error |
+| 4 | Configuration error |
+
+---
+
 ### Agent Registry
 
 | Agent | Module Scope | Status | Agent ID |
 |-------|-------------|--------|----------|
 | Agent A | SP.Core (Config + Logging + Auth + Vault) | COMPLETE | a03bf1a, a0d0175 |
 | Agent B | SP.Api (ApiClient + Campaigns + Certifications + Decisions) | COMPLETE | acda193 |
-| Agent C | SP.Testing (TestLoader + BatchRunner + Assertions + Evidence) | COMPLETE | a6ce5a5 |
+| Agent C | SP.Testing (TestLoader + BatchRunner + Assertions + Evidence) + SP.Audit | COMPLETE | a6ce5a5 |
 | Agent D | Scripts + GUI + Docs | COMPLETE | ac7cdc1 |
 
 ---
@@ -165,6 +220,20 @@ need mocking, confirming the production code works correctly.
 
 8. **Evidence test DateTime comparison** -- PS7 `ConvertFrom-Json` auto-converts ISO 8601 strings
    to DateTime objects. Fixed test to handle both DateTime and string types.
+
+9. **SP.Audit `$campId:` parse errors** -- Invoke-SPCampaignAudit.ps1 had 3 instances of
+   `$campId:` in Write-SPLog strings, parsed as scope prefix. Fixed to `${campId}:`.
+
+10. **SP.AuditReport `$key:` parse error** -- SP.AuditReport.psm1 had `$key:` in string
+    interpolation within Export-SPAuditJsonl. Fixed to `${key}:`.
+
+11. **Build-HtmlTableRow empty string binding** -- `[Parameter(Mandatory)][string[]]$Cells`
+    rejected empty strings from null/missing properties (e.g., no Phase on reviewer). Added
+    `[AllowEmptyString()]` attribute.
+
+12. **SP.Config missing Audit defaults** -- Adding `Audit` section to settings.json triggered
+    "Unknown configuration key 'Audit'" warnings in all existing tests. Added Audit defaults
+    to `Get-SPConfigDefaults` in SP.Config.psm1.
 
 ---
 
@@ -226,10 +295,12 @@ No NuGet packages, no third-party modules, no download-at-runtime dependencies.
 
 1. Copy toolkit to Windows machine
 2. Run `Invoke-Pester -Path .\Tests\ -Output Detailed` on PS 5.1 Desktop
-3. Expect 150/150 pass (all mock-scoping issues resolve on PS 5.1)
-4. If failures remain, investigate PS 5.1-specific behaviors
-5. Run smoke test: `.\Scripts\Invoke-GovernanceTest.ps1 -Tags smoke -WhatIf`
+   -- Expect all 207 tests pass (55 mock-scoping failures are PS7-only)
+3. If failures remain, investigate PS 5.1-specific behaviors
+4. Run smoke test: `.\Scripts\Invoke-GovernanceTest.ps1 -Tags smoke -WhatIf`
+5. Run audit smoke test: `.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7`
 6. Verify WPF GUI launches: `.\Scripts\Show-SPDashboard.ps1`
+7. Verify Audit tab: query campaigns, select, run audit, verify reports generated
 
 ---
 
@@ -272,8 +343,13 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 
 ## Verification Checklist
 
-- [x] All 45 production files implemented
-- [x] All 11 Pester test files implemented
+- [x] All 45 production files implemented (core toolkit)
+- [x] SP.Audit module implemented: SP.AuditQueries.psm1, SP.AuditReport.psm1, SP.Audit.psd1
+- [x] GUI Audit tab implemented: AuditTab.xaml, MainWindow.xaml (inline), SP.MainWindow.psm1, SP.GuiBridge.psm1
+- [x] Campaign report download refactored: v3 API first with silent legacy /cc/api fallback
+- [x] Invoke-SPCampaignAudit.ps1 CLI script implemented
+- [x] All 11 original Pester test files implemented
+- [x] SP.AuditQueries.Tests.ps1 and SP.AuditReport.Tests.ps1 implemented (13 tests total)
 - [x] Module import chain loads on pwsh 7 (41 functions)
 - [x] Cross-module function name verification (zero mismatches)
 - [x] Zero PS7-only syntax (`??`, ternary, `&&`, `||`)
@@ -288,3 +364,7 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 - [ ] `.\Evidence\TC-001\summary.html` -- HTML report renders correctly
 - [ ] `.\Reports\GovernanceRun_*.html` -- suite report renders correctly
 - [ ] `.\Scripts\Show-SPDashboard.ps1` -- WPF GUI launches on Windows
+- [ ] Audit tab: query campaigns, select, run audit, verify HTML reports in Audit/ folder
+- [ ] Audit tab: "Include Campaign Reports" checkbox works (v3-first download)
+- [ ] Audit tab: "Open Reports Folder" opens Audit/ in Explorer
+- [ ] Audit tab: Recent Reports list populates, double-click opens HTML in browser
