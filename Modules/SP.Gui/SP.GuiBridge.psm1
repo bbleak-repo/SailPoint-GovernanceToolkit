@@ -417,6 +417,405 @@ function Test-SPGuiConnectivity {
 
 #endregion
 
+#region Audit Bridge Functions
+
+function Get-SPGuiAuditCampaigns {
+    <#
+    .SYNOPSIS
+        Retrieve campaigns from SailPoint ISC for display in the Audit tab DataGrid.
+    .DESCRIPTION
+        Bridge function that delegates to Get-SPAuditCampaigns and transforms the
+        raw API objects into grid-bindable PSCustomObjects suitable for WPF DataGrid
+        binding. Each item includes an IsSelected checkbox field and retains a
+        reference to the raw campaign object for downstream use in Invoke-SPGuiAudit.
+    .PARAMETER CampaignNameStartsWith
+        Optional starts-with filter. Passed to Get-SPAuditCampaigns as-is.
+    .PARAMETER Status
+        Optional status filter. Pass "(All)" or empty string to skip filtering.
+        Otherwise passed as a single-element array to Get-SPAuditCampaigns.
+    .PARAMETER DaysBack
+        Number of calendar days to look back. Defaults to 3. Passed to
+        Get-SPAuditCampaigns for client-side date filtering.
+    .OUTPUTS
+        @{ Success=$bool; Data=@([PSCustomObject],...); Error=$string }
+    .EXAMPLE
+        $result = Get-SPGuiAuditCampaigns -Status 'COMPLETED' -DaysBack 7
+        if ($result.Success) { $grid.ItemsSource = $result.Data }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNameStartsWith,
+
+        [Parameter()]
+        [string]$Status,
+
+        [Parameter()]
+        [int]$DaysBack = 3
+    )
+
+    try {
+        $params = @{ DaysBack = $DaysBack }
+
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) {
+            $params['CampaignNameStartsWith'] = $CampaignNameStartsWith
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($Status) -and $Status -ne '(All)') {
+            $params['Status'] = @($Status)
+        }
+
+        $result = Get-SPAuditCampaigns @params
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+
+        $displayItems = foreach ($campaign in $result.Data) {
+            [PSCustomObject]@{
+                IsSelected          = $false
+                CampaignId          = $campaign.id
+                CampaignName        = $campaign.name
+                Status              = if ($null -ne $campaign.status)               { [string]$campaign.status }               else { '' }
+                Created             = if ($null -ne $campaign.created)              { [string]$campaign.created }              else { '' }
+                Completed           = if ($null -ne $campaign.completed)            { [string]$campaign.completed }            else { '' }
+                TotalCertifications = if ($null -ne $campaign.totalCertifications)  { [int]$campaign.totalCertifications }     else { 0 }
+                _RawCampaign        = $campaign
+            }
+        }
+
+        return @{ Success = $true; Data = @($displayItems); Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Get-SPGuiAuditCampaigns failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Get-SPGuiAuditCampaigns'
+        return @{ Success = $false; Data = @(); Error = "Get-SPGuiAuditCampaigns failed: $($_.Exception.Message)" }
+    }
+}
+
+function Invoke-SPGuiAudit {
+    <#
+    .SYNOPSIS
+        Orchestrate a full campaign audit for campaigns selected in the Audit tab.
+    .DESCRIPTION
+        Bridge function that mirrors the orchestration logic of Invoke-SPCampaignAudit.ps1
+        but is callable from the WPF GUI background worker. For each selected campaign it:
+          1. Retrieves certifications via Get-SPAuditCertifications
+          2. Retrieves per-certification items via Get-SPAuditCertificationItems
+          3. Wraps items for Group-SPAuditDecisions
+          4. Optionally downloads legacy campaign reports
+          5. Optionally retrieves identity provisioning events for revoked identities
+          6. Categorizes decisions, reviewer actions, and identity events
+          7. Exports per-campaign HTML and text reports
+          8. Exports a combined HTML report when multiple campaigns are audited
+          9. Appends a JSONL audit trail
+
+        Returns a summary hashtable that the GUI worker can surface in the status bar.
+    .PARAMETER SelectedCampaigns
+        Array of PSCustomObjects returned by Get-SPGuiAuditCampaigns (must include
+        the _RawCampaign property).
+    .PARAMETER IncludeCampaignReports
+        When present, calls Get-SPAuditCampaignReport (v3-first with legacy fallback)
+        for each standard report type: CAMPAIGN_STATUS_REPORT and CERTIFICATION_SIGNOFF_REPORT.
+    .PARAMETER IncludeIdentityEvents
+        When present, calls Get-SPAuditIdentityEvents for each identity whose
+        access was revoked during the campaign.
+    .PARAMETER IdentityEventDays
+        Days back to search for identity events. Defaults to 2. Only used when
+        -IncludeIdentityEvents is specified.
+    .PARAMETER OutputPath
+        Directory to write HTML, text, and JSONL output. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{
+            Success          = $bool
+            CampaignsAudited = $int
+            OutputPath       = $string
+            DurationSeconds  = $double
+            FilesWritten     = $int
+            Error            = $string
+        }
+    .EXAMPLE
+        $result = Invoke-SPGuiAudit -SelectedCampaigns $selected -OutputPath 'C:\Toolkit\Audit' -CorrelationID $cid
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$SelectedCampaigns,
+
+        [Parameter()]
+        [switch]$IncludeCampaignReports,
+
+        [Parameter()]
+        [switch]$IncludeIdentityEvents,
+
+        [Parameter()]
+        [int]$IdentityEventDays = 2,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        if ($SelectedCampaigns.Count -eq 0) {
+            return @{
+                Success          = $false
+                CampaignsAudited = 0
+                OutputPath       = $OutputPath
+                DurationSeconds  = 0
+                FilesWritten     = 0
+                Error            = 'No campaigns selected. Select at least one campaign to audit.'
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            $toolkitRoot = Resolve-SPToolkitRoot
+            $OutputPath  = Join-Path $toolkitRoot 'Audit'
+        }
+
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiAudit started: $($SelectedCampaigns.Count) campaign(s), OutputPath='$OutputPath'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+
+        $allCampaignAudits = [System.Collections.Generic.List[object]]::new()
+        $allWrittenFiles   = [System.Collections.Generic.List[string]]::new()
+        $jsonlEvents       = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($campaign in $SelectedCampaigns) {
+            $rawCampaign = $campaign._RawCampaign
+            $campId      = $rawCampaign.id
+            $campName    = $rawCampaign.name
+
+            Write-SPLog -Message "Auditing campaign '$campName' ($campId)" `
+                -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+
+            # --- Certifications ---
+            $certResult     = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+            $certifications = @()
+            if ($certResult.Success -and $null -ne $certResult.Data) {
+                $certifications = @($certResult.Data)
+            }
+            else {
+                Write-SPLog -Message "Could not retrieve certifications for '$campId': $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+            }
+
+            # --- Certification items (wrapped for Group-SPAuditDecisions) ---
+            $wrappedItems = [System.Collections.Generic.List[object]]::new()
+            foreach ($cert in $certifications) {
+                $certName  = if ($null -ne $cert.name) { $cert.name } else { '' }
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+                if ($itemResult.Success -and $null -ne $itemResult.Data) {
+                    foreach ($rawItem in $itemResult.Data) {
+                        $wrappedItems.Add(@{
+                            Item              = $rawItem
+                            CertificationId   = $cert.id
+                            CertificationName = $certName
+                            CampaignName      = $campName
+                        })
+                    }
+                }
+                else {
+                    Write-SPLog -Message "Could not retrieve items for certification '$($cert.id)': $($itemResult.Error)" `
+                        -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                }
+            }
+
+            # --- Optional: Campaign reports (v3-first with legacy fallback) ---
+            $campaignReports = $null
+            if ($IncludeCampaignReports) {
+                $campaignReports = @{}
+                foreach ($reportType in @('CAMPAIGN_STATUS_REPORT', 'CERTIFICATION_SIGNOFF_REPORT')) {
+                    $rptResult = Get-SPAuditCampaignReport -CampaignId $campId -ReportType $reportType `
+                        -CorrelationID $CorrelationID
+                    if ($rptResult.Success) {
+                        $campaignReports[$reportType] = $rptResult.Data
+                    }
+                    else {
+                        Write-SPLog -Message "Campaign report '$reportType' unavailable for '$campId': $($rptResult.Error)" `
+                            -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                    }
+                }
+                if ($campaignReports.Count -eq 0) {
+                    $campaignReports = $null
+                }
+            }
+
+            # --- Optional: Identity provisioning events for revoked identities ---
+            $allIdentityEvents = @()
+            if ($IncludeIdentityEvents) {
+                $revokedIds = @($wrappedItems | ForEach-Object {
+                    $item = $_.Item
+                    if ($null -ne $item.decision -and $item.decision -eq 'REVOKE' -and
+                        $null -ne $item.identitySummary -and $null -ne $item.identitySummary.id) {
+                        $item.identitySummary.id
+                    }
+                } | Where-Object { $_ } | Sort-Object -Unique)
+
+                foreach ($identityId in $revokedIds) {
+                    $evtResult = Get-SPAuditIdentityEvents -IdentityId $identityId `
+                        -DaysBack $IdentityEventDays -CorrelationID $CorrelationID
+                    if ($evtResult.Success -and $null -ne $evtResult.Data) {
+                        foreach ($evt in $evtResult.Data) {
+                            $allIdentityEvents += $evt
+                        }
+                    }
+                    else {
+                        Write-SPLog -Message "Could not retrieve identity events for '$identityId': $($evtResult.Error)" `
+                            -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                    }
+                }
+            }
+
+            # --- Categorize ---
+            $decisions   = Group-SPAuditDecisions      -Items $wrappedItems.ToArray()
+            $reviewers   = Group-SPReviewerActions     -Certifications $certifications
+            $eventGroups = Group-SPAuditIdentityEvents -Events $allIdentityEvents
+
+            # --- Build campaign audit hashtable (keys match Export-SPAuditHtml schema) ---
+            $campaignAudit = @{
+                CampaignName             = $campName
+                CampaignId               = $campId
+                Status                   = if ($null -ne $rawCampaign.status)               { [string]$rawCampaign.status }           else { '' }
+                Created                  = if ($null -ne $rawCampaign.created)              { [string]$rawCampaign.created }          else { '' }
+                Completed                = if ($null -ne $rawCampaign.completed)            { [string]$rawCampaign.completed }        else { '' }
+                TotalCertifications      = if ($null -ne $rawCampaign.totalCertifications)  { [int]$rawCampaign.totalCertifications } else { 0 }
+                Decisions                = $decisions
+                Reviewers                = $reviewers
+                Events                   = $eventGroups
+                CampaignReports          = $campaignReports
+                CampaignReportsAvailable = ($null -ne $campaignReports)
+            }
+
+            # --- Per-campaign export ---
+            $htmlFiles = Export-SPAuditHtml -CampaignAudits @($campaignAudit) `
+                -OutputPath $OutputPath -CorrelationID $CorrelationID
+            Export-SPAuditText -CampaignAudits @($campaignAudit) `
+                -OutputPath $OutputPath -CorrelationID $CorrelationID
+
+            foreach ($f in $htmlFiles) { $allWrittenFiles.Add($f) }
+
+            $allCampaignAudits.Add($campaignAudit)
+
+            # Accumulate a JSONL event per campaign for the audit trail
+            $jsonlEvents.Add(@{
+                Action     = 'CampaignAudited'
+                CampaignId = $campId
+                CampaignName = $campName
+                DecisionsApproved = @($decisions.Approved).Count
+                DecisionsRevoked  = @($decisions.Revoked).Count
+                DecisionsPending  = @($decisions.Pending).Count
+            })
+        }
+
+        # --- Combined HTML if multiple campaigns ---
+        if ($allCampaignAudits.Count -gt 1) {
+            $combinedFiles = Export-SPAuditHtml -CampaignAudits $allCampaignAudits.ToArray() `
+                -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID
+            foreach ($f in $combinedFiles) { $allWrittenFiles.Add($f) }
+        }
+
+        # --- JSONL audit trail ---
+        $jsonlPath = Export-SPAuditJsonl -OutputPath $OutputPath -Events $jsonlEvents.ToArray() `
+            -CorrelationID $CorrelationID
+        $allWrittenFiles.Add($jsonlPath)
+
+        $sw.Stop()
+
+        Write-SPLog -Message "Invoke-SPGuiAudit complete: $($allCampaignAudits.Count) campaign(s), $($allWrittenFiles.Count) file(s)" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+
+        return @{
+            Success          = $true
+            CampaignsAudited = $allCampaignAudits.Count
+            OutputPath       = $OutputPath
+            DurationSeconds  = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+            FilesWritten     = $allWrittenFiles.Count
+            Error            = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiAudit failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+        return @{
+            Success          = $false
+            CampaignsAudited = 0
+            OutputPath       = $OutputPath
+            DurationSeconds  = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+            FilesWritten     = 0
+            Error            = "Invoke-SPGuiAudit failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-SPGuiAuditReports {
+    <#
+    .SYNOPSIS
+        Enumerate recently generated audit HTML reports for display in the Audit tab.
+    .DESCRIPTION
+        Scans AuditOutputPath for HTML files and returns the most recent 20,
+        sorted newest-first, as PSCustomObjects suitable for WPF DataGrid binding.
+        Returns an empty Data array (not an error) when the directory does not exist.
+    .PARAMETER AuditOutputPath
+        Directory to scan for HTML files. Subdirectories are included (-Recurse).
+    .OUTPUTS
+        @{ Success=$bool; Data=@([PSCustomObject],...); Error=$string }
+    .EXAMPLE
+        $result = Get-SPGuiAuditReports -AuditOutputPath 'C:\Toolkit\Audit'
+        if ($result.Success) { $grid.ItemsSource = $result.Data }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$AuditOutputPath
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or -not (Test-Path -Path $AuditOutputPath -PathType Container)) {
+            return @{ Success = $true; Data = @(); Error = $null }
+        }
+
+        $files = Get-ChildItem -Path $AuditOutputPath -Filter '*.html' -Recurse -File -ErrorAction Stop |
+            Sort-Object -Property LastWriteTime -Descending |
+            Select-Object -First 20
+
+        $items = foreach ($file in $files) {
+            [PSCustomObject]@{
+                FileName     = $file.Name
+                FullPath     = $file.FullName
+                LastModified = $file.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+                SizeKB       = [math]::Round($file.Length / 1024, 1)
+            }
+        }
+
+        return @{ Success = $true; Data = @($items); Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Get-SPGuiAuditReports failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Get-SPGuiAuditReports'
+        return @{ Success = $false; Data = @(); Error = "Get-SPGuiAuditReports failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
 #region Internal Helper Functions
 
 function Resolve-SPToolkitRoot {
@@ -465,5 +864,8 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
     'Get-SPGuiIdentityList',
-    'Test-SPGuiConnectivity'
+    'Test-SPGuiConnectivity',
+    'Get-SPGuiAuditCampaigns',
+    'Invoke-SPGuiAudit',
+    'Get-SPGuiAuditReports'
 )

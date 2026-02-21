@@ -37,8 +37,10 @@ $script:LoadedIdentities   = @{}
 $script:ConfigPath         = $null
 $script:ToolkitRoot        = $null
 $script:MainWindow         = $null
-$script:CampaignDataSource = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
-$script:IsRunning          = $false
+$script:CampaignDataSource      = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:IsRunning               = $false
+$script:AuditCampaignDataSource = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:IsAuditRunning          = $false
 
 #endregion
 
@@ -731,6 +733,414 @@ function Save-SettingsForm {
 
 #endregion
 
+#region Audit Tab
+
+function Initialize-AuditTab {
+    <#
+    .SYNOPSIS
+        Wires up the Audit tab controls and event handlers.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $txtName              = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
+    $cboStatus            = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
+    $cboTimespan          = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    $btnQuery             = Find-Control -Parent $TabContent -Name 'BtnQueryCampaigns'
+    $btnClear             = Find-Control -Parent $TabContent -Name 'BtnClearFilter'
+    $btnRunAudit          = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
+    $btnOpenFolder        = Find-Control -Parent $TabContent -Name 'BtnOpenAuditFolder'
+    $btnRefreshReports    = Find-Control -Parent $TabContent -Name 'BtnRefreshAuditReports'
+    $auditReportList      = Find-Control -Parent $TabContent -Name 'AuditReportList'
+
+    # Query Campaigns button
+    if ($btnQuery) {
+        $btnQuery.Add_Click({
+            Invoke-AuditCampaignQuery -TabContent $TabContent
+        })
+    }
+
+    # Clear filter button
+    if ($btnClear) {
+        $btnClear.Add_Click({
+            if ($null -ne $txtName) {
+                $txtName.Text       = 'Filter by name...'
+                $txtName.Foreground = [System.Windows.Media.Brushes]::Gray
+            }
+            if ($null -ne $cboStatus) {
+                $cboStatus.SelectedIndex = 0
+            }
+            if ($null -ne $cboTimespan) {
+                $cboTimespan.SelectedIndex = 2
+            }
+        })
+    }
+
+    # Run Audit button
+    if ($btnRunAudit) {
+        $btnRunAudit.Add_Click({
+            Invoke-GuiAuditRun -TabContent $TabContent
+        })
+    }
+
+    # Open Reports Folder button
+    if ($btnOpenFolder) {
+        $btnOpenFolder.Add_Click({
+            $outputPath = Resolve-AuditOutputPath
+            if (-not (Test-Path $outputPath)) {
+                [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            }
+            Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        })
+    }
+
+    # Refresh audit reports button
+    if ($btnRefreshReports) {
+        $btnRefreshReports.Add_Click({
+            Load-AuditReportList -TabContent $TabContent
+        })
+    }
+
+    # Double-click on report list item opens file
+    if ($auditReportList) {
+        $auditReportList.Add_MouseDoubleClick({
+            $selected = $auditReportList.SelectedItem
+            if ($null -ne $selected -and $null -ne $selected.Tag -and (Test-Path $selected.Tag)) {
+                Start-Process $selected.Tag
+            }
+        })
+    }
+
+    # Populate recent reports on init
+    Load-AuditReportList -TabContent $TabContent
+}
+
+function Invoke-AuditCampaignQuery {
+    <#
+    .SYNOPSIS
+        Queries ISC for campaigns matching the current filter values and populates
+        the AuditCampaignGrid. Synchronous (runs on UI thread).
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $txtName     = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
+    $cboStatus   = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
+    $cboTimespan = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    $grid        = Find-Control -Parent $TabContent -Name 'AuditCampaignGrid'
+    $statusLabel = Find-Control -Parent $TabContent -Name 'AuditStatusLabel'
+    $btnRunAudit = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
+
+    Set-StatusMessage -Message 'Querying campaigns...'
+
+    # Extract filter values
+    $campaignName = ''
+    if ($null -ne $txtName -and $txtName.Text -ne 'Filter by name...') {
+        $campaignName = $txtName.Text.Trim()
+    }
+
+    $statusFilter = $null
+    if ($null -ne $cboStatus -and $null -ne $cboStatus.SelectedItem) {
+        $selectedContent = $cboStatus.SelectedItem.Content
+        if ($selectedContent -ne '(All)') {
+            $statusFilter = $selectedContent
+        }
+    }
+
+    $daysBack = 3
+    if ($null -ne $cboTimespan -and $null -ne $cboTimespan.SelectedItem) {
+        $tagValue = $cboTimespan.SelectedItem.Tag
+        if ($null -ne $tagValue) {
+            [int]::TryParse($tagValue.ToString(), [ref]$daysBack) | Out-Null
+        }
+    }
+
+    # Build parameters
+    $queryParams = @{ DaysBack = $daysBack }
+    if ($campaignName)  { $queryParams['CampaignNameStartsWith'] = $campaignName }
+    if ($statusFilter)  { $queryParams['Status']       = $statusFilter }
+
+    $result = Get-SPGuiAuditCampaigns @queryParams
+
+    if (-not $result.Success) {
+        Set-StatusMessage -Message "Query failed: $($result.Error)" -IsError
+        if ($null -ne $statusLabel) {
+            $statusLabel.Text = "Query failed: $($result.Error)"
+        }
+        return
+    }
+
+    # Populate ObservableCollection in-place (PS 5.1: use .Clear() + .Add())
+    $script:AuditCampaignDataSource.Clear()
+    foreach ($item in $result.Data) {
+        $script:AuditCampaignDataSource.Add($item)
+    }
+
+    # Bind DataGrid
+    if ($null -ne $grid) {
+        $grid.ItemsSource = $script:AuditCampaignDataSource
+    }
+
+    # Enable Run Audit if we got results
+    if ($null -ne $btnRunAudit) {
+        $btnRunAudit.IsEnabled = ($result.Data.Count -gt 0)
+    }
+
+    # Update status label
+    $count = $result.Data.Count
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = "$count campaign(s) found"
+    }
+
+    Set-StatusMessage -Message "Query complete. $count campaign(s) found."
+}
+
+function Invoke-GuiAuditRun {
+    <#
+    .SYNOPSIS
+        Runs the audit against selected campaigns in a background runspace.
+        Follows the same pattern as Invoke-GuiTestRun.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsAuditRunning) {
+        Set-StatusMessage -Message 'An audit run is already in progress.' -IsError
+        return
+    }
+
+    $progressBar     = Find-Control -Parent $TabContent -Name 'AuditProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'AuditProgressPercent'
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'AuditStatusLabel'
+    $btnRunAudit     = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
+    $chkCampReports  = Find-Control -Parent $TabContent -Name 'ChkCampaignReports'
+    $chkIdentEvents  = Find-Control -Parent $TabContent -Name 'ChkIdentityEvents'
+
+    $selectedCampaigns = @($script:AuditCampaignDataSource | Where-Object { $_.IsSelected -eq $true })
+
+    if ($selectedCampaigns.Count -eq 0) {
+        Set-StatusMessage -Message 'No campaigns selected. Use the checkbox column to select campaigns to audit.' -IsError
+        return
+    }
+
+    $script:IsAuditRunning = $true
+    $correlationID         = [guid]::NewGuid().ToString()
+    $outputPath            = Resolve-AuditOutputPath
+    $includeCampaignReports = ($null -eq $chkCampReports -or $chkCampReports.IsChecked -ne $false)
+    $includeIdentEvents    = ($null -eq $chkIdentEvents -or $chkIdentEvents.IsChecked -ne $false)
+
+    Set-StatusMessage -Message "Starting audit run. CorrelationID: $correlationID"
+
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = "Auditing $($selectedCampaigns.Count) campaign(s)..."
+    }
+
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+
+    if ($null -ne $progressPercent) {
+        $progressPercent.Text = '0%'
+    }
+
+    if ($null -ne $btnRunAudit) {
+        $btnRunAudit.IsEnabled = $false
+    }
+
+    # Create background runspace (STA)
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    # Share variables explicitly (PS 5.1: no closures across runspace boundaries)
+    $runspace.SessionStateProxy.SetVariable('SelectedCampaigns',    $selectedCampaigns)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('IncludeCampaignReports', $includeCampaignReports)
+    $runspace.SessionStateProxy.SetVariable('IncludeIdentEvents',   $includeIdentEvents)
+    $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPercent)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+    $runspace.SessionStateProxy.SetVariable('TabContent',           $TabContent)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # Load modules in runspace
+        $coreModule  = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule   = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $auditModule = Join-Path $ToolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+        $guiModule   = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $auditModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $auditResult = Invoke-SPGuiAudit `
+            -SelectedCampaigns      $SelectedCampaigns `
+            -CorrelationID          $CorrelationID `
+            -OutputPath             $OutputPath `
+            -IncludeCampaignReports:$IncludeCampaignReports `
+            -IncludeIdentityEvents:$IncludeIdentEvents
+
+        # Marshal result back to UI thread
+        $dispatcher       = $MainWindow.Dispatcher
+        $capturedResult   = $auditResult
+        $capturedProgress = $ProgressBar
+        $capturedPercent  = $ProgressPercent
+        $capturedLabel    = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgress) {
+                $capturedProgress.Value = 100
+            }
+            if ($null -ne $capturedPercent) {
+                $capturedPercent.Text = '100%'
+            }
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = "Audit complete. $($capturedResult.CampaignsAudited) campaign(s), $($capturedResult.FilesWritten) file(s) written."
+                } else {
+                    $capturedLabel.Text = "Audit failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $auditResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms interval)
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnRunAudit
+    $capturedProg     = $progressBar
+    $capturedPercent2 = $progressPercent
+
+    $timer.Add_Tick({
+        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
+            $capturedTimer.Stop()
+
+            if ($capturedPs.HadErrors) {
+                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
+                Set-StatusMessage -Message "Audit run failed: $errMsg" -IsError
+            } else {
+                Set-StatusMessage -Message 'Audit run complete.'
+            }
+
+            # Re-enable the Run Audit button and hide progress bar
+            if ($null -ne $capturedBtn) {
+                $capturedBtn.IsEnabled = $true
+            }
+            if ($null -ne $capturedProg) {
+                $capturedProg.Visibility = [System.Windows.Visibility]::Collapsed
+            }
+            if ($null -ne $capturedPercent2) {
+                $capturedPercent2.Text = ''
+            }
+
+            # Refresh report list
+            Load-AuditReportList -TabContent $capturedTab
+
+            try {
+                $capturedPs.EndInvoke($capturedAsync) | Out-Null
+                $capturedPs.Dispose()
+                $capturedRunspace.Close()
+            }
+            catch { }
+
+            $script:IsAuditRunning = $false
+        }
+    })
+
+    $timer.Start()
+}
+
+function Load-AuditReportList {
+    <#
+    .SYNOPSIS
+        Populates the AuditReportList ListBox with recent audit report files.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $listBox = Find-Control -Parent $TabContent -Name 'AuditReportList'
+    if ($null -eq $listBox) { return }
+
+    $outputPath = Resolve-AuditOutputPath
+
+    $result = Get-SPGuiAuditReports -AuditOutputPath $outputPath
+
+    $listBox.Items.Clear()
+
+    if (-not $result.Success) {
+        $item        = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = "No reports found (path: $outputPath)"
+        $item.Foreground = [System.Windows.Media.Brushes]::Gray
+        $listBox.Items.Add($item) | Out-Null
+        return
+    }
+
+    foreach ($report in $result.Data) {
+        $item         = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = $report.FileName
+        $item.Tag     = $report.FullPath
+        $item.ToolTip = "$($report.FullPath) ($($report.SizeKB) KB, $($report.LastModified))"
+        $listBox.Items.Add($item) | Out-Null
+    }
+}
+
+function Resolve-AuditOutputPath {
+    <#
+    .SYNOPSIS
+        Resolves the absolute path to the Audit output directory.
+        Reads from config if available, falls back to '.\Audit' relative to toolkit root.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $configAuditPath = $null
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Audit' -and
+            $null -ne $config.Audit -and
+            $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+            $configAuditPath = $config.Audit.OutputPath
+        }
+    }
+    catch { }
+
+    $rawPath = if ($configAuditPath) { $configAuditPath } else { '.\Audit' }
+
+    # If relative, resolve against toolkit root
+    if (-not [System.IO.Path]::IsPathRooted($rawPath)) {
+        $rawPath = Join-Path $script:ToolkitRoot $rawPath
+    }
+
+    return [System.IO.Path]::GetFullPath($rawPath)
+}
+
+#endregion
+
 #region Menu Handlers
 
 function Wire-MenuHandlers {
@@ -862,6 +1272,12 @@ function Show-SPDashboard {
         $settingsTab = Find-Control -Parent $window -Name 'SettingsTabContent'
         if ($null -ne $settingsTab) {
             Initialize-SettingsTab -TabContent $settingsTab
+        }
+
+        # Audit tab
+        $auditTab = Find-Control -Parent $window -Name 'AuditTabContent'
+        if ($null -ne $auditTab) {
+            Initialize-AuditTab -TabContent $auditTab
         }
     }
 

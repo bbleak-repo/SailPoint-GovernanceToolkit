@@ -55,7 +55,10 @@
         'Invoke-SPGuiTest',
         'Get-SPGuiCampaignList',
         'Get-SPGuiIdentityList',
-        'Test-SPGuiConnectivity'
+        'Test-SPGuiConnectivity',
+        'Get-SPGuiAuditCampaigns',
+        'Invoke-SPGuiAudit',
+        'Get-SPGuiAuditReports'
     )
 
     # Cmdlets to export from this module
@@ -84,7 +87,7 @@
     PrivateData = @{
         PSData = @{
             Tags         = @('SailPoint', 'ISC', 'IGA', 'Governance', 'WPF', 'GUI', 'Dashboard')
-            ReleaseNotes = 'v1.0.0: Initial release - WPF dashboard with Campaign, Evidence, and Settings tabs.'
+            ReleaseNotes = 'v1.0.0: Initial release - WPF dashboard with Campaign, Evidence, and Settings tabs. v1.1.0: Added Audit tab bridge functions (Get-SPGuiAuditCampaigns, Invoke-SPGuiAudit, Get-SPGuiAuditReports).'
         }
     }
 }

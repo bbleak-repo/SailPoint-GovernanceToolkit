@@ -79,6 +79,14 @@ function Get-SPConfigDefaults {
             RequireWhatIfOnProd     = $true
             AllowCompleteCampaign   = $false
         }
+        Audit = @{
+            OutputPath               = '.\Audit'
+            DefaultDaysBack          = 30
+            DefaultIdentityEventDays = 2
+            DefaultStatuses          = @('COMPLETED', 'ACTIVE')
+            IncludeCampaignReports   = $true
+            IncludeIdentityEvents    = $true
+        }
     }
 }
 
