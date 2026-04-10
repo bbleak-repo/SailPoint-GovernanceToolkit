@@ -123,6 +123,46 @@ For production environments, set `Authentication.Mode` to `Vault` and store cred
 
 ---
 
+## Authentication Modes
+
+The toolkit supports three authentication modes, configured via `Authentication.Mode` in settings.json.
+
+### ConfigFile
+
+Reads `ClientId` and `ClientSecret` directly from settings.json. The client secret is stored in plain text.
+
+Use only in isolated development environments where the config file is not shared or committed to version control.
+
+### Vault
+
+Credentials are stored in an AES-256-CBC encrypted vault file (`Data\sp-vault.enc` by default). The passphrase is never written to disk.
+
+```powershell
+# One-time setup
+.\Scripts\New-SPVault.ps1
+
+# Switch mode in settings.json
+"Authentication": { "Mode": "Vault" }
+```
+
+Use this mode for any shared, CI/CD, or production-adjacent environment.
+
+### Browser Token
+
+Bypasses OAuth entirely. Pass a JWT bearer token copied from an active browser session directly to the audit script via `-Token`.
+
+```powershell
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7
+```
+
+To obtain the token: open ISC admin console in a browser, open developer tools (F12), go to the Network tab, and copy the `Authorization: Bearer eyJ...` value from any API request. Tokens are typically valid for approximately 12 minutes.
+
+This mode is intended for ad-hoc audits where configuring OAuth credentials is not practical. It is not suitable for automated or scheduled runs.
+
+You can also set the token in the GUI Settings tab without modifying settings.json.
+
+---
+
 ## Usage
 
 ### CLI: Invoke-GovernanceTest.ps1
@@ -161,8 +201,9 @@ campaigns, collects all certifications and review item decisions, fetches identi
 events for revoked identities, and produces per-campaign HTML and text reports plus a
 combined summary and a JSONL audit trail.
 
-**Requirements:** At least one campaign filter must be specified. Without a filter the script
-exits with code 2.
+**Requirements:** At least one campaign filter must be specified (`-CampaignName`,
+`-CampaignNameStartsWith`, `-CampaignNameContains`, or `-Status`). Without a filter the
+script exits with code 2.
 
 ```powershell
 # Audit all campaigns completed in the last 7 days
@@ -174,8 +215,14 @@ exits with code 2.
 # Audit all campaigns whose name begins with a prefix
 .\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameStartsWith 'Q1'
 
+# Audit campaigns whose name contains a keyword (substring match via ISC 'co' filter)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'entitlement' -DaysBack 90
+
 # Audit active and completed campaigns, write JSON result
 .\Scripts\Invoke-SPCampaignAudit.ps1 -Status ACTIVE, COMPLETED -DaysBack 30 -OutputMode JSON
+
+# Use a browser token instead of configured OAuth credentials
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7
 
 # Use a locally exported campaign report CSV instead of the API
 .\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Annual Review' -CampaignReportCsvPath 'C:\Reports\annual.csv'
@@ -196,11 +243,18 @@ Audit\
 ```
 
 **Per-campaign HTML report sections:**
-- Campaign metadata (status, dates, certifier count)
-- Decision summary table (Approved / Revoked / Pending counts)
-- Reviewer action log (primary certifiers and reassignments, with sign-off proof)
-- Identity lifecycle events for revoked identities (provisioning removals)
-- Correlation ID footer for cross-referencing toolkit logs
+
+Each HTML report opens with an Executive Summary Dashboard: a status badge, decision
+breakdown donut, remediation completion bar, risk scorecard, and reviewer response time
+summary. The detailed sections follow:
+
+1. Campaign Summary (name, status, dates, duration, certification count)
+2. Reviewer Accountability (primary certifiers and reassignments with sign-off proof)
+3. Reviewer Performance (time-to-decision metrics per reviewer, color-coded by response time)
+4. Decision Summary (approved, revoked, and pending items with identity and entitlement detail)
+5. Campaign Reports (Campaign Status Report and Certification Signoff Report from ISC)
+6. Remediation and Reassignment Proof (item-level completion status and reassignment chain)
+7. Audit Metadata (correlation ID, generation timestamp, filters applied)
 
 **JSONL audit trail format (one JSON object per line):**
 
@@ -263,8 +317,8 @@ Launches the WPF interactive dashboard (Windows only, requires .NET Framework 4.
 The dashboard provides four tabs:
 - **Campaigns** - load CSV data, select and run tests, view progress and results
 - **Evidence** - browse Evidence/ folder, view JSONL events in a grid
-- **Settings** - edit all settings.json fields with form validation, test connectivity
-- **Audit** - query campaigns, select for audit, generate HTML compliance reports
+- **Settings** - edit all settings.json fields with form validation, test connectivity, and paste a browser token for quick authentication without OAuth setup
+- **Audit** - query campaigns by keyword or substring search, select for audit, generate HTML compliance reports with reviewer performance metrics
 
 ---
 
@@ -346,12 +400,14 @@ SailPoint-GovernanceToolkit/
         SP.Core/                         # Foundation layer (no business logic)
             SP.Config.psm1               # settings.json load/validate/cache
             SP.Logging.psm1              # JSONL structured logging
-            SP.Auth.psm1                 # OAuth 2.0 token acquisition + caching
+            SP.Auth.psm1                 # OAuth 2.0 token acquisition + caching; browser token pass-through (Set-SPBrowserToken)
             SP.Vault.psm1                # AES-256-CBC credential vault
 
         SP.Api/                          # ISC API adapter layer
             SP.ApiClient.psm1            # Rate-limited, retry-capable REST client
-            SP.Campaigns.psm1            # Campaign lifecycle (create/activate/poll/decide)
+            SP.Campaigns.psm1            # Campaign lifecycle (create/activate/poll/decide); Search-SPCampaigns (name co filter)
+            SP.Certifications.psm1       # Certification and access review item queries (Get-SPCertifications, Get-SPAllCertifications, Get-SPAccessReviewItems)
+            SP.Decisions.psm1            # Bulk decide, reassignment, and sign-off operations
 
         SP.Testing/                      # Test orchestration layer
             SP.TestLoader.psm1           # CSV ingestion and cross-validation

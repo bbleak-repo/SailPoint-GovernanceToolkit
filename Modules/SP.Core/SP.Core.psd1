@@ -72,6 +72,7 @@
 
         # SP.Auth exports
         'Get-SPAuthToken',
+        'Set-SPBrowserToken',
         'Clear-SPAuthToken'
     )
 

@@ -110,12 +110,18 @@ function Get-SPAuditCampaigns {
         Supported server-side filter operators used here:
           name eq "..."    - exact name match
           name sw "..."    - starts-with match
+          name co "..."    - substring (contains) match
           status in (...)  - one or more status values
     .PARAMETER CampaignName
         Optional exact name match. Translates to: name eq "..."
     .PARAMETER CampaignNameStartsWith
         Optional starts-with name match. Translates to: name sw "..."
         Ignored if CampaignName is also specified.
+    .PARAMETER CampaignNameContains
+        Optional substring (contains) name match. Translates to: name co "..."
+        Ignored if CampaignName or CampaignNameStartsWith is also specified.
+        This is the recommended filter for fuzzy searching -- ISC does not support
+        wildcards (*test*) and the admin UI only does prefix matching.
     .PARAMETER Status
         Optional array of status values to filter by.
         Valid values: STAGED, ACTIVATING, ACTIVE, COMPLETING, COMPLETED, ERROR.
@@ -144,6 +150,9 @@ function Get-SPAuditCampaigns {
         [string]$CampaignNameStartsWith,
 
         [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
         [string[]]$Status,
 
         [Parameter()]
@@ -157,7 +166,7 @@ function Get-SPAuditCampaigns {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', Status='$($Status -join ',')' DaysBack=$DaysBack" `
+    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')' DaysBack=$DaysBack" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
         -CorrelationID $CorrelationID
 
@@ -172,6 +181,10 @@ function Get-SPAuditCampaigns {
         elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) {
             $escaped = $CampaignNameStartsWith.Replace('"', '\"')
             $filterParts.Add("name sw `"$escaped`"")
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $escaped = $CampaignNameContains.Replace('"', '\"')
+            $filterParts.Add("name co `"$escaped`"")
         }
 
         if ($null -ne $Status -and $Status.Count -gt 0) {

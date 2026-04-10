@@ -460,6 +460,115 @@ function Get-SPCampaignStatus {
     }
 }
 
+function Search-SPCampaigns {
+    <#
+    .SYNOPSIS
+        Searches SailPoint ISC campaigns by keyword (substring match).
+    .DESCRIPTION
+        GETs /campaigns with the 'name co "keyword"' filter to find campaigns
+        where the keyword appears anywhere in the name. This works around the
+        ISC admin UI limitation that only supports prefix matching.
+
+        Auto-paginates across all results.
+    .PARAMETER Keyword
+        The search term. Matches campaigns whose name contains this string
+        anywhere (case-insensitive, server-side).
+    .PARAMETER Status
+        Optional status filter. Valid values: STAGED, ACTIVATING, ACTIVE,
+        COMPLETING, COMPLETED, ERROR.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@([campaign objects]); Error=$string}
+    .EXAMPLE
+        $result = Search-SPCampaigns -Keyword 'test'
+        $result.Data | ForEach-Object { $_.name }
+    .EXAMPLE
+        $result = Search-SPCampaigns -Keyword 'Q1' -Status 'COMPLETED'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Keyword,
+
+        [Parameter()]
+        [ValidateSet('STAGED', 'ACTIVATING', 'ACTIVE', 'COMPLETING', 'COMPLETED', 'ERROR')]
+        [string[]]$Status,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Searching campaigns: Keyword='$Keyword', Status='$($Status -join ',')'" `
+        -Severity INFO -Component 'SP.Campaigns' -Action 'Search-SPCampaigns' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Build server-side filter
+        $filterParts = [System.Collections.Generic.List[string]]::new()
+
+        $escaped = $Keyword.Replace('"', '\"')
+        $filterParts.Add("name co `"$escaped`"")
+
+        if ($null -ne $Status -and $Status.Count -gt 0) {
+            $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
+            $filterParts.Add("status in ($quotedStatuses)")
+        }
+
+        $queryParams = @{
+            'filters' = ($filterParts -join ' and ')
+            'limit'   = '250'
+            'offset'  = '0'
+        }
+
+        # Auto-paginate
+        $allCampaigns = [System.Collections.Generic.List[object]]::new()
+        $pageSize     = 250
+        $offset       = 0
+
+        do {
+            $queryParams['offset'] = $offset.ToString()
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                return @{ Success = $false; Data = $null; Error = $result.Error }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            if ($null -eq $page) { $page = @() }
+
+            if ($page.Count -gt 0) {
+                foreach ($item in $page) { $allCampaigns.Add($item) }
+            }
+
+            $offset += $pageSize
+        } while ($page.Count -ge $pageSize)
+
+        Write-SPLog -Message "Search-SPCampaigns found $($allCampaigns.Count) campaign(s) matching '$Keyword'" `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Search-SPCampaigns' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $allCampaigns.ToArray(); Error = $null }
+    }
+    catch {
+        $errMsg = "Search-SPCampaigns failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+            -Action 'Search-SPCampaigns' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 function Complete-SPCampaign {
     <#
     .SYNOPSIS
@@ -550,5 +659,6 @@ Export-ModuleMember -Function @(
     'Start-SPCampaign',
     'Get-SPCampaign',
     'Get-SPCampaignStatus',
+    'Search-SPCampaigns',
     'Complete-SPCampaign'
 )

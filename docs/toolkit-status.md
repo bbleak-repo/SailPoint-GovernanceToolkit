@@ -1,7 +1,7 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-02-20
-**Status:** IMPLEMENTATION COMPLETE -- SP.Audit + GUI Audit Tab added; Pending Windows PS 5.1 Validation
+**Last Updated:** 2026-04-03
+**Status:** IMPLEMENTATION COMPLETE + 3 Feature Additions (Campaign Search, Browser Token Auth, Reviewer Performance Metrics)
 **Plan File:** `/Users/xand/.claude/plans/cheeky-brewing-hellman.md`
 
 ---
@@ -9,7 +9,8 @@
 ## Quick Start (New Session)
 
 ```
-Read this file. All 52 files are implemented.
+Read this file. All production files are implemented.
+3 features added 2026-04-03: campaign substring search, browser token auth, reviewer performance metrics.
 Next step: Run Pester tests on Windows PS 5.1 to validate mock-scoping fixes.
 ```
 
@@ -53,38 +54,38 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 |--------|------|--------|-------|
 | **SP.Core** | SP.Config.psm1 | DONE | A |
 | | SP.Logging.psm1 | DONE | A |
-| | SP.Auth.psm1 | DONE | A |
+| | SP.Auth.psm1 | DONE (v1.1: +Set-SPBrowserToken, browser token auth) | A |
 | | SP.Vault.psm1 | DONE | A |
-| | SP.Core.psd1 | DONE | A |
+| | SP.Core.psd1 | DONE (updated: +Set-SPBrowserToken export) | A |
 | **SP.Api** | SP.ApiClient.psm1 | DONE | B |
-| | SP.Campaigns.psm1 | DONE (fixed string interpolation) | B |
+| | SP.Campaigns.psm1 | DONE (+Search-SPCampaigns w/ `co` filter) | B |
 | | SP.Certifications.psm1 | DONE (fixed string interpolation) | B |
 | | SP.Decisions.psm1 | DONE (fixed ValidateNotNullOrEmpty) | B |
-| | SP.Api.psd1 | DONE (fixed RequiredModules) | B |
+| | SP.Api.psd1 | DONE (+Search-SPCampaigns export) | B |
 | **SP.Testing** | SP.TestLoader.psm1 | DONE (fixed string interpolation) | C |
 | | SP.BatchRunner.psm1 | DONE (fixed List scoping) | C |
 | | SP.Assertions.psm1 | DONE | C |
 | | SP.Evidence.psm1 | DONE (fixed JSONL encoding) | C |
 | | SP.Testing.psd1 | DONE (fixed RequiredModules) | C |
-| **SP.Gui** | SP.MainWindow.psm1 | DONE (added Audit tab wiring) | D |
-| | SP.GuiBridge.psm1 | DONE (added Audit bridge functions) | D |
-| | SP.Gui.psd1 | DONE (fixed RequiredModules/Assemblies, added Audit exports) | D |
-| **SP.Audit** | SP.AuditQueries.psm1 | DONE | C |
-| | SP.AuditReport.psm1 | DONE | C |
-| | SP.Audit.psd1 | DONE | C |
+| **SP.Gui** | SP.MainWindow.psm1 | DONE (+browser token UI wiring, contains search) | D |
+| | SP.GuiBridge.psm1 | DONE (+Set-SPGuiBrowserToken, CampaignNameContains, ReviewerMetrics) | D |
+| | SP.Gui.psd1 | DONE (+Set-SPGuiBrowserToken export) | D |
+| **SP.Audit** | SP.AuditQueries.psm1 | DONE (+CampaignNameContains param w/ `co` filter) | C |
+| | SP.AuditReport.psm1 | DONE (+Measure-SPAuditReviewerMetrics, Format-HoursDisplay, Section 3 HTML) | C |
+| | SP.Audit.psd1 | DONE (+Measure-SPAuditReviewerMetrics export) | C |
 | **Scripts** | Invoke-GovernanceTest.ps1 | DONE | D |
 | | New-SPVault.ps1 | DONE (fixed SecureString coercion) | D |
 | | Show-SPDashboard.ps1 | DONE | D |
 | | Test-SPConnectivity.ps1 | DONE | D |
-| | Invoke-SPCampaignAudit.ps1 | DONE | C |
+| | Invoke-SPCampaignAudit.ps1 | DONE (+Token, +CampaignNameContains, +ReviewerMetrics) | C |
 | **Config** | settings.json | DONE | A |
 | | test-identities.csv | DONE | C |
 | | test-campaigns.csv | DONE | C |
-| **GUI XAML** | MainWindow.xaml | DONE (added Audit tab inline) | D |
+| **GUI XAML** | MainWindow.xaml | DONE (+Quick Connect browser token section, search placeholder) | D |
 | | CampaignTab.xaml | DONE | D |
 | | EvidenceTab.xaml | DONE | D |
-| | SettingsTab.xaml | DONE | D |
-| | AuditTab.xaml | DONE (design reference) | A/B |
+| | SettingsTab.xaml | DONE (+browser token section in design reference) | D |
+| | AuditTab.xaml | DONE (design reference, updated search placeholder) | A/B |
 | **Tests** | SP.Config.Tests.ps1 | DONE - 20/20 PASS | A |
 | | SP.Auth.Tests.ps1 | DONE - needs PS 5.1 | A |
 | | SP.Vault.Tests.ps1 | DONE - 15/15 PASS | A |
@@ -291,6 +292,113 @@ No NuGet packages, no third-party modules, no download-at-runtime dependencies.
 
 ---
 
+## Session: 2026-04-03 -- Three Feature Additions
+
+### Feature 1: Campaign Substring Search (ISC `co` Filter)
+
+**Problem:** ISC admin UI only supports prefix matching on campaign names. No way to find campaigns where a keyword appears in the middle of the name. Wildcards like `*test*` are not supported.
+
+**Solution:** Added `name co "keyword"` (contains) filter support at all layers.
+
+**Files changed (8 + 3 manifests):**
+
+| File | Change |
+|------|--------|
+| `SP.AuditQueries.psm1` | Added `CampaignNameContains` parameter using `name co "..."` filter operator |
+| `SP.Campaigns.psm1` | New `Search-SPCampaigns` function -- standalone CLI/script campaign search with auto-pagination |
+| `SP.GuiBridge.psm1` | Changed `Get-SPGuiAuditCampaigns` from `CampaignNameStartsWith` to `CampaignNameContains` |
+| `SP.MainWindow.psm1` | Updated query handler param key + placeholder text to "Search by keyword..." |
+| `MainWindow.xaml` | Updated Audit tab search placeholder text |
+| `AuditTab.xaml` | Updated design reference placeholder text |
+| `Invoke-SPCampaignAudit.ps1` | Added `-CampaignNameContains` parameter |
+| `SP.Api.psd1` | Added `Search-SPCampaigns` to exports |
+
+**Backward compatible:** `CampaignNameStartsWith` parameter still exists in `Get-SPAuditCampaigns` (API layer). Precedence: exact > starts-with > contains.
+
+**ISC API filter operators now used:** `eq` (exact), `sw` (starts-with), `co` (contains), `in` (status set).
+
+---
+
+### Feature 2: Browser Token Authentication
+
+**Problem:** Users already logged into ISC in their browser had no way to use that session for toolkit API calls. Required OAuth client credentials configured in settings.json or vault.
+
+**Solution:** Added pre-obtained JWT injection. User grabs bearer token from browser dev tools (F12 > Network tab > Authorization header), pastes into the toolkit. Bypasses OAuth entirely.
+
+**Files changed (6 + 3 manifests):**
+
+| File | Change |
+|------|--------|
+| `SP.Auth.psm1` | New `Set-SPBrowserToken` function -- validates JWT (3-segment check), caches with configurable expiry (default 10 min). Version bumped to 1.1.0 |
+| `SP.GuiBridge.psm1` | New `Set-SPGuiBrowserToken` bridge -- user-friendly messages, placeholder text detection |
+| `MainWindow.xaml` | New "Quick Connect - Browser Token" section in Settings tab: masked PasswordBox, Apply Token / Clear buttons, status text |
+| `SettingsTab.xaml` | Updated design reference with same browser token section |
+| `SP.MainWindow.psm1` | Wired Apply Token (calls Set-SPGuiBrowserToken) and Clear Token (calls Clear-SPAuthToken) button handlers |
+| `Invoke-SPCampaignAudit.ps1` | Added `-Token` and `-TokenExpiryMinutes` parameters. Token injection happens before audit dispatch |
+| `SP.Core.psd1` | Added `Set-SPBrowserToken` to exports |
+| `SP.Gui.psd1` | Added `Set-SPGuiBrowserToken` to exports |
+
+**How it works:**
+- **GUI:** Settings tab > Quick Connect section > paste JWT > Apply Token > status shows green with expiry time
+- **CLI:** `.\Invoke-SPCampaignAudit.ps1 -Token 'eyJ...' -Status COMPLETED -DaysBack 7`
+- **Expiry:** Default 10 min (conservative for ~12 min ISC tokens). When token expires, falls back to configured OAuth mode
+- **Caching:** Token is injected into the same `$script:CurrentToken` cache used by `Get-SPAuthToken`. All downstream `Invoke-SPApiRequest` calls pick it up automatically
+
+**ISC browser token details:** JWT bearer tokens visible in dev tools Network tab. Typically valid ~12 minutes (720 seconds). Pattern: `Authorization: Bearer eyJhbGciOiJSUzI1NiIs...`
+
+---
+
+### Feature 3: Reviewer Performance Metrics (Time-to-Decision)
+
+**Problem:** Campaign audit reports showed who reviewed and what they decided, but not how long it took. No way to identify slow reviewers or measure campaign turnaround time.
+
+**Solution:** New `Measure-SPAuditReviewerMetrics` function calculates time-to-decision per reviewer and per campaign from ISC certification timestamps. New Section 3 in the HTML audit report with color-coded performance data.
+
+**Files changed (4 + 1 manifest):**
+
+| File | Change |
+|------|--------|
+| `SP.AuditReport.psm1` | New `Measure-SPAuditReviewerMetrics` function (categorization), new `Format-HoursDisplay` helper, new Section 3 HTML in `Build-SingleCampaignHtml`, renumbered sections 3-6 to 4-7 |
+| `SP.GuiBridge.psm1` | Added `Measure-SPAuditReviewerMetrics` call in `Invoke-SPGuiAudit`, added `ReviewerMetrics` key to campaign audit hashtable |
+| `Invoke-SPCampaignAudit.ps1` | Added `Measure-SPAuditReviewerMetrics` call, added `ReviewerMetrics` to campaign audit object |
+| `SP.Audit.psd1` | Added `Measure-SPAuditReviewerMetrics` to exports |
+
+**Metrics calculated:**
+
+| Metric | Scope | Source |
+|--------|-------|--------|
+| Min/Max/Avg hours | Per reviewer | cert.created -> cert.signed delta |
+| Certs completed | Per reviewer | Count of signed-off certifications |
+| Campaign min/max/avg/median | Campaign-wide | All completed cert deltas |
+
+**HTML report Section 3 includes:**
+- Campaign-level summary table: Fastest Response, Slowest Response, Average, Median (human-readable: "X.X hours" or "X days, Y hours")
+- Per-reviewer performance table with color-coded Avg Time column:
+  - Green (#339933): <= 24 hours
+  - Blue (#336699): 24-72 hours
+  - Orange (#FF8800): > 72 hours
+
+**Report section numbering (updated):**
+1. Campaign Summary
+2. Reviewer Accountability
+3. Reviewer Performance (NEW)
+4. Decision Summary (was 3)
+5. Campaign Reports (was 4)
+6. Provisioning Proof (was 5)
+7. Audit Metadata (was 6)
+
+**Mockup:** `docs/mockup-audit-report.html` -- full HTML mockup with fictitious data showing all 7 sections.
+
+---
+
+### All Syntax Validation Passed
+
+All modified `.psm1`, `.ps1`, and `.psd1` files pass PowerShell AST syntax validation.
+All modified `.xaml` files pass XML well-formedness validation.
+No Pester tests were broken (existing tests don't test the changed parameters).
+
+---
+
 ## Next Steps (Windows PS 5.1 Validation)
 
 1. Copy toolkit to Windows machine
@@ -368,3 +476,13 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 - [ ] Audit tab: "Include Campaign Reports" checkbox works (v3-first download)
 - [ ] Audit tab: "Open Reports Folder" opens Audit/ in Explorer
 - [ ] Audit tab: Recent Reports list populates, double-click opens HTML in browser
+- [ ] Audit tab: "Search by keyword..." does substring match (type partial name, campaigns with keyword anywhere returned)
+- [ ] Settings tab: Quick Connect browser token section visible with masked PasswordBox
+- [ ] Settings tab: Paste JWT, click Apply Token, status turns green with expiry time
+- [ ] Settings tab: After applying token, Audit tab query uses browser token (no OAuth needed)
+- [ ] Settings tab: Click Clear, token cleared, toolkit reverts to OAuth
+- [ ] CLI: `.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJ...' -Status COMPLETED -DaysBack 7` works
+- [ ] CLI: `.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'test' -DaysBack 90` returns substring matches
+- [ ] Audit HTML report: Section 3 "Reviewer Performance" appears with campaign-level summary + per-reviewer table
+- [ ] Audit HTML report: Avg Time column color-coded (green/blue/orange based on hours threshold)
+- [ ] Audit HTML report: Sections 4-7 renumbered correctly (Decision Summary, Campaign Reports, Provisioning Proof, Audit Metadata)

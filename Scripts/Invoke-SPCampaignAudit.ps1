@@ -9,7 +9,7 @@
     reports plus a combined summary and a JSONL audit trail.
 
     Campaign selection requires at least one filter: -CampaignName, -CampaignNameStartsWith,
-    or -Status. Without a filter the script exits with code 2.
+    -CampaignNameContains, or -Status. Without a filter the script exits with code 2.
 
     Reports are written to the path specified by -OutputPath or Audit.OutputPath in
     settings.json (default: .\Audit relative to the toolkit root).
@@ -20,6 +20,9 @@
     Filter campaigns by exact name match (case-insensitive).
 .PARAMETER CampaignNameStartsWith
     Filter campaigns whose name begins with the specified prefix (case-insensitive).
+.PARAMETER CampaignNameContains
+    Filter campaigns whose name contains the specified keyword anywhere (case-insensitive).
+    Uses the ISC 'co' (contains) filter operator. Recommended for fuzzy/substring searching.
 .PARAMETER Status
     Filter campaigns by one or more status values. Valid values: STAGED, ACTIVE,
     COMPLETING, COMPLETED. Defaults to the Audit.DefaultStatuses list in settings.json
@@ -40,6 +43,14 @@
     Output destination for console summary. Console (default) writes a formatted summary
     to the terminal. JSON writes a machine-parseable result object. Both writes console
     output followed by the JSON object.
+.PARAMETER Token
+    Pre-obtained JWT bearer token from the ISC admin console browser session.
+    When provided, bypasses OAuth client_credentials authentication entirely.
+    Obtain by: F12 dev tools > Network tab > copy Authorization header value.
+    The "Bearer " prefix is stripped automatically if present.
+.PARAMETER TokenExpiryMinutes
+    Minutes until the browser token is considered expired. Default: 10.
+    ISC browser tokens are typically valid for ~12 minutes (720 seconds).
 .PARAMETER Help
     Display full comment-based help and exit.
 .EXAMPLE
@@ -51,6 +62,12 @@
 .EXAMPLE
     .\Invoke-SPCampaignAudit.ps1 -CampaignNameStartsWith 'Q1' -Status COMPLETED -OutputMode Both
     # Audit all Q1 completed campaigns, write console and JSON output.
+.EXAMPLE
+    .\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'test' -DaysBack 90
+    # Find all campaigns with 'test' anywhere in the name from the last 90 days.
+.EXAMPLE
+    .\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1...' -Status COMPLETED -DaysBack 7
+    # Use a browser token instead of OAuth credentials.
 .EXAMPLE
     .\Invoke-SPCampaignAudit.ps1 -CampaignName 'Annual Review' -CampaignReportCsvPath 'C:\Reports\annual.csv'
     # Use a locally exported CSV instead of calling the campaign report API.
@@ -79,6 +96,9 @@ param(
     [string]$CampaignNameStartsWith,
 
     [Parameter()]
+    [string]$CampaignNameContains,
+
+    [Parameter()]
     [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
     [string[]]$Status,
 
@@ -97,6 +117,12 @@ param(
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
     [string]$OutputMode = 'Console',
+
+    [Parameter()]
+    [string]$Token,
+
+    [Parameter()]
+    [int]$TokenExpiryMinutes = 10,
 
     [Parameter()]
     [Alias('?')]
@@ -155,9 +181,9 @@ foreach ($moduleDef in @(
 $correlationID = [guid]::NewGuid().ToString()
 
 # Validate that at least one campaign filter is specified
-$hasFilter = $CampaignName -or $CampaignNameStartsWith -or $Status
+$hasFilter = $CampaignName -or $CampaignNameStartsWith -or $CampaignNameContains -or $Status
 if (-not $hasFilter) {
-    Write-Host "ERROR: At least one campaign filter is required: -CampaignName, -CampaignNameStartsWith, or -Status." -ForegroundColor Red
+    Write-Host "ERROR: At least one campaign filter is required: -CampaignName, -CampaignNameStartsWith, -CampaignNameContains, or -Status." -ForegroundColor Red
     Write-Host "       Example: .\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 30" -ForegroundColor Yellow
     exit 2
 }
@@ -204,6 +230,17 @@ try {
     Initialize-SPLogging -Force -ErrorAction SilentlyContinue
 }
 catch { }
+
+# Inject browser token if provided (bypasses OAuth client_credentials)
+if ($Token) {
+    Write-Host '  Auth: Injecting browser token...' -ForegroundColor Gray
+    $tokenResult = Set-SPBrowserToken -Token $Token -ExpiryMinutes $TokenExpiryMinutes -CorrelationID $correlationID
+    if (-not $tokenResult.Success) {
+        Write-Host "ERROR: Invalid token: $($tokenResult.Error)" -ForegroundColor Red
+        exit 3
+    }
+    Write-Host "  Auth: Browser token active (expires: $($tokenResult.Data.ExpiresAt.ToString('HH:mm:ss')))" -ForegroundColor Green
+}
 
 Write-SPLog -Message "Invoke-SPCampaignAudit started" `
     -Severity INFO -Component 'Invoke-SPCampaignAudit' -Action 'Start' -CorrelationID $correlationID
@@ -259,6 +296,9 @@ if ($CampaignName) {
 }
 if ($CampaignNameStartsWith) {
     $auditCampaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith
+}
+if ($CampaignNameContains) {
+    $auditCampaignParams['CampaignNameContains'] = $CampaignNameContains
 }
 if ($Status) {
     $auditCampaignParams['Status'] = $Status
@@ -375,10 +415,31 @@ foreach ($campaign in $campaigns) {
         }
     }
 
+    # --- Wrap items with certification context for categorization functions ---
+    # Group-SPAuditDecisions and Group-SPAuditRemediationProof expect each element
+    # to be a hashtable with Item/CertificationId/CertificationName/CampaignName keys.
+    $wrappedAllItems = [System.Collections.Generic.List[object]]::new()
+    foreach ($cert in $certifications) {
+        $certName = if ($null -ne $cert.name) { $cert.name } else { '' }
+        $certItemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
+        if ($certItemResult.Success -and $null -ne $certItemResult.Data) {
+            foreach ($rawItem in $certItemResult.Data) {
+                $wrappedAllItems.Add(@{
+                    Item              = $rawItem
+                    CertificationId   = $cert.id
+                    CertificationName = $certName
+                    CampaignName      = $campName
+                })
+            }
+        }
+    }
+
     # --- Categorize decisions and actions ---
-    $decisionGroups  = Group-SPAuditDecisions -Items $allItems.ToArray()
-    $reviewerActions = Group-SPReviewerActions -Certifications $certifications
-    $eventGroups     = Group-SPAuditIdentityEvents -Events $identityEvents
+    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray()
+    $reviewerActions  = Group-SPReviewerActions        -Certifications $certifications
+    $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
+    $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
+    $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications
 
     # --- Build per-campaign audit data ---
     $campaignAudit = [PSCustomObject]@{
@@ -389,7 +450,9 @@ foreach ($campaign in $campaigns) {
         CampaignReport   = $campaignReportRows
         DecisionGroups   = $decisionGroups
         ReviewerActions  = $reviewerActions
+        ReviewerMetrics  = $reviewerMetrics
         EventGroups      = $eventGroups
+        RemediationProof = $remediationProof
         RevokedCount     = $revokedIdentityIds.Count
         AuditedAt        = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }

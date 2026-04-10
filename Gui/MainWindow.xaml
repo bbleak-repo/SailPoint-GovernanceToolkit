@@ -366,6 +366,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <!-- Settings form - loaded from SettingsTab.xaml content via code -->
@@ -376,8 +377,59 @@
                         </StackPanel>
                     </ScrollViewer>
 
+                    <!-- Quick Connect: Browser Token -->
+                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1"
+                            Padding="16,12" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="Quick Connect - Browser Token"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold" FontSize="13"/>
+
+                            <Grid Grid.Row="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="8"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="8"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <PasswordBox Grid.Column="0" x:Name="PbBrowserToken"
+                                             Background="#252538" Foreground="#E0E0E0"
+                                             BorderBrush="#3D3D5C" BorderThickness="1"
+                                             Padding="8,4" FontSize="12" Height="30"
+                                             PasswordChar="*"
+                                             ToolTip="Paste JWT from browser dev tools (F12 > Network tab > copy Authorization header value)"/>
+
+                                <Button Grid.Column="2" x:Name="BtnApplyToken"
+                                        Content="Apply Token"
+                                        Background="#5B9BD5" Foreground="#FFFFFF"
+                                        BorderThickness="0" Padding="14,6"
+                                        FontSize="12" FontFamily="Segoe UI" Cursor="Hand"/>
+
+                                <Button Grid.Column="4" x:Name="BtnClearToken"
+                                        Content="Clear"
+                                        Background="#2D2D44" Foreground="#E0E0E0"
+                                        BorderBrush="#5B9BD5" BorderThickness="1"
+                                        Padding="14,6" FontSize="12" FontFamily="Segoe UI" Cursor="Hand"/>
+                            </Grid>
+
+                            <TextBlock Grid.Row="4" x:Name="BrowserTokenStatus"
+                                       Foreground="#888899" FontSize="11" TextWrapping="Wrap"
+                                       Text="No browser token active. Paste a JWT from the ISC admin console to bypass OAuth credentials."/>
+                        </Grid>
+                    </Border>
+
                     <!-- Bottom button bar -->
-                    <Grid Grid.Row="1" Margin="0,8,0,0">
+                    <Grid Grid.Row="2" Margin="0,8,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -435,7 +487,7 @@
                                  Width="200" Background="#2D2D44" Foreground="#888899"
                                  BorderBrush="#3D3D5C" BorderThickness="1"
                                  Padding="6,4" FontSize="12"
-                                 Text="Filter by name..."
+                                 Text="Search by keyword..."
                                  Margin="0,0,8,0"/>
 
                         <TextBlock Grid.Column="2" Text="Status:" Foreground="#AAAACC"

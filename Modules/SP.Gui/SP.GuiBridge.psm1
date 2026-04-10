@@ -428,8 +428,10 @@ function Get-SPGuiAuditCampaigns {
         raw API objects into grid-bindable PSCustomObjects suitable for WPF DataGrid
         binding. Each item includes an IsSelected checkbox field and retains a
         reference to the raw campaign object for downstream use in Invoke-SPGuiAudit.
-    .PARAMETER CampaignNameStartsWith
-        Optional starts-with filter. Passed to Get-SPAuditCampaigns as-is.
+    .PARAMETER CampaignNameContains
+        Optional substring (contains) filter. Passed to Get-SPAuditCampaigns
+        using the 'co' operator for case-insensitive substring matching.
+        Matches campaigns where the keyword appears anywhere in the name.
     .PARAMETER Status
         Optional status filter. Pass "(All)" or empty string to skip filtering.
         Otherwise passed as a single-element array to Get-SPAuditCampaigns.
@@ -446,7 +448,7 @@ function Get-SPGuiAuditCampaigns {
     [OutputType([hashtable])]
     param(
         [Parameter()]
-        [string]$CampaignNameStartsWith,
+        [string]$CampaignNameContains,
 
         [Parameter()]
         [string]$Status,
@@ -458,8 +460,8 @@ function Get-SPGuiAuditCampaigns {
     try {
         $params = @{ DaysBack = $DaysBack }
 
-        if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) {
-            $params['CampaignNameStartsWith'] = $CampaignNameStartsWith
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $params['CampaignNameContains'] = $CampaignNameContains
         }
 
         if (-not [string]::IsNullOrWhiteSpace($Status) -and $Status -ne '(All)') {
@@ -683,9 +685,11 @@ function Invoke-SPGuiAudit {
             }
 
             # --- Categorize ---
-            $decisions   = Group-SPAuditDecisions      -Items $wrappedItems.ToArray()
-            $reviewers   = Group-SPReviewerActions     -Certifications $certifications
-            $eventGroups = Group-SPAuditIdentityEvents -Events $allIdentityEvents
+            $decisions        = Group-SPAuditDecisions         -Items $wrappedItems.ToArray()
+            $reviewers        = Group-SPReviewerActions        -Certifications $certifications
+            $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
+            $eventGroups      = Group-SPAuditIdentityEvents    -Events $allIdentityEvents
+            $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedItems.ToArray() -Certifications $certifications
 
             # --- Build campaign audit hashtable (keys match Export-SPAuditHtml schema) ---
             $campaignAudit = @{
@@ -697,7 +701,9 @@ function Invoke-SPGuiAudit {
                 TotalCertifications      = if ($null -ne $rawCampaign.totalCertifications)  { [int]$rawCampaign.totalCertifications } else { 0 }
                 Decisions                = $decisions
                 Reviewers                = $reviewers
+                ReviewerMetrics          = $reviewerMetrics
                 Events                   = $eventGroups
+                RemediationProof         = $remediationProof
                 CampaignReports          = $campaignReports
                 CampaignReportsAvailable = ($null -ne $campaignReports)
             }
@@ -816,6 +822,79 @@ function Get-SPGuiAuditReports {
 
 #endregion
 
+#region Browser Token Functions
+
+function Set-SPGuiBrowserToken {
+    <#
+    .SYNOPSIS
+        Injects a browser-obtained JWT token for use by all toolkit API calls.
+    .DESCRIPTION
+        Bridge function for the Settings tab "Apply Token" button. Accepts a JWT
+        from the PasswordBox, validates it, and delegates to Set-SPBrowserToken
+        in SP.Auth. Returns a status hashtable for GUI display.
+
+        After applying, the toolkit uses this token for all API calls until it
+        expires or the user clears it. When the token expires, the toolkit falls
+        back to the configured OAuth authentication mode.
+    .PARAMETER Token
+        The JWT bearer token string. "Bearer " prefix is stripped automatically.
+    .PARAMETER ExpiryMinutes
+        Minutes until the token is considered expired. Default: 10.
+    .OUTPUTS
+        @{Success=$bool; Message=$string; ExpiresAt=$datetime}
+    .EXAMPLE
+        $result = Set-SPGuiBrowserToken -Token $passwordBox.Password
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Token,
+
+        [Parameter()]
+        [int]$ExpiryMinutes = 10
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Token) -or $Token -eq 'Paste browser token here...') {
+        return @{
+            Success   = $false
+            Message   = 'No token provided. Paste a JWT from the browser dev tools Network tab.'
+            ExpiresAt = $null
+        }
+    }
+
+    try {
+        $result = Set-SPBrowserToken -Token $Token -ExpiryMinutes $ExpiryMinutes
+
+        if ($result.Success) {
+            $expiresAt = $result.Data.ExpiresAt
+            return @{
+                Success   = $true
+                Message   = "Token applied. Expires at $($expiresAt.ToString('HH:mm:ss')). All API calls will use this token."
+                ExpiresAt = $expiresAt
+            }
+        }
+        else {
+            return @{
+                Success   = $false
+                Message   = "Token rejected: $($result.Error)"
+                ExpiresAt = $null
+            }
+        }
+    }
+    catch {
+        Write-SPLog -Message "Set-SPGuiBrowserToken failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Set-SPGuiBrowserToken'
+        return @{
+            Success   = $false
+            Message   = "Failed: $($_.Exception.Message)"
+            ExpiresAt = $null
+        }
+    }
+}
+
+#endregion
+
 #region Internal Helper Functions
 
 function Resolve-SPToolkitRoot {
@@ -865,6 +944,7 @@ Export-ModuleMember -Function @(
     'Get-SPGuiCampaignList',
     'Get-SPGuiIdentityList',
     'Test-SPGuiConnectivity',
+    'Set-SPGuiBrowserToken',
     'Get-SPGuiAuditCampaigns',
     'Invoke-SPGuiAudit',
     'Get-SPGuiAuditReports'

@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SailPoint Campaign Audit Report - Mockup</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+<div style="background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:12px 16px; margin-bottom:24px; font-size:13px; color:#856404;">
+    MOCKUP - Fictitious data demonstrating the full audit report with Executive Summary dashboard, Reviewer Performance (Section 3), and Remediation &amp; Reassignment Proof (Section 6). All visuals are inline SVG + HTML tables -- no JavaScript, Word copy-paste compatible.
+</div>
+
+<div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif;">
+
+<h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-bottom:4px; font-size:20px;">Q1 2026 IT Entitlement Review - Active Directory</h2>
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-top:2px;">Campaign ID: 2c91808a8e2f4b01018e3a7c5d290042</p>
+
+<!-- ============================================================ -->
+<!-- EXECUTIVE SUMMARY DASHBOARD -->
+<!-- ============================================================ -->
+<div style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; padding:24px 28px; margin:20px 0 28px 0; page-break-inside:avoid;">
+
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin:0 0 16px 0; font-size:18px; border-bottom:2px solid #336699; padding-bottom:6px;">Executive Summary</h3>
+
+<!-- Row 1: Status Badge + Campaign Timeline (side by side) -->
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="width:50%; vertical-align:top; padding-right:16px;">
+
+    <!-- Campaign Status Badge -->
+    <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:0;">
+    <tr>
+        <td style="padding:12px 16px; background:#339933; border-radius:6px; text-align:center;" colspan="2">
+            <span style="color:#ffffff; font-size:22px; font-weight:bold; letter-spacing:1px;">COMPLETED</span>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:8px 4px; text-align:center; color:#555; font-size:12px;">
+            <span style="font-weight:bold; font-size:16px; color:#2c3e50;">5 / 5</span><br/>
+            Reviewers Signed Off
+        </td>
+        <td style="padding:8px 4px; text-align:center; color:#555; font-size:12px;">
+            <span style="font-weight:bold; font-size:16px; color:#2c3e50;">53 / 53</span><br/>
+            Items Decided
+        </td>
+    </tr>
+    </table>
+
+</td>
+<td style="width:50%; vertical-align:top; padding-left:16px;">
+
+    <!-- Campaign Timeline -->
+    <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">
+    <tr><td style="padding:5px 8px; font-weight:bold; color:#555; width:130px;">Created</td><td style="padding:5px 8px; color:#2c3e50;">2026-03-03 08:00</td></tr>
+    <tr><td style="padding:5px 8px; font-weight:bold; color:#555;">Activated</td><td style="padding:5px 8px; color:#2c3e50;">2026-03-03 08:05</td></tr>
+    <tr><td style="padding:5px 8px; font-weight:bold; color:#555;">Due Date</td><td style="padding:5px 8px; color:#2c3e50;">2026-03-14 23:59</td></tr>
+    <tr><td style="padding:5px 8px; font-weight:bold; color:#555;">Completed</td><td style="padding:5px 8px; color:#2c3e50;">2026-03-10 14:22</td></tr>
+    <tr><td style="padding:5px 8px; font-weight:bold; color:#555;">Result</td><td style="padding:5px 8px;"><span style="color:#339933; font-weight:bold;">4 days early</span></td></tr>
+    </table>
+
+</td>
+</tr>
+</table>
+
+<!-- Row 2: Decision Donut + Remediation Bar + Risk Scorecard (three columns) -->
+<table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+<tr>
+
+<!-- Column 1: Decision Distribution Donut -->
+<td style="width:33%; vertical-align:top; padding-right:12px; text-align:center;">
+    <p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:0 0 8px 0;">Decision Distribution</p>
+
+    <!-- SVG Donut Chart -->
+    <svg width="140" height="140" viewBox="0 0 42 42" style="display:block; margin:0 auto;">
+        <!-- Background circle -->
+        <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#e0e0e0" stroke-width="3.2"></circle>
+
+        <!-- Approved: 45/53 = 84.9% (green) -->
+        <circle cx="21" cy="21" r="15.9" fill="transparent"
+                stroke="#339933" stroke-width="3.2"
+                stroke-dasharray="84.9 15.1"
+                stroke-dashoffset="25"
+                stroke-linecap="butt"></circle>
+
+        <!-- Revoked: 8/53 = 15.1% (red) -- starts after approved -->
+        <circle cx="21" cy="21" r="15.9" fill="transparent"
+                stroke="#CC3333" stroke-width="3.2"
+                stroke-dasharray="15.1 84.9"
+                stroke-dashoffset="-59.9"
+                stroke-linecap="butt"></circle>
+
+        <!-- Center text -->
+        <text x="21" y="19.5" text-anchor="middle" style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:5px; font-weight:bold; fill:#2c3e50;">53</text>
+        <text x="21" y="24" text-anchor="middle" style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:2.8px; fill:#777;">items</text>
+    </svg>
+
+    <!-- Legend -->
+    <table style="margin:8px auto 0 auto; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; border-collapse:collapse;">
+    <tr>
+        <td style="padding:2px 4px;"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#339933"/></svg></td>
+        <td style="padding:2px 4px; color:#555;">Approved: 45 (84.9%)</td>
+    </tr>
+    <tr>
+        <td style="padding:2px 4px;"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#CC3333"/></svg></td>
+        <td style="padding:2px 4px; color:#555;">Revoked: 8 (15.1%)</td>
+    </tr>
+    <tr>
+        <td style="padding:2px 4px;"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#FF8800"/></svg></td>
+        <td style="padding:2px 4px; color:#555;">Pending: 0 (0%)</td>
+    </tr>
+    </table>
+</td>
+
+<!-- Column 2: Remediation Completion -->
+<td style="width:34%; vertical-align:top; padding:0 12px;">
+    <p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:0 0 8px 0;">Remediation Completion</p>
+
+    <!-- Big number -->
+    <div style="text-align:center; margin-bottom:10px;">
+        <span style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:36px; font-weight:bold; color:#FF8800;">87.5%</span>
+        <br/>
+        <span style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">7 of 8 revoked items remediated</span>
+    </div>
+
+    <!-- Progress bar (table-based for Word compat) -->
+    <table style="width:100%; border-collapse:collapse; height:18px; margin-bottom:6px;">
+    <tr>
+        <td style="width:87.5%; background:#339933; height:18px; border-radius:4px 0 0 4px;"></td>
+        <td style="width:12.5%; background:#FF8800; height:18px; border-radius:0 4px 4px 0;"></td>
+    </tr>
+    </table>
+    <table style="width:100%; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; border-collapse:collapse;">
+    <tr>
+        <td style="color:#339933; font-weight:bold; padding:2px 0;">7 Complete</td>
+        <td style="color:#FF8800; font-weight:bold; text-align:right; padding:2px 0;">1 Pending</td>
+    </tr>
+    </table>
+
+    <div style="margin-top:12px; padding:6px 8px; background:#fff3cd; border-radius:4px; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; color:#856404;">
+        Target: 100% remediation for SOX compliance
+    </div>
+</td>
+
+<!-- Column 3: Risk Scorecard -->
+<td style="width:33%; vertical-align:top; padding-left:12px;">
+    <p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:0 0 8px 0;">Risk Indicators</p>
+
+    <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px;">
+    <tr>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; width:20px;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Reviewer Completion</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:#339933;">100%</td>
+    </tr>
+    <tr>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Pending Items</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:#339933;">0</td>
+    </tr>
+    <tr>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#FF8800"/></svg></td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Remediation Rate</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:#FF8800;">87.5%</td>
+    </tr>
+    <tr>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Completed On Time</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:#339933;">Yes</td>
+    </tr>
+    <tr>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#FF8800"/></svg></td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Slowest Reviewer</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:#FF8800;">7d 6h</td>
+    </tr>
+    <tr>
+        <td style="padding:5px 4px;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td>
+        <td style="padding:5px 4px; color:#555;">Reassignments</td>
+        <td style="padding:5px 4px; font-weight:bold; text-align:right; color:#336699;">1</td>
+    </tr>
+    </table>
+</td>
+
+</tr>
+</table>
+
+<!-- Row 3: Reviewer Response Time Bars -->
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:16px 0 8px 0;">Reviewer Response Time</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; margin-bottom:4px;">
+
+<tr>
+    <td style="padding:4px 8px; width:140px; color:#555;">Sarah Mitchell</td>
+    <td style="padding:4px 0;">
+        <table style="width:100%; border-collapse:collapse; height:14px;"><tr>
+            <td style="width:6.6%; background:#339933; height:14px; border-radius:3px 0 0 3px;"></td>
+            <td style="width:93.4%; background:#e8e8e8; height:14px; border-radius:0 3px 3px 0;"></td>
+        </tr></table>
+    </td>
+    <td style="padding:4px 8px; width:90px; text-align:right; color:#339933; font-weight:bold;">11.5 hours</td>
+</tr>
+
+<tr>
+    <td style="padding:4px 8px; color:#555;">Lisa Park</td>
+    <td style="padding:4px 0;">
+        <table style="width:100%; border-collapse:collapse; height:14px;"><tr>
+            <td style="width:3.6%; background:#339933; height:14px; border-radius:3px 0 0 3px;"></td>
+            <td style="width:96.4%; background:#e8e8e8; height:14px; border-radius:0 3px 3px 0;"></td>
+        </tr></table>
+    </td>
+    <td style="padding:4px 8px; width:90px; text-align:right; color:#339933; font-weight:bold;">6.3 hours</td>
+</tr>
+
+<tr>
+    <td style="padding:4px 8px; color:#555;">James Rodriguez</td>
+    <td style="padding:4px 0;">
+        <table style="width:100%; border-collapse:collapse; height:14px;"><tr>
+            <td style="width:18.4%; background:#336699; height:14px; border-radius:3px 0 0 3px;"></td>
+            <td style="width:81.6%; background:#e8e8e8; height:14px; border-radius:0 3px 3px 0;"></td>
+        </tr></table>
+    </td>
+    <td style="padding:4px 8px; width:90px; text-align:right; color:#336699; font-weight:bold;">1d 8h</td>
+</tr>
+
+<tr>
+    <td style="padding:4px 8px; color:#555;">Karen Whitfield</td>
+    <td style="padding:4px 0;">
+        <table style="width:100%; border-collapse:collapse; height:14px;"><tr>
+            <td style="width:55.7%; background:#FF8800; height:14px; border-radius:3px 0 0 3px;"></td>
+            <td style="width:44.3%; background:#e8e8e8; height:14px; border-radius:0 3px 3px 0;"></td>
+        </tr></table>
+    </td>
+    <td style="padding:4px 8px; width:90px; text-align:right; color:#FF8800; font-weight:bold;">4d 1h</td>
+</tr>
+
+<tr>
+    <td style="padding:4px 8px; color:#555;">David Chen</td>
+    <td style="padding:4px 0;">
+        <table style="width:100%; border-collapse:collapse; height:14px;"><tr>
+            <td style="width:100%; background:#FF8800; height:14px; border-radius:3px;"></td>
+        </tr></table>
+    </td>
+    <td style="padding:4px 8px; width:90px; text-align:right; color:#FF8800; font-weight:bold;">7d 6h</td>
+</tr>
+
+</table>
+
+<!-- Response time legend -->
+<table style="margin:4px 0 0 148px; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:10px; border-collapse:collapse;">
+<tr>
+    <td style="padding:1px 4px;"><svg width="10" height="10"><rect width="10" height="10" rx="2" fill="#339933"/></svg></td>
+    <td style="padding:1px 4px; color:#777;">Under 24 hours</td>
+    <td style="padding:1px 8px;"><svg width="10" height="10"><rect width="10" height="10" rx="2" fill="#336699"/></svg></td>
+    <td style="padding:1px 4px; color:#777;">24-72 hours</td>
+    <td style="padding:1px 8px;"><svg width="10" height="10"><rect width="10" height="10" rx="2" fill="#FF8800"/></svg></td>
+    <td style="padding:1px 4px; color:#777;">Over 72 hours</td>
+</tr>
+</table>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; color:#777; margin:8px 0 0 0; text-align:right;">Campaign average: 2 days, 15 hours &nbsp;|&nbsp; Median: 1 day, 8 hours</p>
+
+</div>
+<!-- END EXECUTIVE SUMMARY -->
+
+<!-- ============================================================ -->
+<!-- SECTION 1: Campaign Summary -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">1. Campaign Summary</h3>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+    <tbody>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Campaign Name</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Q1 2026 IT Entitlement Review - Active Directory</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Status</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">COMPLETED</span></td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Created</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-03 08:00</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Completed</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 14:22</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Total Certifications</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">6</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Campaign Duration</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">7 days, 6 hours</td></tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: Reviewer Accountability -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">2. Reviewer Accountability</h3>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;">Primary Reviewers</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Email</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Certs Assigned</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decisions Made</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Sign-Off Date</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Phase</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">s.mitchell@contoso.com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">18</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-04 11:45</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">j.rodriguez@contoso.com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">12</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-05 16:30</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">k.whitfield@contoso.com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">8</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-07 09:15</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">d.chen@contoso.com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">15</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:50</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+</tbody>
+</table>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px;">Reassigned Reviewers</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Email</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reassigned From</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decisions Made</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Sign-Off Date</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Phase</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Proof of Action</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">l.park@contoso.com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">5</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:20</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Yes</span></td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: Reviewer Performance (NEW) -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">3. Reviewer Performance</h3>
+
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+    <tbody>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Fastest Response</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">3.8 hours</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Slowest Response</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">7 days, 6 hours</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Average Response</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2 days, 15 hours</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Median Response</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1 days, 8 hours</td></tr>
+    </tbody>
+</table>
+
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Classification</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Certs</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decisions</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Min Time</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Max Time</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Avg Time</th>
+</tr></thead>
+<tbody>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Primary</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">18</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">3.8 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">19.2 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#339933; font-weight:bold;">11.5 hours</td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Primary</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">12</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1 days, 8 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1 days, 8 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#336699; font-weight:bold;">1 days, 8 hours</td>
+    </tr>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Primary</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">8</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">4 days, 1 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">4 days, 1 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#FF8800; font-weight:bold;">4 days, 1 hours</td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Primary</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">15</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">7 days, 6 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">7 days, 6 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#FF8800; font-weight:bold;">7 days, 6 hours</td>
+    </tr>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Reassigned</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">5</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">6.3 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">6.3 hours</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#339933; font-weight:bold;">6.3 hours</td>
+    </tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Decision Summary -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">4. Decision Summary</h3>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:#339933; margin-bottom:6px; margin-top:12px;">Approved (45)</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Identity</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Access Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Type</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decision Date</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">John Adams</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=IT-Helpdesk-L1,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-04 10:12</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Emily Watson</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=VPN-Remote-Access,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-04 10:14</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Michael Torres</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=SharePoint-Editors,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-05 15:45</td></tr>
+    <tr style="background:#f9f9f9;"><td colspan="5" style="padding:8px 10px; color:#777777; font-style:italic;">... 42 additional approved items ...</td></tr>
+</tbody>
+</table>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:#CC3333; margin-bottom:6px; margin-top:12px;">Revoked (8)</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Identity</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Access Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Type</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decision Date</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Robert Blake</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Finance-Admins,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:20</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Angela Foster</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=SAP-Power-Users,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-07 08:55</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Thomas Price</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Domain-Admins,OU=Privileged,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:05</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sandra Kim</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Exchange-Full-Access,OU=Groups,DC=contoso,DC=com</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:35</td></tr>
+    <tr><td colspan="5" style="padding:8px 10px; color:#777777; font-style:italic;">... 4 additional revoked items ...</td></tr>
+</tbody>
+</table>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:#FF8800; margin-bottom:6px; margin-top:12px;">Pending (0)</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Identity</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Access Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Type</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decision Date</th>
+</tr></thead>
+<tbody>
+    <tr><td colspan="5" style="padding:8px 10px; color:#777777; font-style:italic;">None.</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: Campaign Reports -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">5. Campaign Reports</h3>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;">CAMPAIGN_STATUS_REPORT</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Total Items</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Approved</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Revoked</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Completion %</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">18</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">16</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">100%</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">12</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">11</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">1</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">100%</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">8</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">6</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">100%</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">15</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">12</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">3</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">100%</td></tr>
+</tbody>
+</table>
+
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;">CERTIFICATION_SIGNOFF_REPORT</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Sign-Off Date</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Phase</th>
+</tr></thead>
+<tbody>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-04 11:45</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-05 16:30</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-07 09:15</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr style="background:#f9f9f9;"><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:20</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+    <tr><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:50</td><td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td></tr>
+</tbody>
+</table>
+
+<!-- ============================================================ -->
+<!-- SECTION 6: Remediation & Reassignment Proof (REWORKED) -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">6. Remediation &amp; Reassignment Proof</h3>
+
+<!-- Sub-section A: Remediation Summary -->
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;">Remediation Summary</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+    <tbody>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Total Revoked Items</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">8</td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Remediation Complete</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">7</span></td></tr>
+        <tr><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;">Remediation Pending</td><td style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#FF8800; font-weight:bold;">1</span></td></tr>
+    </tbody>
+</table>
+
+<!-- Sub-section B: Revoked Items - Remediation Status -->
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;">Revoked Items - Remediation Status</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Identity</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Access Name</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Type</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Source</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Decision Date</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Remediation</th>
+</tr></thead>
+<tbody>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Robert Blake</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Finance-Admins,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:20</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Angela Foster</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=SAP-Power-Users,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-07 08:55</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Thomas Price</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Domain-Admins,OU=Privileged,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:05</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sandra Kim</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Exchange-Full-Access,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">David Chen</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-10 13:35</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Marcus Webb</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=VPN-Admin-Access,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Sarah Mitchell</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-04 10:30</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Diana Reeves</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=SQL-DBA-Prod,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">James Rodriguez</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-05 15:50</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Kevin Ortiz</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=Azure-Contributor,OU=Cloud,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:10</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#339933; font-weight:bold;">Complete</span></td>
+    </tr>
+    <tr style="background:#f9f9f9;">
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Patricia Nguyen</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">CN=HRIS-Admin,OU=Groups,DC=contoso,DC=com</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">ENTITLEMENT</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Active Directory [PROD]</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-07 09:00</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"><span style="color:#FF8800; font-weight:bold;">Pending</span></td>
+    </tr>
+</tbody>
+</table>
+
+<!-- Sub-section C: Reassignment Chain -->
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;">Reassignment Chain</p>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+<thead><tr>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Certification</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Reassigned From</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Current Reviewer</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Sign-Off Date</th>
+    <th style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px;">Phase</th>
+</tr></thead>
+<tbody>
+    <tr>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Q1 IT Entitlement Review - Karen Whitfield</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Karen Whitfield</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">Lisa Park</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">2026-03-08 14:20</td>
+        <td style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;">SIGNED</td>
+    </tr>
+</tbody>
+</table>
+
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 7: Audit Metadata -->
+<!-- ============================================================ -->
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">7. Audit Metadata</h3>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+    <tbody>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Correlation ID</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">a1b2c3d4-e5f6-7890-abcd-ef1234567890</td></tr>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Report Generated</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">2026-04-03 09:15:42</td></tr>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Auth Mode</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">BrowserToken</td></tr>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Filter</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">name co &quot;Entitlement Review&quot;, status in (&quot;COMPLETED&quot;)</td></tr>
+    </tbody>
+</table>
+
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v1.0.0 &nbsp;|&nbsp; Generated: 2026-04-03 09:15:42 &nbsp;|&nbsp; Correlation ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+</div>
+
+</div>
+</body>
+</html>

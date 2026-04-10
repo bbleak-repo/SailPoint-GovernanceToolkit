@@ -40,6 +40,8 @@
         'Group-SPAuditDecisions'
         'Group-SPReviewerActions'
         'Group-SPAuditIdentityEvents'
+        'Group-SPAuditRemediationProof'
+        'Measure-SPAuditReviewerMetrics'
 
         # SP.AuditReport - Export functions
         'Export-SPAuditHtml'

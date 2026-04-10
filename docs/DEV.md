@@ -98,14 +98,16 @@ Severity levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Log files are named `{FilePre
 
 ### SP.Auth.psm1
 
-OAuth 2.0 client_credentials token management:
+OAuth 2.0 client_credentials token management and browser token pass-through:
 
 | Function | Purpose |
 |----------|---------|
 | `Get-SPAuthToken` | Acquire or return cached bearer token |
 | `Clear-SPAuthCache` | Force token re-acquisition on next call |
+| `Set-SPBrowserToken` | Store a manually supplied JWT (from browser dev tools) for use by all subsequent API calls in the session |
+| `Clear-SPAuthToken` | Clear any cached token (OAuth or browser) and force re-authentication on next call |
 
-Tokens are cached in module scope (`$script:TokenCache`). Expiry is tracked to avoid unnecessary re-authentication.
+Tokens are cached in module scope (`$script:TokenCache`). Expiry is tracked to avoid unnecessary re-authentication. When `Set-SPBrowserToken` is used, the cached token bypasses the OAuth flow entirely until it expires or `Clear-SPAuthToken` is called.
 
 ### SP.Vault.psm1
 
@@ -141,7 +143,7 @@ Features:
 
 ### SP.Campaigns.psm1
 
-Campaign lifecycle management:
+Campaign lifecycle management and search:
 
 | Function | Purpose |
 |----------|---------|
@@ -150,6 +152,7 @@ Campaign lifecycle management:
 | `Get-SPCampaign` | Retrieve campaign by ID |
 | `Get-SPCampaignStatus` | Poll until target status or timeout |
 | `Complete-SPCampaign` | Complete a past-due campaign (guarded by Safety.AllowCompleteCampaign) |
+| `Search-SPCampaigns` | Search campaigns by name substring using the ISC `name co "..."` filter |
 
 ### SP.Certifications.psm1
 
@@ -201,9 +204,13 @@ Categorization and report generation:
 | `Group-SPAuditDecisions` | Group review items into Approved/Revoked/Pending |
 | `Group-SPReviewerActions` | Group certifications into Primary/Reassigned reviewers |
 | `Group-SPAuditIdentityEvents` | Group events into Revoked/Granted |
-| `Export-SPAuditHtml` | Generate Word-compatible HTML report (inline CSS, table layout) |
+| `Measure-SPAuditReviewerMetrics` | Calculate per-reviewer time-to-decision statistics (min, max, median, mean) |
+| `Group-SPAuditRemediationProof` | Assemble item-level remediation completion status and reassignment chain per reviewer |
+| `Export-SPAuditHtml` | Generate Word-compatible HTML report (inline CSS, table layout) including Executive Summary Dashboard |
 | `Export-SPAuditText` | Generate plain-text summary report |
 | `Export-SPAuditJsonl` | Write JSONL audit trail (UTF-8 no BOM) |
+
+Internal (not exported): `Build-ExecutiveSummaryHtml` -- renders the status badge, decision donut, remediation bar, risk scorecard, and reviewer response time summary that appear at the top of each per-campaign HTML report.
 
 `Group-SPAuditDecisions` expects wrapper hashtables with an `Item` key pointing to the raw API object plus `CertificationId`, `CertificationName`, and `CampaignName` context fields.
 
@@ -310,7 +317,7 @@ These were discovered during development and are documented here for reference:
 | Endpoint | Method | Module | Purpose |
 |----------|--------|--------|---------|
 | `/oauth/token` | POST | SP.Auth | OAuth 2.0 token acquisition |
-| `/v3/campaigns` | GET/POST | SP.Campaigns, SP.AuditQueries | List/create campaigns |
+| `/v3/campaigns` | GET/POST | SP.Campaigns, SP.AuditQueries | List/create campaigns. `Search-SPCampaigns` uses `?filters=name+co+"..."` for substring search. |
 | `/v3/campaigns/{id}/activate` | POST | SP.Campaigns | Activate a staged campaign |
 | `/v3/campaigns/{id}/complete` | POST | SP.Campaigns | Complete a past-due campaign |
 | `/v3/campaigns/{id}/reports` | GET | SP.AuditQueries | Get report metadata |

@@ -110,14 +110,22 @@ Query completed campaigns and generate compliance reports:
 # Audit a specific campaign by exact name
 .\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Q1 2026 Access Review'
 
+# Search campaigns by keyword anywhere in the name (substring match)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'entitlement' -DaysBack 90
+
 # Audit campaigns starting with a prefix
 .\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameStartsWith 'Q1'
+
+# Use a browser token instead of OAuth credentials
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7
 
 # Output JSON results
 .\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 30 -OutputMode JSON
 ```
 
-At least one campaign filter must be specified (`-CampaignName`, `-CampaignNameStartsWith`, or `-Status`).
+At least one campaign filter must be specified (`-CampaignName`, `-CampaignNameStartsWith`, `-CampaignNameContains`, or `-Status`).
+
+**Browser token authentication:** If you are already logged into the ISC admin console, you can skip OAuth setup entirely. Open browser dev tools (F12), go to the Network tab, copy the `Authorization: Bearer eyJ...` header from any API call, and pass the JWT via `-Token`. Tokens are typically valid for ~12 minutes.
 
 **Output files** are written to `.\Audit\` by default:
 
@@ -131,6 +139,15 @@ Audit\
 ```
 
 The HTML reports are designed for copy-paste into Word documents. They use inline CSS and table-based layout only (no flexbox/grid).
+
+Each campaign report includes 7 sections:
+1. Campaign Summary (name, status, dates, certification count)
+2. Reviewer Accountability (primary + reassigned reviewers with sign-off proof)
+3. Reviewer Performance (time-to-decision metrics per reviewer, color-coded by response time)
+4. Decision Summary (approved, revoked, pending items with identity/entitlement/reviewer detail)
+5. Campaign Reports (Campaign Status Report + Certification Signoff Report from ISC)
+6. Provisioning Proof (downstream REMOVE/ADD events confirming access changes were applied)
+7. Audit Metadata (correlation ID, generation timestamp, filters used)
 
 ---
 
@@ -165,8 +182,8 @@ The WPF dashboard provides a visual interface for running tests and browsing evi
 The dashboard has four tabs:
 - **Campaigns** -- Load test data, select and run tests, view progress and results
 - **Evidence** -- Browse evidence directories, view JSONL events in a data grid
-- **Settings** -- Edit settings.json fields, test connectivity
-- **Audit** -- Query campaigns by name/status/timespan, select for audit, generate HTML compliance reports
+- **Settings** -- Edit settings.json fields, test connectivity, paste browser token for quick authentication
+- **Audit** -- Query campaigns by keyword (substring search), select for audit, generate HTML compliance reports with reviewer performance metrics
 
 The GUI requires Windows and .NET Framework 4.5+.
 

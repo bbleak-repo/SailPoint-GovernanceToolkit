@@ -56,6 +56,7 @@
         'Get-SPGuiCampaignList',
         'Get-SPGuiIdentityList',
         'Test-SPGuiConnectivity',
+        'Set-SPGuiBrowserToken',
         'Get-SPGuiAuditCampaigns',
         'Invoke-SPGuiAudit',
         'Get-SPGuiAuditReports'

@@ -533,6 +533,10 @@ function Initialize-SettingsTab {
     $btnReset        = Find-Control -Parent $TabContent -Name 'BtnResetDefaults'
     $btnTestConn     = Find-Control -Parent $TabContent -Name 'BtnTestConnectivity'
     $connStatus      = Find-Control -Parent $TabContent -Name 'ConnectivityStatusText'
+    $pbBrowserToken  = Find-Control -Parent $TabContent -Name 'PbBrowserToken'
+    $btnApplyToken   = Find-Control -Parent $TabContent -Name 'BtnApplyToken'
+    $btnClearToken   = Find-Control -Parent $TabContent -Name 'BtnClearToken'
+    $tokenStatus     = Find-Control -Parent $TabContent -Name 'BrowserTokenStatus'
 
     # Load current settings into form
     Load-SettingsForm -TabContent $TabContent
@@ -579,6 +583,47 @@ function Initialize-SettingsTab {
                 }
             }
             Set-StatusMessage -Message $statusResult.OverallMessage -IsError:(-not $statusResult.Success)
+        })
+    }
+
+    # Apply browser token
+    if ($btnApplyToken) {
+        $btnApplyToken.Add_Click({
+            $tokenValue = ''
+            if ($null -ne $pbBrowserToken) {
+                $tokenValue = $pbBrowserToken.Password
+            }
+
+            $result = Set-SPGuiBrowserToken -Token $tokenValue
+
+            if ($null -ne $tokenStatus) {
+                $tokenStatus.Text = $result.Message
+                $tokenStatus.Foreground = if ($result.Success) {
+                    [System.Windows.Media.Brushes]::LightGreen
+                } else {
+                    [System.Windows.Media.Brushes]::Salmon
+                }
+            }
+
+            Set-StatusMessage -Message $result.Message -IsError:(-not $result.Success)
+        })
+    }
+
+    # Clear browser token
+    if ($btnClearToken) {
+        $btnClearToken.Add_Click({
+            Clear-SPAuthToken
+
+            if ($null -ne $pbBrowserToken) {
+                $pbBrowserToken.Clear()
+            }
+
+            if ($null -ne $tokenStatus) {
+                $tokenStatus.Text = 'Browser token cleared. Toolkit will use configured OAuth credentials.'
+                $tokenStatus.Foreground = [System.Windows.Media.Brushes]::LightGray
+            }
+
+            Set-StatusMessage -Message 'Browser token cleared.'
         })
     }
 }
@@ -764,7 +809,7 @@ function Initialize-AuditTab {
     if ($btnClear) {
         $btnClear.Add_Click({
             if ($null -ne $txtName) {
-                $txtName.Text       = 'Filter by name...'
+                $txtName.Text       = 'Search by keyword...'
                 $txtName.Foreground = [System.Windows.Media.Brushes]::Gray
             }
             if ($null -ne $cboStatus) {
@@ -835,7 +880,7 @@ function Invoke-AuditCampaignQuery {
 
     # Extract filter values
     $campaignName = ''
-    if ($null -ne $txtName -and $txtName.Text -ne 'Filter by name...') {
+    if ($null -ne $txtName -and $txtName.Text -ne 'Search by keyword...') {
         $campaignName = $txtName.Text.Trim()
     }
 
@@ -857,7 +902,7 @@ function Invoke-AuditCampaignQuery {
 
     # Build parameters
     $queryParams = @{ DaysBack = $daysBack }
-    if ($campaignName)  { $queryParams['CampaignNameStartsWith'] = $campaignName }
+    if ($campaignName)  { $queryParams['CampaignNameContains'] = $campaignName }
     if ($statusFilter)  { $queryParams['Status']       = $statusFilter }
 
     $result = Get-SPGuiAuditCampaigns @queryParams

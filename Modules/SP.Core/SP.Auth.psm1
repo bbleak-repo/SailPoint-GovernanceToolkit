@@ -3,14 +3,22 @@
 .SYNOPSIS
     SailPoint ISC Governance Toolkit Authentication Module
 .DESCRIPTION
-    Provides OAuth 2.0 client_credentials authentication for SailPoint ISC.
-    Supports two modes:
-      - ConfigFile: ClientId/ClientSecret read directly from settings.json
-      - Vault:      ClientId/ClientSecret retrieved from encrypted SP.Vault
-    Token is cached with a 5-minute expiry buffer.
+    Provides authentication for SailPoint ISC. Supports three modes:
+      - ConfigFile:   ClientId/ClientSecret read directly from settings.json
+      - Vault:        ClientId/ClientSecret retrieved from encrypted SP.Vault
+      - BrowserToken: Pre-obtained JWT pasted from browser dev tools (no OAuth flow)
+
+    OAuth modes use client_credentials grant. Token is cached with a 5-minute
+    expiry buffer.
+
+    Browser token mode is useful for quick one-off queries when you are already
+    logged into the ISC admin console. Open browser dev tools (F12), go to the
+    Network tab, copy the Authorization header value from any API call, and pass
+    the JWT to Set-SPBrowserToken. ISC browser tokens are typically valid for
+    ~12 minutes (720 seconds).
 .NOTES
     Module: SP.Auth
-    Version: 1.0.0
+    Version: 1.1.0
 #>
 
 # Script-scoped variables
@@ -223,6 +231,110 @@ function Get-SPAuthToken {
     }
 }
 
+function Set-SPBrowserToken {
+    <#
+    .SYNOPSIS
+        Injects a pre-obtained browser JWT as the active authentication token.
+    .DESCRIPTION
+        Accepts a bearer token obtained from the ISC admin console browser session
+        (via dev tools Network tab) and caches it as the active authentication token.
+        Subsequent calls to Get-SPAuthToken will return this token until it expires
+        or is cleared.
+
+        ISC browser tokens are typically valid for ~12 minutes (720 seconds).
+        The function sets a conservative default expiry of 10 minutes from injection
+        to account for time elapsed between copying the token and pasting it.
+
+        To obtain a token from the browser:
+        1. Log into SailPoint ISC admin console
+        2. Open browser dev tools (F12) > Network tab
+        3. Click any action that triggers an API call
+        4. Find the request, copy the Authorization header value
+        5. Strip the "Bearer " prefix if present, paste the JWT
+    .PARAMETER Token
+        The JWT bearer token string. The "Bearer " prefix is stripped automatically
+        if present.
+    .PARAMETER ExpiryMinutes
+        Minutes until the token is considered expired. Default: 10.
+        Set higher if you just obtained a fresh token; lower if some time has passed.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=@{Mode; ExpiresAt}; Error=[string]}
+    .EXAMPLE
+        Set-SPBrowserToken -Token 'eyJhbGciOiJSUzI1NiIs...'
+    .EXAMPLE
+        Set-SPBrowserToken -Token 'Bearer eyJhbGciOiJSUzI1NiIs...' -ExpiryMinutes 5
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Token,
+
+        [Parameter()]
+        [ValidateRange(1, 60)]
+        [int]$ExpiryMinutes = 10,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # Strip "Bearer " prefix if present
+        $jwt = $Token.Trim()
+        if ($jwt.StartsWith('Bearer ', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $jwt = $jwt.Substring(7).Trim()
+        }
+
+        if ([string]::IsNullOrWhiteSpace($jwt)) {
+            throw 'Token is empty after stripping Bearer prefix.'
+        }
+
+        # Basic JWT structure validation (3 dot-separated segments)
+        $segments = $jwt.Split('.')
+        if ($segments.Count -ne 3) {
+            throw "Token does not appear to be a valid JWT (expected 3 segments, got $($segments.Count))."
+        }
+
+        $expiresAt = (Get-Date).AddMinutes($ExpiryMinutes)
+
+        $tokenData = @{
+            Mode      = 'BrowserToken'
+            Token     = $jwt
+            Headers   = @{
+                'Authorization' = "Bearer $jwt"
+                'Content-Type'  = 'application/json'
+            }
+            ExpiresAt = $expiresAt
+        }
+
+        # Cache the token
+        $script:CurrentToken = $tokenData
+        $script:TokenExpiry  = $expiresAt
+
+        Write-SPLog -Message "Browser token injected (expires: $($expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')), segments: $($segments.Count))" `
+            -Severity 'INFO' -Component 'SP.Auth' -Action 'SetBrowserToken' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{ Mode = 'BrowserToken'; ExpiresAt = $expiresAt }
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Set-SPBrowserToken failed: $($_.Exception.Message)" `
+            -Severity 'ERROR' -Component 'SP.Auth' -Action 'SetBrowserToken' -CorrelationID $CorrelationID
+
+        return @{ Success = $false; Data = $null; Error = $_.Exception.Message }
+    }
+}
+
 function Clear-SPAuthToken {
     <#
     .SYNOPSIS
@@ -254,5 +366,6 @@ function Clear-SPAuthToken {
 # Export public functions
 Export-ModuleMember -Function @(
     'Get-SPAuthToken',
+    'Set-SPBrowserToken',
     'Clear-SPAuthToken'
 )

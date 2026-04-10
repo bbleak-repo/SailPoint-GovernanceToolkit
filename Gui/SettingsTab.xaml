@@ -332,6 +332,45 @@
                     </Grid>
                 </Border>
 
+                <!-- Quick Connect: Browser Token Section -->
+                <TextBlock Text="Quick Connect - Browser Token" Style="{StaticResource SectionHeader}"/>
+                <Border Style="{StaticResource SectionBorder}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <PasswordBox Grid.Column="0" x:Name="PbBrowserToken"
+                                         Style="{StaticResource FieldPassword}"
+                                         PasswordChar="*"
+                                         ToolTip="Paste JWT from browser dev tools (F12 > Network tab > copy Authorization header value)"/>
+
+                            <Button Grid.Column="2" x:Name="BtnApplyToken"
+                                    Content="Apply Token"
+                                    Style="{StaticResource ToolkitButton}"/>
+
+                            <Button Grid.Column="4" x:Name="BtnClearToken"
+                                    Content="Clear"
+                                    Style="{StaticResource SecondaryButton}"/>
+                        </Grid>
+
+                        <TextBlock Grid.Row="2" x:Name="BrowserTokenStatus"
+                                   Foreground="#888899" FontSize="11" TextWrapping="Wrap"
+                                   Text="No browser token active. Paste a JWT from the ISC admin console to bypass OAuth credentials."/>
+                    </Grid>
+                </Border>
+
                 <!-- Safety Section -->
                 <TextBlock Text="Safety Controls" Style="{StaticResource SectionHeader}"/>
                 <Border Style="{StaticResource SectionBorder}">

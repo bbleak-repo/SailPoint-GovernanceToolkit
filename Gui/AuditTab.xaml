@@ -83,7 +83,7 @@
                  Width="200" Background="#2D2D44" Foreground="#888899"
                  BorderBrush="#3D3D5C" BorderThickness="1"
                  Padding="6,4" FontSize="12"
-                 Text="Filter by name..."
+                 Text="Search by keyword..."
                  Margin="0,0,8,0"/>
 
         <TextBlock Grid.Column="2" Text="Status:" Foreground="#AAAACC"
