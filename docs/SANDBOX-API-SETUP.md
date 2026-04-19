@@ -182,11 +182,11 @@ For a sandbox tenant named `acme-sb`, the URLs are:
 | Setting | URL Pattern | Example |
 |---------|-------------|---------|
 | **Tenant URL** | `https://<tenant>.api.identitynow.com` | `https://acme-sb.api.identitynow.com` |
-| **OAuth Token URL** | `https://<tenant>.identitynow.com/oauth/token` | `https://acme-sb.identitynow.com/oauth/token` |
+| **OAuth Token URL** | `https://<tenant>.api.identitynow.com/oauth/token` | `https://acme-sb.api.identitynow.com/oauth/token` |
 | **API Base URL** | `https://<tenant>.api.identitynow.com/v3` | `https://acme-sb.api.identitynow.com/v3` |
 | **Admin Console** | `https://<tenant>.identitynow.com` | `https://acme-sb.identitynow.com` |
 
-**Important:** The token URL uses `identitynow.com` (no `api.` prefix). The API base URL uses `api.identitynow.com`. These are different hostnames.
+**Note:** The token URL, API base URL, and tenant URL all use `api.identitynow.com`. Only the admin console UI uses `identitynow.com` without the `api.` prefix.
 
 ---
 
@@ -207,7 +207,7 @@ Edit `Config\settings.json`:
         "Mode": "ConfigFile",
         "ConfigFile": {
             "TenantUrl": "https://acme-sb.api.identitynow.com",
-            "OAuthTokenUrl": "https://acme-sb.identitynow.com/oauth/token",
+            "OAuthTokenUrl": "https://acme-sb.api.identitynow.com/oauth/token",
             "ClientId": "<your-client-id>",
             "ClientSecret": "<your-client-secret>"
         }

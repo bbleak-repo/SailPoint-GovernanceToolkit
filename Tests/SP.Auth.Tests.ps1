@@ -27,7 +27,7 @@ BeforeAll {
             Mode       = 'ConfigFile'
             ConfigFile = [PSCustomObject]@{
                 TenantUrl     = 'https://testlab.api.identitynow.com'
-                OAuthTokenUrl = 'https://testlab.identitynow.com/oauth/token'
+                OAuthTokenUrl = 'https://testlab.api.identitynow.com/oauth/token'
                 ClientId      = 'test-client-id'
                 ClientSecret  = 'test-client-secret'
             }

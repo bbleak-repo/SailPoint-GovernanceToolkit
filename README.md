@@ -12,7 +12,7 @@ A PowerShell 5.1 toolkit for automated testing of SailPoint IdentityNow (ISC) ce
 | Windows     | 10 / 11 / Server 2019+ | WPF requires Windows. CLI works on any edition. |
 | .NET Framework | 4.5+ | Required for WPF dashboard. Included in Windows 10+. |
 | Pester      | 5.x | Required only for running unit tests in Tests/. |
-| SailPoint ISC API credentials | - | OAuth 2.0 client_credentials with certification read/write scope. |
+| SailPoint ISC API credentials | - | OAuth 2.0 PAT or browser token. Read-only audit needs 4 scopes (see `docs/SANDBOX-API-SETUP.md`). |
 
 ---
 
@@ -37,7 +37,7 @@ On first run, the toolkit auto-generates `Config\settings.json` from a template.
 Key values to update:
 - `Global.EnvironmentName` - label for this environment (e.g., Sandbox)
 - `Authentication.ConfigFile.TenantUrl` - `https://<tenant>.api.identitynow.com`
-- `Authentication.ConfigFile.OAuthTokenUrl` - `https://<tenant>.identitynow.com/oauth/token`
+- `Authentication.ConfigFile.OAuthTokenUrl` - `https://<tenant>.api.identitynow.com/oauth/token`
 - `Authentication.ConfigFile.ClientId` / `ClientSecret`
 - `Api.BaseUrl` - `https://<tenant>.api.identitynow.com/v3`
 
@@ -80,7 +80,7 @@ The toolkit uses a single `Config\settings.json` file. A complete annotated stru
     "Mode": "ConfigFile",
     "ConfigFile": {
       "TenantUrl": "https://tenant.api.identitynow.com",
-      "OAuthTokenUrl": "https://tenant.identitynow.com/oauth/token",
+      "OAuthTokenUrl": "https://tenant.api.identitynow.com/oauth/token",
       "ClientId": "...",
       "ClientSecret": "..."
     },

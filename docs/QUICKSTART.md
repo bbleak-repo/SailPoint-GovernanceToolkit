@@ -11,7 +11,7 @@ Get the SailPoint ISC Governance Toolkit running in under 10 minutes.
 | PowerShell | 5.1 Desktop | Windows PowerShell only. PS Core 7.x is not the target platform. |
 | Windows | 10 / 11 / Server 2019+ | WPF GUI requires Windows. CLI scripts work on any edition. |
 | .NET Framework | 4.5+ | Required for the WPF dashboard. Included in Windows 10+. |
-| SailPoint ISC API credentials | -- | OAuth 2.0 client_credentials with certification read/write scope. |
+| SailPoint ISC API credentials | -- | OAuth 2.0 PAT or browser token. Read-only audit needs: `idn:campaign:read`, `idn:campaign-report:read`, `sp:report:read`, `idn:sources:read`. Full scope mapping in `docs/SANDBOX-API-SETUP.md`. |
 
 Optional:
 - **Pester 5.x** -- Only needed if running the unit tests in `Tests/`.
@@ -43,7 +43,7 @@ This creates the config file and exits with guidance. Open `Config\settings.json
 |-----|---------------|
 | `Global.EnvironmentName` | `Sandbox` or `Production` |
 | `Authentication.ConfigFile.TenantUrl` | `https://acme.api.identitynow.com` |
-| `Authentication.ConfigFile.OAuthTokenUrl` | `https://acme.identitynow.com/oauth/token` |
+| `Authentication.ConfigFile.OAuthTokenUrl` | `https://acme.api.identitynow.com/oauth/token` |
 | `Authentication.ConfigFile.ClientId` | Your ISC API client ID |
 | `Authentication.ConfigFile.ClientSecret` | Your ISC API client secret |
 | `Api.BaseUrl` | `https://acme.api.identitynow.com/v3` |
@@ -146,7 +146,7 @@ Each campaign report includes 7 sections:
 3. Reviewer Performance (time-to-decision metrics per reviewer, color-coded by response time)
 4. Decision Summary (approved, revoked, pending items with identity/entitlement/reviewer detail)
 5. Campaign Reports (Campaign Status Report + Certification Signoff Report from ISC)
-6. Provisioning Proof (downstream REMOVE/ADD events confirming access changes were applied)
+6. Remediation & Reassignment Proof (item-level completion status for revoked items + reassignment chain showing who handed off to whom)
 7. Audit Metadata (correlation ID, generation timestamp, filters used)
 
 ---
@@ -207,7 +207,7 @@ HTML reports can be opened directly in a browser. Audit HTML is formatted for co
 
 **"CHANGE_ME" values detected**: Run `Test-SPConnectivity.ps1` and update `settings.json` with your ISC tenant details.
 
-**OAuth token failure**: Verify `TenantUrl` and `OAuthTokenUrl` are correct. The token URL uses `identitynow.com` (not `api.identitynow.com`). Confirm your API client has `sp:scopes:all` or appropriate certification scopes.
+**OAuth token failure**: Verify `TenantUrl` and `OAuthTokenUrl` are correct. The token URL uses `identitynow.com` (not `api.identitynow.com`). For audit-only (read-only), the PAT needs: `idn:campaign:read`, `idn:campaign-report:read`, `sp:report:read`, `idn:sources:read`. For full campaign management add the `:manage` variants instead. See `docs/SANDBOX-API-SETUP.md` for the complete scope mapping.
 
 **Rate limit errors (429)**: The toolkit handles 429 responses automatically with backoff. If you see persistent rate limiting, reduce `Api.RateLimitRequestsPerWindow` below 95.
 

@@ -437,7 +437,7 @@ No Pester tests were broken (existing tests don't test the changed parameters).
 
 **Authentication:**
 ```
-POST https://{tenant}.identitynow.com/oauth/token
+POST https://{tenant}.api.identitynow.com/oauth/token
 Content-Type: application/x-www-form-urlencoded
 grant_type=client_credentials&client_id={id}&client_secret={secret}
 -> { "access_token": "...", "token_type": "bearer", "expires_in": 749 }
