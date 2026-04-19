@@ -438,3 +438,77 @@ Describe "API-006: Invoke-SPApiRequest refreshes token on 401" {
         }
     }
 }
+
+# H3: Connection-level failures (WebException with no Response, no HTTP
+# status in the message) should be retried the same way 5xx is. Prior
+# behavior: any transient network hiccup (DNS blip, TLS handshake, reset)
+# produced an immediate non-resumable failure, which killed long-running
+# audits on flaky corporate VPNs.
+Describe "API-007: Invoke-SPApiRequest retries on connection failure (status=0)" {
+    Context "When the first call throws a WebException with no Response and no HTTP status in the message" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient { New-MockSPConfig }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Start-Sleep     -ModuleName SP.ApiClient { }
+
+            $script:ConnCallCount = 0
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                $script:ConnCallCount++
+                if ($script:ConnCallCount -lt 2) {
+                    # No 3-digit number anywhere in the message so the regex
+                    # fallback in Get-SPStatusCodeFromException returns 0.
+                    throw [System.Net.WebException]::new(
+                        'The remote name could not be resolved: test.api.identitynow.com'
+                    )
+                }
+                return [PSCustomObject]@{ id = 'after-retry'; status = 'OK' }
+            }
+        }
+
+        It "Should retry after a connection failure and ultimately succeed" {
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'h3-cid-001'
+
+            $result.Success        | Should -Be $true
+            $result.Data.id        | Should -Be 'after-retry'
+            $script:ConnCallCount  | Should -Be 2
+        }
+
+        It "Should call Start-Sleep before the retry" {
+            $script:ConnCallCount = 0
+            Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'h3-cid-002'
+
+            Should -Invoke Start-Sleep -ModuleName SP.ApiClient
+        }
+    }
+
+    Context "When connection failures persist beyond RetryCount" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient { New-MockSPConfig }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Start-Sleep     -ModuleName SP.ApiClient { }
+
+            $script:ConnCallCount = 0
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                $script:ConnCallCount++
+                throw [System.Net.WebException]::new(
+                    'Unable to connect to the remote server'
+                )
+            }
+        }
+
+        It "Should stop after RetryCount+1 total attempts and return Success=false" {
+            # Mock config has RetryCount=2, so we expect 3 attempts total.
+            $script:ConnCallCount = 0
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'h3-cid-003'
+
+            $result.Success       | Should -Be $false
+            $result.Error         | Should -Not -BeNullOrEmpty
+            $script:ConnCallCount | Should -Be 3
+        }
+    }
+}
