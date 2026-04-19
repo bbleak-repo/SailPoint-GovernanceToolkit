@@ -308,3 +308,133 @@ Describe "API-005: Invoke-SPApiRequest returns error on auth failure" {
         }
     }
 }
+
+# H2: 401 mid-run should evict the cached OAuth token and retry once with a
+# fresh one. Prior to this fix, an expired token caused every subsequent
+# call to reuse the stale cache and fail, killing long-running audits.
+Describe "API-006: Invoke-SPApiRequest refreshes token on 401" {
+    Context "When the first call returns 401 and token refresh succeeds" {
+        BeforeEach {
+            Mock Write-SPLog         -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig        -ModuleName SP.ApiClient { New-MockSPConfig }
+            Mock Clear-SPAuthToken   -ModuleName SP.ApiClient { }
+            Mock Start-Sleep         -ModuleName SP.ApiClient { }
+
+            $script:AuthCallCount = 0
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient {
+                $script:AuthCallCount++
+                return @{
+                    Success = $true
+                    Data    = @{
+                        Token   = "token-v$script:AuthCallCount"
+                        Headers = @{ 'Authorization' = "Bearer token-v$script:AuthCallCount"; 'Content-Type' = 'application/json' }
+                    }
+                    Error   = $null
+                }
+            }
+
+            $script:RestCallCount = 0
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                $script:RestCallCount++
+                if ($script:RestCallCount -eq 1) {
+                    throw [System.Net.WebException]::new('(401) Unauthorized')
+                }
+                return [PSCustomObject]@{ id = 'camp-after-refresh' }
+            }
+        }
+
+        It "Should retry once and ultimately succeed" {
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns/x' `
+                -CorrelationID 'h2-cid-001'
+
+            $result.Success | Should -Be $true
+            $result.Data.id | Should -Be 'camp-after-refresh'
+        }
+
+        It "Should call Clear-SPAuthToken exactly once" {
+            Invoke-SPApiRequest -Method GET -Endpoint '/campaigns/y' `
+                -CorrelationID 'h2-cid-002'
+
+            Should -Invoke Clear-SPAuthToken -ModuleName SP.ApiClient -Times 1 -Exactly
+        }
+
+        It "Should call Get-SPAuthToken twice (initial + forced refresh)" {
+            $script:AuthCallCount = 0
+            Invoke-SPApiRequest -Method GET -Endpoint '/campaigns/z' `
+                -CorrelationID 'h2-cid-003'
+
+            $script:AuthCallCount | Should -Be 2
+        }
+    }
+
+    Context "When the 401 persists after token refresh" {
+        BeforeEach {
+            Mock Write-SPLog         -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig        -ModuleName SP.ApiClient { New-MockSPConfig }
+            Mock Clear-SPAuthToken   -ModuleName SP.ApiClient { }
+            Mock Start-Sleep         -ModuleName SP.ApiClient { }
+            Mock Get-SPAuthToken     -ModuleName SP.ApiClient {
+                return @{
+                    Success = $true
+                    Data    = @{
+                        Token   = 'token-bad'
+                        Headers = @{ 'Authorization' = 'Bearer token-bad'; 'Content-Type' = 'application/json' }
+                    }
+                    Error   = $null
+                }
+            }
+            $script:RestCallCount = 0
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                $script:RestCallCount++
+                throw [System.Net.WebException]::new('(401) Unauthorized')
+            }
+        }
+
+        It "Should not retry more than once on 401 (no infinite loop)" {
+            $script:RestCallCount = 0
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns/bad' `
+                -CorrelationID 'h2-cid-004'
+
+            $result.Success       | Should -Be $false
+            # Exactly 2 attempts: initial + one retry after token refresh.
+            $script:RestCallCount | Should -Be 2
+        }
+    }
+
+    Context "When token refresh itself fails" {
+        BeforeEach {
+            Mock Write-SPLog         -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig        -ModuleName SP.ApiClient { New-MockSPConfig }
+            Mock Clear-SPAuthToken   -ModuleName SP.ApiClient { }
+            Mock Start-Sleep         -ModuleName SP.ApiClient { }
+
+            $script:AuthCallCount = 0
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient {
+                $script:AuthCallCount++
+                if ($script:AuthCallCount -eq 1) {
+                    return @{
+                        Success = $true
+                        Data    = @{
+                            Token   = 'token-initial'
+                            Headers = @{ 'Authorization' = 'Bearer token-initial'; 'Content-Type' = 'application/json' }
+                        }
+                        Error   = $null
+                    }
+                }
+                return @{ Success = $false; Data = $null; Error = 'ClientSecret expired' }
+            }
+
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                throw [System.Net.WebException]::new('(401) Unauthorized')
+            }
+        }
+
+        It "Should return Success=false with a refresh-failure message" {
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns/bad' `
+                -CorrelationID 'h2-cid-005'
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'Token refresh after 401 failed'
+        }
+    }
+}
