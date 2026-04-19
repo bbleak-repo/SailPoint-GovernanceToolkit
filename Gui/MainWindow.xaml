@@ -4,9 +4,9 @@
     x:Name="MainWindowRoot"
     Title="SailPoint ISC Governance Toolkit"
     Width="1100"
-    Height="780"
+    Height="640"
     MinWidth="860"
-    MinHeight="600"
+    MinHeight="480"
     WindowStartupLocation="CenterScreen"
     Background="#1E1E2E"
     Foreground="#E0E0E0"
@@ -118,6 +118,62 @@
             <Setter Property="Background" Value="#2D2D44"/>
             <Setter Property="Foreground" Value="#5B9BD5"/>
         </Style>
+
+        <!-- Settings form field styles (inlined from SettingsTab.xaml) -->
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground"        Value="#AAAACC"/>
+            <Setter Property="FontSize"          Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin"            Value="0,0,0,2"/>
+        </Style>
+
+        <Style x:Key="FieldBox" TargetType="TextBox">
+            <Setter Property="Background"               Value="#2D2D44"/>
+            <Setter Property="Foreground"               Value="#E0E0E0"/>
+            <Setter Property="BorderBrush"              Value="#3D3D5C"/>
+            <Setter Property="BorderThickness"          Value="1"/>
+            <Setter Property="Padding"                  Value="8,4"/>
+            <Setter Property="FontSize"                 Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Height"                   Value="30"/>
+        </Style>
+
+        <Style x:Key="FieldPassword" TargetType="PasswordBox">
+            <Setter Property="Background"      Value="#2D2D44"/>
+            <Setter Property="Foreground"      Value="#E0E0E0"/>
+            <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding"         Value="8,4"/>
+            <Setter Property="FontSize"        Value="12"/>
+            <Setter Property="Height"          Value="30"/>
+        </Style>
+
+        <Style x:Key="FieldCombo" TargetType="ComboBox">
+            <Setter Property="Background"               Value="#2D2D44"/>
+            <Setter Property="Foreground"               Value="#E0E0E0"/>
+            <Setter Property="BorderBrush"              Value="#3D3D5C"/>
+            <Setter Property="BorderThickness"          Value="1"/>
+            <Setter Property="Padding"                  Value="8,4"/>
+            <Setter Property="FontSize"                 Value="12"/>
+            <Setter Property="Height"                   Value="30"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#5B9BD5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize"   Value="13"/>
+            <Setter Property="Margin"     Value="0,16,0,8"/>
+        </Style>
+
+        <Style x:Key="SectionBorder" TargetType="Border">
+            <Setter Property="Background"      Value="#2D2D44"/>
+            <Setter Property="CornerRadius"    Value="6"/>
+            <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding"         Value="16,12"/>
+            <Setter Property="Margin"          Value="0,0,0,8"/>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -127,20 +183,33 @@
             <RowDefinition Height="28"/>    <!-- Status bar -->
         </Grid.RowDefinitions>
 
-        <!-- Menu Bar -->
-        <Menu Grid.Row="0" Background="#252538" Padding="4,2">
-            <MenuItem Header="File">
-                <MenuItem x:Name="MenuExit" Header="Exit" InputGestureText="Alt+F4"/>
-            </MenuItem>
-            <MenuItem Header="Tools">
-                <MenuItem x:Name="MenuTestConnectivity" Header="Test Connectivity"/>
-                <Separator/>
-                <MenuItem x:Name="MenuNewVault"         Header="New Vault Setup..."/>
-            </MenuItem>
-            <MenuItem Header="Help">
-                <MenuItem x:Name="MenuAbout" Header="About"/>
-            </MenuItem>
-        </Menu>
+        <!-- Menu Bar + right-aligned Close button -->
+        <Grid Grid.Row="0" Background="#252538">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Menu Grid.Column="0" Background="#252538" Padding="4,2">
+                <MenuItem Header="File">
+                    <MenuItem x:Name="MenuExit" Header="Exit" InputGestureText="Alt+F4"/>
+                </MenuItem>
+                <MenuItem Header="Tools">
+                    <MenuItem x:Name="MenuTestConnectivity" Header="Test Connectivity"/>
+                    <Separator/>
+                    <MenuItem x:Name="MenuNewVault"         Header="New Vault Setup..."/>
+                </MenuItem>
+                <MenuItem Header="Help">
+                    <MenuItem x:Name="MenuAbout" Header="About"/>
+                </MenuItem>
+            </Menu>
+            <Button Grid.Column="1" x:Name="BtnCloseApp" Content="✕  Close"
+                    Background="#8B2E2E" Foreground="#FFFFFF"
+                    BorderBrush="#C04040" BorderThickness="1"
+                    Padding="14,4" FontSize="12" FontWeight="SemiBold"
+                    FontFamily="Segoe UI" Cursor="Hand"
+                    Margin="4,2,6,2" VerticalAlignment="Center"
+                    ToolTip="Close the dashboard (Alt+F4)"/>
+        </Grid>
 
         <!-- Main Tab Control -->
         <TabControl x:Name="MainTabControl"
@@ -251,7 +320,7 @@
                                          Height="10" Background="#252538"
                                          Foreground="#5B9BD5"
                                          BorderBrush="#3D3D5C" BorderThickness="1"
-                                         Visibility="Collapsed" CornerRadius="4"/>
+                                         Visibility="Collapsed"/>
                         </Grid>
 
                         <TextBlock Grid.Row="1" x:Name="ResultSummaryText"
@@ -369,11 +438,215 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Settings form - loaded from SettingsTab.xaml content via code -->
+                    <!-- Settings form (inlined; previous ContentControl injection was never wired up) -->
                     <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="8,4">
-                            <!-- Content injected here from Settings XAML -->
-                            <ContentControl x:Name="SettingsFormHost"/>
+
+                            <!-- Environment -->
+                            <TextBlock Text="Environment" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Environment Name" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtEnvironmentName" Style="{StaticResource FieldBox}"
+                                               ToolTip="Logical label for this environment (e.g. Sandbox, Production)"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Debug Mode" Style="{StaticResource FieldLabel}"/>
+                                    <CheckBox  Grid.Row="2" Grid.Column="1" x:Name="ChkDebugMode"
+                                               Foreground="#E0E0E0" FontSize="12" VerticalAlignment="Center"
+                                               ToolTip="Enable verbose debug logging"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Authentication -->
+                            <TextBlock Text="Authentication" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="12"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Authentication Mode" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox  Grid.Row="0" Grid.Column="1" x:Name="CboAuthMode" Style="{StaticResource FieldCombo}"
+                                               ToolTip="ConfigFile stores credentials in settings.json. Vault uses encrypted vault file.">
+                                        <ComboBoxItem Content="ConfigFile"/>
+                                        <ComboBoxItem Content="Vault"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Tenant URL" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtTenantUrl" Style="{StaticResource FieldBox}"
+                                               ToolTip="https://&lt;tenant&gt;.api.identitynow.com"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Client ID" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtClientId" Style="{StaticResource FieldBox}"
+                                               ToolTip="OAuth 2.0 client_credentials ClientId (used when Mode=ConfigFile)"/>
+
+                                    <TextBlock   Grid.Row="6" Grid.Column="0" Text="Client Secret" Style="{StaticResource FieldLabel}"/>
+                                    <PasswordBox Grid.Row="6" Grid.Column="1" x:Name="PbClientSecret" Style="{StaticResource FieldPassword}"
+                                                 ToolTip="Client Secret (only visible in ConfigFile mode; prefer Vault for production)"/>
+
+                                    <Border Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Background="#252538" CornerRadius="4" Padding="10,6">
+                                        <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#FF9900">
+                                            For production environments, use Authentication Mode = Vault and run New-SPVault.ps1 to store credentials securely. The Client Secret field above is only for ConfigFile mode.
+                                        </TextBlock>
+                                    </Border>
+                                </Grid>
+                            </Border>
+
+                            <!-- API -->
+                            <TextBlock Text="API Configuration" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="API Base URL" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtApiBaseUrl" Style="{StaticResource FieldBox}"
+                                               ToolTip="https://&lt;tenant&gt;.api.identitynow.com/v3"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Timeout (seconds)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtApiTimeout" Style="{StaticResource FieldBox}" Text="60"
+                                               ToolTip="HTTP request timeout in seconds"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Retry Count" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtRetryCount" Style="{StaticResource FieldBox}" Text="3"
+                                               ToolTip="Number of retries on 429/5xx responses"/>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="3" Text="Rate Limit (req/window)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="4" x:Name="TxtRateLimit" Style="{StaticResource FieldBox}" Text="95"
+                                               ToolTip="Max requests per window (ISC limit: 95/10s)"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="3" Text="Rate Window (seconds)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="2" Grid.Column="4" x:Name="TxtRateWindow" Style="{StaticResource FieldBox}" Text="10"
+                                               ToolTip="Rate limit window in seconds"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="3" Text="Retry Delay (seconds)" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="4" Grid.Column="4" x:Name="TxtRetryDelay" Style="{StaticResource FieldBox}" Text="5"
+                                               ToolTip="Seconds to wait between retries on server errors"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Testing / Paths -->
+                            <TextBlock Text="Testing" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Identities CSV Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtIdentitiesCsvPath" Style="{StaticResource FieldBox}"
+                                               ToolTip="Path to test-identities.csv (relative to toolkit root or absolute)"/>
+                                    <Button    Grid.Row="0" Grid.Column="2" x:Name="BtnBrowseIdentities" Content="Browse"
+                                               Style="{StaticResource SecondaryButton}" Padding="10,4" FontSize="11" Margin="6,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Campaigns CSV Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtCampaignsCsvPath" Style="{StaticResource FieldBox}"
+                                               ToolTip="Path to test-campaigns.csv (relative to toolkit root or absolute)"/>
+                                    <Button    Grid.Row="2" Grid.Column="2" x:Name="BtnBrowseCampaigns" Content="Browse"
+                                               Style="{StaticResource SecondaryButton}" Padding="10,4" FontSize="11" Margin="6,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Evidence Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtEvidencePath" Style="{StaticResource FieldBox}"
+                                               ToolTip="Directory where JSONL evidence files are written"/>
+                                    <Button    Grid.Row="4" Grid.Column="2" x:Name="BtnBrowseEvidence" Content="Browse"
+                                               Style="{StaticResource SecondaryButton}" Padding="10,4" FontSize="11" Margin="6,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Reports Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TxtReportsPath" Style="{StaticResource FieldBox}"
+                                               ToolTip="Directory where HTML reports are written"/>
+                                    <Button    Grid.Row="6" Grid.Column="2" x:Name="BtnBrowseReports" Content="Browse"
+                                               Style="{StaticResource SecondaryButton}" Padding="10,4" FontSize="11" Margin="6,0,0,0"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Safety -->
+                            <TextBlock Text="Safety Controls" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="12"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Max Campaigns Per Run" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtMaxCampaignsPerRun" Style="{StaticResource FieldBox}"
+                                               Text="10" Width="80" HorizontalAlignment="Left"
+                                               ToolTip="Hard limit on campaigns per execution (prevents runaway test runs)"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Require WhatIf on Prod" Style="{StaticResource FieldLabel}"/>
+                                    <CheckBox  Grid.Row="2" Grid.Column="1" x:Name="ChkRequireWhatIf"
+                                               IsChecked="True" Foreground="#E0E0E0" FontSize="12" VerticalAlignment="Center"
+                                               ToolTip="Forces confirmation before running against an environment with RequireWhatIfOnProd=true"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Allow Complete Campaign" Style="{StaticResource FieldLabel}"/>
+                                    <CheckBox  Grid.Row="4" Grid.Column="1" x:Name="ChkAllowComplete"
+                                               IsChecked="False" Foreground="#E0E0E0" FontSize="12" VerticalAlignment="Center"
+                                               ToolTip="Allow tests to call POST /campaigns/{id}/complete (only works on past-due campaigns)"/>
+
+                                    <Border Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Background="#252538" CornerRadius="4" Padding="10,6">
+                                        <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#FF9900">
+                                            Safety controls are enforced at runtime by Invoke-GovernanceTest.ps1. AllowCompleteCampaign should remain false unless you are explicitly testing campaign completion on a past-due campaign in a non-production environment.
+                                        </TextBlock>
+                                    </Border>
+                                </Grid>
+                            </Border>
+
                         </StackPanel>
                     </ScrollViewer>
 
@@ -638,7 +911,7 @@
                                      Height="10" Background="#252538"
                                      Foreground="#5B9BD5"
                                      BorderBrush="#3D3D5C" BorderThickness="1"
-                                     Visibility="Collapsed" CornerRadius="4"/>
+                                     Visibility="Collapsed"/>
 
                         <TextBlock Grid.Column="2" x:Name="AuditProgressPercent"
                                    Foreground="#AAAACC" VerticalAlignment="Center"
