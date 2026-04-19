@@ -12,15 +12,8 @@
 #>
 
 BeforeAll {
-    # Load SP.Core first (SP.Api depends on it; SP.Audit depends on both)
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    if (Test-Path $apiPath) { Import-Module $apiPath -Force }
-
-    $auditPath = Join-Path $PSScriptRoot "..\Modules\SP.Audit\SP.Audit.psd1"
-    Import-Module $auditPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Audit
 
     # Helper: build a minimal mock config with Audit section
     function New-MockAuditConfig {
