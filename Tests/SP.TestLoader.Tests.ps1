@@ -11,14 +11,8 @@
 #>
 
 BeforeAll {
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    if (Test-Path $apiPath) { Import-Module $apiPath -Force }
-
-    $testingPath = Join-Path $PSScriptRoot "..\Modules\SP.Testing\SP.Testing.psd1"
-    Import-Module $testingPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Testing
 
     # Helper: build a minimal valid identities CSV in TestDrive
     function New-TestIdentitiesCsv {

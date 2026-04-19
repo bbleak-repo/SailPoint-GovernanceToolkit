@@ -447,8 +447,14 @@ function Test-SPConfigFirstRun {
     .SYNOPSIS
         Checks if the config result indicates first-run state
     .DESCRIPTION
-        Returns true if the configuration object is a first-run placeholder,
-        indicating the user needs to configure settings before proceeding.
+        Returns true if the configuration object is either:
+          - a first-run placeholder (the _FirstRun marker set by Get-SPConfig
+            when it auto-creates settings.json), OR
+          - has unreplaced CHANGE_ME placeholder values in any required field.
+
+        Either case means the operator has not finished configuring the
+        toolkit and downstream steps (token acquisition, API calls) will fail
+        in a confusing way.
     .PARAMETER Config
         The configuration object from Get-SPConfig
     .OUTPUTS
@@ -468,7 +474,30 @@ function Test-SPConfigFirstRun {
         [PSCustomObject]$Config
     )
 
-    return ($Config.PSObject.Properties.Name -contains '_FirstRun' -and $Config._FirstRun -eq $true)
+    if ($Config.PSObject.Properties.Name -contains '_FirstRun' -and $Config._FirstRun -eq $true) {
+        return $true
+    }
+
+    # Detect an unconfigured settings.json (all CHANGE_ME placeholders).
+    # We only look at a curated set of required fields - checking every string
+    # would false-positive on legitimate free-text values like EnvironmentName
+    # set to a string that happens to contain 'CHANGE'.
+    $fieldsToCheck = @(
+        { $Config.Authentication.ConfigFile.TenantUrl },
+        { $Config.Authentication.ConfigFile.OAuthTokenUrl },
+        { $Config.Authentication.ConfigFile.ClientId },
+        { $Config.Authentication.ConfigFile.ClientSecret },
+        { $Config.Api.BaseUrl }
+    )
+    foreach ($getter in $fieldsToCheck) {
+        $value = $null
+        try { $value = & $getter } catch { continue }
+        if ($null -ne $value -and $value -is [string] -and $value -match '(?i)CHANGE_ME') {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function New-SPConfigFile {
@@ -478,10 +507,19 @@ function New-SPConfigFile {
     .DESCRIPTION
         Generates a settings.json file with CHANGE_ME sentinel values.
         Called automatically on first run when no configuration file exists.
+
+        The parent directory MUST already exist. If it doesn't, this function
+        throws instead of silently creating arbitrary directory trees - a
+        user-supplied typo like -ConfigPath 'C:\does\not\exist.json' would
+        otherwise materialize 'C:\does\not\' on disk with no warning.
     .PARAMETER ConfigPath
-        Path where the configuration file should be created
+        Path where the configuration file should be created. Parent directory
+        must already exist.
     .OUTPUTS
         [string] Path to the created configuration file
+    .EXCEPTION
+        Throws [System.IO.DirectoryNotFoundException] if the parent directory
+        does not already exist.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -490,10 +528,13 @@ function New-SPConfigFile {
         [string]$ConfigPath
     )
 
-    # Ensure directory exists
     $configDir = Split-Path -Path $ConfigPath -Parent
-    if (-not (Test-Path -Path $configDir)) {
-        New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+    if (-not (Test-Path -Path $configDir -PathType Container)) {
+        throw [System.IO.DirectoryNotFoundException]::new(
+            "Cannot create config file: parent directory does not exist. " +
+            "Create the directory first, or supply a -ConfigPath inside an " +
+            "existing directory. Path given: '$ConfigPath' (parent: '$configDir')."
+        )
     }
 
     $jsonContent = Get-SPConfigTemplate

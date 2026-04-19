@@ -11,8 +11,8 @@
 #>
 
 BeforeAll {
-    $modulePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    Import-Module $modulePath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core
 
     $script:ValidConfigPath = Join-Path $PSScriptRoot "TestData\valid-settings.json"
 

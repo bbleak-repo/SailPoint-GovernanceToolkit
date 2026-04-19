@@ -10,12 +10,8 @@
 #>
 
 BeforeAll {
-    # Import SP.Core first (SP.Api depends on it)
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    Import-Module $apiPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api
 
     # Helper: standard mock config
     function New-MockSPConfig {

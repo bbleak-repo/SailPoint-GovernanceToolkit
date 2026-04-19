@@ -84,7 +84,7 @@
         3 = Authentication error (failed to acquire token)
         4 = Configuration error (settings.json missing, invalid, or first-run placeholders)
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter()]
     [string]$ConfigPath,
@@ -282,6 +282,30 @@ if ($config.Audit -and $config.Audit.DefaultIdentityEventDays -and $IdentityEven
 #region Dispatch
 
 $runStart = Get-Date
+
+# -WhatIf short-circuit: validate config + filters, describe what would be
+# queried, and exit without any API calls. Useful for smoke-checking a new
+# config or CI pipeline before it has OAuth credentials.
+if ($WhatIfPreference.IsPresent) {
+    Write-Host ''
+    Write-Host '  [WhatIf] Dry-run mode enabled. No API calls will be made.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host "  Would query campaigns with the following filters:" -ForegroundColor Cyan
+    Write-Host "    DaysBack:            $effectiveDaysBack"
+    if ($Status)                 { Write-Host "    Status:              $($Status -join ', ')" }
+    if ($CampaignName)           { Write-Host "    CampaignName:        $CampaignName" }
+    if ($CampaignNameStartsWith) { Write-Host "    CampaignNameStartsWith: $CampaignNameStartsWith" }
+    if ($CampaignNameContains)   { Write-Host "    CampaignNameContains: $CampaignNameContains" }
+    if ($CampaignReportCsvPath)  { Write-Host "    CampaignReportCsvPath: $CampaignReportCsvPath (local, no API)" }
+    Write-Host ''
+    Write-Host "  Would write output to: $OutputPath" -ForegroundColor Cyan
+    Write-Host "  CorrelationID:         $correlationID" -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  [WhatIf] Validation complete. Re-run without -WhatIf to execute the audit.' -ForegroundColor Yellow
+    Write-SPLog -Message "Audit skipped: -WhatIf" -Severity INFO `
+        -Component 'Invoke-SPCampaignAudit' -Action 'WhatIfSkip' -CorrelationID $correlationID
+    exit 0
+}
 
 Write-Host "  Querying campaigns (DaysBack=$effectiveDaysBack)..." -ForegroundColor Cyan
 

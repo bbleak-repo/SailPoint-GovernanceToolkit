@@ -331,4 +331,68 @@ Batch fixes to close out Bug 6 / Bug 8 follow-ups and add an explicit exit UX.
 
 ---
 
-_Logged on 2026-04-17. Source: no-ISC-line-of-sight smoke session on Windows 11 / PS 5.1 Desktop / Pester 5.7.1._
+## 2026-04-19 follow-up pass — open bugs sweep (branch: fix/open-bug-followups)
+
+### Status after this pass
+
+| # | Title | Status |
+|---|---|---|
+| 1 | Pester mock scoping — 56/207 failures | **Mostly fixed** (201/207 passing; 6 per-test issues remain — see below) |
+| 2 | `Test-SPConfigFirstRun` doesn't detect `CHANGE_ME` | **FIXED** |
+| 3 | `Invoke-SPCampaignAudit.ps1` missing `-WhatIf` | **FIXED** |
+| 4 | `ShouldProcess` `NullReferenceException` in non-interactive host | **FIXED** |
+| 5 | Bad `-ConfigPath` silently creates dirs | **FIXED** |
+| 6 | GUI handler closure pattern | Fixed 2026-04-17 |
+| 7 | `ProgressBar.CornerRadius` XAML | Fixed 2026-04-17 |
+| 8 | Settings tab empty form | Fixed 2026-04-17 |
+
+### Bug 2 fix — `Test-SPConfigFirstRun` detects `CHANGE_ME`
+
+`Modules\SP.Core\SP.Config.psm1:445` — function now scans a curated list of required fields (`Authentication.ConfigFile.TenantUrl` / `OAuthTokenUrl` / `ClientId` / `ClientSecret`, `Api.BaseUrl`) for case-insensitive `CHANGE_ME` in addition to the pre-existing `_FirstRun` marker check. Verified: `Test-SPConnectivity.ps1` against an unmodified template now FAILs step 1 with "First-run configuration detected" instead of proceeding to a confusing DNS error on step 2.
+
+### Bug 5 fix — `New-SPConfigFile` refuses to create parent dirs
+
+`Modules\SP.Core\SP.Config.psm1:503` — throws `DirectoryNotFoundException` if the parent directory is missing, instead of `New-Item -Force`-ing a whole tree. `Get-SPConfig`'s existing try/catch surfaces this as a clean error at the entry script. Verified: `-ConfigPath 'C:\does\not\exist.json'` now prints `Cannot create config file: parent directory does not exist` and exits 4; `C:\does\` is not materialized. Regression in four CFG-007 tests (which relied on the old auto-create behavior) fixed in the same branch.
+
+### Bug 4 fix — graceful `ShouldProcess` in non-interactive host
+
+`Scripts\Invoke-GovernanceTest.ps1:173` — WhatIf guard now:
+1. Short-circuits if `-Confirm:$false` or `$ConfirmPreference = 'None'` was already supplied.
+2. Wraps `$PSCmdlet.ShouldProcess` in try/catch. On exception, prints actionable guidance ("Re-run with -WhatIf or -Confirm:$false") and exits 2.
+
+Verified across three paths: no args → exit 2 with message (was: uncaught NullRef); `-WhatIf` → exit 0; `-Confirm:$false` → bypass, run, DNS fail → exit 1.
+
+### Bug 3 fix — `-WhatIf` on `Invoke-SPCampaignAudit.ps1`
+
+`Scripts\Invoke-SPCampaignAudit.ps1:87` — `[CmdletBinding(SupportsShouldProcess)]`. A `-WhatIf` short-circuit after config load + filter parsing prints exactly what would be queried (filters, output path, correlation ID) and exits 0 without any API call. Logs `Audit skipped: -WhatIf` for audit-trail parity.
+
+### Bug 1 fix — Pester mock scoping (151 → 201 passing)
+
+Two structural changes in the test harness:
+
+1. **Direct `.psm1` imports via new `Tests/Import-TestModules.ps1`.** Test files previously imported `SP.Core.psd1` and other aggregator manifests, making each nested `.psm1` a *nested* module scope. Pester 5.7.1 on PS 5.1 Desktop does not reliably intercept mocks with `-ModuleName <nested-name>` in that layout. Helper imports each `.psm1` directly as a top-level module. Every `BeforeAll` became:
+   ```powershell
+   . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+   Import-SPTestModules -Core -Api [-Audit] [-Testing]
+   ```
+   The DEV.md claim that PS 5.1 was permissive to this pattern is wrong on Pester 5.7.1; the fix is required.
+
+2. **`-ModuleName` added to cross-module mocks.** Mocks for functions called from a different module than the SUT's home (e.g. mocking `Get-SPCampaign` when exercising `Assert-SPCampaignStatus`) were missing `-ModuleName`. Added `-ModuleName SP.Assertions` across `SP.Assertions.Tests.ps1`, `-ModuleName SP.BatchRunner` across `SP.BatchRunner.Tests.ps1`, including the corresponding `Should -Invoke` assertions.
+
+**Result:** 201/207 passing, 6 failing (~97% pass rate). Up from 151/207.
+
+### Remaining 6 test failures (out of Bug 1 scope — per-test issues, not structural)
+
+| Test ID | File | Suspected class of issue |
+|---|---|---|
+| API-003 (×2) | `SP.ApiClient.Tests.ps1` | Mock throws a half-built `WebException`; `Invoke-SPApiRequest`'s retry logic doesn't recognize it as a 500, so no retry fires. Mock fidelity, not scoping. |
+| AQ-005 | `SP.AuditQueries.Tests.ps1` | `Get-SPAuditCampaignReport` "handles unavailable report API" — specific assertion about task-ID-returning endpoint. |
+| BATCH-001 | `SP.BatchRunner.Tests.ps1` | Suite aggregation — `Results.Count` expected 3, got 0. Mock return-shape mismatch is the leading candidate. |
+| BATCH-003 | `SP.BatchRunner.Tests.ps1` | 10-step WhatIf flow; expects specific step counts / SKIP markers. |
+| DEC-001 | `SP.Decisions.Tests.ps1` | **Possibly a real production bug.** "Expected 1 API call for 250 items, but got 250" — suggests `Invoke-SPBulkDecide` is not batching. Worth investigation before adjusting the test. |
+
+All six are individually scoped. Treat each as its own follow-up commit / PR.
+
+---
+
+_Logged on 2026-04-17 (Bugs 6–8), updated 2026-04-19 (Bugs 1–5 swept). Source: no-ISC-line-of-sight sessions on Windows 11 / PS 5.1 Desktop / Pester 5.7.1._

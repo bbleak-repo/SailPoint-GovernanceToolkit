@@ -11,17 +11,11 @@
 #>
 
 BeforeAll {
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    if (Test-Path $apiPath) { Import-Module $apiPath -Force }
-
-    $testingPath = Join-Path $PSScriptRoot "..\Modules\SP.Testing\SP.Testing.psd1"
-    Import-Module $testingPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Testing
 
     # Mock supporting SP.Core functions
-    Mock -CommandName Write-SPLog { }
+    Mock -ModuleName SP.Assertions -CommandName Write-SPLog { }
 }
 
 # ---------------------------------------------------------------------------
@@ -29,7 +23,7 @@ BeforeAll {
 # ---------------------------------------------------------------------------
 Describe "ASRT-001: Assert-SPCampaignStatus passes when status matches" {
     BeforeAll {
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             param($CampaignId, $Full, $CorrelationID, $CampaignTestId)
             @{
                 Success = $true
@@ -70,7 +64,7 @@ Describe "ASRT-001: Assert-SPCampaignStatus passes when status matches" {
 # ---------------------------------------------------------------------------
 Describe "ASRT-002: Assert-SPCampaignStatus fails when status mismatches" {
     BeforeAll {
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             param($CampaignId, $Full, $CorrelationID, $CampaignTestId)
             @{
                 Success = $true
@@ -96,7 +90,7 @@ Describe "ASRT-002: Assert-SPCampaignStatus fails when status mismatches" {
     }
 
     It "Should return Pass=false when Get-SPCampaign fails" {
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             @{
                 Success = $false
                 Data    = $null
@@ -112,7 +106,7 @@ Describe "ASRT-002: Assert-SPCampaignStatus fails when status mismatches" {
         $result.Message | Should -Match 'API unavailable'
 
         # Restore mock
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             param($CampaignId)
             @{
                 Success = $true
@@ -123,7 +117,7 @@ Describe "ASRT-002: Assert-SPCampaignStatus fails when status mismatches" {
     }
 
     It "Should handle missing Get-SPCampaign function gracefully" {
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             throw "Mock forced error"
         }
 
@@ -135,7 +129,7 @@ Describe "ASRT-002: Assert-SPCampaignStatus fails when status mismatches" {
         $result.Message | Should -Not -BeNullOrEmpty
 
         # Restore
-        Mock -CommandName Get-SPCampaign {
+        Mock -ModuleName SP.Assertions -CommandName Get-SPCampaign {
             param($CampaignId)
             @{
                 Success = $true
