@@ -507,10 +507,19 @@ function New-SPConfigFile {
     .DESCRIPTION
         Generates a settings.json file with CHANGE_ME sentinel values.
         Called automatically on first run when no configuration file exists.
+
+        The parent directory MUST already exist. If it doesn't, this function
+        throws instead of silently creating arbitrary directory trees - a
+        user-supplied typo like -ConfigPath 'C:\does\not\exist.json' would
+        otherwise materialize 'C:\does\not\' on disk with no warning.
     .PARAMETER ConfigPath
-        Path where the configuration file should be created
+        Path where the configuration file should be created. Parent directory
+        must already exist.
     .OUTPUTS
         [string] Path to the created configuration file
+    .EXCEPTION
+        Throws [System.IO.DirectoryNotFoundException] if the parent directory
+        does not already exist.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -519,10 +528,13 @@ function New-SPConfigFile {
         [string]$ConfigPath
     )
 
-    # Ensure directory exists
     $configDir = Split-Path -Path $ConfigPath -Parent
-    if (-not (Test-Path -Path $configDir)) {
-        New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+    if (-not (Test-Path -Path $configDir -PathType Container)) {
+        throw [System.IO.DirectoryNotFoundException]::new(
+            "Cannot create config file: parent directory does not exist. " +
+            "Create the directory first, or supply a -ConfigPath inside an " +
+            "existing directory. Path given: '$ConfigPath' (parent: '$configDir')."
+        )
     }
 
     $jsonContent = Get-SPConfigTemplate
