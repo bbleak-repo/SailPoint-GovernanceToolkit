@@ -39,7 +39,7 @@ Open `Config\settings.json` and replace all `CHANGE_ME` values:
     "Mode": "ConfigFile",
     "ConfigFile": {
       "TenantUrl": "https://acme.api.identitynow.com",
-      "OAuthTokenUrl": "https://acme.identitynow.com/oauth/token",
+      "OAuthTokenUrl": "https://acme.api.identitynow.com/oauth/token",
       "ClientId": "your-client-id-here",
       "ClientSecret": "your-client-secret-here"
     }

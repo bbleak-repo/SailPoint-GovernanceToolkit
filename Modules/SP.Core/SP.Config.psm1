@@ -212,7 +212,7 @@ function Get-SPConfigTemplate {
             Mode       = 'ConfigFile'
             ConfigFile = [ordered]@{
                 TenantUrl     = 'https://CHANGE_ME.api.identitynow.com'
-                OAuthTokenUrl = 'https://CHANGE_ME.identitynow.com/oauth/token'
+                OAuthTokenUrl = 'https://CHANGE_ME.api.identitynow.com/oauth/token'
                 ClientId      = 'CHANGE_ME'
                 ClientSecret  = 'CHANGE_ME_DO_NOT_USE_IN_PRODUCTION'
             }

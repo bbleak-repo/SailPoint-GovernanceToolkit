@@ -347,13 +347,21 @@ foreach ($campaign in $campaigns) {
             -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetCertifications' -CorrelationID $correlationID
     }
 
-    # --- Certification items ---
-    $allItems = [System.Collections.Generic.List[object]]::new()
+    # --- Certification items (wrapped with context for categorization functions) ---
+    $wrappedAllItems = [System.Collections.Generic.List[object]]::new()
+    $allItems        = [System.Collections.Generic.List[object]]::new()
     foreach ($cert in $certifications) {
+        $certName   = if ($null -ne $cert.name) { $cert.name } else { '' }
         $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
-        if ($itemResult.Success) {
-            foreach ($item in $itemResult.Data) {
-                $allItems.Add($item)
+        if ($itemResult.Success -and $null -ne $itemResult.Data) {
+            foreach ($rawItem in $itemResult.Data) {
+                $allItems.Add($rawItem)
+                $wrappedAllItems.Add(@{
+                    Item              = $rawItem
+                    CertificationId   = $cert.id
+                    CertificationName = $certName
+                    CampaignName      = $campName
+                })
             }
         }
         else {
@@ -363,12 +371,20 @@ foreach ($campaign in $campaigns) {
     Write-Host "    Collected $($allItems.Count) review items across $($certifications.Count) certification(s)." -ForegroundColor DarkGray
 
     # --- Campaign report (CSV) ---
-    $campaignReportRows = @()
+    $campaignReportRows = $null
     if ($CampaignReportCsvPath) {
         Write-Host "    Importing campaign report from CSV: $CampaignReportCsvPath" -ForegroundColor DarkGray
-        $csvResult = Import-SPAuditCampaignReport -CsvPath $CampaignReportCsvPath -CorrelationID $correlationID
+        $csvResult = Import-SPAuditCampaignReport -CsvDirectoryPath $CampaignReportCsvPath -CorrelationID $correlationID
         if ($csvResult.Success) {
-            $campaignReportRows = @($csvResult.Data)
+            # Convert from {StatusReport=; SignOffReport=} to {CAMPAIGN_STATUS_REPORT=; CERTIFICATION_SIGNOFF_REPORT=}
+            $campaignReportRows = @{}
+            if ($null -ne $csvResult.Data.StatusReport) {
+                $campaignReportRows['CAMPAIGN_STATUS_REPORT'] = @($csvResult.Data.StatusReport)
+            }
+            if ($null -ne $csvResult.Data.SignOffReport) {
+                $campaignReportRows['CERTIFICATION_SIGNOFF_REPORT'] = @($csvResult.Data.SignOffReport)
+            }
+            if ($campaignReportRows.Count -eq 0) { $campaignReportRows = $null }
         }
         else {
             Write-Host "    WARN: Could not import campaign report CSV: $($csvResult.Error)" -ForegroundColor Yellow
@@ -376,60 +392,51 @@ foreach ($campaign in $campaigns) {
     }
     elseif ($config.Audit -and $config.Audit.IncludeCampaignReports -ne $false) {
         Write-Host "    Fetching campaign reports from API..." -ForegroundColor DarkGray
-        $reportResult = Get-SPAuditCampaignReport -CampaignId $campId -CorrelationID $correlationID
-        if ($reportResult.Success) {
-            $campaignReportRows = @($reportResult.Data)
+        $campaignReportRows = @{}
+        foreach ($reportType in @('CAMPAIGN_STATUS_REPORT', 'CERTIFICATION_SIGNOFF_REPORT')) {
+            $reportResult = Get-SPAuditCampaignReport -CampaignId $campId -ReportType $reportType `
+                -CorrelationID $correlationID
+            if ($reportResult.Success) {
+                $campaignReportRows[$reportType] = @($reportResult.Data)
+            }
+            else {
+                Write-Host "    WARN: $reportType unavailable: $($reportResult.Error)" -ForegroundColor Yellow
+                Write-SPLog -Message "Campaign report '$reportType' unavailable for ${campId}: $($reportResult.Error)" `
+                    -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetCampaignReport' -CorrelationID $correlationID
+            }
         }
-        else {
-            Write-Host "    WARN: Campaign report API unavailable: $($reportResult.Error)" -ForegroundColor Yellow
-            Write-SPLog -Message "Campaign report API unavailable for ${campId}: $($reportResult.Error)" `
-                -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetCampaignReport' -CorrelationID $correlationID
-        }
+        if ($campaignReportRows.Count -eq 0) { $campaignReportRows = $null }
     }
 
-    # --- Collect revoked identity IDs ---
+    # --- Collect revoked identity IDs (from raw items using identitySummary, matching GUI bridge pattern) ---
     $revokedIdentityIds = @(
-        $allItems |
-            Where-Object { $_.decision -eq 'REVOKE' } |
-            ForEach-Object { $_.accessSummary.identity.id } |
-            Where-Object { $_ }
+        $allItems | ForEach-Object {
+            if ($null -ne $_.decision -and $_.decision -eq 'REVOKE' -and
+                $null -ne $_.identitySummary -and $null -ne $_.identitySummary.id) {
+                $_.identitySummary.id
+            }
+        } | Where-Object { $_ } | Sort-Object -Unique
     )
-    $revokedIdentityIds = @($revokedIdentityIds | Sort-Object -Unique)
 
-    # --- Identity lifecycle events ---
+    # --- Identity lifecycle events (per-identity loop, matching GUI bridge pattern) ---
     $identityEvents = @()
     if ($revokedIdentityIds.Count -gt 0 -and ($config.Audit -and $config.Audit.IncludeIdentityEvents -ne $false)) {
         Write-Host "    Fetching identity events for $($revokedIdentityIds.Count) revoked identit(ies)..." -ForegroundColor DarkGray
-        $eventResult = Get-SPAuditIdentityEvents `
-            -IdentityIds $revokedIdentityIds `
-            -DaysBack $effectiveIdentityEventDays `
-            -CorrelationID $correlationID
+        foreach ($identityId in $revokedIdentityIds) {
+            $eventResult = Get-SPAuditIdentityEvents `
+                -IdentityId $identityId `
+                -DaysBack $effectiveIdentityEventDays `
+                -CorrelationID $correlationID
 
-        if ($eventResult.Success) {
-            $identityEvents = @($eventResult.Data)
-        }
-        else {
-            Write-Host "    WARN: Could not retrieve identity events: $($eventResult.Error)" -ForegroundColor Yellow
-            Write-SPLog -Message "Could not retrieve identity events for campaign ${campId}: $($eventResult.Error)" `
-                -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetIdentityEvents' -CorrelationID $correlationID
-        }
-    }
-
-    # --- Wrap items with certification context for categorization functions ---
-    # Group-SPAuditDecisions and Group-SPAuditRemediationProof expect each element
-    # to be a hashtable with Item/CertificationId/CertificationName/CampaignName keys.
-    $wrappedAllItems = [System.Collections.Generic.List[object]]::new()
-    foreach ($cert in $certifications) {
-        $certName = if ($null -ne $cert.name) { $cert.name } else { '' }
-        $certItemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
-        if ($certItemResult.Success -and $null -ne $certItemResult.Data) {
-            foreach ($rawItem in $certItemResult.Data) {
-                $wrappedAllItems.Add(@{
-                    Item              = $rawItem
-                    CertificationId   = $cert.id
-                    CertificationName = $certName
-                    CampaignName      = $campName
-                })
+            if ($eventResult.Success -and $null -ne $eventResult.Data) {
+                foreach ($evt in $eventResult.Data) {
+                    $identityEvents += $evt
+                }
+            }
+            else {
+                Write-Host "    WARN: Could not retrieve identity events for ${identityId}: $($eventResult.Error)" -ForegroundColor Yellow
+                Write-SPLog -Message "Could not retrieve identity events for identity '${identityId}': $($eventResult.Error)" `
+                    -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetIdentityEvents' -CorrelationID $correlationID
             }
         }
     }
@@ -441,20 +448,23 @@ foreach ($campaign in $campaigns) {
     $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
     $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications
 
-    # --- Build per-campaign audit data ---
-    $campaignAudit = [PSCustomObject]@{
-        CorrelationID    = $correlationID
-        Campaign         = $campaign
-        Certifications   = $certifications
-        Items            = $allItems.ToArray()
-        CampaignReport   = $campaignReportRows
-        DecisionGroups   = $decisionGroups
-        ReviewerActions  = $reviewerActions
-        ReviewerMetrics  = $reviewerMetrics
-        EventGroups      = $eventGroups
-        RemediationProof = $remediationProof
-        RevokedCount     = $revokedIdentityIds.Count
-        AuditedAt        = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    # --- Build per-campaign audit data (hashtable, keys match Build-SingleCampaignHtml) ---
+    $campaignAudit = @{
+        CampaignName             = $campName
+        CampaignId               = $campId
+        Status                   = if ($null -ne $campaign.status)              { [string]$campaign.status }              else { '' }
+        Created                  = if ($null -ne $campaign.created)             { [string]$campaign.created }             else { '' }
+        Completed                = if ($null -ne $campaign.completed)           { [string]$campaign.completed }           else { '' }
+        Deadline                 = if ($null -ne $campaign.deadline)            { [string]$campaign.deadline }
+                                   elseif ($null -ne $campaign.due)             { [string]$campaign.due }                 else { '' }
+        TotalCertifications      = if ($null -ne $campaign.totalCertifications) { [int]$campaign.totalCertifications }    else { 0 }
+        Decisions                = $decisionGroups
+        Reviewers                = $reviewerActions
+        ReviewerMetrics          = $reviewerMetrics
+        Events                   = $eventGroups
+        RemediationProof         = $remediationProof
+        CampaignReports          = $campaignReportRows
+        CampaignReportsAvailable = ($null -ne $campaignReportRows)
     }
     $allCampaignAudits.Add($campaignAudit)
 
@@ -469,13 +479,13 @@ foreach ($campaign in $campaigns) {
 
     # HTML report
     Export-SPAuditHtml `
-        -CampaignAudit $campaignAudit `
+        -CampaignAudits @($campaignAudit) `
         -OutputPath $campOutputDir `
         -CorrelationID $correlationID
 
     # Text summary
     Export-SPAuditText `
-        -CampaignAudit $campaignAudit `
+        -CampaignAudits @($campaignAudit) `
         -OutputPath $campOutputDir `
         -CorrelationID $correlationID
 
@@ -493,8 +503,19 @@ Export-SPAuditHtml `
     -CorrelationID $correlationID
 
 # --- JSONL audit trail ---
+$jsonlEvents = foreach ($audit in $allCampaignAudits) {
+    $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+    @{
+        Action           = 'CampaignAudited'
+        CampaignId       = $audit['CampaignId']
+        CampaignName     = $audit['CampaignName']
+        DecisionsApproved = if ($null -ne $d -and $null -ne $d['Approved']) { @($d['Approved']).Count } else { 0 }
+        DecisionsRevoked  = if ($null -ne $d -and $null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
+        DecisionsPending  = if ($null -ne $d -and $null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
+    }
+}
 Export-SPAuditJsonl `
-    -CampaignAudits $allCampaignAudits.ToArray() `
+    -Events @($jsonlEvents) `
     -OutputPath $OutputPath `
     -CorrelationID $correlationID
 
