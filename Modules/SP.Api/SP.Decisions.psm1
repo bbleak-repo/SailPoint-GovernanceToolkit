@@ -51,7 +51,12 @@ function Split-SPItemsIntoBatches {
         $start    = $end
     }
 
-    return $batches
+    # Return with the comma operator so a single-batch result is not unwrapped
+    # by the PowerShell pipeline. Without this, an input of exactly BatchSize
+    # items (e.g. 250) would produce a 1-element list; PowerShell unwraps it
+    # and the caller's foreach would iterate the inner item-id array instead
+    # of the batch list - causing N individual API calls instead of 1.
+    return ,$batches
 }
 
 #endregion
