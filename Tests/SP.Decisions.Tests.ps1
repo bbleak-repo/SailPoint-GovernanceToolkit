@@ -161,6 +161,97 @@ Describe "DEC-001: Invoke-SPBulkDecide batches at 250 items" {
     }
 }
 
+# M1 regression: body-building used to use O(N^2) `$arr += $item`; now uses
+# List[object] + .ToArray(). These tests lock in the body shape so a future
+# refactor can't accidentally break it (e.g. by leaving the List unconverted,
+# which would cause ConvertTo-Json to wrap items in an extra envelope object).
+Describe "DEC-M1: Decision body items[] is a well-formed array after List->ToArray" {
+    # Note: we use 500 items (2 batches) here rather than 250 (single batch)
+    # so the test isolates M1's body-building behavior from the unrelated
+    # DEC-001 unwrap bug in Split-SPItemsIntoBatches (single-batch case).
+    Context "When Invoke-SPBulkDecide is called with 500 items (two full batches)" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.Decisions { }
+            Mock Get-SPConfig    -ModuleName SP.Decisions { New-MockSPConfig }
+
+            $script:CapturedBodies = [System.Collections.Generic.List[object]]::new()
+            Mock Invoke-SPApiRequest -ModuleName SP.Decisions {
+                $script:CapturedBodies.Add($Body)
+                return @{ Success = $true; StatusCode = 200; Data = [PSCustomObject]@{}; Error = $null }
+            }
+        }
+
+        It "Each batch body should carry items as a 250-element array, freshly built per batch" {
+            $items = New-ItemIdArray -Count 500
+            Invoke-SPBulkDecide -CertificationId 'cert-m1-bulk' `
+                -ReviewItemIds $items -Decision 'APPROVE' -CorrelationID 'm1-bulk-1'
+
+            $script:CapturedBodies.Count             | Should -Be 2
+
+            ,$script:CapturedBodies[0].items         | Should -BeOfType [System.Array]
+            $script:CapturedBodies[0].items.Count    | Should -Be 250
+            $script:CapturedBodies[0].items[0].id    | Should -Be 'item-0001'
+            $script:CapturedBodies[0].items[249].id  | Should -Be 'item-0250'
+            $script:CapturedBodies[0].items[0].decision | Should -Be 'APPROVE'
+
+            ,$script:CapturedBodies[1].items         | Should -BeOfType [System.Array]
+            $script:CapturedBodies[1].items.Count    | Should -Be 250
+            $script:CapturedBodies[1].items[0].id    | Should -Be 'item-0251'
+            $script:CapturedBodies[1].items[249].id  | Should -Be 'item-0500'
+        }
+    }
+
+    Context "When Invoke-SPReassign is called with 50 items (sync max)" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.Decisions { }
+            Mock Get-SPConfig    -ModuleName SP.Decisions { New-MockSPConfig -ReassignSyncMax 50 }
+
+            $script:CapturedBody = $null
+            Mock Invoke-SPApiRequest -ModuleName SP.Decisions {
+                $script:CapturedBody = $Body
+                return @{ Success = $true; StatusCode = 200; Data = [PSCustomObject]@{}; Error = $null }
+            }
+        }
+
+        It "Body.items should be an array of 50 reassign items" {
+            $items = New-ItemIdArray -Count 50
+            Invoke-SPReassign -CertificationId 'cert-m1-sync' `
+                -NewCertifierIdentityId 'id-new-cert' `
+                -ReviewItemIds $items -Reason 'M1 test' -CorrelationID 'm1-sync-1'
+
+            ,$script:CapturedBody.items     | Should -BeOfType [System.Array]
+            $script:CapturedBody.items.Count | Should -Be 50
+            $script:CapturedBody.items[0].id  | Should -Be 'item-0001'
+            $script:CapturedBody.items[49].id | Should -Be 'item-0050'
+        }
+    }
+
+    Context "When Invoke-SPReassignAsync is called with 500 items (async max)" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.Decisions { }
+            Mock Get-SPConfig    -ModuleName SP.Decisions { New-MockSPConfig -ReassignAsyncMax 500 }
+
+            $script:CapturedBody = $null
+            Mock Invoke-SPApiRequest -ModuleName SP.Decisions {
+                $script:CapturedBody = $Body
+                return @{ Success = $true; StatusCode = 200; Data = [PSCustomObject]@{ id = 'task-m1' }; Error = $null }
+            }
+        }
+
+        It "Body.items should be an array of 500 reassign items" {
+            $items = New-ItemIdArray -Count 500
+            Invoke-SPReassignAsync -CertificationId 'cert-m1-async' `
+                -NewCertifierIdentityId 'id-new-cert' `
+                -ReviewItemIds $items -Reason 'M1 async test' -CorrelationID 'm1-async-1'
+
+            ,$script:CapturedBody.items      | Should -BeOfType [System.Array]
+            $script:CapturedBody.items.Count  | Should -Be 500
+            $script:CapturedBody.items[0].id   | Should -Be 'item-0001'
+            $script:CapturedBody.items[499].id | Should -Be 'item-0500'
+        }
+    }
+}
+
 Describe "DEC-002: Invoke-SPReassign respects 50-item sync limit" {
     Context "When the item count is within the sync limit (<=50)" {
         BeforeEach {
