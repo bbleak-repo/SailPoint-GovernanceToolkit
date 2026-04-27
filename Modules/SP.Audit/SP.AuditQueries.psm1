@@ -208,8 +208,26 @@ function Get-SPAuditCampaigns {
         $offset       = 0
         $pageNum      = 0
 
+        # M2: pagination ceiling.
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allCampaigns.Count) campaigns). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPAuditCampaigns' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $queryParams['offset'] = $offset.ToString()
 
             $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
@@ -345,8 +363,26 @@ function Get-SPAuditCertifications {
         $offset   = 0
         $pageNum  = 0
 
+        # M2: pagination ceiling.
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allCerts.Count) certifications). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPAuditCertifications' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $queryParams = @{
                 'filters' = "campaign.id eq `"$CampaignId`""
                 'limit'   = $pageSize.ToString()
@@ -463,8 +499,26 @@ function Get-SPAuditCertificationItems {
         $pageNum  = 0
         $endpoint = "/certifications/$CertificationId/access-review-items"
 
+        # M2: pagination ceiling.
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allItems.Count) items). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPAuditCertificationItems' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $queryParams = @{
                 'limit'  = $pageSize.ToString()
                 'offset' = $offset.ToString()
@@ -951,8 +1005,26 @@ function Get-SPAuditIdentityEvents {
         $offset        = 0
         $pageNum       = 0
 
+        # M2: pagination ceiling.
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allActivities.Count) activities). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPAuditIdentityEvents' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $queryParams = @{
                 'requested-for' = $IdentityId
                 'limit'         = $pageSize.ToString()

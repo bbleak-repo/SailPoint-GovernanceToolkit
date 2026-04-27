@@ -282,6 +282,50 @@ Describe "AQ-004: Get-SPAuditCertificationItems auto-paginates" {
             $result.Data.Count    | Should -Be 15
         }
     }
+
+    # M2: pagination ceiling regression test for the audit-side paginator.
+    # Cross-module coverage: SP.Certifications.Tests.ps1 covers the Cert
+    # paginator; this covers SP.AuditQueries to verify the same pattern
+    # applies in the audit module's Get-SPConfig resolution scope.
+    Context "M2: When the audit-items API would return full pages indefinitely" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+
+            Mock Get-SPConfig -ModuleName SP.AuditQueries {
+                [PSCustomObject]@{
+                    Api = [PSCustomObject]@{
+                        BaseUrl                    = 'https://test.api.identitynow.com/v3'
+                        MaxPaginationPages         = 4
+                        TimeoutSeconds             = 30
+                        RetryCount                 = 1
+                        RetryDelaySeconds          = 1
+                        RateLimitRequestsPerWindow = 95
+                        RateLimitWindowSeconds     = 10
+                    }
+                }
+            }
+
+            $script:RunawayCallCount = 0
+            Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries {
+                $script:RunawayCallCount++
+                # Always return a full page (250) so the paginator would
+                # otherwise loop forever.
+                $items = 1..250 | ForEach-Object {
+                    [PSCustomObject]@{ id = "runaway-p$($script:RunawayCallCount)-$_" }
+                }
+                return @{ Success = $true; StatusCode = 200; Data = $items; Error = $null }
+            }
+        }
+
+        It "Should abort after MaxPaginationPages with a ceiling error" {
+            $script:RunawayCallCount = 0
+            $result = Get-SPAuditCertificationItems -CertificationId 'cert-runaway'
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'Pagination ceiling reached'
+            $script:RunawayCallCount | Should -Be 4
+        }
+    }
 }
 
 #endregion
