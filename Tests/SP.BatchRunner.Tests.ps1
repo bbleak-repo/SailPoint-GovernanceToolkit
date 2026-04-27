@@ -117,6 +117,20 @@ BeforeAll {
         @{ Success = $true; Error = $null }
     }
 
+    # Mock SP.Assertions functions called within SP.BatchRunner's non-WhatIf path.
+    # Assert-SPCertificationCount internally calls Get-SPAllCertifications (in SP.Certifications),
+    # which in turn calls the real API. Mocking it here at the SP.BatchRunner scope ensures
+    # Invoke-SPSingleTest sees a Pass=true result without leaking any network calls.
+    Mock -ModuleName SP.BatchRunner -CommandName Assert-SPCertificationCount {
+        param($CampaignId, $MinimumCount, $CorrelationID, $CampaignTestId)
+        @{ Pass = $true; Message = 'Mock: certification count assertion passed'; Actual = 1; Minimum = $MinimumCount }
+    }
+
+    Mock -ModuleName SP.BatchRunner -CommandName Assert-SPCampaignStatus {
+        param($CampaignId, $ExpectedStatus, $CorrelationID, $CampaignTestId)
+        @{ Pass = $true; Message = 'Mock: campaign status assertion passed'; Actual = $ExpectedStatus; Expected = $ExpectedStatus }
+    }
+
     # Suppress report generation to avoid file I/O in tests
     Mock -ModuleName SP.BatchRunner -CommandName Export-SPCampaignReport { }
     Mock -ModuleName SP.BatchRunner -CommandName Export-SPSuiteReport    { }
