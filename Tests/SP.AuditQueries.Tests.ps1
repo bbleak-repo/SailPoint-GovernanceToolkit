@@ -308,7 +308,10 @@ Describe "AQ-005: Get-SPAuditCampaignReport handles unavailable report API" {
                 throw [System.Net.WebException]::new('404 Not Found')
             }
             Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries {
-                if ($Endpoint -like '*/reports*') {
+                # Match only the campaign reports *list* endpoint, not the v3 download endpoint.
+                # /campaigns/{id}/reports  -> list of available reports (returns array with taskResultId)
+                # /reports/{taskResultId}  -> v3 CSV download (should fail so legacy fallback is tested)
+                if ($Endpoint -like '*/campaigns/*/reports') {
                     return @{
                         Success    = $true
                         StatusCode = 200
