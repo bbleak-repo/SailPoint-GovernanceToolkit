@@ -313,10 +313,12 @@ Describe "BATCH-003: Invoke-SPSingleTest executes full 10-step flow in WhatIf mo
         $infoSteps = $result.Steps | Where-Object { $_.Status -eq 'INFO' }
         $infoSteps.Count | Should -BeGreaterOrEqual 8
 
-        # Verify no real API calls were made in WhatIf mode
-        Should -Not -Invoke New-SPCampaign
-        Should -Not -Invoke Start-SPCampaign
-        Should -Not -Invoke Invoke-SPBulkDecide
+        # Verify no real API calls were made in WhatIf mode.
+        # -ModuleName SP.BatchRunner is required so Pester resolves the assertion
+        # against the module-scoped mocks defined in BeforeAll, not the script scope.
+        Should -Not -Invoke New-SPCampaign    -ModuleName SP.BatchRunner
+        Should -Not -Invoke Start-SPCampaign  -ModuleName SP.BatchRunner
+        Should -Not -Invoke Invoke-SPBulkDecide -ModuleName SP.BatchRunner
     }
 
     It "Should record SKIP for optional steps when conditions are false" {
