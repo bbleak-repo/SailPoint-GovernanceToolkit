@@ -386,8 +386,17 @@ function Invoke-SPApiRequest {
                 break
             }
 
-            # Determine if we should retry
-            $shouldRetry = ($statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -le 599))
+            # Determine if we should retry.
+            # H3: status=0 represents a WebException with no Response object -
+            # transient connection-level failures (DNS blip, TLS hiccup,
+            # connection reset). These are exactly the kind of thing a retry
+            # will often paper over; not retrying makes long-running audits
+            # fragile on flaky networks.
+            $shouldRetry = (
+                $statusCode -eq 429 -or
+                ($statusCode -ge 500 -and $statusCode -le 599) -or
+                $statusCode -eq 0
+            )
 
             if ($shouldRetry -and $attempt -lt $maxRetries) {
                 if ($statusCode -eq 429) {
@@ -396,6 +405,12 @@ function Invoke-SPApiRequest {
                         -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
                     Start-Sleep -Milliseconds $waitRetryMs
+                }
+                elseif ($statusCode -eq 0) {
+                    Write-SPLog -Message "Connection-level error (no HTTP status). Waiting $retryDelaySec s before retry. Underlying: $lastError" `
+                        -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
+                        -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+                    Start-Sleep -Seconds $retryDelaySec
                 }
                 else {
                     Write-SPLog -Message "Server error ($statusCode). Waiting $retryDelaySec s before retry." `
