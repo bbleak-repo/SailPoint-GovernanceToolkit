@@ -132,8 +132,13 @@ function Get-SPStatusCodeFromException {
                 }
             }
         }
-        # Invoke-RestMethod in PS5.1 wraps in ErrorRecord; check ErrorDetails
-        if ($statusCode -eq 0 -and $Exception.Message -match '(\d{3})') {
+        # Invoke-RestMethod in PS5.1 wraps in ErrorRecord; check ErrorDetails.
+        # L1: restrict to plausible HTTP-error status codes (4xx/5xx) and require
+        # the canonical WebException parenthesis format "(NNN)" so that bare
+        # numbers in error messages — port numbers like "port 443", durations
+        # like "200 ms", or error codes like "error 12002" — are never mistaken
+        # for an HTTP status code.
+        if ($statusCode -eq 0 -and $Exception.Message -match '\(([45]\d{2})\)') {
             $statusCode = [int]$Matches[1]
         }
     }
@@ -297,12 +302,16 @@ function Invoke-SPApiRequest {
     $fullUrl     = $baseUrl + $cleanEndpoint + $queryString
 
     # Retry loop
-    $maxRetries      = $config.Api.RetryCount
-    $retryDelaySec   = $config.Api.RetryDelaySeconds
-    $timeoutSec      = $config.Api.TimeoutSeconds
-    $attempt         = 0
-    $lastStatusCode  = 0
-    $lastError       = ''
+    $maxRetries         = $config.Api.RetryCount
+    $retryDelaySec      = $config.Api.RetryDelaySeconds
+    $maxRetryDelaySec   = if ($config.Api.PSObject.Properties.Name -contains 'MaxRetryDelaySeconds' -and
+                               $config.Api.MaxRetryDelaySeconds -gt 0) {
+                              $config.Api.MaxRetryDelaySeconds
+                          } else { 60 }
+    $timeoutSec         = $config.Api.TimeoutSeconds
+    $attempt            = 0
+    $lastStatusCode     = 0
+    $lastError          = ''
 
     while ($attempt -le $maxRetries) {
         # Rate limiting: wait if window is saturated
@@ -400,23 +409,29 @@ function Invoke-SPApiRequest {
 
             if ($shouldRetry -and $attempt -lt $maxRetries) {
                 if ($statusCode -eq 429) {
+                    # 429: always honor Retry-After; no exponential backoff here.
                     $waitRetryMs = Get-SPRetryAfterMs -Exception $exc -DefaultDelaySeconds $retryDelaySec
                     Write-SPLog -Message "Rate limited (429). Waiting $waitRetryMs ms before retry." `
                         -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
                     Start-Sleep -Milliseconds $waitRetryMs
                 }
-                elseif ($statusCode -eq 0) {
-                    Write-SPLog -Message "Connection-level error (no HTTP status). Waiting $retryDelaySec s before retry. Underlying: $lastError" `
-                        -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
-                        -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
-                    Start-Sleep -Seconds $retryDelaySec
-                }
                 else {
-                    Write-SPLog -Message "Server error ($statusCode). Waiting $retryDelaySec s before retry." `
+                    # L2: exponential backoff for 5xx AND status=0 connection
+                    # failures (the H3-era constant-delay elseif was removed
+                    # during merge - the $label below distinguishes the two
+                    # cases for the log entry).
+                    # delay = min(retryDelaySec * 2^attempt, maxRetryDelaySec)
+                    # attempt is 0-indexed so the first retry uses delay * 1.
+                    $backoffSec = [Math]::Min(
+                        $retryDelaySec * [Math]::Pow(2, $attempt),
+                        $maxRetryDelaySec
+                    )
+                    $label = if ($statusCode -eq 0) { 'Connection-level error (no HTTP status)' } else { "Server error ($statusCode)" }
+                    Write-SPLog -Message "$label. Waiting $backoffSec s before retry (attempt $($attempt + 1), backoff). Underlying: $lastError" `
                         -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
-                    Start-Sleep -Seconds $retryDelaySec
+                    Start-Sleep -Seconds $backoffSec
                 }
 
                 $attempt++
