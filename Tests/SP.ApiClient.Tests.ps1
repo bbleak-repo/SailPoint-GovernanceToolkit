@@ -15,13 +15,19 @@ BeforeAll {
 
     # Helper: build a standard mock config object
     function New-MockSPConfig {
+        param(
+            [int]$RetryCount            = 2,
+            [int]$RetryDelaySeconds     = 1,
+            [int]$MaxRetryDelaySeconds  = 60
+        )
         return [PSCustomObject]@{
             Api = [PSCustomObject]@{
                 BaseUrl                    = 'https://test.api.identitynow.com/v3'
                 TimeoutSeconds             = 30
-                RetryCount                 = 2
-                RetryDelaySeconds          = 1
-                RateLimitRequestsPerWindow = 95
+                RetryCount                 = $RetryCount
+                RetryDelaySeconds          = $RetryDelaySeconds
+                MaxRetryDelaySeconds       = $MaxRetryDelaySeconds
+                RateLimitRequestsPerWindow = 9999
                 RateLimitWindowSeconds     = 10
             }
             Testing = [PSCustomObject]@{
@@ -509,6 +515,145 @@ Describe "API-007: Invoke-SPApiRequest retries on connection failure (status=0)"
             $result.Success       | Should -Be $false
             $result.Error         | Should -Not -BeNullOrEmpty
             $script:ConnCallCount | Should -Be 3
+        }
+    }
+}
+
+Describe "API-008: status-code regex tightening (L1) + exponential backoff (L2)" {
+
+    Context "L1 - port number in error message must NOT be treated as status" {
+        # A DNS failure has no HTTP response at all. The exception message may
+        # contain 443 (the port). The old greedy regex would extract 443 and
+        # return statusCode=443, which is not a retryable code.  The tightened
+        # regex must leave statusCode=0 so the connection-failure retry path fires.
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient { New-MockSPConfig -RetryCount 1 -RetryDelaySeconds 1 }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Start-Sleep     -ModuleName SP.ApiClient { }
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                throw [System.Net.WebException]::new(
+                    'The remote name could not be resolved on port 443'
+                )
+            }
+        }
+
+        It "Should retry (Start-Sleep called) because status stays 0, not 443" {
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'test-l1-port-001'
+
+            # Connection-level failure: retried and ultimately fails
+            $result.Success | Should -Be $false
+
+            # The retry path calls Start-Sleep; if status were misread as 443
+            # (non-retryable) the function would return immediately without sleeping
+            Should -Invoke Start-Sleep -ModuleName SP.ApiClient -Times 1 -Exactly
+        }
+    }
+
+    Context "L1 - actual HTTP 503 in message DOES still match and triggers retry" {
+        BeforeEach {
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient { New-MockSPConfig -RetryCount 1 -RetryDelaySeconds 1 }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Start-Sleep     -ModuleName SP.ApiClient { }
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                throw [System.Net.WebException]::new('(503) Service Unavailable')
+            }
+        }
+
+        It "Should extract 503 from the message and retry" {
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'test-l1-503-001'
+
+            $result.Success    | Should -Be $false
+            $result.StatusCode | Should -Be 503
+
+            Should -Invoke Start-Sleep -ModuleName SP.ApiClient -Times 1 -Exactly
+        }
+    }
+
+    Context "L2 - backoff doubles between attempts" {
+        # RetryCount=3, RetryDelaySeconds=1, MaxRetryDelaySeconds=10
+        # Expected delays: attempt 0 -> 1*2^0=1s, attempt 1 -> 1*2^1=2s, attempt 2 -> 1*2^2=4s
+        BeforeEach {
+            $script:RecordedSleeps = [System.Collections.Generic.List[double]]::new()
+
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient {
+                New-MockSPConfig -RetryCount 3 -RetryDelaySeconds 1 -MaxRetryDelaySeconds 10
+            }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Get-SPRateLimitWaitMs -ModuleName SP.ApiClient { return 0 }
+            Mock Start-Sleep -ModuleName SP.ApiClient {
+                param($Seconds, $Milliseconds)
+                if ($PSBoundParameters.ContainsKey('Milliseconds')) {
+                    $script:RecordedSleeps.Add([double]$Milliseconds / 1000.0)
+                } else {
+                    $script:RecordedSleeps.Add([double]$Seconds)
+                }
+            }
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                throw [System.Net.WebException]::new('(500) Internal Server Error')
+            }
+        }
+
+        It "Should record exponentially growing delays of 1, 2, 4 seconds" {
+            Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'test-l2-backoff-001'
+
+            # Three retries should produce three sleep calls (attempts 0, 1, 2)
+            $script:RecordedSleeps.Count | Should -Be 3
+
+            $script:RecordedSleeps[0] | Should -Be 1
+            $script:RecordedSleeps[1] | Should -Be 2
+            $script:RecordedSleeps[2] | Should -Be 4
+        }
+    }
+
+    Context "L2 - backoff caps at MaxRetryDelaySeconds" {
+        # RetryCount=10, RetryDelaySeconds=5, MaxRetryDelaySeconds=20
+        # Uncapped: 5, 10, 20, 40, 80 ... but all above 20 should clamp to 20
+        BeforeEach {
+            $script:RecordedSleepsCap = [System.Collections.Generic.List[double]]::new()
+
+            Mock Write-SPLog     -ModuleName SP.ApiClient { }
+            Mock Get-SPConfig    -ModuleName SP.ApiClient {
+                New-MockSPConfig -RetryCount 10 -RetryDelaySeconds 5 -MaxRetryDelaySeconds 20
+            }
+            Mock Get-SPAuthToken -ModuleName SP.ApiClient { New-MockAuthResult }
+            Mock Get-SPRateLimitWaitMs -ModuleName SP.ApiClient { return 0 }
+            Mock Start-Sleep -ModuleName SP.ApiClient {
+                param($Seconds, $Milliseconds)
+                if ($PSBoundParameters.ContainsKey('Milliseconds')) {
+                    $script:RecordedSleepsCap.Add([double]$Milliseconds / 1000.0)
+                } else {
+                    $script:RecordedSleepsCap.Add([double]$Seconds)
+                }
+            }
+            Mock Invoke-RestMethod -ModuleName SP.ApiClient {
+                throw [System.Net.WebException]::new('(500) Internal Server Error')
+            }
+        }
+
+        It "Should not exceed MaxRetryDelaySeconds on any attempt" {
+            Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -CorrelationID 'test-l2-cap-001'
+
+            # 10 retries means 10 sleep calls
+            $script:RecordedSleepsCap.Count | Should -Be 10
+
+            foreach ($delay in $script:RecordedSleepsCap) {
+                $delay | Should -BeLessOrEqual 20
+            }
+
+            # First three before cap: 5, 10, 20
+            $script:RecordedSleepsCap[0] | Should -Be 5
+            $script:RecordedSleepsCap[1] | Should -Be 10
+            $script:RecordedSleepsCap[2] | Should -Be 20
+            # Remaining should all be capped at 20
+            $script:RecordedSleepsCap[3] | Should -Be 20
+            $script:RecordedSleepsCap[9] | Should -Be 20
         }
     }
 }

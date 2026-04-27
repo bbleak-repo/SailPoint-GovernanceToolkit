@@ -58,6 +58,7 @@ function Get-SPConfigDefaults {
             TimeoutSeconds           = 60
             RetryCount               = 3
             RetryDelaySeconds        = 5
+            MaxRetryDelaySeconds     = 60
             RateLimitRequestsPerWindow = 95
             RateLimitWindowSeconds   = 10
             # M2: hard ceiling on auto-paginators. At default page size 250
@@ -240,6 +241,7 @@ function Get-SPConfigTemplate {
             TimeoutSeconds             = 60
             RetryCount                 = 3
             RetryDelaySeconds          = 5
+            MaxRetryDelaySeconds       = 60
             RateLimitRequestsPerWindow = 95
             RateLimitWindowSeconds     = 10
             MaxPaginationPages         = 200
