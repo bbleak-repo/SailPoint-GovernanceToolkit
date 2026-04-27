@@ -60,6 +60,13 @@ function Get-SPConfigDefaults {
             RetryDelaySeconds        = 5
             RateLimitRequestsPerWindow = 95
             RateLimitWindowSeconds   = 10
+            # M2: hard ceiling on auto-paginators. At default page size 250
+            # this caps any single Get-All* / Search-*Campaigns call at
+            # 50,000 items. Raise via settings.json if a tenant legitimately
+            # exceeds that. The point is to fail loudly rather than spin
+            # forever if the API ever returns full pages indefinitely
+            # (offset bug, cursor drift, tenant-side regression).
+            MaxPaginationPages       = 200
         }
         Testing = @{
             IdentitiesCsvPath                  = '.\Config\test-identities.csv'
@@ -235,6 +242,7 @@ function Get-SPConfigTemplate {
             RetryDelaySeconds          = 5
             RateLimitRequestsPerWindow = 95
             RateLimitWindowSeconds     = 10
+            MaxPaginationPages         = 200
         }
         Testing = [ordered]@{
             IdentitiesCsvPath                = '.\Config\test-identities.csv'

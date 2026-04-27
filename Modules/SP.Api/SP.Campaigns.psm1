@@ -531,8 +531,28 @@ function Search-SPCampaigns {
         $allCampaigns = [System.Collections.Generic.List[object]]::new()
         $pageSize     = 250
         $offset       = 0
+        $pageNum      = 0
+
+        # M2: pagination ceiling (see SP.Certifications.psm1 for rationale).
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
 
         do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allCampaigns.Count) campaigns). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+                    -Action 'Search-SPCampaigns' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $queryParams['offset'] = $offset.ToString()
 
             $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `

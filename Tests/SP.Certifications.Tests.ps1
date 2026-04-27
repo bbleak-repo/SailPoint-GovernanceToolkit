@@ -175,6 +175,49 @@ Describe "CERT-002: Get-SPAllCertifications auto-paginates" {
         }
     }
 
+    # M2: pagination ceiling regression test. If the API ever returned full
+    # pages indefinitely (offset bug, cursor drift, runaway tenant), the
+    # paginator must cap rather than spin forever burning the rate limit.
+    Context "M2: When the API would return full pages indefinitely" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.Certifications { }
+
+            # Override config with a small MaxPaginationPages so the test
+            # finishes quickly. Get-SPConfig is called from inside the
+            # paginator (in SP.Certifications module scope).
+            Mock Get-SPConfig -ModuleName SP.Certifications {
+                [PSCustomObject]@{
+                    Api = [PSCustomObject]@{
+                        BaseUrl                    = 'https://test.api.identitynow.com/v3'
+                        MaxPaginationPages         = 5
+                        TimeoutSeconds             = 30
+                        RetryCount                 = 1
+                        RetryDelaySeconds          = 1
+                        RateLimitRequestsPerWindow = 95
+                        RateLimitWindowSeconds     = 10
+                    }
+                }
+            }
+
+            # Always return a full page - the paginator would otherwise loop
+            # forever.
+            $fullPage = New-MockArray -Count 250 -Factory { param($id) New-MockCert -Id "runaway-$id" }
+            Mock Get-SPCertifications -ModuleName SP.Certifications {
+                return @{ Success = $true; Data = $fullPage; TotalCount = 999999; Error = $null }
+            }
+        }
+
+        It "Should abort with a ceiling error after MaxPaginationPages full pages" {
+            $result = Get-SPAllCertifications -CampaignId 'runaway' -CorrelationID 'm2-cid-001'
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'Pagination ceiling reached'
+            # Exactly 5 pages fetched (the cap), then on the 6th iteration
+            # the ceiling check fires before any 6th fetch.
+            Should -Invoke Get-SPCertifications -ModuleName SP.Certifications -Times 5 -Exactly
+        }
+    }
+
     Context "When a page request fails mid-pagination" {
         BeforeEach {
             Mock Write-SPLog  -ModuleName SP.Certifications { }
