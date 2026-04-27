@@ -389,10 +389,44 @@ Two structural changes in the test harness:
 | AQ-005 | `SP.AuditQueries.Tests.ps1` | `Get-SPAuditCampaignReport` "handles unavailable report API" — specific assertion about task-ID-returning endpoint. |
 | BATCH-001 | `SP.BatchRunner.Tests.ps1` | Suite aggregation — `Results.Count` expected 3, got 0. Mock return-shape mismatch is the leading candidate. |
 | BATCH-003 | `SP.BatchRunner.Tests.ps1` | 10-step WhatIf flow; expects specific step counts / SKIP markers. |
-| DEC-001 | `SP.Decisions.Tests.ps1` | **Possibly a real production bug.** "Expected 1 API call for 250 items, but got 250" — suggests `Invoke-SPBulkDecide` is not batching. Worth investigation before adjusting the test. |
+| DEC-001 | `SP.Decisions.Tests.ps1` | **Confirmed real production bug. FIXED 2026-04-19** on branch `fix/bulk-decide-single-batch-unwrap`. See Bug 9 below. |
 
 All six are individually scoped. Treat each as its own follow-up commit / PR.
 
 ---
 
-_Logged on 2026-04-17 (Bugs 6–8), updated 2026-04-19 (Bugs 1–5 swept). Source: no-ISC-line-of-sight sessions on Windows 11 / PS 5.1 Desktop / Pester 5.7.1._
+## Bug 9 — `Invoke-SPBulkDecide` makes N individual API calls instead of 1 batched call when item count equals BatchSize (FIXED)
+
+**Severity:** High — real production bug with rate-limit and performance implications against live ISC
+
+**Status:** FIXED on 2026-04-19 on branch `fix/bulk-decide-single-batch-unwrap`
+
+### Summary
+DEC-001 test flagged it: submitting exactly 250 items (the documented ISC batch size) resulted in 250 individual `POST /certifications/{id}/decide` calls with 1 item each, instead of 1 call with 250 items. The pattern generalized to any item count that fit in a single batch. Against a real ISC tenant this would chew through the sliding-window rate limit (95 req / 10 s) in seconds for any large certification.
+
+### Root cause
+`Modules\SP.Api\SP.Decisions.psm1:22` — `Split-SPItemsIntoBatches` uses:
+```powershell
+$batches = [System.Collections.Generic.List[object[]]]::new()
+...
+return $batches
+```
+
+PowerShell's pipeline auto-unwraps collections returned from functions. When the list contains **exactly one element** (one batch), the caller receives the inner `object[]` directly instead of the list. The caller's `foreach ($batch in $batches)` then iterates the 250 item-id strings one at a time, and each "batch" in the loop is a single string — so 250 `Invoke-SPApiRequest` calls get made.
+
+When the list has 2+ elements (e.g. 500 items → 2 batches of 250), PowerShell emits each batch as a pipeline item, the caller gets an array of batch arrays, and the loop works correctly. That asymmetry is exactly why the 500-item test passed and the 250-item test failed.
+
+### Fix
+Change `return $batches` to `return ,$batches`. The unary comma operator wraps the return in a one-element array, so PowerShell's pipeline unwrapping emits the list as a single pipeline object and the caller receives the list intact, regardless of how many batches it contains.
+
+### Verified
+- `Invoke-Pester -Path .\Tests\SP.Decisions.Tests.ps1` → 18/18 passing (was 17/18 with DEC-001 failing)
+- Full suite: 202/207 passing (was 201/207)
+- No regressions on the 500-item or 251-item batch tests
+
+### Remaining 5 failures (now, not 6)
+Same as listed above minus DEC-001: API-003 (×2), AQ-005, BATCH-001, BATCH-003.
+
+---
+
+_Logged on 2026-04-17 (Bugs 6–8), updated 2026-04-19 (Bugs 1–5 swept + Bug 9 caught & fixed). Source: no-ISC-line-of-sight sessions on Windows 11 / PS 5.1 Desktop / Pester 5.7.1._
