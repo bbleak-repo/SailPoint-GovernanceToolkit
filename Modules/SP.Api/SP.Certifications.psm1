@@ -134,9 +134,11 @@ function Get-SPCertifications {
         if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
             $items = $result.Data.items
         }
-        if ($null -eq $items) {
-            $items = @()
-        }
+        # Force array wrap. PS 5.1 ConvertFrom-Json unwraps 1-element JSON
+        # arrays to bare objects; without @(), a single-item page would be
+        # silently dropped by downstream `$page.Count -gt 0` guards. @($null)
+        # safely returns @() so the previous null-check behavior is preserved.
+        $items = @($items)
 
         $totalCount = Get-SPTotalCountFromResult -ApiResult $result
 
@@ -314,9 +316,11 @@ function Get-SPAccessReviewItems {
         if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
             $items = $result.Data.items
         }
-        if ($null -eq $items) {
-            $items = @()
-        }
+        # Force array wrap. PS 5.1 ConvertFrom-Json unwraps 1-element JSON
+        # arrays to bare objects; without @(), a single-item page would be
+        # silently dropped by downstream `$page.Count -gt 0` guards. @($null)
+        # safely returns @() so the previous null-check behavior is preserved.
+        $items = @($items)
 
         $totalCount = Get-SPTotalCountFromResult -ApiResult $result
 

@@ -227,7 +227,8 @@ function Get-SPAuditCampaigns {
             if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
                 $page = $result.Data.items
             }
-            if ($null -eq $page) { $page = @() }
+            # Force array wrap (see SP.Certifications.psm1 comment; H1 fix).
+            $page = @($page)
 
             if ($page.Count -gt 0) {
                 foreach ($campaign in $page) {
@@ -367,7 +368,8 @@ function Get-SPAuditCertifications {
             if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
                 $page = $result.Data.items
             }
-            if ($null -eq $page) { $page = @() }
+            # Force array wrap (see SP.Certifications.psm1 comment; H1 fix).
+            $page = @($page)
 
             if ($page.Count -gt 0) {
                 foreach ($cert in $page) {
@@ -483,7 +485,8 @@ function Get-SPAuditCertificationItems {
             if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
                 $page = $result.Data.items
             }
-            if ($null -eq $page) { $page = @() }
+            # Force array wrap (see SP.Certifications.psm1 comment; H1 fix).
+            $page = @($page)
 
             if ($page.Count -gt 0) {
                 foreach ($item in $page) { $allItems.Add($item) }
@@ -599,7 +602,10 @@ function Get-SPAuditCampaignReport {
         if ($reportsData.PSObject.Properties.Name -contains 'items') {
             $reportsData = $reportsData.items
         }
-        if ($null -eq $reportsData) { $reportsData = @() }
+        # Force array wrap (H1 fix) - a single report in the .items array
+        # would otherwise be unwrapped to a bare object and the foreach below
+        # would iterate its PROPERTIES instead of finding the single report.
+        $reportsData = @($reportsData)
 
         $matchingReport = $null
         foreach ($report in $reportsData) {
@@ -968,7 +974,8 @@ function Get-SPAuditIdentityEvents {
             if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
                 $page = $result.Data.items
             }
-            if ($null -eq $page) { $page = @() }
+            # Force array wrap (see SP.Certifications.psm1 comment; H1 fix).
+            $page = @($page)
 
             if ($page.Count -gt 0) {
                 foreach ($activity in $page) { $allActivities.Add($activity) }

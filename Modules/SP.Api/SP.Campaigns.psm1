@@ -546,7 +546,8 @@ function Search-SPCampaigns {
             if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
                 $page = $result.Data.items
             }
-            if ($null -eq $page) { $page = @() }
+            # Force array wrap (H1 fix; see SP.Certifications.psm1 comment).
+            $page = @($page)
 
             if ($page.Count -gt 0) {
                 foreach ($item in $page) { $allCampaigns.Add($item) }
