@@ -359,6 +359,33 @@ function Invoke-SPApiRequest {
                 -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
+            # H2: 401 on the first attempt most likely means the cached OAuth
+            # token has expired mid-run. Evict the cache, force-acquire a new
+            # token, and retry ONCE with the fresh headers. If the second
+            # attempt also 401s, the credentials are genuinely bad and we let
+            # the normal fallthrough report it.
+            if ($statusCode -eq 401 -and $attempt -eq 0) {
+                Write-SPLog -Message "401 Unauthorized on first attempt; evicting cached token and refreshing." `
+                    -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
+                    -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+                try { Clear-SPAuthToken } catch { }
+                $refreshResult = $null
+                try {
+                    $refreshResult = Get-SPAuthToken -Force -CorrelationID $CorrelationID
+                }
+                catch {
+                    $refreshResult = @{ Success = $false; Error = $_.Exception.Message }
+                }
+                if ($null -ne $refreshResult -and $refreshResult.Success) {
+                    $headers = $refreshResult.Data.Headers
+                    $attempt++
+                    continue
+                }
+                # Refresh failed: stop retrying; caller sees 401/error.
+                $lastError = "Token refresh after 401 failed: $($refreshResult.Error)"
+                break
+            }
+
             # Determine if we should retry
             $shouldRetry = ($statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -le 599))
 
