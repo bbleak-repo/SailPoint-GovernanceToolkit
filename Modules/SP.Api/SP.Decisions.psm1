@@ -153,8 +153,13 @@ function Invoke-SPBulkDecide {
                 -Severity DEBUG -Component 'SP.Decisions' -Action 'Invoke-SPBulkDecide' `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
-            # Build decision items array for this batch
-            $decisionItems = @()
+            # Build decision items array for this batch.
+            # M1: Use List[object] + .Add() rather than `$arr += $item`. The
+            # latter reallocates the entire backing array on every append
+            # (O(N^2)); for a 250-item batch that's ~32k object copies just
+            # to build the request body. Negligible at small N, measurable
+            # at full batch sizes.
+            $decisionItemList = [System.Collections.Generic.List[object]]::new()
             foreach ($itemId in $batch) {
                 $decisionItem = @{
                     id       = $itemId
@@ -163,10 +168,10 @@ function Invoke-SPBulkDecide {
                 if (-not [string]::IsNullOrWhiteSpace($Comments)) {
                     $decisionItem['comments'] = $Comments
                 }
-                $decisionItems += $decisionItem
+                $decisionItemList.Add($decisionItem)
             }
 
-            $body   = @{ items = $decisionItems }
+            $body   = @{ items = $decisionItemList.ToArray() }
             $result = Invoke-SPApiRequest -Method POST `
                 -Endpoint "/certifications/$CertificationId/decide" `
                 -Body $body `
@@ -291,14 +296,15 @@ function Invoke-SPReassign {
         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
     try {
-        $reassignItems = @()
+        # M1: List[object] + .Add() instead of O(N^2) `$arr += $item`.
+        $reassignItemList = [System.Collections.Generic.List[object]]::new()
         foreach ($itemId in $ReviewItemIds) {
-            $reassignItems += @{ id = $itemId }
+            $reassignItemList.Add(@{ id = $itemId })
         }
 
         $body = @{
             reassignTo = @{ type = 'IDENTITY'; id = $NewCertifierIdentityId }
-            items      = $reassignItems
+            items      = $reassignItemList.ToArray()
         }
         if (-not [string]::IsNullOrWhiteSpace($Reason)) {
             $body['reason'] = $Reason
@@ -410,14 +416,17 @@ function Invoke-SPReassignAsync {
         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
     try {
-        $reassignItems = @()
+        # M1: List[object] + .Add() instead of O(N^2) `$arr += $item`.
+        # Async reassign accepts up to 500 items - the worst case for the
+        # array-append pattern (~125k object copies just to build the body).
+        $reassignItemList = [System.Collections.Generic.List[object]]::new()
         foreach ($itemId in $ReviewItemIds) {
-            $reassignItems += @{ id = $itemId }
+            $reassignItemList.Add(@{ id = $itemId })
         }
 
         $body = @{
             reassignTo = @{ type = 'IDENTITY'; id = $NewCertifierIdentityId }
-            items      = $reassignItems
+            items      = $reassignItemList.ToArray()
         }
         if (-not [string]::IsNullOrWhiteSpace($Reason)) {
             $body['reason'] = $Reason
