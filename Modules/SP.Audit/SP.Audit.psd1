@@ -35,6 +35,7 @@
         'Get-SPAuditCampaignReport'
         'Import-SPAuditCampaignReport'
         'Get-SPAuditIdentityEvents'
+        'Resolve-SPAuditIdentityAccounts'
 
         # SP.AuditReport - Categorization functions
         'Group-SPAuditDecisions'

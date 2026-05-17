@@ -85,6 +85,7 @@ The Governance Toolkit uses these ISC v3 API endpoints:
 | SP.AuditQueries | GET | `/v3/campaigns/{id}/reports` | List available campaign reports |
 | SP.AuditQueries | GET | `/v3/reports/{id}` | Download campaign report CSV |
 | SP.AuditQueries | GET | `/v3/sources/{id}` | Resolve source ID to display name |
+| SP.AuditQueries | GET | `/v3/accounts` | Resolve identity to account (UPN/sAMAccountName) |
 | Legacy fallback | GET | `/cc/api/report/get/{id}?format=csv` | Legacy report download (if v3 fails) |
 
 ### Endpoint-to-Scope Mapping
@@ -120,6 +121,12 @@ ISC PAT scopes use granular strings (not role names). Here is the exact mapping 
 |----------|--------|----------------|
 | `/v3/sources/{id}` | GET | `idn:sources:read` or `idn:sources:manage` |
 
+**Accounts (`idn:` namespace):**
+
+| Endpoint | Method | Required Scope |
+|----------|--------|----------------|
+| `/v3/accounts` | GET | `idn:accounts:read` or `idn:accounts:manage` |
+
 **Legacy (uses bearer token, no separate scope):**
 
 | Endpoint | Method | Notes |
@@ -128,13 +135,14 @@ ISC PAT scopes use granular strings (not role names). Here is the exact mapping 
 
 ### Recommended Scope: Sandbox (Full Toolkit)
 
-Select these 4 scopes when creating the PAT. This covers all toolkit operations (read + write):
+Select these 5 scopes when creating the PAT. This covers all toolkit operations (read + write):
 
 ```
 idn:campaign:manage
 idn:campaign-report:manage
 sp:report:manage
 idn:sources:read
+idn:accounts:read
 ```
 
 Note: `idn:campaign:manage` is a superset of `idn:campaign:read` -- you do not need both.
@@ -148,6 +156,7 @@ idn:campaign:read
 idn:campaign-report:read
 sp:report:read
 idn:sources:read
+idn:accounts:read
 ```
 
 ### Catch-All (Quick and Dirty)

@@ -12,7 +12,7 @@ A PowerShell 5.1 toolkit for automated testing of SailPoint IdentityNow (ISC) ce
 | Windows     | 10 / 11 / Server 2019+ | WPF requires Windows. CLI works on any edition. |
 | .NET Framework | 4.5+ | Required for WPF dashboard. Included in Windows 10+. |
 | Pester      | 5.x | Required only for running unit tests in Tests/. |
-| SailPoint ISC API credentials | - | OAuth 2.0 PAT or browser token. Read-only audit needs 4 scopes (see `docs/SANDBOX-API-SETUP.md`). |
+| SailPoint ISC API credentials | - | OAuth 2.0 PAT or browser token. Read-only audit needs 5 scopes (see `docs/SANDBOX-API-SETUP.md`). |
 
 ---
 

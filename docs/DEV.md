@@ -192,6 +192,7 @@ Read-only campaign audit data retrieval:
 | `Get-SPAuditCampaignReport` | Download campaign report CSV. Tries v3 API first, falls back to legacy `/cc/api`. |
 | `Import-SPAuditCampaignReport` | Import manually downloaded CSV files from local directory. |
 | `Get-SPAuditIdentityEvents` | Get identity lifecycle events. Resolves source names. |
+| `Resolve-SPAuditIdentityAccounts` | Batch-resolve identity IDs to account details (sAMAccountName, UPN). Cached per session. |
 
 Internal helper: `Get-SPAuditSourceName` -- Module-scope cached source name resolver.
 
@@ -329,6 +330,7 @@ These were discovered during development and are documented here for reference:
 | `/v3/certifications/{id}/sign-off` | POST | SP.Decisions | Sign off certification |
 | `/v3/account-activities` | GET | SP.AuditQueries | Identity lifecycle events |
 | `/v3/sources/{id}` | GET | SP.AuditQueries | Source name resolution |
+| `/v3/accounts` | GET | SP.AuditQueries | Identity account resolution (UPN/sAMAccountName) |
 | `/v3/reports/{id}` | GET | SP.AuditQueries | CSV report download (v3, preferred) |
 | `/cc/api/report/get/{id}` | GET | SP.AuditQueries | CSV report download (legacy fallback) |
 

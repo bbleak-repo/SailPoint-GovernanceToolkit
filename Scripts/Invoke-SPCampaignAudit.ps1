@@ -441,12 +441,35 @@ foreach ($campaign in $campaigns) {
         }
     }
 
+    # --- Resolve identity accounts for UPN/sAMAccountName ---
+    $uniqueIdentityIds = @($wrappedAllItems | ForEach-Object {
+        $item = $_.Item
+        $iid = if ($null -ne $item.identitySummary -and $null -ne $item.identitySummary.identityId) { $item.identitySummary.identityId }
+               elseif ($null -ne $item.identitySummary -and $null -ne $item.identitySummary.id) { $item.identitySummary.id }
+               else { $null }
+        $iid
+    } | Where-Object { $_ } | Sort-Object -Unique)
+
+    $accountMap = @{}
+    if ($uniqueIdentityIds.Count -gt 0) {
+        Write-Host "    Resolving account attributes for $($uniqueIdentityIds.Count) unique identit(ies)..." -ForegroundColor DarkGray
+        $acctResult = Resolve-SPAuditIdentityAccounts -IdentityIds $uniqueIdentityIds -CorrelationID $correlationID
+        if ($acctResult.Success) {
+            $accountMap = $acctResult.Data
+        }
+        else {
+            Write-Host "    WARN: Account resolution failed (non-fatal): $($acctResult.Error)" -ForegroundColor Yellow
+            Write-SPLog -Message "Account resolution failed for campaign ${campId}: $($acctResult.Error)" `
+                -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'ResolveAccounts' -CorrelationID $correlationID
+        }
+    }
+
     # --- Categorize decisions and actions ---
-    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray()
+    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray() -AccountMap $accountMap
     $reviewerActions  = Group-SPReviewerActions        -Certifications $certifications
     $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
     $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
-    $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications
+    $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications -AccountMap $accountMap
 
     # --- Build per-campaign audit data (hashtable, keys match Build-SingleCampaignHtml) ---
     $campaignAudit = @{

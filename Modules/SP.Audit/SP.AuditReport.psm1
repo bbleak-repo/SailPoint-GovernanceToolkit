@@ -56,7 +56,10 @@ function Group-SPAuditDecisions {
     param(
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [object[]]$Items
+        [object[]]$Items,
+
+        [Parameter()]
+        [hashtable]$AccountMap = $null
     )
 
     $approved = [System.Collections.Generic.List[object]]::new()
@@ -91,9 +94,33 @@ function Group-SPAuditDecisions {
             $reviewerName = $rawItem.reviewedBy.name
         }
 
+        # Resolve identity ID for account lookup
+        $identityId = ''
+        if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.identityId) {
+            $identityId = [string]$rawItem.identitySummary.identityId
+        }
+        if ([string]::IsNullOrWhiteSpace($identityId) -and
+            $null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.id) {
+            $identityId = [string]$rawItem.identitySummary.id
+        }
+
+        # Look up account details from AccountMap
+        $accountName       = ''
+        $accountIdentifier = ''
+        if ($null -ne $AccountMap -and -not [string]::IsNullOrWhiteSpace($identityId) -and $AccountMap.ContainsKey($identityId)) {
+            $acct = $AccountMap[$identityId]
+            $accountName = if (-not [string]::IsNullOrWhiteSpace($acct.SamAccountName)) { $acct.SamAccountName } else { '' }
+            $accountIdentifier = if (-not [string]::IsNullOrWhiteSpace($acct.UserPrincipalName)) { $acct.UserPrincipalName }
+                                 elseif (-not [string]::IsNullOrWhiteSpace($acct.SamAccountName)) { $acct.SamAccountName }
+                                 elseif (-not [string]::IsNullOrWhiteSpace($acct.NativeIdentity)) { $acct.NativeIdentity }
+                                 else { '' }
+        }
+
         # Build normalized output object
         $out = [PSCustomObject]@{
             IdentityName      = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
+            AccountName       = $accountName
+            AccountIdentifier = $accountIdentifier
             AccessName        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
             AccessType        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
             ReviewerName      = $reviewerName
@@ -369,7 +396,10 @@ function Group-SPAuditRemediationProof {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [object[]]$Certifications
+        [object[]]$Certifications,
+
+        [Parameter()]
+        [hashtable]$AccountMap = $null
     )
 
     $revokedItems    = [System.Collections.Generic.List[object]]::new()
@@ -403,6 +433,26 @@ function Group-SPAuditRemediationProof {
             $identityName = [string]$rawItem.identitySummary.name
         }
 
+        # Resolve identity ID for account lookup
+        $identityId = ''
+        if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.identityId) {
+            $identityId = [string]$rawItem.identitySummary.identityId
+        }
+        if ([string]::IsNullOrWhiteSpace($identityId) -and
+            $null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.id) {
+            $identityId = [string]$rawItem.identitySummary.id
+        }
+
+        # Look up account identifier from AccountMap
+        $accountIdentifier = ''
+        if ($null -ne $AccountMap -and -not [string]::IsNullOrWhiteSpace($identityId) -and $AccountMap.ContainsKey($identityId)) {
+            $acct = $AccountMap[$identityId]
+            $accountIdentifier = if (-not [string]::IsNullOrWhiteSpace($acct.UserPrincipalName)) { $acct.UserPrincipalName }
+                                 elseif (-not [string]::IsNullOrWhiteSpace($acct.SamAccountName)) { $acct.SamAccountName }
+                                 elseif (-not [string]::IsNullOrWhiteSpace($acct.NativeIdentity)) { $acct.NativeIdentity }
+                                 else { '' }
+        }
+
         $accessName = ''
         $accessType = ''
         $sourceName = ''
@@ -433,6 +483,7 @@ function Group-SPAuditRemediationProof {
 
         $revokedItems.Add([PSCustomObject]@{
             IdentityName          = $identityName
+            AccountIdentifier     = $accountIdentifier
             AccessName            = $accessName
             AccessType            = $accessType
             SourceName            = $sourceName
@@ -1551,17 +1602,18 @@ function Build-SingleCampaignHtml {
 
         $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:$catColor; margin-bottom:6px; margin-top:12px;"">$catLabel ($($catItems.Count))</p>`n"
         $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
+        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
         $html += "<tbody>`n"
 
         if ($catItems.Count -eq 0) {
-            $html += "<tr><td colspan=""5"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
+            $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
         }
         else {
             $rowIdx = 0
             foreach ($item in $catItems) {
                 $cells = @(
                     (ConvertTo-SafeHtml $item.IdentityName),
+                    (ConvertTo-SafeHtml $item.AccountIdentifier),
                     (ConvertTo-SafeHtml $item.AccessName),
                     (ConvertTo-SafeHtml $item.AccessType),
                     (ConvertTo-SafeHtml $item.ReviewerName),
@@ -1650,11 +1702,11 @@ function Build-SingleCampaignHtml {
         $revokedRows = @($remediationProof['RevokedItems'])
         $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;"">Revoked Items - Remediation Status</p>`n"
         $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
+        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
         $html += "<tbody>`n"
 
         if ($revokedRows.Count -eq 0) {
-            $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
+            $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
         }
         else {
             $rowIdx = 0
@@ -1667,6 +1719,7 @@ function Build-SingleCampaignHtml {
                 }
                 $cells = @(
                     (ConvertTo-SafeHtml $ri.IdentityName),
+                    (ConvertTo-SafeHtml $ri.AccountIdentifier),
                     (ConvertTo-SafeHtml $ri.AccessName),
                     (ConvertTo-SafeHtml $ri.AccessType),
                     (ConvertTo-SafeHtml $ri.SourceName),

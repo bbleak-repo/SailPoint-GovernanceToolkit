@@ -684,12 +684,31 @@ function Invoke-SPGuiAudit {
                 }
             }
 
+            # --- Resolve identity accounts for UPN/sAMAccountName ---
+            $uniqueIdentityIds = @($wrappedItems | ForEach-Object {
+                $item = $_.Item
+                $iid = if ($null -ne $item.identitySummary -and $null -ne $item.identitySummary.identityId) { $item.identitySummary.identityId }
+                       elseif ($null -ne $item.identitySummary -and $null -ne $item.identitySummary.id) { $item.identitySummary.id }
+                       else { $null }
+                $iid
+            } | Where-Object { $_ } | Sort-Object -Unique)
+
+            $accountMap = @{}
+            if ($uniqueIdentityIds.Count -gt 0) {
+                $acctResult = Resolve-SPAuditIdentityAccounts -IdentityIds $uniqueIdentityIds -CorrelationID $CorrelationID
+                if ($acctResult.Success) { $accountMap = $acctResult.Data }
+                else {
+                    Write-SPLog -Message "Account resolution failed (non-fatal): $($acctResult.Error)" `
+                        -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                }
+            }
+
             # --- Categorize ---
-            $decisions        = Group-SPAuditDecisions         -Items $wrappedItems.ToArray()
+            $decisions        = Group-SPAuditDecisions         -Items $wrappedItems.ToArray() -AccountMap $accountMap
             $reviewers        = Group-SPReviewerActions        -Certifications $certifications
             $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
             $eventGroups      = Group-SPAuditIdentityEvents    -Events $allIdentityEvents
-            $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedItems.ToArray() -Certifications $certifications
+            $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedItems.ToArray() -Certifications $certifications -AccountMap $accountMap
 
             # --- Build campaign audit hashtable (keys match Export-SPAuditHtml schema) ---
             $campaignAudit = @{

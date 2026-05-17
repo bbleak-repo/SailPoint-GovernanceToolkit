@@ -26,6 +26,9 @@
 # Module-scope source name cache to avoid redundant API calls within a session.
 $script:SourceNameCache = @{}
 
+# Module-scope account cache: keyed by identity ID, value is @{SamAccountName; UserPrincipalName; Email; NativeIdentity}.
+$script:AccountCache = @{}
+
 #region Internal Functions
 
 function Get-SPAuditSourceName {
@@ -91,6 +94,145 @@ function Get-SPAuditSourceName {
     # Fallback: cache and return the raw ID so we do not call the API again
     $script:SourceNameCache[$SourceId] = $SourceId
     return $SourceId
+}
+
+function Get-SPAuditAccountForIdentity {
+    <#
+    .SYNOPSIS
+        Resolves an identity ID to its primary account attributes with in-memory caching.
+    .DESCRIPTION
+        Calls GET /accounts?filters=identityId eq "..." once per unique identity ID per session.
+        Returns sAMAccountName, userPrincipalName, mail, and nativeIdentity extracted from
+        the account attributes. Prefers AD/directory accounts when multiple accounts exist,
+        but falls back to the first account with attributes if no AD account is found.
+
+        On failure or no matching account, caches and returns empty strings so the API is
+        not called again for the same identity ID within the session.
+    .PARAMETER IdentityId
+        The SailPoint ISC identity ID to resolve.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{SamAccountName; UserPrincipalName; Email; NativeIdentity} - all strings.
+    .EXAMPLE
+        $acct = Get-SPAuditAccountForIdentity -IdentityId 'id-abc123' -CorrelationID $cid
+        $acct.UserPrincipalName
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$IdentityId,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Return cached result immediately
+    if ($script:AccountCache.ContainsKey($IdentityId)) {
+        return $script:AccountCache[$IdentityId]
+    }
+
+    $emptyResult = @{
+        SamAccountName    = ''
+        UserPrincipalName = ''
+        Email             = ''
+        NativeIdentity    = ''
+    }
+
+    Write-SPLog -Message "Resolving account attributes for identity '$IdentityId'" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPAuditAccountForIdentity' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $result = Invoke-SPApiRequest -Method GET -Endpoint '/accounts' `
+            -QueryParams @{
+                'filters' = "identityId eq `"$IdentityId`""
+                'limit'   = '10'
+            } `
+            -CorrelationID $CorrelationID
+
+        if (-not $result.Success -or $null -eq $result.Data) {
+            $script:AccountCache[$IdentityId] = $emptyResult
+            return $emptyResult
+        }
+
+        # Normalize: API may return array directly or object with items
+        $accounts = $result.Data
+        if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+            $accounts = $result.Data.items
+        }
+        if ($null -eq $accounts) { $accounts = @() }
+
+        # Find best account: prefer one with a non-empty sAMAccountName or UPN (AD/directory),
+        # fall back to first account with any attributes.
+        $bestAccount = $null
+        foreach ($acct in $accounts) {
+            if ($null -eq $acct) { continue }
+            $attrs = $acct.attributes
+            if ($null -eq $attrs) { continue }
+
+            $sam = ''
+            $upn = ''
+            if ($attrs.PSObject.Properties.Name -contains 'sAMAccountName' -and $null -ne $attrs.sAMAccountName) {
+                $sam = [string]$attrs.sAMAccountName
+            }
+            if ($attrs.PSObject.Properties.Name -contains 'userPrincipalName' -and $null -ne $attrs.userPrincipalName) {
+                $upn = [string]$attrs.userPrincipalName
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($sam) -or -not [string]::IsNullOrWhiteSpace($upn)) {
+                $bestAccount = $acct
+                break
+            }
+
+            # Keep first account with attributes as fallback
+            if ($null -eq $bestAccount) {
+                $bestAccount = $acct
+            }
+        }
+
+        if ($null -eq $bestAccount) {
+            $script:AccountCache[$IdentityId] = $emptyResult
+            return $emptyResult
+        }
+
+        $attrs          = $bestAccount.attributes
+        $samValue       = ''
+        $upnValue       = ''
+        $mailValue      = ''
+        $displayValue   = ''
+        $nativeValue    = if ($null -ne $bestAccount.PSObject.Properties['nativeIdentity'] -and $null -ne $bestAccount.nativeIdentity) { [string]$bestAccount.nativeIdentity } else { '' }
+
+        if ($null -ne $attrs) {
+            if ($attrs.PSObject.Properties.Name -contains 'sAMAccountName'    -and $null -ne $attrs.sAMAccountName)    { $samValue     = [string]$attrs.sAMAccountName    }
+            if ($attrs.PSObject.Properties.Name -contains 'userPrincipalName' -and $null -ne $attrs.userPrincipalName) { $upnValue     = [string]$attrs.userPrincipalName }
+            if ($attrs.PSObject.Properties.Name -contains 'mail'              -and $null -ne $attrs.mail)              { $mailValue    = [string]$attrs.mail              }
+            if ($attrs.PSObject.Properties.Name -contains 'displayName'       -and $null -ne $attrs.displayName)       { $displayValue = [string]$attrs.displayName       }
+        }
+
+        $resolved = @{
+            SamAccountName    = $samValue
+            UserPrincipalName = $upnValue
+            Email             = $mailValue
+            NativeIdentity    = $nativeValue
+        }
+
+        $script:AccountCache[$IdentityId] = $resolved
+        return $resolved
+    }
+    catch {
+        Write-SPLog -Message "Get-SPAuditAccountForIdentity failed for '$IdentityId': $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPAuditAccountForIdentity' `
+            -CorrelationID $CorrelationID
+        $script:AccountCache[$IdentityId] = $emptyResult
+        return $emptyResult
+    }
 }
 
 #endregion
@@ -1073,6 +1215,72 @@ function Get-SPAuditIdentityEvents {
     }
 }
 
+function Resolve-SPAuditIdentityAccounts {
+    <#
+    .SYNOPSIS
+        Batch-resolves identity IDs to account details (sAMAccountName, UPN, mail).
+    .DESCRIPTION
+        Calls Get-SPAuditAccountForIdentity for each supplied identity ID and returns
+        a hashtable keyed by identity ID. The internal per-identity cache means duplicate
+        IDs are not re-fetched within the same session.
+
+        Intended to be called once per campaign with all unique identity IDs collected
+        from the review items, before passing the resulting map to
+        Group-SPAuditDecisions and Group-SPAuditRemediationProof via -AccountMap.
+    .PARAMETER IdentityIds
+        Array of identity ID strings to resolve.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{ identityId = @{SamAccountName; UserPrincipalName; Email; NativeIdentity} }
+            Error   = $string
+        }
+    .EXAMPLE
+        $acctResult = Resolve-SPAuditIdentityAccounts -IdentityIds $ids -CorrelationID $cid
+        if ($acctResult.Success) { $accountMap = $acctResult.Data }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]]$IdentityIds,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Resolving account attributes for $($IdentityIds.Count) unique identity ID(s)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Resolve-SPAuditIdentityAccounts' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $results = @{}
+        foreach ($id in $IdentityIds) {
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            $results[$id] = Get-SPAuditAccountForIdentity -IdentityId $id -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Account resolution complete: $($results.Count) identit(ies) resolved" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Resolve-SPAuditIdentityAccounts' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $results; Error = $null }
+    }
+    catch {
+        $errMsg = "Resolve-SPAuditIdentityAccounts failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Resolve-SPAuditIdentityAccounts' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1081,5 +1289,6 @@ Export-ModuleMember -Function @(
     'Get-SPAuditCertificationItems',
     'Get-SPAuditCampaignReport',
     'Import-SPAuditCampaignReport',
-    'Get-SPAuditIdentityEvents'
+    'Get-SPAuditIdentityEvents',
+    'Resolve-SPAuditIdentityAccounts'
 )
