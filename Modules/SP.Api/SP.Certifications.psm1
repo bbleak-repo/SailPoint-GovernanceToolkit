@@ -134,9 +134,11 @@ function Get-SPCertifications {
         if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
             $items = $result.Data.items
         }
-        if ($null -eq $items) {
-            $items = @()
-        }
+        # Force array wrap. PS 5.1 ConvertFrom-Json unwraps 1-element JSON
+        # arrays to bare objects; without @(), a single-item page would be
+        # silently dropped by downstream `$page.Count -gt 0` guards. @($null)
+        # safely returns @() so the previous null-check behavior is preserved.
+        $items = @($items)
 
         $totalCount = Get-SPTotalCountFromResult -ApiResult $result
 
@@ -202,8 +204,27 @@ function Get-SPAllCertifications {
         $offset    = 0
         $pageNum   = 0
 
+        # M2: hard ceiling on pagination so a runaway loop can't burn the
+        # rate limit forever. Default 200 pages = 50k items at pageSize 250.
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allCerts.Count) certifications). Raise Api.MaxPaginationPages in settings.json if this is a legitimate large dataset."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Certifications' `
+                    -Action 'Get-SPAllCertifications' -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $pageResult = Get-SPCertifications -CampaignId $CampaignId `
                 -Limit $pageSize -Offset $offset `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
@@ -314,9 +335,11 @@ function Get-SPAccessReviewItems {
         if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
             $items = $result.Data.items
         }
-        if ($null -eq $items) {
-            $items = @()
-        }
+        # Force array wrap. PS 5.1 ConvertFrom-Json unwraps 1-element JSON
+        # arrays to bare objects; without @(), a single-item page would be
+        # silently dropped by downstream `$page.Count -gt 0` guards. @($null)
+        # safely returns @() so the previous null-check behavior is preserved.
+        $items = @($items)
 
         $totalCount = Get-SPTotalCountFromResult -ApiResult $result
 
@@ -382,8 +405,26 @@ function Get-SPAllAccessReviewItems {
         $offset   = 0
         $pageNum  = 0
 
+        # M2: pagination ceiling (see Get-SPAllCertifications above).
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
         do {
             $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allItems.Count) items). Raise Api.MaxPaginationPages in settings.json if this is a legitimate large dataset."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Certifications' `
+                    -Action 'Get-SPAllAccessReviewItems' -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
             $pageResult = Get-SPAccessReviewItems -CertificationId $CertificationId `
                 -Limit $pageSize -Offset $offset `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId

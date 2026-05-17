@@ -11,17 +11,11 @@
 #>
 
 BeforeAll {
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    if (Test-Path $apiPath) { Import-Module $apiPath -Force }
-
-    $testingPath = Join-Path $PSScriptRoot "..\Modules\SP.Testing\SP.Testing.psd1"
-    Import-Module $testingPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Testing
 
     # Mock all SP.Core functions
-    Mock -CommandName Get-SPConfig {
+    Mock -ModuleName SP.BatchRunner -CommandName Get-SPConfig {
         [PSCustomObject]@{
             ISC     = [PSCustomObject]@{ TenantUrl = 'https://test.identitynow.com' }
             Global  = [PSCustomObject]@{ Environment = 'NonProd' }
@@ -42,10 +36,10 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Write-SPLog { }
+    Mock -ModuleName SP.BatchRunner -CommandName Write-SPLog { }
 
     # Mock all SP.Api functions to return successful results
-    Mock -CommandName New-SPCampaign {
+    Mock -ModuleName SP.BatchRunner -CommandName New-SPCampaign {
         param($Name, $Type, $CertifierIdentityId, $SourceId, $SearchFilter, $RoleId, $Description, $CorrelationID, $CampaignTestId)
         @{
             Success = $true
@@ -54,11 +48,11 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Start-SPCampaign {
+    Mock -ModuleName SP.BatchRunner -CommandName Start-SPCampaign {
         @{ Success = $true; Data = @{}; Error = $null }
     }
 
-    Mock -CommandName Get-SPCampaign {
+    Mock -ModuleName SP.BatchRunner -CommandName Get-SPCampaign {
         param($CampaignId, $Full)
         @{
             Success = $true
@@ -67,7 +61,7 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Get-SPCampaignStatus {
+    Mock -ModuleName SP.BatchRunner -CommandName Get-SPCampaignStatus {
         param($CampaignId, $TimeoutSeconds, $PollIntervalSeconds, $TargetStatus)
         @{
             Success = $true
@@ -76,7 +70,7 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Get-SPAllCertifications {
+    Mock -ModuleName SP.BatchRunner -CommandName Get-SPAllCertifications {
         param($CampaignId)
         @{
             Success = $true
@@ -87,7 +81,7 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Get-SPAllAccessReviewItems {
+    Mock -ModuleName SP.BatchRunner -CommandName Get-SPAllAccessReviewItems {
         param($CertificationId)
         @{
             Success = $true
@@ -99,7 +93,7 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Invoke-SPBulkDecide {
+    Mock -ModuleName SP.BatchRunner -CommandName Invoke-SPBulkDecide {
         param($CertificationId, $ReviewItemIds, $Decision, $Comments)
         @{
             Success = $true
@@ -111,23 +105,37 @@ BeforeAll {
         }
     }
 
-    Mock -CommandName Invoke-SPReassign {
+    Mock -ModuleName SP.BatchRunner -CommandName Invoke-SPReassign {
         @{ Success = $true; Data = @{}; Error = $null }
     }
 
-    Mock -CommandName Invoke-SPSignOff {
+    Mock -ModuleName SP.BatchRunner -CommandName Invoke-SPSignOff {
         @{ Success = $true; Error = $null }
     }
 
-    Mock -CommandName Complete-SPCampaign {
+    Mock -ModuleName SP.BatchRunner -CommandName Complete-SPCampaign {
         @{ Success = $true; Error = $null }
+    }
+
+    # Mock SP.Assertions functions called within SP.BatchRunner's non-WhatIf path.
+    # Assert-SPCertificationCount internally calls Get-SPAllCertifications (in SP.Certifications),
+    # which in turn calls the real API. Mocking it here at the SP.BatchRunner scope ensures
+    # Invoke-SPSingleTest sees a Pass=true result without leaking any network calls.
+    Mock -ModuleName SP.BatchRunner -CommandName Assert-SPCertificationCount {
+        param($CampaignId, $MinimumCount, $CorrelationID, $CampaignTestId)
+        @{ Pass = $true; Message = 'Mock: certification count assertion passed'; Actual = 1; Minimum = $MinimumCount }
+    }
+
+    Mock -ModuleName SP.BatchRunner -CommandName Assert-SPCampaignStatus {
+        param($CampaignId, $ExpectedStatus, $CorrelationID, $CampaignTestId)
+        @{ Pass = $true; Message = 'Mock: campaign status assertion passed'; Actual = $ExpectedStatus; Expected = $ExpectedStatus }
     }
 
     # Suppress report generation to avoid file I/O in tests
-    Mock -CommandName Export-SPCampaignReport { }
-    Mock -CommandName Export-SPSuiteReport    { }
-    Mock -CommandName Write-SPEvidenceEvent   { }
-    Mock -CommandName New-SPCampaignEvidencePath { return $TestDrive }
+    Mock -ModuleName SP.BatchRunner -CommandName Export-SPCampaignReport { }
+    Mock -ModuleName SP.BatchRunner -CommandName Export-SPSuiteReport    { }
+    Mock -ModuleName SP.BatchRunner -CommandName Write-SPEvidenceEvent   { }
+    Mock -ModuleName SP.BatchRunner -CommandName New-SPCampaignEvidencePath { return $TestDrive }
 
     # Helper: build standard test identities
     $script:TestIdentities = @{
@@ -214,7 +222,7 @@ Describe "BATCH-001: Invoke-SPTestSuite runs all campaigns" {
         Invoke-SPTestSuite -Campaigns $campaigns -Identities $script:TestIdentities -CorrelationID $cid
 
         # Each campaign calls New-SPCampaign once
-        Should -Invoke New-SPCampaign -Times 2 -Exactly
+        Should -Invoke New-SPCampaign -ModuleName SP.BatchRunner -Times 2 -Exactly
     }
 }
 
@@ -224,7 +232,7 @@ Describe "BATCH-001: Invoke-SPTestSuite runs all campaigns" {
 Describe "BATCH-002: Invoke-SPTestSuite stops on first failure when flag set" {
     It "Should skip remaining tests after first failure with -StopOnFirstFailure" {
         # Override New-SPCampaign to fail on TC-001
-        Mock -CommandName New-SPCampaign {
+        Mock -ModuleName SP.BatchRunner -CommandName New-SPCampaign {
             param($Name, $Type, $CertifierIdentityId, $SourceId, $SearchFilter, $RoleId, $Description, $CorrelationID, $CampaignTestId)
             if ($CampaignTestId -eq 'TC-001') {
                 return @{
@@ -254,7 +262,7 @@ Describe "BATCH-002: Invoke-SPTestSuite stops on first failure when flag set" {
         $result.Success    | Should -Be $false
 
         # Restore default mock
-        Mock -CommandName New-SPCampaign {
+        Mock -ModuleName SP.BatchRunner -CommandName New-SPCampaign {
             param($Name, $Type, $CertifierIdentityId, $SourceId, $SearchFilter, $RoleId, $Description, $CorrelationID, $CampaignTestId)
             @{
                 Success = $true
@@ -319,10 +327,12 @@ Describe "BATCH-003: Invoke-SPSingleTest executes full 10-step flow in WhatIf mo
         $infoSteps = $result.Steps | Where-Object { $_.Status -eq 'INFO' }
         $infoSteps.Count | Should -BeGreaterOrEqual 8
 
-        # Verify no real API calls were made in WhatIf mode
-        Should -Not -Invoke New-SPCampaign
-        Should -Not -Invoke Start-SPCampaign
-        Should -Not -Invoke Invoke-SPBulkDecide
+        # Verify no real API calls were made in WhatIf mode.
+        # -ModuleName SP.BatchRunner is required so Pester resolves the assertion
+        # against the module-scoped mocks defined in BeforeAll, not the script scope.
+        Should -Not -Invoke New-SPCampaign    -ModuleName SP.BatchRunner
+        Should -Not -Invoke Start-SPCampaign  -ModuleName SP.BatchRunner
+        Should -Not -Invoke Invoke-SPBulkDecide -ModuleName SP.BatchRunner
     }
 
     It "Should record SKIP for optional steps when conditions are false" {
@@ -369,7 +379,7 @@ Describe "BATCH-004: Invoke-SPTestSuite respects MaxCampaignsPerRun safety limit
     It "Should cap execution at MaxCampaignsPerRun and mark excess as skipped" {
         # MaxCampaignsPerRun is mocked to 10 but we use a lower value here
         # by overriding the config mock
-        Mock -CommandName Get-SPConfig {
+        Mock -ModuleName SP.BatchRunner -CommandName Get-SPConfig {
             [PSCustomObject]@{
                 ISC     = [PSCustomObject]@{ TenantUrl = 'https://test.identitynow.com' }
                 Global  = [PSCustomObject]@{ Environment = 'NonProd' }
@@ -409,7 +419,7 @@ Describe "BATCH-004: Invoke-SPTestSuite respects MaxCampaignsPerRun safety limit
         $skippedResults[0].Error | Should -Match 'MaxCampaignsPerRun'
 
         # Restore config mock
-        Mock -CommandName Get-SPConfig {
+        Mock -ModuleName SP.BatchRunner -CommandName Get-SPConfig {
             [PSCustomObject]@{
                 ISC     = [PSCustomObject]@{ TenantUrl = 'https://test.identitynow.com' }
                 Global  = [PSCustomObject]@{ Environment = 'NonProd' }

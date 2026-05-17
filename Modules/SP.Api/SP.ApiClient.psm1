@@ -132,8 +132,13 @@ function Get-SPStatusCodeFromException {
                 }
             }
         }
-        # Invoke-RestMethod in PS5.1 wraps in ErrorRecord; check ErrorDetails
-        if ($statusCode -eq 0 -and $Exception.Message -match '(\d{3})') {
+        # Invoke-RestMethod in PS5.1 wraps in ErrorRecord; check ErrorDetails.
+        # L1: restrict to plausible HTTP-error status codes (4xx/5xx) and require
+        # the canonical WebException parenthesis format "(NNN)" so that bare
+        # numbers in error messages — port numbers like "port 443", durations
+        # like "200 ms", or error codes like "error 12002" — are never mistaken
+        # for an HTTP status code.
+        if ($statusCode -eq 0 -and $Exception.Message -match '\(([45]\d{2})\)') {
             $statusCode = [int]$Matches[1]
         }
     }
@@ -297,12 +302,16 @@ function Invoke-SPApiRequest {
     $fullUrl     = $baseUrl + $cleanEndpoint + $queryString
 
     # Retry loop
-    $maxRetries      = $config.Api.RetryCount
-    $retryDelaySec   = $config.Api.RetryDelaySeconds
-    $timeoutSec      = $config.Api.TimeoutSeconds
-    $attempt         = 0
-    $lastStatusCode  = 0
-    $lastError       = ''
+    $maxRetries         = $config.Api.RetryCount
+    $retryDelaySec      = $config.Api.RetryDelaySeconds
+    $maxRetryDelaySec   = if ($config.Api.PSObject.Properties.Name -contains 'MaxRetryDelaySeconds' -and
+                               $config.Api.MaxRetryDelaySeconds -gt 0) {
+                              $config.Api.MaxRetryDelaySeconds
+                          } else { 60 }
+    $timeoutSec         = $config.Api.TimeoutSeconds
+    $attempt            = 0
+    $lastStatusCode     = 0
+    $lastError          = ''
 
     while ($attempt -le $maxRetries) {
         # Rate limiting: wait if window is saturated
@@ -359,11 +368,48 @@ function Invoke-SPApiRequest {
                 -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
-            # Determine if we should retry
-            $shouldRetry = ($statusCode -eq 429 -or ($statusCode -ge 500 -and $statusCode -le 599))
+            # H2: 401 on the first attempt most likely means the cached OAuth
+            # token has expired mid-run. Evict the cache, force-acquire a new
+            # token, and retry ONCE with the fresh headers. If the second
+            # attempt also 401s, the credentials are genuinely bad and we let
+            # the normal fallthrough report it.
+            if ($statusCode -eq 401 -and $attempt -eq 0) {
+                Write-SPLog -Message "401 Unauthorized on first attempt; evicting cached token and refreshing." `
+                    -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
+                    -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+                try { Clear-SPAuthToken } catch { }
+                $refreshResult = $null
+                try {
+                    $refreshResult = Get-SPAuthToken -Force -CorrelationID $CorrelationID
+                }
+                catch {
+                    $refreshResult = @{ Success = $false; Error = $_.Exception.Message }
+                }
+                if ($null -ne $refreshResult -and $refreshResult.Success) {
+                    $headers = $refreshResult.Data.Headers
+                    $attempt++
+                    continue
+                }
+                # Refresh failed: stop retrying; caller sees 401/error.
+                $lastError = "Token refresh after 401 failed: $($refreshResult.Error)"
+                break
+            }
+
+            # Determine if we should retry.
+            # H3: status=0 represents a WebException with no Response object -
+            # transient connection-level failures (DNS blip, TLS hiccup,
+            # connection reset). These are exactly the kind of thing a retry
+            # will often paper over; not retrying makes long-running audits
+            # fragile on flaky networks.
+            $shouldRetry = (
+                $statusCode -eq 429 -or
+                ($statusCode -ge 500 -and $statusCode -le 599) -or
+                $statusCode -eq 0
+            )
 
             if ($shouldRetry -and $attempt -lt $maxRetries) {
                 if ($statusCode -eq 429) {
+                    # 429: always honor Retry-After; no exponential backoff here.
                     $waitRetryMs = Get-SPRetryAfterMs -Exception $exc -DefaultDelaySeconds $retryDelaySec
                     Write-SPLog -Message "Rate limited (429). Waiting $waitRetryMs ms before retry." `
                         -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
@@ -371,10 +417,21 @@ function Invoke-SPApiRequest {
                     Start-Sleep -Milliseconds $waitRetryMs
                 }
                 else {
-                    Write-SPLog -Message "Server error ($statusCode). Waiting $retryDelaySec s before retry." `
+                    # L2: exponential backoff for 5xx AND status=0 connection
+                    # failures (the H3-era constant-delay elseif was removed
+                    # during merge - the $label below distinguishes the two
+                    # cases for the log entry).
+                    # delay = min(retryDelaySec * 2^attempt, maxRetryDelaySec)
+                    # attempt is 0-indexed so the first retry uses delay * 1.
+                    $backoffSec = [Math]::Min(
+                        $retryDelaySec * [Math]::Pow(2, $attempt),
+                        $maxRetryDelaySec
+                    )
+                    $label = if ($statusCode -eq 0) { 'Connection-level error (no HTTP status)' } else { "Server error ($statusCode)" }
+                    Write-SPLog -Message "$label. Waiting $backoffSec s before retry (attempt $($attempt + 1), backoff). Underlying: $lastError" `
                         -Severity WARN -Component 'SP.ApiClient' -Action 'Invoke-SPApiRequest' `
                         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
-                    Start-Sleep -Seconds $retryDelaySec
+                    Start-Sleep -Seconds $backoffSec
                 }
 
                 $attempt++

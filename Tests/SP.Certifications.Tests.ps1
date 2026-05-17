@@ -11,12 +11,8 @@
 #>
 
 BeforeAll {
-    # Import SP.Core first (SP.Api depends on it)
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    Import-Module $apiPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api
 
     # Helper: generate a mock certification object
     function New-MockCert {
@@ -179,6 +175,49 @@ Describe "CERT-002: Get-SPAllCertifications auto-paginates" {
         }
     }
 
+    # M2: pagination ceiling regression test. If the API ever returned full
+    # pages indefinitely (offset bug, cursor drift, runaway tenant), the
+    # paginator must cap rather than spin forever burning the rate limit.
+    Context "M2: When the API would return full pages indefinitely" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.Certifications { }
+
+            # Override config with a small MaxPaginationPages so the test
+            # finishes quickly. Get-SPConfig is called from inside the
+            # paginator (in SP.Certifications module scope).
+            Mock Get-SPConfig -ModuleName SP.Certifications {
+                [PSCustomObject]@{
+                    Api = [PSCustomObject]@{
+                        BaseUrl                    = 'https://test.api.identitynow.com/v3'
+                        MaxPaginationPages         = 5
+                        TimeoutSeconds             = 30
+                        RetryCount                 = 1
+                        RetryDelaySeconds          = 1
+                        RateLimitRequestsPerWindow = 95
+                        RateLimitWindowSeconds     = 10
+                    }
+                }
+            }
+
+            # Always return a full page - the paginator would otherwise loop
+            # forever.
+            $fullPage = New-MockArray -Count 250 -Factory { param($id) New-MockCert -Id "runaway-$id" }
+            Mock Get-SPCertifications -ModuleName SP.Certifications {
+                return @{ Success = $true; Data = $fullPage; TotalCount = 999999; Error = $null }
+            }
+        }
+
+        It "Should abort with a ceiling error after MaxPaginationPages full pages" {
+            $result = Get-SPAllCertifications -CampaignId 'runaway' -CorrelationID 'm2-cid-001'
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'Pagination ceiling reached'
+            # Exactly 5 pages fetched (the cap), then on the 6th iteration
+            # the ceiling check fires before any 6th fetch.
+            Should -Invoke Get-SPCertifications -ModuleName SP.Certifications -Times 5 -Exactly
+        }
+    }
+
     Context "When a page request fails mid-pagination" {
         BeforeEach {
             Mock Write-SPLog  -ModuleName SP.Certifications { }
@@ -201,6 +240,45 @@ Describe "CERT-002: Get-SPAllCertifications auto-paginates" {
 
             $result.Success | Should -Be $false
             $result.Error   | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    # H1 regression test: PS 5.1 ConvertFrom-Json unwraps 1-element JSON arrays,
+    # so a response body like {"items":[{...}]} lands in Invoke-RestMethod's
+    # output with .items as a bare PSCustomObject. Get-SPCertifications must
+    # force-array the normalized value so the paginator doesn't drop it.
+    Context "H1: When the API returns a single certification (PS 5.1 unwrap)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.Certifications { }
+
+            $singleCert = New-MockCert -Id 'lone-cert-001'
+            # Simulate the ConvertFrom-Json unwrap: .items is a bare object,
+            # NOT a 1-element array.
+            Mock Invoke-SPApiRequest -ModuleName SP.Certifications {
+                return @{
+                    Success    = $true
+                    Data       = [PSCustomObject]@{ items = $singleCert }
+                    StatusCode = 200
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Get-SPCertifications should return a 1-element array, not drop the item" {
+            $result = Get-SPCertifications -CampaignId 'lone-camp' -CorrelationID 'cert-h1-a'
+
+            $result.Success        | Should -Be $true
+            ,$result.Data          | Should -BeOfType [System.Array]
+            $result.Data.Count     | Should -Be 1
+            $result.Data[0].id     | Should -Be 'lone-cert-001'
+        }
+
+        It "Get-SPAllCertifications should surface the single item through pagination" {
+            $result = Get-SPAllCertifications -CampaignId 'lone-camp' -CorrelationID 'cert-h1-b'
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 1
+            $result.Data[0].id | Should -Be 'lone-cert-001'
         }
     }
 }
@@ -315,6 +393,41 @@ Describe "CERT-004: Get-SPAllAccessReviewItems auto-paginates" {
 
             $result.Success    | Should -Be $true
             $result.Data.Count | Should -Be 3
+        }
+    }
+
+    # H1 regression test: same PS 5.1 unwrap concern for access review items.
+    Context "H1: When the API returns a single access review item (PS 5.1 unwrap)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.Certifications { }
+
+            $singleItem = New-MockItem -Id 'lone-item-001'
+            Mock Invoke-SPApiRequest -ModuleName SP.Certifications {
+                return @{
+                    Success    = $true
+                    Data       = [PSCustomObject]@{ items = $singleItem }
+                    StatusCode = 200
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Get-SPAccessReviewItems should return a 1-element array" {
+            $result = Get-SPAccessReviewItems -CertificationId 'lone-cert' `
+                -CorrelationID 'cert-h1-c'
+
+            $result.Success        | Should -Be $true
+            $result.Data.Count     | Should -Be 1
+            $result.Data[0].id     | Should -Be 'lone-item-001'
+        }
+
+        It "Get-SPAllAccessReviewItems should surface the single item through pagination" {
+            $result = Get-SPAllAccessReviewItems -CertificationId 'lone-cert' `
+                -CorrelationID 'cert-h1-d'
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 1
+            $result.Data[0].id | Should -Be 'lone-item-001'
         }
     }
 }

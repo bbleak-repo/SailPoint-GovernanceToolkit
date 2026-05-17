@@ -234,7 +234,7 @@
                      Height="10" Background="#252538"
                      Foreground="#5B9BD5"
                      BorderBrush="#3D3D5C" BorderThickness="1"
-                     Visibility="Collapsed" CornerRadius="4"/>
+                     Visibility="Collapsed"/>
 
         <TextBlock Grid.Column="2" x:Name="AuditProgressPercent"
                    Foreground="#AAAACC" VerticalAlignment="Center"

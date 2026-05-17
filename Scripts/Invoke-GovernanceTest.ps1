@@ -178,11 +178,36 @@ if ($isProdEnvironment -and -not $isWhatIf) {
     $message = "You are about to run governance tests against environment '$envName' without -WhatIf. This will create and activate real certification campaigns."
     $target  = "Environment: $envName"
 
-    if (-not $PSCmdlet.ShouldProcess($target, $message)) {
-        Write-Host "Execution aborted by user." -ForegroundColor Yellow
-        Write-SPLog -Message "Execution aborted by user at WhatIf guard" `
-            -Severity WARN -Component 'Invoke-GovernanceTest' -Action 'Abort' -CorrelationID $correlationID
-        exit 2
+    # Already-answered cases first: -Confirm:$false explicitly bypasses, any
+    # other ConfirmPreference=None (e.g. set in-session) is treated the same.
+    $confirmBypass = ($PSBoundParameters.ContainsKey('Confirm') -and -not $PSBoundParameters['Confirm']) `
+                     -or ($ConfirmPreference -eq 'None')
+
+    if (-not $confirmBypass) {
+        # ShouldProcess can throw NullReferenceException when invoked in a
+        # non-interactive host (e.g. 'powershell.exe -Command ...' from CI,
+        # a parent process, or an IDE runner) because the host's UI is
+        # incomplete. We treat any throw here as 'operator did not confirm'
+        # rather than crashing the whole script.
+        $confirmed = $false
+        try {
+            $confirmed = $PSCmdlet.ShouldProcess($target, $message)
+        }
+        catch {
+            Write-Host "Execution aborted: cannot prompt for confirmation in this host." -ForegroundColor Yellow
+            Write-Host "  Reason: $($_.Exception.Message)" -ForegroundColor DarkGray
+            Write-Host "  Re-run with -WhatIf to dry-run, or -Confirm:`$false to skip this prompt." -ForegroundColor DarkGray
+            Write-SPLog -Message "Execution aborted at WhatIf guard: ShouldProcess threw in non-interactive host ($($_.Exception.Message))" `
+                -Severity WARN -Component 'Invoke-GovernanceTest' -Action 'Abort' -CorrelationID $correlationID
+            exit 2
+        }
+
+        if (-not $confirmed) {
+            Write-Host "Execution aborted by user." -ForegroundColor Yellow
+            Write-SPLog -Message "Execution aborted by user at WhatIf guard" `
+                -Severity WARN -Component 'Invoke-GovernanceTest' -Action 'Abort' -CorrelationID $correlationID
+            exit 2
+        }
     }
 }
 

@@ -12,15 +12,8 @@
 #>
 
 BeforeAll {
-    # Load SP.Core first (SP.Api depends on it; SP.Audit depends on both)
-    $corePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    if (Test-Path $corePath) { Import-Module $corePath -Force }
-
-    $apiPath = Join-Path $PSScriptRoot "..\Modules\SP.Api\SP.Api.psd1"
-    if (Test-Path $apiPath) { Import-Module $apiPath -Force }
-
-    $auditPath = Join-Path $PSScriptRoot "..\Modules\SP.Audit\SP.Audit.psd1"
-    Import-Module $auditPath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Audit
 
     # Helper: build a minimal mock config with Audit section
     function New-MockAuditConfig {
@@ -289,6 +282,50 @@ Describe "AQ-004: Get-SPAuditCertificationItems auto-paginates" {
             $result.Data.Count    | Should -Be 15
         }
     }
+
+    # M2: pagination ceiling regression test for the audit-side paginator.
+    # Cross-module coverage: SP.Certifications.Tests.ps1 covers the Cert
+    # paginator; this covers SP.AuditQueries to verify the same pattern
+    # applies in the audit module's Get-SPConfig resolution scope.
+    Context "M2: When the audit-items API would return full pages indefinitely" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+
+            Mock Get-SPConfig -ModuleName SP.AuditQueries {
+                [PSCustomObject]@{
+                    Api = [PSCustomObject]@{
+                        BaseUrl                    = 'https://test.api.identitynow.com/v3'
+                        MaxPaginationPages         = 4
+                        TimeoutSeconds             = 30
+                        RetryCount                 = 1
+                        RetryDelaySeconds          = 1
+                        RateLimitRequestsPerWindow = 95
+                        RateLimitWindowSeconds     = 10
+                    }
+                }
+            }
+
+            $script:RunawayCallCount = 0
+            Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries {
+                $script:RunawayCallCount++
+                # Always return a full page (250) so the paginator would
+                # otherwise loop forever.
+                $items = 1..250 | ForEach-Object {
+                    [PSCustomObject]@{ id = "runaway-p$($script:RunawayCallCount)-$_" }
+                }
+                return @{ Success = $true; StatusCode = 200; Data = $items; Error = $null }
+            }
+        }
+
+        It "Should abort after MaxPaginationPages with a ceiling error" {
+            $script:RunawayCallCount = 0
+            $result = Get-SPAuditCertificationItems -CertificationId 'cert-runaway'
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'Pagination ceiling reached'
+            $script:RunawayCallCount | Should -Be 4
+        }
+    }
 }
 
 #endregion
@@ -315,7 +352,10 @@ Describe "AQ-005: Get-SPAuditCampaignReport handles unavailable report API" {
                 throw [System.Net.WebException]::new('404 Not Found')
             }
             Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries {
-                if ($Endpoint -like '*/reports*') {
+                # Match only the campaign reports *list* endpoint, not the v3 download endpoint.
+                # /campaigns/{id}/reports  -> list of available reports (returns array with taskResultId)
+                # /reports/{taskResultId}  -> v3 CSV download (should fail so legacy fallback is tested)
+                if ($Endpoint -like '*/campaigns/*/reports') {
                     return @{
                         Success    = $true
                         StatusCode = 200

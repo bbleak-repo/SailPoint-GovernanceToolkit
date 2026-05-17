@@ -10,8 +10,8 @@
 #>
 
 BeforeAll {
-    $modulePath = Join-Path $PSScriptRoot "..\Modules\SP.Core\SP.Core.psd1"
-    Import-Module $modulePath -Force
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core
 
     $script:ValidConfigPath = Join-Path $PSScriptRoot "TestData\valid-settings.json"
 }
@@ -166,20 +166,30 @@ Describe "Test-SPConfigFirstRun" {
 Describe "New-SPConfigFile" {
 
     Context "CFG-007: Creates default config file" {
+        # New-SPConfigFile now requires the parent directory to already exist
+        # (deliberate safety change; see bugs.md Bug 5). Tests ensure the dir
+        # first, then assert file creation.
+
         It "Should create a settings.json file at the specified path" {
-            $targetPath = Join-Path $TestDrive "test-output\settings.json"
+            $dir = Join-Path $TestDrive "test-output"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $targetPath = Join-Path $dir "settings.json"
             $returnedPath = New-SPConfigFile -ConfigPath $targetPath
             Test-Path $returnedPath | Should -Be $true
         }
 
         It "Should return the path to the created file" {
-            $targetPath = Join-Path $TestDrive "new-config\settings.json"
+            $dir = Join-Path $TestDrive "new-config"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $targetPath = Join-Path $dir "settings.json"
             $returnedPath = New-SPConfigFile -ConfigPath $targetPath
             $returnedPath | Should -Be $targetPath
         }
 
         It "Should create a valid JSON file" {
-            $targetPath = Join-Path $TestDrive "json-check\settings.json"
+            $dir = Join-Path $TestDrive "json-check"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $targetPath = Join-Path $dir "settings.json"
             New-SPConfigFile -ConfigPath $targetPath | Out-Null
 
             $content = Get-Content -Path $targetPath -Raw
@@ -187,17 +197,21 @@ Describe "New-SPConfigFile" {
         }
 
         It "Should embed CHANGE_ME placeholders in the generated file" {
-            $targetPath = Join-Path $TestDrive "placeholder-check\settings.json"
+            $dir = Join-Path $TestDrive "placeholder-check"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $targetPath = Join-Path $dir "settings.json"
             New-SPConfigFile -ConfigPath $targetPath | Out-Null
 
             $content = Get-Content -Path $targetPath -Raw
             $content | Should -Match 'CHANGE_ME'
         }
 
-        It "Should create parent directories if they do not exist" {
+        It "Should throw DirectoryNotFoundException when parent does not exist" {
             $nestedPath = Join-Path $TestDrive "deep\nested\dir\settings.json"
-            New-SPConfigFile -ConfigPath $nestedPath | Out-Null
-            Test-Path $nestedPath | Should -Be $true
+            { New-SPConfigFile -ConfigPath $nestedPath } |
+                Should -Throw -ExceptionType ([System.IO.DirectoryNotFoundException])
+            Test-Path $nestedPath | Should -Be $false
+            Test-Path (Join-Path $TestDrive "deep") | Should -Be $false
         }
     }
 }

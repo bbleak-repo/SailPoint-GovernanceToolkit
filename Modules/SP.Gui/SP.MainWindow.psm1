@@ -191,7 +191,7 @@ function Initialize-CampaignTab {
     if ($btnRefresh) {
         $btnRefresh.Add_Click({
             Load-CampaignData -Grid $campaignGrid -TagFilter $tagFilter -ProgressLabel $progressLabel
-        })
+        }.GetNewClosure())
     }
 
     # Run Selected
@@ -204,7 +204,7 @@ function Initialize-CampaignTab {
             }
             Invoke-GuiTestRun -Campaigns $selected -ProgressBar $progressBar `
                 -ProgressLabel $progressLabel -ResultSummary $resultSummary
-        })
+        }.GetNewClosure())
     }
 
     # Run All
@@ -217,7 +217,7 @@ function Initialize-CampaignTab {
             }
             Invoke-GuiTestRun -Campaigns $all -ProgressBar $progressBar `
                 -ProgressLabel $progressLabel -ResultSummary $resultSummary
-        })
+        }.GetNewClosure())
     }
 
     # Run Smoke
@@ -234,7 +234,7 @@ function Initialize-CampaignTab {
             }
             Invoke-GuiTestRun -Campaigns $smoke -ProgressBar $progressBar `
                 -ProgressLabel $progressLabel -ResultSummary $resultSummary
-        })
+        }.GetNewClosure())
     }
 }
 
@@ -422,7 +422,7 @@ function Initialize-EvidenceTab {
     if ($btnRefresh) {
         $btnRefresh.Add_Click({
             Load-EvidenceTree -Tree $evidenceTree
-        })
+        }.GetNewClosure())
     }
 
     if ($evidenceTree) {
@@ -431,7 +431,7 @@ function Initialize-EvidenceTab {
             if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
                 Load-EvidenceDetail -FilePath $selectedNode.Tag -DetailGrid $detailGrid
             }
-        })
+        }.GetNewClosure())
     }
 
     if ($btnOpenBrowser) {
@@ -440,7 +440,7 @@ function Initialize-EvidenceTab {
             if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
                 Start-Process $selectedNode.Tag
             }
-        })
+        }.GetNewClosure())
     }
 
     Load-EvidenceTree -Tree $evidenceTree
@@ -537,6 +537,10 @@ function Initialize-SettingsTab {
     $btnApplyToken   = Find-Control -Parent $TabContent -Name 'BtnApplyToken'
     $btnClearToken   = Find-Control -Parent $TabContent -Name 'BtnClearToken'
     $tokenStatus     = Find-Control -Parent $TabContent -Name 'BrowserTokenStatus'
+    $btnBrowseIds    = Find-Control -Parent $TabContent -Name 'BtnBrowseIdentities'
+    $btnBrowseCamps  = Find-Control -Parent $TabContent -Name 'BtnBrowseCampaigns'
+    $btnBrowseEvid   = Find-Control -Parent $TabContent -Name 'BtnBrowseEvidence'
+    $btnBrowseReps   = Find-Control -Parent $TabContent -Name 'BtnBrowseReports'
 
     # Load current settings into form
     Load-SettingsForm -TabContent $TabContent
@@ -545,7 +549,7 @@ function Initialize-SettingsTab {
     if ($btnSave) {
         $btnSave.Add_Click({
             Save-SettingsForm -TabContent $TabContent
-        })
+        }.GetNewClosure())
     }
 
     # Reset to defaults
@@ -560,29 +564,40 @@ function Initialize-SettingsTab {
             if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
                 Load-SettingsForm -TabContent $TabContent
             }
-        })
+        }.GetNewClosure())
     }
 
     # Test connectivity
     if ($btnTestConn) {
         $btnTestConn.Add_Click({
-            if ($null -ne $connStatus) {
-                $connStatus.Text = 'Testing connectivity...'
-                $connStatus.Foreground = [System.Windows.Media.Brushes]::LightGray
-            }
-            Set-StatusMessage -Message 'Running connectivity test...'
-
-            $statusResult = Test-SPGuiConnectivity -ConfigPath $script:ConfigPath
-
-            if ($null -ne $connStatus) {
-                $connStatus.Text = $statusResult.OverallMessage
-                $connStatus.Foreground = if ($statusResult.Success) {
-                    [System.Windows.Media.Brushes]::LightGreen
-                } else {
-                    [System.Windows.Media.Brushes]::Salmon
+            try {
+                # Re-find the control inside the handler: local vars from the outer
+                # Initialize-SettingsTab scope are not reliably visible here under
+                # Set-StrictMode in a module. $script:MainWindow is module-scoped and safe.
+                $connStatusCtl = Find-Control -Parent $script:MainWindow -Name 'ConnectivityStatusText'
+                if ($null -ne $connStatusCtl) {
+                    $connStatusCtl.Text = 'Testing connectivity...'
+                    $connStatusCtl.Foreground = [System.Windows.Media.Brushes]::LightGray
                 }
+                Set-StatusMessage -Message 'Running connectivity test...'
+
+                $statusResult = Test-SPGuiConnectivity -ConfigPath $script:ConfigPath
+
+                if ($null -ne $connStatusCtl) {
+                    $connStatusCtl.Text = $statusResult.OverallMessage
+                    $connStatusCtl.Foreground = if ($statusResult.Success) {
+                        [System.Windows.Media.Brushes]::LightGreen
+                    } else {
+                        [System.Windows.Media.Brushes]::Salmon
+                    }
+                }
+                Set-StatusMessage -Message $statusResult.OverallMessage -IsError:(-not $statusResult.Success)
             }
-            Set-StatusMessage -Message $statusResult.OverallMessage -IsError:(-not $statusResult.Success)
+            catch {
+                $errMsg = "Test Connectivity handler failed: $($_.Exception.Message)"
+                try { Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Gui' -Action 'TestConnectivity' } catch { }
+                try { Set-StatusMessage -Message $errMsg -IsError } catch { }
+            }
         })
     }
 
@@ -606,7 +621,7 @@ function Initialize-SettingsTab {
             }
 
             Set-StatusMessage -Message $result.Message -IsError:(-not $result.Success)
-        })
+        }.GetNewClosure())
     }
 
     # Clear browser token
@@ -624,7 +639,85 @@ function Initialize-SettingsTab {
             }
 
             Set-StatusMessage -Message 'Browser token cleared.'
-        })
+        }.GetNewClosure())
+    }
+
+    # Browse buttons: wire file picker for CSVs, folder picker for directories
+    if ($btnBrowseIds) {
+        $btnBrowseIds.Add_Click({
+            Invoke-GuiFilePicker -TargetName 'TxtIdentitiesCsvPath' -Title 'Select test-identities.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+        }.GetNewClosure())
+    }
+    if ($btnBrowseCamps) {
+        $btnBrowseCamps.Add_Click({
+            Invoke-GuiFilePicker -TargetName 'TxtCampaignsCsvPath' -Title 'Select test-campaigns.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+        }.GetNewClosure())
+    }
+    if ($btnBrowseEvid) {
+        $btnBrowseEvid.Add_Click({
+            Invoke-GuiFolderPicker -TargetName 'TxtEvidencePath' -Description 'Select Evidence output folder'
+        }.GetNewClosure())
+    }
+    if ($btnBrowseReps) {
+        $btnBrowseReps.Add_Click({
+            Invoke-GuiFolderPicker -TargetName 'TxtReportsPath' -Description 'Select Reports output folder'
+        }.GetNewClosure())
+    }
+}
+
+function Invoke-GuiFilePicker {
+    <#
+    .SYNOPSIS
+        Opens an OpenFileDialog and writes the chosen path into a named TextBox
+        on the main window.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TargetName,
+        [Parameter()]        [string]$Title   = 'Select file',
+        [Parameter()]        [string]$Filter  = 'All files (*.*)|*.*'
+    )
+    $dlg = New-Object Microsoft.Win32.OpenFileDialog
+    $dlg.Title       = $Title
+    $dlg.Filter      = $Filter
+    $dlg.Multiselect = $false
+    $existing = Find-Control -Parent $script:MainWindow -Name $TargetName
+    if ($null -ne $existing -and $existing.Text) {
+        $seed = $existing.Text
+        try {
+            $seedDir = if (Test-Path $seed -PathType Container) { $seed } else { Split-Path -Parent $seed }
+            if ($seedDir -and (Test-Path $seedDir)) { $dlg.InitialDirectory = $seedDir }
+        } catch { }
+    }
+    if ($dlg.ShowDialog() -eq $true) {
+        if ($null -ne $existing) { $existing.Text = $dlg.FileName }
+    }
+}
+
+function Invoke-GuiFolderPicker {
+    <#
+    .SYNOPSIS
+        Opens a FolderBrowserDialog (from System.Windows.Forms) and writes the
+        chosen directory into a named TextBox on the main window.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TargetName,
+        [Parameter()]        [string]$Description = 'Select folder'
+    )
+    try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop } catch { }
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = $Description
+    $dlg.ShowNewFolderButton = $true
+    $existing = Find-Control -Parent $script:MainWindow -Name $TargetName
+    if ($null -ne $existing -and $existing.Text) {
+        try {
+            $seed = $existing.Text
+            if (Test-Path $seed) { $dlg.SelectedPath = $seed }
+        } catch { }
+    }
+    if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        if ($null -ne $existing) { $existing.Text = $dlg.SelectedPath }
     }
 }
 
@@ -694,6 +787,30 @@ function Save-SettingsForm {
         return $Default
     }
 
+    # Read current config to preserve fields we don't edit in the GUI (e.g. ClientSecret
+    # when the password box was left blank — overwriting it unconditionally would
+    # destroy a real credential already on disk).
+    $existingConfig = $null
+    try { $existingConfig = Get-SPConfig -ConfigPath $configPath -Force } catch { }
+
+    # Resolve ClientSecret: prefer the password box if user typed something; otherwise
+    # keep whatever is already in settings.json. Never write an empty string, and
+    # never write a sentinel that would silently erase a real secret.
+    $clientSecretToWrite = $null
+    $pbSecret = Find-Control -Parent $TabContent -Name 'PbClientSecret'
+    if ($null -ne $pbSecret -and $pbSecret.Password) {
+        $clientSecretToWrite = $pbSecret.Password
+    }
+    elseif ($null -ne $existingConfig -and
+            $existingConfig.PSObject.Properties.Name -contains 'Authentication' -and
+            $existingConfig.Authentication.PSObject.Properties.Name -contains 'ConfigFile' -and
+            $existingConfig.Authentication.ConfigFile.PSObject.Properties.Name -contains 'ClientSecret') {
+        $clientSecretToWrite = $existingConfig.Authentication.ConfigFile.ClientSecret
+    }
+    else {
+        $clientSecretToWrite = 'CHANGE_ME_DO_NOT_USE_IN_PRODUCTION'
+    }
+
     $timeoutVal  = 60; [int]::TryParse((& $getField 'TxtApiTimeout'), [ref]$timeoutVal) | Out-Null
     $retryVal    = 3;  [int]::TryParse((& $getField 'TxtRetryCount'), [ref]$retryVal) | Out-Null
     $maxRunVal   = 10; [int]::TryParse((& $getField 'TxtMaxCampaignsPerRun'), [ref]$maxRunVal) | Out-Null
@@ -710,7 +827,7 @@ function Save-SettingsForm {
                 TenantUrl     = & $getField 'TxtTenantUrl'
                 OAuthTokenUrl = (& $getField 'TxtTenantUrl').TrimEnd('/') + '/oauth/token'
                 ClientId      = & $getField 'TxtClientId'
-                ClientSecret  = 'VAULT_OR_ENV_ONLY'
+                ClientSecret  = $clientSecretToWrite
             }
             Vault = [ordered]@{
                 VaultPath        = '.\Data\sp-vault.enc'
@@ -802,7 +919,7 @@ function Initialize-AuditTab {
     if ($btnQuery) {
         $btnQuery.Add_Click({
             Invoke-AuditCampaignQuery -TabContent $TabContent
-        })
+        }.GetNewClosure())
     }
 
     # Clear filter button
@@ -818,14 +935,14 @@ function Initialize-AuditTab {
             if ($null -ne $cboTimespan) {
                 $cboTimespan.SelectedIndex = 2
             }
-        })
+        }.GetNewClosure())
     }
 
     # Run Audit button
     if ($btnRunAudit) {
         $btnRunAudit.Add_Click({
             Invoke-GuiAuditRun -TabContent $TabContent
-        })
+        }.GetNewClosure())
     }
 
     # Open Reports Folder button
@@ -836,14 +953,14 @@ function Initialize-AuditTab {
                 [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
             }
             Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
-        })
+        }.GetNewClosure())
     }
 
     # Refresh audit reports button
     if ($btnRefreshReports) {
         $btnRefreshReports.Add_Click({
             Load-AuditReportList -TabContent $TabContent
-        })
+        }.GetNewClosure())
     }
 
     # Double-click on report list item opens file
@@ -853,7 +970,7 @@ function Initialize-AuditTab {
             if ($null -ne $selected -and $null -ne $selected.Tag -and (Test-Path $selected.Tag)) {
                 Start-Process $selected.Tag
             }
-        })
+        }.GetNewClosure())
     }
 
     # Populate recent reports on init
@@ -1198,6 +1315,12 @@ function Wire-MenuHandlers {
         $menuExit.Add_Click({ $script:MainWindow.Close() })
     }
 
+    # Top-right Close button (explicit UI exit, same behavior as File -> Exit)
+    $btnCloseApp = Find-Control -Parent $script:MainWindow -Name 'BtnCloseApp'
+    if ($btnCloseApp) {
+        $btnCloseApp.Add_Click({ $script:MainWindow.Close() })
+    }
+
     # Tools -> Test Connectivity
     $menuTestConn = Find-Control -Parent $script:MainWindow -Name 'MenuTestConnectivity'
     if ($menuTestConn) {
@@ -1285,6 +1408,10 @@ function Show-SPDashboard {
         $script:ConfigPath = Join-Path $script:ToolkitRoot 'Config\settings.json'
     }
 
+    # Initialize structured logging so handler/dispatcher errors have somewhere to go.
+    # Other entry-point scripts do this; the dashboard was the only one that did not.
+    try { Initialize-SPLogging -Force -ErrorAction SilentlyContinue } catch { }
+
     # Create WPF Application if not already running
     if ($null -eq [System.Windows.Application]::Current) {
         $app = [System.Windows.Application]::new()
@@ -1328,6 +1455,58 @@ function Show-SPDashboard {
 
     # Set initial status
     Set-StatusMessage -Message "Ready | Toolkit root: $($script:ToolkitRoot)"
+
+    # Safety net: catch any unhandled exception from event handlers so a single
+    # bad handler cannot tear down the dashboard. Log via Write-SPLog (if
+    # available) and surface to the status bar; mark the event handled to
+    # keep the dispatcher loop alive.
+    $window.Dispatcher.add_UnhandledException({
+        param($eventSender, $eventArgs)
+        $ex = $eventArgs.Exception
+        $detail = "$($ex.GetType().FullName): $($ex.Message)"
+        try {
+            Write-SPLog -Message "Unhandled GUI exception: $detail" `
+                -Severity ERROR -Component 'SP.Gui' -Action 'UnhandledException'
+        } catch { }
+        try {
+            Set-StatusMessage -Message "Error (see log): $($ex.Message)" -IsError
+        } catch { }
+        $eventArgs.Handled = $true
+    })
+
+    try {
+        Write-SPLog -Message "Dashboard launched (ConfigPath: $($script:ConfigPath))" `
+            -Severity INFO -Component 'SP.Gui' -Action 'Start'
+    } catch { }
+
+    # Clamp the window into the primary screen's work area once it's laid out.
+    # On smaller displays (laptops, 1366x768, etc.) a Height of 780 + CenterScreen
+    # pushes the title bar above pixel 0, leaving the window uncloseable. We shrink
+    # to fit, then re-center inside WorkingArea.
+    $window.add_Loaded({
+        try {
+            try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop } catch { }
+            $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+            if ($null -eq $screen) { return }
+            $work = $screen.WorkingArea
+            $margin = 8
+
+            # If the window is taller/wider than the work area, shrink it.
+            $newW = [Math]::Min($this.Width,  [double]($work.Width  - 2 * $margin))
+            $newH = [Math]::Min($this.Height, [double]($work.Height - 2 * $margin))
+            if ($newW -ne $this.Width)  { $this.Width  = $newW }
+            if ($newH -ne $this.Height) { $this.Height = $newH }
+
+            # Re-center inside the work area (accounts for taskbar + multi-monitor origin).
+            $this.Left = [double]$work.X + [Math]::Max(0, ($work.Width  - $this.Width)  / 2)
+            $this.Top  = [double]$work.Y + [Math]::Max(0, ($work.Height - $this.Height) / 2)
+        } catch {
+            try {
+                Write-SPLog -Message "Window fit-to-screen failed: $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.Gui' -Action 'FitToScreen'
+            } catch { }
+        }
+    })
 
     # Show window
     $window.ShowDialog() | Out-Null
