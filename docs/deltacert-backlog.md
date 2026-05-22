@@ -459,7 +459,7 @@ lines 731-954, SP.GuiBridge.psm1 bridge functions, SP.MainWindow.psm1 button han
 ### F-10: Identity Exclusion Filters
 
 - **Status:** `DONE`
-- **Commit:** (pending)
+- **Commit:** f8ed112
 - **Depends On:** none (enhances Phase 1 function)
 
 **Description:**
