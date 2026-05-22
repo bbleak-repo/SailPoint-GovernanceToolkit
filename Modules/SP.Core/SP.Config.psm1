@@ -105,6 +105,9 @@ function Get-SPConfigDefaults {
             CleanupDaysStale           = 3
             OutputPath                 = '.\DeltaCert'
             DefaultReviewerMode        = 'Manager'
+            ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+            ExcludeDisplayNamePatterns = @()
+            ExcludeIdentityIds         = @()
             Escalation = @{
                 DefaultStaleHours      = 24
                 MaxEscalationLevels    = 2

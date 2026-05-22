@@ -59,12 +59,13 @@ function Get-SPDeltaIdentityDetail {
     }
 
     $emptyResult = @{
-        IdentityId  = $IdentityId
-        DisplayName = ''
-        ManagerId   = ''
-        ManagerName = ''
-        IsActive    = $false
-        Found       = $false
+        IdentityId          = $IdentityId
+        DisplayName         = ''
+        ManagerId           = ''
+        ManagerName         = ''
+        IsActive            = $false
+        Found               = $false
+        CloudLifecycleState = ''
     }
 
     if ($script:IdentityCache.ContainsKey($IdentityId)) {
@@ -117,25 +118,27 @@ function Get-SPDeltaIdentityDetail {
         # Active status: ISC uses cloudLifecycleState on the attributes bag.
         # Treat missing or unrecognised states as active.
         $isActive = $true
+        $cloudLifecycleState = ''
         if ($null -ne $identity.PSObject.Properties['attributes'] -and
             $null -ne $identity.attributes) {
             $attrs = $identity.attributes
             if ($null -ne $attrs.PSObject.Properties['cloudLifecycleState'] -and
                 -not [string]::IsNullOrWhiteSpace($attrs.cloudLifecycleState)) {
-                $lcs = [string]$attrs.cloudLifecycleState
-                if ($lcs -in @('terminated', 'inactive', 'leaver', 'prehire')) {
+                $cloudLifecycleState = [string]$attrs.cloudLifecycleState
+                if ($cloudLifecycleState -in @('terminated', 'inactive', 'leaver', 'prehire')) {
                     $isActive = $false
                 }
             }
         }
 
         $resolved = @{
-            IdentityId  = $IdentityId
-            DisplayName = $displayName
-            ManagerId   = $managerId
-            ManagerName = $managerName
-            IsActive    = $isActive
-            Found       = $true
+            IdentityId          = $IdentityId
+            DisplayName         = $displayName
+            ManagerId           = $managerId
+            ManagerName         = $managerName
+            IsActive            = $isActive
+            Found               = $true
+            CloudLifecycleState = $cloudLifecycleState
         }
 
         $script:IdentityCache[$IdentityId] = $resolved
@@ -448,6 +451,33 @@ function Get-SPDeltaAffectedIdentities {
         -CorrelationID $CorrelationID
 
     try {
+        # Load exclusion config (fail-safe to hardcoded defaults)
+        $excludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+        $excludeDisplayNamePatterns = @()
+        $excludeIdentityIds         = @()
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg -and $null -ne $cfg.PSObject.Properties['DeltaCert'] -and
+                $null -ne $cfg.DeltaCert) {
+                $dc = $cfg.DeltaCert
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeLifecycleStates' -and
+                    $null -ne $dc.ExcludeLifecycleStates) {
+                    $excludeLifecycleStates = @($dc.ExcludeLifecycleStates)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeDisplayNamePatterns' -and
+                    $null -ne $dc.ExcludeDisplayNamePatterns) {
+                    $excludeDisplayNamePatterns = @($dc.ExcludeDisplayNamePatterns)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeIdentityIds' -and
+                    $null -ne $dc.ExcludeIdentityIds) {
+                    $excludeIdentityIds = @($dc.ExcludeIdentityIds)
+                }
+            }
+        } catch { }
+        $excludeIdSet = if ($excludeIdentityIds.Count -gt 0) {
+            [System.Collections.Generic.HashSet[string]]::new([string[]]$excludeIdentityIds)
+        } else { $null }
+
         $uniqueIds = @(
             $GrantEvents |
                 Select-Object -ExpandProperty IdentityId |
@@ -462,12 +492,23 @@ function Get-SPDeltaAffectedIdentities {
             return @{ Success = $true; Data = @(); Error = $null }
         }
 
-        $affectedIdentities = [System.Collections.Generic.List[object]]::new()
-        $skippedNotFound    = 0
-        $skippedInactive    = 0
-        $skippedNoManager   = 0
+        $affectedIdentities    = [System.Collections.Generic.List[object]]::new()
+        $skippedNotFound       = 0
+        $skippedInactive       = 0
+        $skippedNoManager      = 0
+        $skippedExcludedId     = 0
+        $skippedDisplayName    = 0
 
         foreach ($identityId in $uniqueIds) {
+            # Explicit identity ID exclusion (before API call)
+            if ($null -ne $excludeIdSet -and $excludeIdSet.Contains($identityId)) {
+                $skippedExcludedId++
+                Write-SPLog -Message "Identity '$identityId' is in ExcludeIdentityIds -- skipped" `
+                    -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaAffectedIdentities' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
             $detail = Get-SPDeltaIdentityDetail -IdentityId $identityId -CorrelationID $CorrelationID
 
             if (-not $detail.Found) {
@@ -478,12 +519,35 @@ function Get-SPDeltaAffectedIdentities {
                 continue
             }
 
-            if (-not $detail.IsActive) {
+            # Configurable lifecycle state exclusion
+            $lcs = $detail.CloudLifecycleState
+            if (-not [string]::IsNullOrWhiteSpace($lcs) -and
+                $excludeLifecycleStates.Count -gt 0 -and $lcs -in $excludeLifecycleStates) {
                 $skippedInactive++
-                Write-SPLog -Message "Identity '$identityId' ($($detail.DisplayName)) is inactive -- skipped" `
+                Write-SPLog -Message "Identity '$identityId' ($($detail.DisplayName)) has lifecycle state '$lcs' -- skipped" `
                     -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaAffectedIdentities' `
                     -CorrelationID $CorrelationID
                 continue
+            }
+
+            # Display name pattern exclusion
+            if ($excludeDisplayNamePatterns.Count -gt 0 -and
+                -not [string]::IsNullOrWhiteSpace($detail.DisplayName)) {
+                $matchedPattern = $null
+                foreach ($pattern in $excludeDisplayNamePatterns) {
+                    if (-not [string]::IsNullOrWhiteSpace($pattern) -and
+                        $detail.DisplayName -match $pattern) {
+                        $matchedPattern = $pattern
+                        break
+                    }
+                }
+                if ($null -ne $matchedPattern) {
+                    $skippedDisplayName++
+                    Write-SPLog -Message "Identity '$identityId' ($($detail.DisplayName)) matches exclusion pattern '$matchedPattern' -- skipped" `
+                        -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaAffectedIdentities' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
             }
 
             if ([string]::IsNullOrWhiteSpace($detail.ManagerId)) {
@@ -517,7 +581,7 @@ function Get-SPDeltaAffectedIdentities {
             })
         }
 
-        Write-SPLog -Message "Affected identity resolution complete: $($affectedIdentities.Count) included, $skippedNotFound not-found, $skippedInactive inactive, $skippedNoManager no-manager" `
+        Write-SPLog -Message "Affected identity resolution complete: $($affectedIdentities.Count) included, $skippedNotFound not-found, $skippedInactive inactive, $skippedNoManager no-manager, $skippedExcludedId excluded-id, $skippedDisplayName excluded-displayname" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaAffectedIdentities' `
             -CorrelationID $CorrelationID
 

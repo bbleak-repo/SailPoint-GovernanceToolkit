@@ -31,7 +31,7 @@ Cross-phase dependencies are noted explicitly.
 | 3 | Reviewer routing (SOURCE_OWNER / app owner mode) | F-05 | DONE |
 | 4 | OOO escalation (stale detection, org tree walk, reassignment) | F-06 to F-08 | DONE |
 | 5 | GUI tab integration (XAML, bridge, wiring) | F-09 | DONE |
-| 6 | Hardening (identity exclusion filters) | F-10 | PENDING |
+| 6 | Hardening (identity exclusion filters) | F-10 | DONE |
 
 ---
 
@@ -458,8 +458,8 @@ lines 731-954, SP.GuiBridge.psm1 bridge functions, SP.MainWindow.psm1 button han
 
 ### F-10: Identity Exclusion Filters
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (pending)
 - **Depends On:** none (enhances Phase 1 function)
 
 **Description:**

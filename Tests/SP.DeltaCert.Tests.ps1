@@ -1598,3 +1598,128 @@ Describe "DC-031: Invoke-SPDeltaCertEscalate WhatIf does not call reassignment A
 }
 
 #endregion DC-031
+
+# ---------------------------------------------------------------------------
+#region DC-032: Identity with displayName matching exclusion pattern is skipped
+# ---------------------------------------------------------------------------
+
+Describe "DC-032: Get-SPDeltaAffectedIdentities skips identity matching ExcludeDisplayNamePatterns" {
+
+    Context "When identity displayName matches a configured exclusion regex" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries {
+                return [PSCustomObject]@{
+                    DeltaCert = [PSCustomObject]@{
+                        ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+                        ExcludeDisplayNamePatterns = @('^SVC-')
+                        ExcludeIdentityIds         = @()
+                    }
+                }
+            }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-svc-001'
+                        displayName = 'SVC-SQLBackup'
+                        manager     = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Manager One' }
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should return an empty Data array (identity skipped)" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-svc-001'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+        }
+    }
+}
+
+#endregion DC-032
+
+# ---------------------------------------------------------------------------
+#region DC-033: Identity in ExcludeIdentityIds is skipped
+# ---------------------------------------------------------------------------
+
+Describe "DC-033: Get-SPDeltaAffectedIdentities skips identity in ExcludeIdentityIds" {
+
+    Context "When identity ID is in the exclusion list" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries {
+                return [PSCustomObject]@{
+                    DeltaCert = [PSCustomObject]@{
+                        ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+                        ExcludeDisplayNamePatterns = @()
+                        ExcludeIdentityIds         = @('id-excluded-001')
+                    }
+                }
+            }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries { }
+        }
+
+        It "Should skip the identity without calling the identity API" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-excluded-001'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+            Should -Not -Invoke Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries
+        }
+    }
+}
+
+#endregion DC-033
+
+# ---------------------------------------------------------------------------
+#region DC-034: Empty exclusion config includes all active identities (regression)
+# ---------------------------------------------------------------------------
+
+Describe "DC-034: Get-SPDeltaAffectedIdentities includes all active identities with empty exclusion config" {
+
+    Context "When ExcludeDisplayNamePatterns and ExcludeIdentityIds are empty" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries {
+                return [PSCustomObject]@{
+                    DeltaCert = [PSCustomObject]@{
+                        ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+                        ExcludeDisplayNamePatterns = @()
+                        ExcludeIdentityIds         = @()
+                    }
+                }
+            }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-normal-001'
+                        displayName = 'Jane Smith'
+                        manager     = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Manager One' }
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should include the active identity" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-normal-001'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success            | Should -Be $true
+            $result.Data.Count         | Should -Be 1
+            $result.Data[0].IdentityId | Should -Be 'id-normal-001'
+        }
+    }
+}
+
+#endregion DC-034
