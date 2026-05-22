@@ -77,7 +77,11 @@ function Get-SPDeltaIdentityDetail {
         -CorrelationID $CorrelationID
 
     try {
-        $result = Invoke-SPApiRequest -Method GET -Endpoint "/identities/$IdentityId" `
+        # NOTE: GET /v3/identities/{id} does not exist in the ISC v3 API.
+        # Use GET /v3/search/identities/{id} which returns the IdentityDocument
+        # schema: manager.id, manager.name, attributes.cloudLifecycleState, displayName.
+        # Requires sp:search:read scope.
+        $result = Invoke-SPApiRequest -Method GET -Endpoint "/search/identities/$IdentityId" `
             -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {

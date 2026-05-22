@@ -127,6 +127,18 @@ ISC PAT scopes use granular strings (not role names). Here is the exact mapping 
 |----------|--------|----------------|
 | `/v3/accounts` | GET | `idn:accounts:read` or `idn:accounts:manage` |
 
+**Identity Search (`sp:` namespace):**
+
+| Endpoint | Method | Required Scope |
+|----------|--------|----------------|
+| `/v3/search/identities/{id}` | GET | `sp:search:read` or `sp:search:manage` |
+
+**Account Activities (no granular scope):**
+
+| Endpoint | Method | Required Scope |
+|----------|--------|----------------|
+| `/v3/account-activities` | GET | `sp:scopes:all` (no granular scope exists) |
+
 **Legacy (uses bearer token, no separate scope):**
 
 | Endpoint | Method | Notes |
@@ -135,17 +147,20 @@ ISC PAT scopes use granular strings (not role names). Here is the exact mapping 
 
 ### Recommended Scope: Sandbox (Full Toolkit)
 
-Select these 5 scopes when creating the PAT. This covers all toolkit operations (read + write):
+Select these 6 scopes when creating the PAT. This covers all toolkit operations (read + write):
 
 ```
 idn:campaign:manage
 idn:campaign-report:manage
 sp:report:manage
+sp:search:read
 idn:sources:read
 idn:accounts:read
 ```
 
 Note: `idn:campaign:manage` is a superset of `idn:campaign:read` -- you do not need both.
+Note: `sp:search:read` is required for identity resolution in Delta Cert (manager lookup).
+Note: Delta Cert's account-activities endpoint requires `sp:scopes:all` or a browser token.
 
 ### Recommended Scope: Read-Only Audit (No Campaign Creation)
 
@@ -155,6 +170,7 @@ If you only need to query and audit existing campaigns (no create/activate/decid
 idn:campaign:read
 idn:campaign-report:read
 sp:report:read
+sp:search:read
 idn:sources:read
 idn:accounts:read
 ```
