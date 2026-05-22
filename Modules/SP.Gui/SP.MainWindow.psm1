@@ -44,6 +44,7 @@ $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
 $script:LastDeltaCertParams         = $null
+$script:LastEscalationParams        = $null
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -1762,6 +1763,53 @@ function Get-DeltaCertDialogDefaults {
     return $defaults
 }
 
+function Get-EscalationDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns escalation dialog defaults: last-used params if available, otherwise from config.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastEscalationParams) {
+        return $script:LastEscalationParams
+    }
+
+    $defaults = @{
+        TxtCampaignPrefix = 'AD Delta Cert'
+        TxtStaleHours     = '24'
+        TxtMaxLevels      = '2'
+    }
+
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $null -ne $config.DeltaCert) {
+            if ($config.DeltaCert.PSObject.Properties.Name -contains 'Escalation' -and
+                $null -ne $config.DeltaCert.Escalation) {
+                $esc = $config.DeltaCert.Escalation
+                if ($esc.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
+                    -not [string]::IsNullOrWhiteSpace($esc.CampaignNamePrefix)) {
+                    $defaults['TxtCampaignPrefix'] = $esc.CampaignNamePrefix
+                }
+                if ($esc.PSObject.Properties.Name -contains 'DefaultStaleHours') {
+                    $defaults['TxtStaleHours'] = [string]$esc.DefaultStaleHours
+                }
+                if ($esc.PSObject.Properties.Name -contains 'MaxEscalationLevels') {
+                    $defaults['TxtMaxLevels'] = [string]$esc.MaxEscalationLevels
+                }
+            }
+        }
+    }
+    catch { }
+
+    return $defaults
+}
+
 function Invoke-GuiDeltaCertRun {
     <#
     .SYNOPSIS
@@ -2105,7 +2153,7 @@ function Invoke-GuiDeltaCertCleanup {
 function Invoke-GuiDeltaCertEscalation {
     <#
     .SYNOPSIS
-        Runs delta cert escalation in a background runspace.
+        Shows escalation parameters dialog, then runs escalation in a background runspace.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -2114,6 +2162,19 @@ function Invoke-GuiDeltaCertEscalation {
         Set-StatusMessage -Message 'A delta cert operation is already in progress.' -IsError
         return
     }
+
+    # Show escalation parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'DeltaCertEscalateDialog.xaml'
+    $defaults   = Get-EscalationDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtCampaignPrefix', 'TxtStaleHours', 'TxtMaxLevels') `
+        -Defaults      $defaults
+
+    if ($null -eq $dialogResult) { return }
+
+    # Persist for next open
+    $script:LastEscalationParams = $dialogResult
 
     $statusLabel  = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
     $btnEscalate  = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
@@ -2125,31 +2186,20 @@ function Invoke-GuiDeltaCertEscalation {
     if ($null -ne $statusLabel) { $statusLabel.Text = 'Running escalation...' }
     if ($null -ne $btnEscalate) { $btnEscalate.IsEnabled = $false }
 
-    # Read escalation config
-    $campaignNamePrefix  = 'AD Delta Cert'
-    $staleHours          = 24
-    $maxEscalationLevels = 2
-    try {
-        $configParams = @{}
-        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
-        $config = Get-SPConfig @configParams
-        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'DeltaCert' -and $null -ne $config.DeltaCert) {
-            if ($config.DeltaCert.PSObject.Properties.Name -contains 'Escalation' -and $null -ne $config.DeltaCert.Escalation) {
-                $esc = $config.DeltaCert.Escalation
-                if ($esc.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
-                    -not [string]::IsNullOrWhiteSpace($esc.CampaignNamePrefix)) {
-                    $campaignNamePrefix = $esc.CampaignNamePrefix
-                }
-                if ($esc.PSObject.Properties.Name -contains 'DefaultStaleHours') {
-                    $staleHours = [int]$esc.DefaultStaleHours
-                }
-                if ($esc.PSObject.Properties.Name -contains 'MaxEscalationLevels') {
-                    $maxEscalationLevels = [int]$esc.MaxEscalationLevels
-                }
-            }
-        }
+    # Extract values from dialog result
+    $campaignNamePrefix = if ($dialogResult['TxtCampaignPrefix']) {
+        $dialogResult['TxtCampaignPrefix'].Trim()
+    } else { 'AD Delta Cert' }
+
+    $staleHours = 24
+    if ($dialogResult['TxtStaleHours']) {
+        [int]::TryParse($dialogResult['TxtStaleHours'].Trim(), [ref]$staleHours) | Out-Null
     }
-    catch { }
+
+    $maxEscalationLevels = 2
+    if ($dialogResult['TxtMaxLevels']) {
+        [int]::TryParse($dialogResult['TxtMaxLevels'].Trim(), [ref]$maxEscalationLevels) | Out-Null
+    }
 
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $runspace.ApartmentState = 'STA'
