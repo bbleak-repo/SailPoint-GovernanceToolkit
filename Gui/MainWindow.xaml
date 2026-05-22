@@ -647,6 +647,62 @@
                                 </Grid>
                             </Border>
 
+                            <!-- Delta Cert -->
+                            <TextBlock Text="Delta Cert" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Source IDs" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtDcSourceIds" Style="{StaticResource FieldBox}"
+                                               ToolTip="Comma-separated list of AD source IDs to monitor for GRANT_ACCESS events"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Default Hours Back" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtDcHoursBack" Style="{StaticResource FieldBox}"
+                                               Text="24" Width="80" HorizontalAlignment="Left"
+                                               ToolTip="How many hours back to search for GRANT_ACCESS events"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Default Deadline Days" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtDcDeadlineDays" Style="{StaticResource FieldBox}"
+                                               Text="2" Width="80" HorizontalAlignment="Left"
+                                               ToolTip="Certification campaign deadline in days from creation"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Default Reviewer Mode" Style="{StaticResource FieldLabel}"/>
+                                    <ComboBox  Grid.Row="6" Grid.Column="1" x:Name="CboDcReviewerMode" Style="{StaticResource FieldCombo}"
+                                               Width="160" HorizontalAlignment="Left"
+                                               ToolTip="Who reviews the certification: identity manager or source owner">
+                                        <ComboBoxItem Content="Manager" IsSelected="True"/>
+                                        <ComboBoxItem Content="SourceOwner"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Campaign Name Prefix" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="8" Grid.Column="1" x:Name="TxtDcCampaignPrefix" Style="{StaticResource FieldBox}"
+                                               Text="AD Delta Cert"
+                                               ToolTip="Prefix for auto-generated certification campaign names"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Output Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="10" Grid.Column="1" x:Name="TxtDcOutputPath" Style="{StaticResource FieldBox}"
+                                               Text=".\DeltaCert"
+                                               ToolTip="Directory where DeltaCert output files are written"/>
+                                </Grid>
+                            </Border>
+
                         </StackPanel>
                     </ScrollViewer>
 

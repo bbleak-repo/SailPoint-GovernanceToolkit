@@ -1003,6 +1003,21 @@ function Load-SettingsForm {
     & $setField 'TxtMaxCampaignsPerRun'  $config.Safety.MaxCampaignsPerRun
     & $setField 'ChkRequireWhatIf'       $config.Safety.RequireWhatIfOnProd
     & $setField 'ChkAllowComplete'       $config.Safety.AllowCompleteCampaign
+
+    # DeltaCert settings
+    if ($config.PSObject.Properties.Name -contains 'DeltaCert') {
+        $dc = $config.DeltaCert
+        $sourceIdText = ''
+        if ($dc.PSObject.Properties.Name -contains 'SourceIds' -and $dc.SourceIds) {
+            $sourceIdText = ($dc.SourceIds -join ', ')
+        }
+        & $setField 'TxtDcSourceIds'       $sourceIdText
+        & $setField 'TxtDcHoursBack'       $dc.DefaultHoursBack
+        & $setField 'TxtDcDeadlineDays'    $dc.DefaultDeadlineDays
+        & $setField 'CboDcReviewerMode'    $dc.DefaultReviewerMode
+        & $setField 'TxtDcCampaignPrefix'  $dc.CampaignNamePrefix
+        & $setField 'TxtDcOutputPath'      $dc.OutputPath
+    }
 }
 
 function Save-SettingsForm {
@@ -1107,6 +1122,61 @@ function Save-SettingsForm {
             AllowCompleteCampaign = (& $getField 'ChkAllowComplete' $false)
         }
     }
+
+    # Preserve Audit section from existing config
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'Audit') {
+        $newConfig['Audit'] = $existingConfig.Audit
+    }
+
+    # DeltaCert: overlay GUI fields onto existing config to preserve non-GUI keys
+    $dcHoursBack    = 24;  [int]::TryParse((& $getField 'TxtDcHoursBack'),    [ref]$dcHoursBack)    | Out-Null
+    $dcDeadlineDays = 2;   [int]::TryParse((& $getField 'TxtDcDeadlineDays'), [ref]$dcDeadlineDays) | Out-Null
+
+    $sourceIdRaw = & $getField 'TxtDcSourceIds' ''
+    $sourceIdArray = @()
+    if ($sourceIdRaw -and $sourceIdRaw.Trim()) {
+        $sourceIdArray = @($sourceIdRaw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'DeltaCert') {
+        # Start from existing, overlay GUI fields
+        $dcExisting = $existingConfig.DeltaCert
+        $dcConfig = [ordered]@{}
+        foreach ($prop in $dcExisting.PSObject.Properties) {
+            $dcConfig[$prop.Name] = $prop.Value
+        }
+        $dcConfig['SourceIds']            = $sourceIdArray
+        $dcConfig['DefaultHoursBack']     = $dcHoursBack
+        $dcConfig['DefaultDeadlineDays']  = $dcDeadlineDays
+        $dcConfig['DefaultReviewerMode']  = & $getField 'CboDcReviewerMode' 'Manager'
+        $dcConfig['CampaignNamePrefix']   = & $getField 'TxtDcCampaignPrefix' 'AD Delta Cert'
+        $dcConfig['OutputPath']           = & $getField 'TxtDcOutputPath' '.\DeltaCert'
+    }
+    else {
+        # No existing DeltaCert section -- create fresh with defaults for non-GUI fields
+        $dcConfig = [ordered]@{
+            SourceIds                  = $sourceIdArray
+            DefaultHoursBack           = $dcHoursBack
+            DefaultDeadlineDays        = $dcDeadlineDays
+            FallbackReviewerIdentityId = ''
+            CampaignNamePrefix         = & $getField 'TxtDcCampaignPrefix' 'AD Delta Cert'
+            MaxCampaignsPerRun         = 50
+            CleanupDaysStale           = 3
+            OutputPath                 = & $getField 'TxtDcOutputPath' '.\DeltaCert'
+            DefaultReviewerMode        = & $getField 'CboDcReviewerMode' 'Manager'
+            ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+            ExcludeDisplayNamePatterns = @()
+            ExcludeIdentityIds         = @()
+            Escalation                 = [ordered]@{
+                DefaultStaleHours     = 24
+                MaxEscalationLevels   = 2
+                CampaignNamePrefix    = 'AD Delta Cert'
+            }
+        }
+    }
+    $newConfig['DeltaCert'] = $dcConfig
 
     try {
         $json = $newConfig | ConvertTo-Json -Depth 10
