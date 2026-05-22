@@ -95,6 +95,14 @@ function Get-SPConfigDefaults {
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
         }
+        DeltaCert = @{
+            SourceIds                  = @()
+            DefaultHoursBack           = 24
+            DefaultDeadlineDays        = 2
+            FallbackReviewerIdentityId = ''
+            CampaignNamePrefix         = 'AD Delta Cert'
+            MaxCampaignsPerRun         = 50
+        }
     }
 }
 
