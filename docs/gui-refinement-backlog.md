@@ -28,17 +28,17 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| G-01 | WPF Modal Dialog Helper | none | PENDING |
-| G-05 | History Display Upgrade | none | PENDING |
-| G-06 | DeltaCert Config in Settings Tab | none | PENDING |
-| G-02 | DeltaCert Run Parameters Dialog | G-01 | PENDING |
-| G-04 | Escalation Parameters Dialog | G-01 | PENDING |
-| G-03 | DeltaCert Tab Declutter | G-02 | PENDING |
-| G-07 | Audit Tab Dialog Retrofit | G-01 | PENDING |
-| G-08 | UI Consistency Pass | G-03, G-07 | PENDING |
-| G-09 | Update toolkit-status.md | G-08 | PENDING |
-| G-10 | README DeltaCert Section | G-08 | PENDING |
-| G-11 | Portable Zip Rebuild | G-09, G-10 | PENDING |
+| G-01 | WPF Modal Dialog Helper | none | DONE |
+| G-05 | History Display Upgrade | none | DONE |
+| G-06 | DeltaCert Config in Settings Tab | none | DONE |
+| G-02 | DeltaCert Run Parameters Dialog | G-01 | DONE |
+| G-04 | Escalation Parameters Dialog | G-01 | DONE |
+| G-03 | DeltaCert Tab Declutter | G-02 | DONE |
+| G-07 | Audit Tab Dialog Retrofit | G-01 | DONE |
+| G-08 | UI Consistency Pass | G-03, G-07 | DONE |
+| G-09 | Update toolkit-status.md | G-08 | DONE |
+| G-10 | README DeltaCert Section | G-08 | DONE |
+| G-11 | Portable Zip Rebuild | G-09, G-10 | DONE |
 
 ---
 
@@ -90,8 +90,8 @@ if ($dialog.ShowDialog()) { <read control values> } else { <cancelled> }
 
 ## G-01: WPF Modal Dialog Helper
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** c863462
 - **Depends On:** none
 
 **Description:**
@@ -141,8 +141,8 @@ function Show-SPGuiDialog {
 
 ## G-05: History Display Upgrade
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** f4a9e60
 - **Depends On:** none
 
 **Description:**
@@ -174,8 +174,8 @@ Foreground. Apply the same color pattern to the Audit report list for consistenc
 
 ## G-06: DeltaCert Config in Settings Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** cb50b88
 - **Depends On:** none
 
 **Description:**
@@ -213,8 +213,8 @@ as JSON array; empty string saves as `[]`.
 
 ## G-02: DeltaCert Run Parameters Dialog
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** a17cda6
 - **Depends On:** G-01
 
 **Description:**
@@ -257,8 +257,8 @@ come from the last-used values.
 
 ## G-04: Escalation Parameters Dialog
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** df8c2c8
 - **Depends On:** G-01
 
 **Description:**
@@ -294,8 +294,8 @@ Update `Invoke-GuiDeltaCertEscalation` to show dialog before running. Add
 
 ## G-03: DeltaCert Tab Declutter
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 7fa34c9
 - **Depends On:** G-02
 
 **Description:**
@@ -338,8 +338,8 @@ DeltaCertRunDialog (same as Run, but doesn't execute -- just stores params and u
 
 ## G-07: Audit Tab Dialog Retrofit
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** ae176cc
 - **Depends On:** G-01
 
 **Description:**
@@ -380,8 +380,8 @@ they're action modifiers, not query filters.
 
 ## G-08: UI Consistency Pass
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2f5e3c7
 - **Depends On:** G-03, G-07
 
 **Description:**
@@ -408,8 +408,8 @@ After dialog refactoring, sweep all 5 tabs + 3 dialogs for consistency:
 
 ## G-09: Update toolkit-status.md
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** a767897
 - **Depends On:** G-08
 
 **Description:**
@@ -431,8 +431,8 @@ update, verification checklist for GUI features.
 
 ## G-10: README DeltaCert Section
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** d60be88
 - **Depends On:** G-08
 
 **Description:**
@@ -452,8 +452,8 @@ recommended scheduled task setup.
 
 ## G-11: Portable Zip Rebuild
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 72f6bab
 - **Depends On:** G-09, G-10
 
 **Description:**

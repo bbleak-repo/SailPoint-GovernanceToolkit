@@ -43,6 +43,9 @@ $script:AuditCampaignDataSource     = [System.Collections.ObjectModel.Observable
 $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
+$script:LastDeltaCertParams         = $null
+$script:LastEscalationParams        = $null
+$script:LastAuditQueryParams        = $null
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -142,6 +145,130 @@ function Invoke-OnDispatcher {
     }
 }
 
+function Show-SPGuiDialog {
+    <#
+    .SYNOPSIS
+        Loads a XAML dialog, shows it as a modal, and returns control values.
+    .DESCRIPTION
+        Reusable modal dialog helper. Loads XAML from file, sets Owner to the
+        main window, wires OK/Cancel buttons, optionally pre-populates controls,
+        and returns a hashtable of named control values on OK or $null on Cancel.
+    .PARAMETER XamlPath
+        Absolute path to the dialog XAML file.
+    .PARAMETER ControlNames
+        Array of x:Name strings whose values to read on OK.
+    .PARAMETER Defaults
+        Optional hashtable of control-name -> default-value to pre-populate.
+    .PARAMETER OkButtonName
+        x:Name of the OK button (default: BtnOK).
+    .PARAMETER CancelButtonName
+        x:Name of the Cancel button (default: BtnCancel).
+    .OUTPUTS
+        Hashtable of control values on OK, or $null on Cancel/error.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$XamlPath,
+        [Parameter(Mandatory)][string[]]$ControlNames,
+        [Parameter()][hashtable]$Defaults,
+        [Parameter()][string]$OkButtonName = 'BtnOK',
+        [Parameter()][string]$CancelButtonName = 'BtnCancel'
+    )
+
+    if (-not (Test-Path $XamlPath)) {
+        try { Write-SPLog -Message "Dialog XAML not found: $XamlPath" -Severity ERROR -Component 'SP.Gui' -Action 'ShowDialog' } catch { }
+        return $null
+    }
+
+    try {
+        [xml]$xaml = [System.IO.File]::ReadAllText($XamlPath)
+        $reader = [System.Xml.XmlNodeReader]::new($xaml)
+        $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+        $reader.Close()
+
+        # Set owner for centering
+        if ($null -ne $script:MainWindow) {
+            $dialog.Owner = $script:MainWindow
+        }
+
+        # Wire OK button
+        $btnOK = $dialog.FindName($OkButtonName)
+        if ($null -ne $btnOK) {
+            $btnOK.Add_Click({ $dialog.DialogResult = $true }.GetNewClosure())
+        }
+
+        # Wire Cancel button
+        $btnCancel = $dialog.FindName($CancelButtonName)
+        if ($null -ne $btnCancel) {
+            $btnCancel.Add_Click({ $dialog.Close() }.GetNewClosure())
+        }
+
+        # Apply defaults
+        if ($null -ne $Defaults) {
+            foreach ($key in $Defaults.Keys) {
+                $ctrl = $dialog.FindName($key)
+                if ($null -eq $ctrl) { continue }
+                $value = $Defaults[$key]
+                if ($ctrl -is [System.Windows.Controls.TextBox]) {
+                    $ctrl.Text = if ($null -ne $value) { [string]$value } else { '' }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.ComboBox]) {
+                    # Match item by Content string
+                    foreach ($item in $ctrl.Items) {
+                        $itemContent = if ($item -is [System.Windows.Controls.ComboBoxItem]) {
+                            $item.Content
+                        } else { $item }
+                        if ([string]$itemContent -eq [string]$value) {
+                            $ctrl.SelectedItem = $item
+                            break
+                        }
+                    }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.CheckBox]) {
+                    $ctrl.IsChecked = [bool]$value
+                }
+            }
+        }
+
+        # Show modal
+        $result = $dialog.ShowDialog()
+
+        if ($result -eq $true) {
+            $values = @{}
+            foreach ($name in $ControlNames) {
+                $ctrl = $dialog.FindName($name)
+                if ($null -eq $ctrl) {
+                    $values[$name] = $null
+                }
+                elseif ($ctrl -is [System.Windows.Controls.TextBox]) {
+                    $values[$name] = $ctrl.Text
+                }
+                elseif ($ctrl -is [System.Windows.Controls.ComboBox]) {
+                    $selected = $ctrl.SelectedItem
+                    $values[$name] = if ($selected -is [System.Windows.Controls.ComboBoxItem]) {
+                        $selected.Content
+                    } else { $selected }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.CheckBox]) {
+                    $values[$name] = $ctrl.IsChecked
+                }
+                else {
+                    $values[$name] = $null
+                }
+            }
+            return $values
+        }
+        else {
+            return $null
+        }
+    }
+    catch {
+        try { Write-SPLog -Message "Dialog error ($XamlPath): $($_.Exception.Message)" -Severity ERROR -Component 'SP.Gui' -Action 'ShowDialog' } catch { }
+        return $null
+    }
+}
+
 #endregion
 
 #region Status Bar Helpers
@@ -196,9 +323,10 @@ function Initialize-CampaignTab {
     $btnRunSmoke    = Find-Control -Parent $TabContent -Name 'BtnRunSmoke'
     $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshCampaigns'
     $tagFilter      = Find-Control -Parent $TabContent -Name 'TagFilterCombo'
-    $progressBar    = Find-Control -Parent $TabContent -Name 'SuiteProgressBar'
-    $progressLabel  = Find-Control -Parent $TabContent -Name 'CurrentTestLabel'
-    $resultSummary  = Find-Control -Parent $TabContent -Name 'ResultSummaryText'
+    $progressBar     = Find-Control -Parent $TabContent -Name 'SuiteProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'SuiteProgressPercent'
+    $progressLabel   = Find-Control -Parent $TabContent -Name 'CurrentTestLabel'
+    $resultSummary   = Find-Control -Parent $TabContent -Name 'ResultSummaryText'
 
     # Load initial data
     Load-CampaignData -Grid $campaignGrid -TagFilter $tagFilter -ProgressLabel $progressLabel
@@ -217,15 +345,15 @@ function Initialize-CampaignTab {
     if ($btnRunSelected) {
         $btnRunSelected.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $selected = @($script:LoadedCampaigns | Where-Object { $_.IsSelected -eq $true })
                 if ($selected.Count -eq 0) {
                     Set-StatusMessage -Message 'No campaigns selected. Use the checkbox column to select tests.' -IsError
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $selected -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
@@ -233,15 +361,15 @@ function Initialize-CampaignTab {
     if ($btnRunAll) {
         $btnRunAll.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $all = @($script:LoadedCampaigns | ForEach-Object { $_._Original })
                 if ($all.Count -eq 0) {
                     Set-StatusMessage -Message 'No campaigns loaded.' -IsError
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $all -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
@@ -249,7 +377,7 @@ function Initialize-CampaignTab {
     if ($btnRunSmoke) {
         $btnRunSmoke.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $smoke = @($script:LoadedCampaigns | Where-Object {
                     $tags = $_._Original.Tags -split ',' | ForEach-Object { $_.Trim().ToLower() }
                     $tags -contains 'smoke'
@@ -260,8 +388,8 @@ function Initialize-CampaignTab {
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $smoke -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 }
@@ -308,7 +436,7 @@ function Load-CampaignData {
 
 function Invoke-GuiTestRun {
     [CmdletBinding()]
-    param($Campaigns, $ProgressBar, $ProgressLabel, $ResultSummary)
+    param($Campaigns, $ProgressBar, $ProgressPercent, $ProgressLabel, $ResultSummary)
 
     if ($script:IsRunning) {
         Set-StatusMessage -Message 'A test run is already in progress.' -IsError
@@ -359,6 +487,10 @@ function Invoke-GuiTestRun {
         $ProgressBar.Visibility = [System.Windows.Visibility]::Visible
     }
 
+    if ($null -ne $ProgressPercent) {
+        $ProgressPercent.Text = '0%'
+    }
+
     # Run in a background runspace to avoid freezing the UI
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $runspace.ApartmentState = 'STA'
@@ -370,6 +502,7 @@ function Invoke-GuiTestRun {
     $runspace.SessionStateProxy.SetVariable('CorrelationID',    $correlationID)
     $runspace.SessionStateProxy.SetVariable('ToolkitRoot',      $script:ToolkitRoot)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',      $ProgressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',  $ProgressPercent)
     $runspace.SessionStateProxy.SetVariable('ProgressLabel',    $ProgressLabel)
     $runspace.SessionStateProxy.SetVariable('ResultSummary',    $ResultSummary)
     $runspace.SessionStateProxy.SetVariable('MainWindow',       $script:MainWindow)
@@ -395,15 +528,19 @@ function Invoke-GuiTestRun {
 
         # Marshal result back to UI thread
         $dispatcher = $MainWindow.Dispatcher
-        $capturedResult = $suiteResult
+        $capturedResult   = $suiteResult
         $capturedProgress = $ProgressBar
-        $capturedLabel = $ProgressLabel
-        $capturedSummary = $ResultSummary
+        $capturedPercent  = $ProgressPercent
+        $capturedLabel    = $ProgressLabel
+        $capturedSummary  = $ResultSummary
 
         $dispatcher.Invoke([System.Action]{
             if ($null -ne $capturedProgress) {
                 $capturedProgress.Value      = $capturedResult.PassCount + $capturedResult.FailCount + $capturedResult.SkipCount
                 $capturedProgress.Visibility = [System.Windows.Visibility]::Visible
+            }
+            if ($null -ne $capturedPercent) {
+                $capturedPercent.Text = '100%'
             }
             if ($null -ne $capturedLabel) {
                 $capturedLabel.Content = 'Complete'
@@ -505,6 +642,7 @@ function Initialize-EvidenceTab {
     $evidenceTree   = Find-Control -Parent $TabContent -Name 'EvidenceTree'
     $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshEvidence'
     $btnOpenBrowser = Find-Control -Parent $TabContent -Name 'BtnOpenInBrowser'
+    $btnExportAll   = Find-Control -Parent $TabContent -Name 'BtnExportAll'
     $detailGrid     = Find-Control -Parent $TabContent -Name 'EvidenceDetailGrid'
 
     if ($btnRefresh) {
@@ -533,6 +671,20 @@ function Initialize-EvidenceTab {
             $selectedNode = $evidenceTree.SelectedItem
             if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
                 Start-Process $selectedNode.Tag
+            }
+        }.GetNewClosure())
+    }
+
+    if ($btnExportAll) {
+        $btnExportAll.Add_Click({
+            & $module {
+                $evidenceRoot = Join-Path $script:ToolkitRoot 'Evidence'
+                if (-not (Test-Path $evidenceRoot)) {
+                    Set-StatusMessage -Message 'Evidence directory not found.' -IsError
+                    return
+                }
+                Start-Process 'explorer.exe' -ArgumentList "`"$evidenceRoot`""
+                Set-StatusMessage -Message "Opened evidence folder: $evidenceRoot"
             }
         }.GetNewClosure())
     }
@@ -879,6 +1031,21 @@ function Load-SettingsForm {
     & $setField 'TxtMaxCampaignsPerRun'  $config.Safety.MaxCampaignsPerRun
     & $setField 'ChkRequireWhatIf'       $config.Safety.RequireWhatIfOnProd
     & $setField 'ChkAllowComplete'       $config.Safety.AllowCompleteCampaign
+
+    # DeltaCert settings
+    if ($config.PSObject.Properties.Name -contains 'DeltaCert') {
+        $dc = $config.DeltaCert
+        $sourceIdText = ''
+        if ($dc.PSObject.Properties.Name -contains 'SourceIds' -and $dc.SourceIds) {
+            $sourceIdText = ($dc.SourceIds -join ', ')
+        }
+        & $setField 'TxtDcSourceIds'       $sourceIdText
+        & $setField 'TxtDcHoursBack'       $dc.DefaultHoursBack
+        & $setField 'TxtDcDeadlineDays'    $dc.DefaultDeadlineDays
+        & $setField 'CboDcReviewerMode'    $dc.DefaultReviewerMode
+        & $setField 'TxtDcCampaignPrefix'  $dc.CampaignNamePrefix
+        & $setField 'TxtDcOutputPath'      $dc.OutputPath
+    }
 }
 
 function Save-SettingsForm {
@@ -984,6 +1151,61 @@ function Save-SettingsForm {
         }
     }
 
+    # Preserve Audit section from existing config
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'Audit') {
+        $newConfig['Audit'] = $existingConfig.Audit
+    }
+
+    # DeltaCert: overlay GUI fields onto existing config to preserve non-GUI keys
+    $dcHoursBack    = 24;  [int]::TryParse((& $getField 'TxtDcHoursBack'),    [ref]$dcHoursBack)    | Out-Null
+    $dcDeadlineDays = 2;   [int]::TryParse((& $getField 'TxtDcDeadlineDays'), [ref]$dcDeadlineDays) | Out-Null
+
+    $sourceIdRaw = & $getField 'TxtDcSourceIds' ''
+    $sourceIdArray = @()
+    if ($sourceIdRaw -and $sourceIdRaw.Trim()) {
+        $sourceIdArray = @($sourceIdRaw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'DeltaCert') {
+        # Start from existing, overlay GUI fields
+        $dcExisting = $existingConfig.DeltaCert
+        $dcConfig = [ordered]@{}
+        foreach ($prop in $dcExisting.PSObject.Properties) {
+            $dcConfig[$prop.Name] = $prop.Value
+        }
+        $dcConfig['SourceIds']            = $sourceIdArray
+        $dcConfig['DefaultHoursBack']     = $dcHoursBack
+        $dcConfig['DefaultDeadlineDays']  = $dcDeadlineDays
+        $dcConfig['DefaultReviewerMode']  = & $getField 'CboDcReviewerMode' 'Manager'
+        $dcConfig['CampaignNamePrefix']   = & $getField 'TxtDcCampaignPrefix' 'AD Delta Cert'
+        $dcConfig['OutputPath']           = & $getField 'TxtDcOutputPath' '.\DeltaCert'
+    }
+    else {
+        # No existing DeltaCert section -- create fresh with defaults for non-GUI fields
+        $dcConfig = [ordered]@{
+            SourceIds                  = $sourceIdArray
+            DefaultHoursBack           = $dcHoursBack
+            DefaultDeadlineDays        = $dcDeadlineDays
+            FallbackReviewerIdentityId = ''
+            CampaignNamePrefix         = & $getField 'TxtDcCampaignPrefix' 'AD Delta Cert'
+            MaxCampaignsPerRun         = 50
+            CleanupDaysStale           = 3
+            OutputPath                 = & $getField 'TxtDcOutputPath' '.\DeltaCert'
+            DefaultReviewerMode        = & $getField 'CboDcReviewerMode' 'Manager'
+            ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+            ExcludeDisplayNamePatterns = @()
+            ExcludeIdentityIds         = @()
+            Escalation                 = [ordered]@{
+                DefaultStaleHours     = 24
+                MaxEscalationLevels   = 2
+                CampaignNamePrefix    = 'AD Delta Cert'
+            }
+        }
+    }
+    $newConfig['DeltaCert'] = $dcConfig
+
     try {
         $json = $newConfig | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($configPath, $json, [System.Text.Encoding]::UTF8)
@@ -1022,39 +1244,41 @@ function Initialize-AuditTab {
 
     $module = $script:ThisModule
 
-    $txtName              = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
-    $cboStatus            = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
-    $cboTimespan          = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    $btnConfigure         = Find-Control -Parent $TabContent -Name 'BtnConfigureAudit'
     $btnQuery             = Find-Control -Parent $TabContent -Name 'BtnQueryCampaigns'
-    $btnClear             = Find-Control -Parent $TabContent -Name 'BtnClearFilter'
     $btnRunAudit          = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
     $btnOpenFolder        = Find-Control -Parent $TabContent -Name 'BtnOpenAuditFolder'
     $btnRefreshReports    = Find-Control -Parent $TabContent -Name 'BtnRefreshAuditReports'
     $auditReportList      = Find-Control -Parent $TabContent -Name 'AuditReportList'
 
-    # Query Campaigns button
+    # Configure button -- opens dialog, stores params, updates summary (does NOT query)
+    if ($btnConfigure) {
+        $btnConfigure.Add_Click({
+            & $module {
+                param($tc)
+
+                $dialogXaml = Get-XamlPath -FileName 'AuditQueryDialog.xaml'
+                $defaults   = Get-AuditQueryDialogDefaults
+                $dialogResult = Show-SPGuiDialog `
+                    -XamlPath      $dialogXaml `
+                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+                    -Defaults      $defaults
+
+                if ($null -ne $dialogResult) {
+                    $script:LastAuditQueryParams = $dialogResult
+                    Update-AuditSummaryLabel -TabContent $tc
+                }
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Query Campaigns button -- opens dialog then queries on OK
     if ($btnQuery) {
         $btnQuery.Add_Click({
             & $module {
                 param($tc)
                 Invoke-AuditCampaignQuery -TabContent $tc
             } $TabContent
-        }.GetNewClosure())
-    }
-
-    # Clear filter button
-    if ($btnClear) {
-        $btnClear.Add_Click({
-            if ($null -ne $txtName) {
-                $txtName.Text       = 'Search by keyword...'
-                $txtName.Foreground = [System.Windows.Media.Brushes]::Gray
-            }
-            if ($null -ne $cboStatus) {
-                $cboStatus.SelectedIndex = 0
-            }
-            if ($null -ne $cboTimespan) {
-                $cboTimespan.SelectedIndex = 2
-            }
         }.GetNewClosure())
     }
 
@@ -1099,48 +1323,59 @@ function Initialize-AuditTab {
         }.GetNewClosure())
     }
 
-    # Populate recent reports on init
+    # Populate summary label and recent reports on init
+    Update-AuditSummaryLabel -TabContent $TabContent
     Load-AuditReportList -TabContent $TabContent
 }
 
 function Invoke-AuditCampaignQuery {
     <#
     .SYNOPSIS
-        Queries ISC for campaigns matching the current filter values and populates
-        the AuditCampaignGrid. Synchronous (runs on UI thread).
+        Shows query parameters dialog, then queries ISC for campaigns matching
+        the filter values and populates the AuditCampaignGrid.
     #>
     [CmdletBinding()]
     param($TabContent)
 
-    $txtName     = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
-    $cboStatus   = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
-    $cboTimespan = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    # Show parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'AuditQueryDialog.xaml'
+    $defaults   = Get-AuditQueryDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+        -Defaults      $defaults
+
+    if ($null -eq $dialogResult) { return }
+
+    # Persist for next open and update summary label
+    $script:LastAuditQueryParams = $dialogResult
+    Update-AuditSummaryLabel -TabContent $TabContent
+
     $grid        = Find-Control -Parent $TabContent -Name 'AuditCampaignGrid'
     $statusLabel = Find-Control -Parent $TabContent -Name 'AuditStatusLabel'
     $btnRunAudit = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
 
     Set-StatusMessage -Message 'Querying campaigns...'
 
-    # Extract filter values
+    # Extract filter values from dialog result
     $campaignName = ''
-    if ($null -ne $txtName -and $txtName.Text -ne 'Search by keyword...') {
-        $campaignName = $txtName.Text.Trim()
+    if ($dialogResult['TxtCampaignName']) {
+        $campaignName = $dialogResult['TxtCampaignName'].Trim()
     }
 
     $statusFilter = $null
-    if ($null -ne $cboStatus -and $null -ne $cboStatus.SelectedItem) {
-        $selectedContent = $cboStatus.SelectedItem.Content
-        if ($selectedContent -ne '(All)') {
-            $statusFilter = $selectedContent
-        }
+    if ($dialogResult['CboStatus'] -and $dialogResult['CboStatus'] -ne '(All)') {
+        $statusFilter = $dialogResult['CboStatus']
     }
 
-    $daysBack = 3
-    if ($null -ne $cboTimespan -and $null -ne $cboTimespan.SelectedItem) {
-        $tagValue = $cboTimespan.SelectedItem.Tag
-        if ($null -ne $tagValue) {
-            [int]::TryParse($tagValue.ToString(), [ref]$daysBack) | Out-Null
+    $daysBack = 30
+    if ($dialogResult['CboTimespan']) {
+        $timespanText = $dialogResult['CboTimespan']
+        $parsed = 30
+        if ($timespanText -match '(\d+)') {
+            [int]::TryParse($Matches[1], [ref]$parsed) | Out-Null
         }
+        $daysBack = $parsed
     }
 
     # Build parameters
@@ -1181,6 +1416,61 @@ function Invoke-AuditCampaignQuery {
     }
 
     Set-StatusMessage -Message "Query complete. $count campaign(s) found."
+}
+
+function Get-AuditQueryDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns audit query dialog defaults: last-used params if available, otherwise sensible defaults.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastAuditQueryParams) {
+        return $script:LastAuditQueryParams
+    }
+
+    return @{
+        TxtCampaignName = ''
+        CboStatus       = '(All)'
+        CboTimespan     = '30 days'
+    }
+}
+
+function Update-AuditSummaryLabel {
+    <#
+    .SYNOPSIS
+        Updates the Audit summary label to reflect current query parameters.
+    .DESCRIPTION
+        Shows "Status: (All) | Timespan: 30 days" when no campaign name filter,
+        or "Campaign: test | Status: COMPLETED | Timespan: 14 days" when set.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'AuditSummaryLabel'
+    if ($null -eq $label) { return }
+
+    $params = $script:LastAuditQueryParams
+    if ($null -eq $params) {
+        $params = Get-AuditQueryDialogDefaults
+    }
+
+    $status   = if ($params['CboStatus'])   { $params['CboStatus'] }   else { '(All)' }
+    $timespan = if ($params['CboTimespan']) { $params['CboTimespan'] } else { '30 days' }
+
+    $campaignName = ''
+    if ($params['TxtCampaignName']) {
+        $campaignName = $params['TxtCampaignName'].Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($campaignName)) {
+        $label.Text = "Status: $status | Timespan: $timespan"
+    }
+    else {
+        $label.Text = "Campaign: $campaignName | Status: $status | Timespan: $timespan"
+    }
 }
 
 function Invoke-GuiAuditRun {
@@ -1360,7 +1650,8 @@ function Invoke-GuiAuditRun {
 function Load-AuditReportList {
     <#
     .SYNOPSIS
-        Populates the AuditReportList ListBox with recent audit report files.
+        Populates the AuditReportList ListBox with color-coded audit report files.
+        Green = HTML reports (full analysis), Gray = other file types.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -1382,11 +1673,23 @@ function Load-AuditReportList {
         return
     }
 
+    $converter  = [System.Windows.Media.BrushConverter]::new()
+    $brushGreen = $converter.ConvertFromString('#339933')
+    $brushGray  = $converter.ConvertFromString('#888899')
+
     foreach ($report in $result.Data) {
         $item         = [System.Windows.Controls.ListBoxItem]::new()
         $item.Content = $report.FileName
         $item.Tag     = $report.FullPath
         $item.ToolTip = "$($report.FullPath) ($($report.SizeKB) KB, $($report.LastModified))"
+
+        if ($report.FileName -match '\.html$') {
+            $item.Foreground = $brushGreen
+        }
+        else {
+            $item.Foreground = $brushGray
+        }
+
         $listBox.Items.Add($item) | Out-Null
     }
 }
@@ -1440,6 +1743,7 @@ function Initialize-DeltaCertTab {
 
     $module = $script:ThisModule
 
+    $btnConfigure    = Find-Control -Parent $TabContent -Name 'BtnConfigureDeltaCert'
     $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
     $btnCleanup      = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
     $btnEscalate     = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
@@ -1450,6 +1754,27 @@ function Initialize-DeltaCertTab {
     # Bind DataGrid to observable collection
     if ($null -ne $grid) {
         $grid.ItemsSource = $script:DeltaCertResultDataSource
+    }
+
+    # Configure button -- opens dialog, stores params, updates summary (does NOT run)
+    if ($btnConfigure) {
+        $btnConfigure.Add_Click({
+            & $module {
+                param($tc)
+
+                $dialogXaml = Get-XamlPath -FileName 'DeltaCertRunDialog.xaml'
+                $defaults   = Get-DeltaCertDialogDefaults
+                $dialogResult = Show-SPGuiDialog `
+                    -XamlPath      $dialogXaml `
+                    -ControlNames  @('TxtSourceIds', 'TxtHoursBack', 'TxtDeadlineDays', 'CboReviewerMode') `
+                    -Defaults      $defaults
+
+                if ($null -ne $dialogResult) {
+                    $script:LastDeltaCertParams = $dialogResult
+                    Update-DeltaCertSummaryLabel -TabContent $tc
+                }
+            } $TabContent
+        }.GetNewClosure())
     }
 
     # Run Delta Cert button
@@ -1503,14 +1828,148 @@ function Initialize-DeltaCertTab {
         }.GetNewClosure())
     }
 
-    # Populate history on init
+    # Populate summary label and history on init
+    Update-DeltaCertSummaryLabel -TabContent $TabContent
     Load-DeltaCertHistory -TabContent $TabContent
+}
+
+function Get-DeltaCertDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns dialog defaults: last-used params if available, otherwise from config.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastDeltaCertParams) {
+        return $script:LastDeltaCertParams
+    }
+
+    $defaults = @{
+        TxtSourceIds    = ''
+        TxtHoursBack    = '24'
+        TxtDeadlineDays = '2'
+        CboReviewerMode = 'Manager'
+    }
+
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $null -ne $config.DeltaCert) {
+            $dc = $config.DeltaCert
+            if ($dc.PSObject.Properties.Name -contains 'SourceIds' -and $dc.SourceIds) {
+                $defaults['TxtSourceIds'] = ($dc.SourceIds -join ', ')
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultHoursBack' -and $dc.DefaultHoursBack) {
+                $defaults['TxtHoursBack'] = [string]$dc.DefaultHoursBack
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultDeadlineDays' -and $dc.DefaultDeadlineDays) {
+                $defaults['TxtDeadlineDays'] = [string]$dc.DefaultDeadlineDays
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultReviewerMode' -and $dc.DefaultReviewerMode) {
+                $defaults['CboReviewerMode'] = $dc.DefaultReviewerMode
+            }
+        }
+    }
+    catch { }
+
+    return $defaults
+}
+
+function Get-EscalationDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns escalation dialog defaults: last-used params if available, otherwise from config.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastEscalationParams) {
+        return $script:LastEscalationParams
+    }
+
+    $defaults = @{
+        TxtCampaignPrefix = 'AD Delta Cert'
+        TxtStaleHours     = '24'
+        TxtMaxLevels      = '2'
+    }
+
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $null -ne $config.DeltaCert) {
+            if ($config.DeltaCert.PSObject.Properties.Name -contains 'Escalation' -and
+                $null -ne $config.DeltaCert.Escalation) {
+                $esc = $config.DeltaCert.Escalation
+                if ($esc.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
+                    -not [string]::IsNullOrWhiteSpace($esc.CampaignNamePrefix)) {
+                    $defaults['TxtCampaignPrefix'] = $esc.CampaignNamePrefix
+                }
+                if ($esc.PSObject.Properties.Name -contains 'DefaultStaleHours') {
+                    $defaults['TxtStaleHours'] = [string]$esc.DefaultStaleHours
+                }
+                if ($esc.PSObject.Properties.Name -contains 'MaxEscalationLevels') {
+                    $defaults['TxtMaxLevels'] = [string]$esc.MaxEscalationLevels
+                }
+            }
+        }
+    }
+    catch { }
+
+    return $defaults
+}
+
+function Update-DeltaCertSummaryLabel {
+    <#
+    .SYNOPSIS
+        Updates the DeltaCert summary label to reflect current parameters.
+    .DESCRIPTION
+        Shows "Sources: src-ad-001 | 24h | 2d deadline | Manager" when configured,
+        or "Not configured. Click Configure to set parameters." otherwise.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'DeltaCertSummaryLabel'
+    if ($null -eq $label) { return }
+
+    $params = $script:LastDeltaCertParams
+    if ($null -eq $params) {
+        # Try loading from config defaults (without storing as LastDeltaCertParams)
+        $defaults = Get-DeltaCertDialogDefaults
+        $sourceText = if ($defaults['TxtSourceIds']) { $defaults['TxtSourceIds'].Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($sourceText)) {
+            $label.Text = 'Not configured. Click Configure to set parameters.'
+            return
+        }
+        $params = $defaults
+    }
+
+    $sourceText = if ($params['TxtSourceIds']) { $params['TxtSourceIds'].Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($sourceText)) {
+        $label.Text = 'Not configured. Click Configure to set parameters.'
+        return
+    }
+
+    $hours    = if ($params['TxtHoursBack'])    { $params['TxtHoursBack'].Trim() }    else { '24' }
+    $deadline = if ($params['TxtDeadlineDays']) { $params['TxtDeadlineDays'].Trim() } else { '2' }
+    $reviewer = if ($params['CboReviewerMode']) { $params['CboReviewerMode'] }         else { 'Manager' }
+
+    $label.Text = "Sources: $sourceText | ${hours}h | ${deadline}d deadline | $reviewer"
 }
 
 function Invoke-GuiDeltaCertRun {
     <#
     .SYNOPSIS
-        Runs delta cert in a background runspace. Follows the Audit tab pattern.
+        Shows run parameters dialog, then runs delta cert in a background runspace.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -1520,60 +1979,46 @@ function Invoke-GuiDeltaCertRun {
         return
     }
 
-    $progressBar     = Find-Control -Parent $TabContent -Name 'DeltaCertProgressBar'
-    $progressPercent = Find-Control -Parent $TabContent -Name 'DeltaCertProgressPercent'
-    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
-    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
-    $txtSourceIds    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertSourceIds'
-    $txtHoursBack    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertHoursBack'
-    $txtDeadlineDays = Find-Control -Parent $TabContent -Name 'TxtDeltaCertDeadlineDays'
-    $cboReviewerMode = Find-Control -Parent $TabContent -Name 'CboDeltaCertReviewerMode'
+    # Show parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'DeltaCertRunDialog.xaml'
+    $defaults   = Get-DeltaCertDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtSourceIds', 'TxtHoursBack', 'TxtDeadlineDays', 'CboReviewerMode') `
+        -Defaults      $defaults
 
-    # Extract source IDs
-    $sourceIdText = ''
-    if ($null -ne $txtSourceIds -and $txtSourceIds.Text -ne 'Comma-separated source IDs...') {
-        $sourceIdText = $txtSourceIds.Text.Trim()
-    }
+    if ($null -eq $dialogResult) { return }
 
-    if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
-        # Try config
-        try {
-            $configParams = @{}
-            if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
-            $config = Get-SPConfig @configParams
-            if ($null -ne $config -and
-                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
-                $null -ne $config.DeltaCert -and
-                $config.DeltaCert.PSObject.Properties.Name -contains 'SourceIds' -and
-                @($config.DeltaCert.SourceIds).Count -gt 0) {
-                $sourceIdText = ($config.DeltaCert.SourceIds) -join ','
-            }
-        }
-        catch { }
-    }
+    # Persist for next open and update summary label
+    $script:LastDeltaCertParams = $dialogResult
+    Update-DeltaCertSummaryLabel -TabContent $TabContent
+
+    # Extract values from dialog result
+    $sourceIdText = if ($dialogResult['TxtSourceIds']) { $dialogResult['TxtSourceIds'].Trim() } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
-        Set-StatusMessage -Message 'No source IDs specified. Enter source IDs or configure DeltaCert.SourceIds in settings.' -IsError
+        Set-StatusMessage -Message 'No source IDs specified. Configure Source IDs in the dialog or Settings tab.' -IsError
         return
     }
 
     $sourceIds = @($sourceIdText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-    # Extract numeric values
     $hoursBack = 24
-    if ($null -ne $txtHoursBack -and $txtHoursBack.Text) {
-        [int]::TryParse($txtHoursBack.Text.Trim(), [ref]$hoursBack) | Out-Null
+    if ($dialogResult['TxtHoursBack']) {
+        [int]::TryParse($dialogResult['TxtHoursBack'].Trim(), [ref]$hoursBack) | Out-Null
     }
 
     $deadlineDays = 2
-    if ($null -ne $txtDeadlineDays -and $txtDeadlineDays.Text) {
-        [int]::TryParse($txtDeadlineDays.Text.Trim(), [ref]$deadlineDays) | Out-Null
+    if ($dialogResult['TxtDeadlineDays']) {
+        [int]::TryParse($dialogResult['TxtDeadlineDays'].Trim(), [ref]$deadlineDays) | Out-Null
     }
 
-    $reviewerMode = 'Manager'
-    if ($null -ne $cboReviewerMode -and $null -ne $cboReviewerMode.SelectedItem) {
-        $reviewerMode = $cboReviewerMode.SelectedItem.Content
-    }
+    $reviewerMode = if ($dialogResult['CboReviewerMode']) { $dialogResult['CboReviewerMode'] } else { 'Manager' }
+
+    $progressBar     = Find-Control -Parent $TabContent -Name 'DeltaCertProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'DeltaCertProgressPercent'
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
 
     $script:IsDeltaCertRunning = $true
     $correlationID = [guid]::NewGuid().ToString()
@@ -1865,7 +2310,7 @@ function Invoke-GuiDeltaCertCleanup {
 function Invoke-GuiDeltaCertEscalation {
     <#
     .SYNOPSIS
-        Runs delta cert escalation in a background runspace.
+        Shows escalation parameters dialog, then runs escalation in a background runspace.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -1874,6 +2319,19 @@ function Invoke-GuiDeltaCertEscalation {
         Set-StatusMessage -Message 'A delta cert operation is already in progress.' -IsError
         return
     }
+
+    # Show escalation parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'DeltaCertEscalateDialog.xaml'
+    $defaults   = Get-EscalationDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtCampaignPrefix', 'TxtStaleHours', 'TxtMaxLevels') `
+        -Defaults      $defaults
+
+    if ($null -eq $dialogResult) { return }
+
+    # Persist for next open
+    $script:LastEscalationParams = $dialogResult
 
     $statusLabel  = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
     $btnEscalate  = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
@@ -1885,31 +2343,20 @@ function Invoke-GuiDeltaCertEscalation {
     if ($null -ne $statusLabel) { $statusLabel.Text = 'Running escalation...' }
     if ($null -ne $btnEscalate) { $btnEscalate.IsEnabled = $false }
 
-    # Read escalation config
-    $campaignNamePrefix  = 'AD Delta Cert'
-    $staleHours          = 24
-    $maxEscalationLevels = 2
-    try {
-        $configParams = @{}
-        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
-        $config = Get-SPConfig @configParams
-        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'DeltaCert' -and $null -ne $config.DeltaCert) {
-            if ($config.DeltaCert.PSObject.Properties.Name -contains 'Escalation' -and $null -ne $config.DeltaCert.Escalation) {
-                $esc = $config.DeltaCert.Escalation
-                if ($esc.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
-                    -not [string]::IsNullOrWhiteSpace($esc.CampaignNamePrefix)) {
-                    $campaignNamePrefix = $esc.CampaignNamePrefix
-                }
-                if ($esc.PSObject.Properties.Name -contains 'DefaultStaleHours') {
-                    $staleHours = [int]$esc.DefaultStaleHours
-                }
-                if ($esc.PSObject.Properties.Name -contains 'MaxEscalationLevels') {
-                    $maxEscalationLevels = [int]$esc.MaxEscalationLevels
-                }
-            }
-        }
+    # Extract values from dialog result
+    $campaignNamePrefix = if ($dialogResult['TxtCampaignPrefix']) {
+        $dialogResult['TxtCampaignPrefix'].Trim()
+    } else { 'AD Delta Cert' }
+
+    $staleHours = 24
+    if ($dialogResult['TxtStaleHours']) {
+        [int]::TryParse($dialogResult['TxtStaleHours'].Trim(), [ref]$staleHours) | Out-Null
     }
-    catch { }
+
+    $maxEscalationLevels = 2
+    if ($dialogResult['TxtMaxLevels']) {
+        [int]::TryParse($dialogResult['TxtMaxLevels'].Trim(), [ref]$maxEscalationLevels) | Out-Null
+    }
 
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $runspace.ApartmentState = 'STA'
@@ -2008,7 +2455,8 @@ function Invoke-GuiDeltaCertEscalation {
 function Load-DeltaCertHistory {
     <#
     .SYNOPSIS
-        Populates the DeltaCertHistoryList ListBox with recent run entries from JSONL.
+        Populates the DeltaCertHistoryList ListBox with color-coded run entries from JSONL.
+        Green = campaigns created, Gray = no changes, Orange = errors present.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -2030,10 +2478,26 @@ function Load-DeltaCertHistory {
         return
     }
 
+    $converter   = [System.Windows.Media.BrushConverter]::new()
+    $brushGreen  = $converter.ConvertFromString('#339933')
+    $brushGray   = $converter.ConvertFromString('#888899')
+    $brushOrange = $converter.ConvertFromString('#FF9900')
+
     foreach ($entry in $result.Data) {
         $item         = [System.Windows.Controls.ListBoxItem]::new()
         $item.Content = "$($entry.Timestamp) | Campaigns: $($entry.CampaignsCreated) | $($entry.Reason)"
         $item.ToolTip = "Identities: $($entry.Identities), Groups: $($entry.ManagerGroups), Errors: $($entry.Errors)"
+
+        if ($entry.Errors -and [int]$entry.Errors -gt 0) {
+            $item.Foreground = $brushOrange
+        }
+        elseif ($entry.Reason -match 'Created' -or ($entry.CampaignsCreated -and [int]$entry.CampaignsCreated -gt 0)) {
+            $item.Foreground = $brushGreen
+        }
+        elseif ($entry.Reason -eq 'NoChanges') {
+            $item.Foreground = $brushGray
+        }
+
         $listBox.Items.Add($item) | Out-Null
     }
 }

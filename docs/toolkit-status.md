@@ -1,7 +1,7 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-05-21
-**Status:** IMPLEMENTATION COMPLETE + SP.DeltaCert module added (AD delta certification)
+**Last Updated:** 2026-05-22
+**Status:** IMPLEMENTATION COMPLETE + SP.DeltaCert module + Phase 7 GUI refinement (modal dialogs, tab declutter)
 
 ---
 
@@ -9,7 +9,7 @@
 
 ```
 Read this file. All production files are implemented.
-Latest addition 2026-05-21: SP.DeltaCert module -- daily AD delta certification campaigns.
+Latest addition 2026-05-22: Phase 7 GUI refinement -- modal dialog pattern, DeltaCert/Audit tab declutter, 3 dialog XAML files.
 Open items: Run Pester tests on Windows PS 5.1, WPF GUI smoke test.
 ```
 
@@ -39,9 +39,21 @@ SP.Testing  SP.Audit   SP.DeltaCert (DeltaCertQueries, DeltaCertRunner)
     |
     v
 SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
+    |
+    v
+Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
+  MainWindow.xaml          -- main window layout + all tab content
+  CampaignTab.xaml         -- design reference
+  EvidenceTab.xaml         -- design reference
+  SettingsTab.xaml         -- design reference
+  AuditTab.xaml            -- design reference
+  DeltaCertTab.xaml        -- design reference
+  DeltaCertRunDialog.xaml  -- modal: run parameters (Phase 7)
+  DeltaCertEscalateDialog.xaml -- modal: escalation parameters (Phase 7)
+  AuditQueryDialog.xaml    -- modal: audit query filters (Phase 7)
 ```
 
-5 modules, 17 .psm1 files, 5 .psd1 manifests, 5 Scripts, 5 XAML files, 13 Pester test files, Config + Docs.
+6 modules, 18 .psm1 files, 6 .psd1 manifests, 7 Scripts, 9 XAML files, 14 Pester test files, Config + Docs.
 
 ---
 
@@ -66,7 +78,7 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | SP.Assertions.psm1 | DONE | C |
 | | SP.Evidence.psm1 | DONE (fixed JSONL encoding) | C |
 | | SP.Testing.psd1 | DONE (fixed RequiredModules) | C |
-| **SP.Gui** | SP.MainWindow.psm1 | DONE (+browser token UI wiring, contains search) | D |
+| **SP.Gui** | SP.MainWindow.psm1 | DONE (+Phase 7: Show-SPGuiDialog, dialog handlers, tab declutter, summary labels) | D |
 | | SP.GuiBridge.psm1 | DONE (+Set-SPGuiBrowserToken, CampaignNameContains, ReviewerMetrics) | D |
 | | SP.Gui.psd1 | DONE (+Set-SPGuiBrowserToken export) | D |
 | **SP.Audit** | SP.AuditQueries.psm1 | DONE (+CampaignNameContains param w/ `co` filter) | C |
@@ -77,14 +89,20 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | Show-SPDashboard.ps1 | DONE | D |
 | | Test-SPConnectivity.ps1 | DONE | D |
 | | Invoke-SPCampaignAudit.ps1 | DONE (+Token, +CampaignNameContains, +ReviewerMetrics) | C |
+| | Invoke-SPADDeltaCert.ps1 | DONE (CLI thin wrapper, browser token, WhatIf, fallback reviewer) | - |
+| | Invoke-SPDeltaCertEscalate.ps1 | DONE (CLI thin wrapper, escalation with safety guards) | - |
 | **Config** | settings.json | DONE | A |
 | | test-identities.csv | DONE | C |
 | | test-campaigns.csv | DONE | C |
-| **GUI XAML** | MainWindow.xaml | DONE (+Quick Connect browser token section, search placeholder) | D |
+| **GUI XAML** | MainWindow.xaml | DONE (+Phase 7: DeltaCert/Audit tab declutter, summary labels, dialog wiring) | D |
 | | CampaignTab.xaml | DONE | D |
 | | EvidenceTab.xaml | DONE | D |
-| | SettingsTab.xaml | DONE (+browser token section in design reference) | D |
-| | AuditTab.xaml | DONE (design reference, updated search placeholder) | A/B |
+| | SettingsTab.xaml | DONE (+browser token section, +DeltaCert config section) | D |
+| | AuditTab.xaml | DONE (design reference, updated for dialog retrofit) | A/B |
+| | DeltaCertTab.xaml | DONE (design reference, post-declutter layout) | - |
+| | DeltaCertRunDialog.xaml | DONE (Phase 7: modal run parameters dialog) | - |
+| | DeltaCertEscalateDialog.xaml | DONE (Phase 7: modal escalation parameters dialog) | - |
+| | AuditQueryDialog.xaml | DONE (Phase 7: modal audit query filters dialog) | - |
 | **Tests** | SP.Config.Tests.ps1 | DONE - 20/20 PASS | A |
 | | SP.Auth.Tests.ps1 | DONE - needs PS 5.1 | A |
 | | SP.Vault.Tests.ps1 | DONE - 15/15 PASS | A |
@@ -102,15 +120,14 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | TestData/sample-identities.csv | DONE | C |
 | | TestData/sample-campaigns.csv | DONE | C |
 | **SP.DeltaCert** | SP.DeltaCertQueries.psm1 | DONE (Get-SPDeltaGrantEvents, Get-SPDeltaAffectedIdentities, Group-SPDeltaByManager) | - |
-| | SP.DeltaCertRunner.psm1 | DONE (Invoke-SPDeltaCertRun) | - |
+| | SP.DeltaCertRunner.psm1 | DONE (Invoke-SPDeltaCertRun, +SourceOwner mode, +deadline, +cleanup, +escalation, +audit trail) | - |
 | | SP.DeltaCert.psd1 | DONE | - |
-| **Scripts** | Invoke-SPADDeltaCert.ps1 | DONE (CLI thin wrapper, browser token, WhatIf, fallback reviewer) | - |
-| **Tests** | SP.DeltaCert.Tests.ps1 | DONE - 14 tests (DC-001 to DC-014), PS 5.1 target | - |
+| **Tests** | SP.DeltaCert.Tests.ps1 | DONE - 50 tests (Phases 2-6 expanded from 14), PS 5.1 target | - |
 | **Docs** | README.md | DONE | D |
 
 ### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-20, pre-SP.DeltaCert)
 
-**152 PASS / 55 FAIL / 207 total (73%)**
+**152 PASS / 55 FAIL / 207 total (73%) -- original core toolkit**
 
 | Test File | Pass | Fail | Notes |
 |-----------|------|------|-------|
@@ -127,6 +144,25 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | SP.Campaigns.Tests | 3 | 13 | Mock-scoping |
 | SP.Certifications.Tests | 2 | 13 | Mock-scoping |
 | SP.Decisions.Tests | 0 | 14 | Mock-scoping |
+
+### Current Test Totals (278 tests across 14 files)
+
+| Test File | Tests | Notes |
+|-----------|-------|-------|
+| SP.Config.Tests | 20 | 100% pass (PS7) |
+| SP.Vault.Tests | 15 | 100% pass (PS7) |
+| SP.TestLoader.Tests | 13 | 100% pass (PS7) |
+| SP.Evidence.Tests | 12 | 100% pass (PS7) |
+| SP.AuditQueries.Tests | 26 | 100% pass (PS7) |
+| SP.AuditReport.Tests | 32 | 100% pass (PS7) |
+| SP.DeltaCert.Tests | 50 | PS 5.1 target (Phases 2-6) |
+| SP.ApiClient.Tests | 27 | Mock-scoping on PS7 |
+| SP.Auth.Tests | 9 | Mock-scoping on PS7 |
+| SP.Assertions.Tests | 10 | Mock-scoping on PS7 |
+| SP.BatchRunner.Tests | 6 | Mock-scoping on PS7 |
+| SP.Campaigns.Tests | 16 | Mock-scoping on PS7 |
+| SP.Certifications.Tests | 21 | Mock-scoping on PS7 |
+| SP.Decisions.Tests | 21 | Mock-scoping on PS7 |
 
 **Root cause of ALL 55 failures:** PS7 Pester 5.x has stricter mock-scoping for nested
 modules loaded via `.psd1` manifests. Mocks defined without `-ModuleName` targeting don't
@@ -403,16 +439,54 @@ No Pester tests were broken (existing tests don't test the changed parameters).
 
 ---
 
+## Phase 7: GUI Refinement (2026-05-22)
+
+**Purpose:** Reduce visual clutter, add modal dialog pattern for parameter entry, unify tab layouts.
+
+**Changes:**
+
+| Feature | Description | Commit |
+|---------|-------------|--------|
+| G-01 | `Show-SPGuiDialog` reusable modal helper in SP.MainWindow.psm1 | c863462 |
+| G-05 | Color-coded DeltaCert history (green/gray/orange) | f4a9e60 |
+| G-06 | DeltaCert config fields in Settings tab (6 persistent fields) | cb50b88 |
+| G-02 | DeltaCert Run Parameters Dialog (4 fields, session persistence) | a17cda6 |
+| G-04 | Escalation Parameters Dialog (3 fields, session persistence) | df8c2c8 |
+| G-03 | DeltaCert Tab Declutter (21 -> ~14 controls, summary + Configure + Run) | 7fa34c9 |
+| G-07 | Audit Tab Dialog Retrofit (query filters moved to modal dialog) | ae176cc |
+| G-08 | UI Consistency Pass (button styles, margins, dialog colors) | 2f5e3c7 |
+| G-09 | toolkit-status.md refresh (this section, updated counts, Phase 7 checklist) | -- |
+
+**New files (3 dialog XAMLs):**
+- `Gui/DeltaCertRunDialog.xaml` -- Source IDs, Hours Back, Deadline Days, Reviewer Mode
+- `Gui/DeltaCertEscalateDialog.xaml` -- Campaign Prefix, Stale Hours, Max Levels
+- `Gui/AuditQueryDialog.xaml` -- Campaign Name, Status, Timespan
+
+**Dialog pattern:** `Show-SPGuiDialog -XamlPath $path -ControlNames @('Ctrl1','Ctrl2') -Defaults @{Ctrl1='val'}` returns hashtable on OK, `$null` on cancel. Dark theme inline (Background=#1E1E2E, Surface=#2D2D44, Primary=#5B9BD5, Text=#E0E0E0).
+
+**Tab layout pattern (post-declutter):**
+```
+Row 0: [Summary label] .............. [Configure...] [Action Button]
+Row 1: Results DataGrid (expanded vertical space)
+Row 2: Secondary action buttons
+Row 3: Progress bar + status
+Row 4: History (DeltaCert only)
+```
+
+---
+
 ## Next Steps (Windows PS 5.1 Validation)
 
-1. Pull latest from GitHub on Windows machine (3 commits added 2026-05-21: SP.DeltaCert module, tests, status doc)
+1. Pull latest from GitHub on Windows machine
 2. Run `Invoke-Pester -Path .\Tests\ -Output Detailed` on PS 5.1 Desktop
-   -- Expect all 207 tests pass (55 mock-scoping failures are PS7-only)
+   -- Expect 278 tests pass (mock-scoping failures are PS7-only)
 3. If failures remain, investigate PS 5.1-specific behaviors
 4. Run smoke test: `.\Scripts\Invoke-GovernanceTest.ps1 -Tags smoke -WhatIf`
 5. Run audit smoke test: `.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7`
 6. Verify WPF GUI launches: `.\Scripts\Show-SPDashboard.ps1`
 7. Verify Audit tab: query campaigns, select, run audit, verify reports generated
+8. Verify DeltaCert tab: Configure dialog opens, Run dialog opens, escalation dialog opens
+9. Verify Settings tab: DeltaCert config section loads/saves correctly
 
 ---
 
@@ -455,14 +529,14 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 
 ## Verification Checklist
 
-- [x] All 45 production files implemented (core toolkit)
+- [x] All 57 production files implemented (core toolkit + DeltaCert + Phase 7 GUI)
 - [x] SP.Audit module implemented: SP.AuditQueries.psm1, SP.AuditReport.psm1, SP.Audit.psd1
 - [x] GUI Audit tab implemented: AuditTab.xaml, MainWindow.xaml (inline), SP.MainWindow.psm1, SP.GuiBridge.psm1
 - [x] Campaign report download refactored: v3 API first with silent legacy /cc/api fallback
 - [x] Invoke-SPCampaignAudit.ps1 CLI script implemented
-- [x] All 11 original Pester test files implemented
+- [x] All 14 Pester test files implemented (11 original + AuditQueries + AuditReport + DeltaCert)
 - [x] SP.AuditQueries.Tests.ps1 and SP.AuditReport.Tests.ps1 implemented (13 tests total)
-- [x] SP.DeltaCert.Tests.ps1 implemented (14 tests: DC-001 to DC-014)
+- [x] SP.DeltaCert.Tests.ps1 implemented (50 tests: Phases 2-6 expanded from initial DC-001 to DC-014)
 - [x] Module import chain loads on pwsh 7 (41 functions)
 - [x] Cross-module function name verification (zero mismatches)
 - [x] Zero PS7-only syntax (`??`, ternary, `&&`, `||`)
@@ -491,3 +565,23 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 - [ ] Audit HTML report: Section 3 "Reviewer Performance" appears with campaign-level summary + per-reviewer table
 - [ ] Audit HTML report: Avg Time column color-coded (green/blue/orange based on hours threshold)
 - [ ] Audit HTML report: Sections 4-7 renumbered correctly (Decision Summary, Campaign Reports, Provisioning Proof, Audit Metadata)
+
+### Phase 7 GUI Verification (2026-05-22)
+
+- [x] G-01: `Show-SPGuiDialog` loads XAML, wires OK/Cancel, returns hashtable or $null
+- [x] G-05: DeltaCert history entries color-coded (green=created, gray=no changes, orange=errors)
+- [x] G-06: Settings tab has DeltaCert config section (6 fields), round-trips correctly
+- [x] G-02: DeltaCert Run Parameters dialog opens with 4 fields, session persistence works
+- [x] G-04: Escalation Parameters dialog opens with 3 fields, session persistence works
+- [x] G-03: DeltaCert tab decluttered (summary + Configure + Run), DataGrid has more space
+- [x] G-07: Audit tab decluttered (summary + Configure + Query), dialog retrofit matches DeltaCert
+- [x] G-08: UI consistency pass (button styles, margins, dialog colors unified across all tabs)
+- [x] G-09: toolkit-status.md refreshed with Phase 7 changes, accurate counts, Phase 7 checklist
+- [ ] DeltaCert tab: "Configure..." opens dialog, updates summary label, does NOT run
+- [ ] DeltaCert tab: "Run Delta Cert" opens dialog then executes on OK
+- [ ] DeltaCert tab: "Run Escalation" opens dialog then executes on OK
+- [ ] Audit tab: "Configure..." opens dialog, updates summary label, does NOT query
+- [ ] Audit tab: "Query Campaigns" opens dialog then queries on OK
+- [ ] All 3 dialog XAMLs present in Gui/ folder (DeltaCertRunDialog, DeltaCertEscalateDialog, AuditQueryDialog)
+- [ ] Dialog dark theme consistent: Background=#1E1E2E, Surface=#2D2D44, Primary=#5B9BD5
+- [ ] Settings tab: DeltaCert config fields save/load (Source IDs, Hours Back, Deadline Days, Reviewer Mode, Campaign Prefix, Output Path)
