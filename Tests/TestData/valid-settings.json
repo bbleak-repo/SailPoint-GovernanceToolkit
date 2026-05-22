@@ -29,8 +29,10 @@
         "TimeoutSeconds": 60,
         "RetryCount": 3,
         "RetryDelaySeconds": 5,
+        "MaxRetryDelaySeconds": 60,
         "RateLimitRequestsPerWindow": 95,
-        "RateLimitWindowSeconds": 10
+        "RateLimitWindowSeconds": 10,
+        "MaxPaginationPages": 200
     },
     "Testing": {
         "IdentitiesCsvPath": ".\\Config\\test-identities.csv",
@@ -49,5 +51,32 @@
         "MaxCampaignsPerRun": 10,
         "RequireWhatIfOnProd": false,
         "AllowCompleteCampaign": false
+    },
+    "Audit": {
+        "OutputPath": ".\\Audit",
+        "DefaultDaysBack": 30,
+        "DefaultIdentityEventDays": 2,
+        "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+        "IncludeCampaignReports": true,
+        "IncludeIdentityEvents": true
+    },
+    "DeltaCert": {
+        "SourceIds": [],
+        "DefaultHoursBack": 24,
+        "DefaultDeadlineDays": 2,
+        "FallbackReviewerIdentityId": "",
+        "CampaignNamePrefix": "AD Delta Cert",
+        "MaxCampaignsPerRun": 50,
+        "CleanupDaysStale": 3,
+        "OutputPath": ".\\DeltaCert",
+        "DefaultReviewerMode": "Manager",
+        "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+        "ExcludeDisplayNamePatterns": [],
+        "ExcludeIdentityIds": [],
+        "Escalation": {
+            "DefaultStaleHours": 24,
+            "MaxEscalationLevels": 2,
+            "CampaignNamePrefix": "AD Delta Cert"
+        }
     }
 }

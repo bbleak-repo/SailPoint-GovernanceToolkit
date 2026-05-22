@@ -1374,7 +1374,10 @@ Describe "DC-023: JSONL audit line contains all required fields" {
             Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -HoursBack 12 -MaxCampaignsPerRun 50
 
             $jsonlPath = Join-Path $script:testOutputPath 'deltacert-audit.jsonl'
-            $line = (Get-Content -Path $jsonlPath | Where-Object { $_ -ne '' })[0]
+            # Select-Object preserves pipeline-item identity; bare (...)[0] on a single-string
+            # pipeline result indexes into the string and returns a [char], which ConvertFrom-Json
+            # then chokes on as 'Invalid object passed in (1): {'.
+            $line = Get-Content -Path $jsonlPath | Where-Object { $_ -ne '' } | Select-Object -First 1
             $event = $line | ConvertFrom-Json
 
             $event.Timestamp       | Should -Not -BeNullOrEmpty

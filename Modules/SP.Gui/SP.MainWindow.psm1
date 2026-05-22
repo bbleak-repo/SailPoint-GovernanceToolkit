@@ -704,7 +704,7 @@ function Load-EvidenceTree {
     if (-not (Test-Path $evidenceRoot)) {
         $rootNode         = [System.Windows.Controls.TreeViewItem]::new()
         $rootNode.Header  = 'Evidence directory not found'
-        $Tree.Items.Add($rootNode)
+        [void]$Tree.Items.Add($rootNode)
         return
     }
 
@@ -726,14 +726,14 @@ function Load-EvidenceTree {
             $fileNode        = [System.Windows.Controls.TreeViewItem]::new()
             $fileNode.Header = $file.Name
             $fileNode.Tag    = $file.FullName
-            $dirNode.Items.Add($fileNode)
+            [void]$dirNode.Items.Add($fileNode)
         }
 
-        $rootNode.Items.Add($dirNode)
+        [void]$rootNode.Items.Add($dirNode)
     }
 
     $rootNode.IsExpanded = $true
-    $Tree.Items.Add($rootNode)
+    [void]$Tree.Items.Add($rootNode)
 }
 
 function Load-EvidenceDetail {

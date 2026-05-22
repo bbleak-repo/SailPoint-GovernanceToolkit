@@ -184,7 +184,7 @@ foreach ($mod in $moduleChain) {
 $correlationID = [guid]::NewGuid().ToString()
 
 if (-not $ConfigPath) {
-    $ConfigPath = Join-Path $toolkitRoot 'Config\settings.json'
+    $ConfigPath = Resolve-SPConfigPath -ToolkitRoot $toolkitRoot
 }
 
 try {
