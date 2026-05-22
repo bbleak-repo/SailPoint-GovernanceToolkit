@@ -1013,68 +1013,34 @@
             <TabItem Header="Delta Cert" Style="{StaticResource ToolkitTabItem}">
                 <Grid x:Name="DeltaCertTabContent" Background="#1E1E2E" Margin="12,8">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>  <!-- Row 0: Config inputs -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Run -->
                         <RowDefinition Height="*"/>     <!-- Row 1: Results DataGrid -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 2: Action buttons -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 2: Cleanup + Escalation + Open Folder -->
                         <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
                         <RowDefinition Height="Auto"/>  <!-- Row 4: Recent run history -->
                     </Grid.RowDefinitions>
 
-                    <!-- Row 0: Config inputs -->
+                    <!-- Row 0: Summary + Configure + Run -->
                     <Grid Grid.Row="0" Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="0" Text="Source IDs:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+                        <TextBlock Grid.Column="0" x:Name="DeltaCertSummaryLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Text="Not configured. Click Configure to set parameters."/>
 
-                        <TextBox Grid.Column="1" x:Name="TxtDeltaCertSourceIds"
-                                 Width="220" Background="#2D2D44" Foreground="#888899"
-                                 BorderBrush="#3D3D5C" BorderThickness="1"
-                                 Padding="6,4" FontSize="12"
-                                 Text="Comma-separated source IDs..."
-                                 Margin="0,0,12,0"/>
+                        <Button Grid.Column="1" x:Name="BtnConfigureDeltaCert"
+                                Content="Configure..."
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
 
-                        <TextBlock Grid.Column="2" Text="Hours Back:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
-
-                        <TextBox Grid.Column="3" x:Name="TxtDeltaCertHoursBack"
-                                 Width="50" Background="#2D2D44" Foreground="#E0E0E0"
-                                 BorderBrush="#3D3D5C" BorderThickness="1"
-                                 Padding="6,4" FontSize="12"
-                                 Text="24" Margin="0,0,12,0"/>
-
-                        <TextBlock Grid.Column="4" Text="Deadline Days:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
-
-                        <TextBox Grid.Column="5" x:Name="TxtDeltaCertDeadlineDays"
-                                 Width="50" Background="#2D2D44" Foreground="#E0E0E0"
-                                 BorderBrush="#3D3D5C" BorderThickness="1"
-                                 Padding="6,4" FontSize="12"
-                                 Text="2" Margin="0,0,12,0"/>
-
-                        <TextBlock Grid.Column="6" Text="Reviewer:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
-
-                        <ComboBox Grid.Column="7" x:Name="CboDeltaCertReviewerMode"
-                                  Width="120" Background="#2D2D44"
-                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                  SelectedIndex="0" Margin="0,0,8,0" FontSize="12">
-                            <ComboBoxItem Content="Manager" IsSelected="True"/>
-                            <ComboBoxItem Content="SourceOwner"/>
-                        </ComboBox>
-
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="8"/>
+                        <Button Grid.Column="2" x:Name="BtnRunDeltaCert"
+                                Content="Run Delta Cert"
+                                Style="{StaticResource ToolkitButton}"/>
                     </Grid>
 
                     <!-- Row 1: Results DataGrid -->
@@ -1141,30 +1107,24 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <Button Grid.Column="0" x:Name="BtnRunDeltaCert"
-                                Content="Run Delta Cert"
-                                Style="{StaticResource ToolkitButton}"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="1" x:Name="BtnCleanupDeltaCert"
+                        <Button Grid.Column="0" x:Name="BtnCleanupDeltaCert"
                                 Content="Run Cleanup"
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="2" x:Name="BtnEscalateDeltaCert"
+                        <Button Grid.Column="1" x:Name="BtnEscalateDeltaCert"
                                 Content="Run Escalation"
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
                         <!-- Spacer -->
-                        <StackPanel Grid.Column="3"/>
+                        <StackPanel Grid.Column="2"/>
 
-                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
+                        <Button Grid.Column="3" x:Name="BtnOpenDeltaCertFolder"
                                 Content="Open Output Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>

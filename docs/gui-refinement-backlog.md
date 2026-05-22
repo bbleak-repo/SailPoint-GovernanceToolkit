@@ -33,7 +33,7 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 | G-06 | DeltaCert Config in Settings Tab | none | DONE |
 | G-02 | DeltaCert Run Parameters Dialog | G-01 | DONE |
 | G-04 | Escalation Parameters Dialog | G-01 | DONE |
-| G-03 | DeltaCert Tab Declutter | G-02 | PENDING |
+| G-03 | DeltaCert Tab Declutter | G-02 | DONE |
 | G-07 | Audit Tab Dialog Retrofit | G-01 | PENDING |
 | G-08 | UI Consistency Pass | G-03, G-07 | PENDING |
 | G-09 | Update toolkit-status.md | G-08 | PENDING |
@@ -294,8 +294,8 @@ Update `Invoke-GuiDeltaCertEscalation` to show dialog before running. Add
 
 ## G-03: DeltaCert Tab Declutter
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 7fa34c9
 - **Depends On:** G-02
 
 **Description:**

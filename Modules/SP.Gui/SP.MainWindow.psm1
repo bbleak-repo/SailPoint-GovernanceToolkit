@@ -1649,6 +1649,7 @@ function Initialize-DeltaCertTab {
 
     $module = $script:ThisModule
 
+    $btnConfigure    = Find-Control -Parent $TabContent -Name 'BtnConfigureDeltaCert'
     $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
     $btnCleanup      = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
     $btnEscalate     = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
@@ -1659,6 +1660,27 @@ function Initialize-DeltaCertTab {
     # Bind DataGrid to observable collection
     if ($null -ne $grid) {
         $grid.ItemsSource = $script:DeltaCertResultDataSource
+    }
+
+    # Configure button -- opens dialog, stores params, updates summary (does NOT run)
+    if ($btnConfigure) {
+        $btnConfigure.Add_Click({
+            & $module {
+                param($tc)
+
+                $dialogXaml = Get-XamlPath -FileName 'DeltaCertRunDialog.xaml'
+                $defaults   = Get-DeltaCertDialogDefaults
+                $dialogResult = Show-SPGuiDialog `
+                    -XamlPath      $dialogXaml `
+                    -ControlNames  @('TxtSourceIds', 'TxtHoursBack', 'TxtDeadlineDays', 'CboReviewerMode') `
+                    -Defaults      $defaults
+
+                if ($null -ne $dialogResult) {
+                    $script:LastDeltaCertParams = $dialogResult
+                    Update-DeltaCertSummaryLabel -TabContent $tc
+                }
+            } $TabContent
+        }.GetNewClosure())
     }
 
     # Run Delta Cert button
@@ -1712,7 +1734,8 @@ function Initialize-DeltaCertTab {
         }.GetNewClosure())
     }
 
-    # Populate history on init
+    # Populate summary label and history on init
+    Update-DeltaCertSummaryLabel -TabContent $TabContent
     Load-DeltaCertHistory -TabContent $TabContent
 }
 
@@ -1810,6 +1833,45 @@ function Get-EscalationDialogDefaults {
     return $defaults
 }
 
+function Update-DeltaCertSummaryLabel {
+    <#
+    .SYNOPSIS
+        Updates the DeltaCert summary label to reflect current parameters.
+    .DESCRIPTION
+        Shows "Sources: src-ad-001 | 24h | 2d deadline | Manager" when configured,
+        or "Not configured. Click Configure to set parameters." otherwise.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'DeltaCertSummaryLabel'
+    if ($null -eq $label) { return }
+
+    $params = $script:LastDeltaCertParams
+    if ($null -eq $params) {
+        # Try loading from config defaults (without storing as LastDeltaCertParams)
+        $defaults = Get-DeltaCertDialogDefaults
+        $sourceText = if ($defaults['TxtSourceIds']) { $defaults['TxtSourceIds'].Trim() } else { '' }
+        if ([string]::IsNullOrWhiteSpace($sourceText)) {
+            $label.Text = 'Not configured. Click Configure to set parameters.'
+            return
+        }
+        $params = $defaults
+    }
+
+    $sourceText = if ($params['TxtSourceIds']) { $params['TxtSourceIds'].Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($sourceText)) {
+        $label.Text = 'Not configured. Click Configure to set parameters.'
+        return
+    }
+
+    $hours    = if ($params['TxtHoursBack'])    { $params['TxtHoursBack'].Trim() }    else { '24' }
+    $deadline = if ($params['TxtDeadlineDays']) { $params['TxtDeadlineDays'].Trim() } else { '2' }
+    $reviewer = if ($params['CboReviewerMode']) { $params['CboReviewerMode'] }         else { 'Manager' }
+
+    $label.Text = "Sources: $sourceText | ${hours}h | ${deadline}d deadline | $reviewer"
+}
+
 function Invoke-GuiDeltaCertRun {
     <#
     .SYNOPSIS
@@ -1833,8 +1895,9 @@ function Invoke-GuiDeltaCertRun {
 
     if ($null -eq $dialogResult) { return }
 
-    # Persist for next open
+    # Persist for next open and update summary label
     $script:LastDeltaCertParams = $dialogResult
+    Update-DeltaCertSummaryLabel -TabContent $TabContent
 
     # Extract values from dialog result
     $sourceIdText = if ($dialogResult['TxtSourceIds']) { $dialogResult['TxtSourceIds'].Trim() } else { '' }
