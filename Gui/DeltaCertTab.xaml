@@ -12,7 +12,12 @@
       Row 1: Results DataGrid (Timestamp, CampaignsCreated, Identities, ManagerGroups, Reason, Errors)
       Row 2: Action buttons (Run Delta Cert, Run Cleanup, Run Escalation, Open Output Folder)
       Row 3: Progress bar + status label
-      Row 4: Recent run history from JSONL audit trail
+      Row 4: Recent run history from JSONL audit trail (color-coded)
+
+    History color coding (G-05):
+      Green  (#339933): Reason contains "Created" or CampaignsCreated > 0
+      Gray   (#888899): Reason is "NoChanges"
+      Orange (#FF9900): Errors present
 
     Bridge functions (SP.GuiBridge.psm1):
       Invoke-SPGuiDeltaCertRun       - wraps Invoke-SPDeltaCertRun
@@ -229,7 +234,7 @@
         <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
                 BorderBrush="#3D3D5C" BorderThickness="1">
             <ListBox x:Name="DeltaCertHistoryList"
-                     MaxHeight="120" Background="#2D2D44"
+                     MaxHeight="150" Background="#2D2D44"
                      Foreground="#E0E0E0" BorderThickness="0"
                      Margin="4" FontSize="12"/>
         </Border>

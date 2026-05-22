@@ -1484,7 +1484,8 @@ function Invoke-GuiAuditRun {
 function Load-AuditReportList {
     <#
     .SYNOPSIS
-        Populates the AuditReportList ListBox with recent audit report files.
+        Populates the AuditReportList ListBox with color-coded audit report files.
+        Green = HTML reports (full analysis), Gray = other file types.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -1506,11 +1507,23 @@ function Load-AuditReportList {
         return
     }
 
+    $converter  = [System.Windows.Media.BrushConverter]::new()
+    $brushGreen = $converter.ConvertFromString('#339933')
+    $brushGray  = $converter.ConvertFromString('#888899')
+
     foreach ($report in $result.Data) {
         $item         = [System.Windows.Controls.ListBoxItem]::new()
         $item.Content = $report.FileName
         $item.Tag     = $report.FullPath
         $item.ToolTip = "$($report.FullPath) ($($report.SizeKB) KB, $($report.LastModified))"
+
+        if ($report.FileName -match '\.html$') {
+            $item.Foreground = $brushGreen
+        }
+        else {
+            $item.Foreground = $brushGray
+        }
+
         $listBox.Items.Add($item) | Out-Null
     }
 }
@@ -2132,7 +2145,8 @@ function Invoke-GuiDeltaCertEscalation {
 function Load-DeltaCertHistory {
     <#
     .SYNOPSIS
-        Populates the DeltaCertHistoryList ListBox with recent run entries from JSONL.
+        Populates the DeltaCertHistoryList ListBox with color-coded run entries from JSONL.
+        Green = campaigns created, Gray = no changes, Orange = errors present.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -2154,10 +2168,26 @@ function Load-DeltaCertHistory {
         return
     }
 
+    $converter   = [System.Windows.Media.BrushConverter]::new()
+    $brushGreen  = $converter.ConvertFromString('#339933')
+    $brushGray   = $converter.ConvertFromString('#888899')
+    $brushOrange = $converter.ConvertFromString('#FF9900')
+
     foreach ($entry in $result.Data) {
         $item         = [System.Windows.Controls.ListBoxItem]::new()
         $item.Content = "$($entry.Timestamp) | Campaigns: $($entry.CampaignsCreated) | $($entry.Reason)"
         $item.ToolTip = "Identities: $($entry.Identities), Groups: $($entry.ManagerGroups), Errors: $($entry.Errors)"
+
+        if ($entry.Errors -and [int]$entry.Errors -gt 0) {
+            $item.Foreground = $brushOrange
+        }
+        elseif ($entry.Reason -match 'Created' -or ($entry.CampaignsCreated -and [int]$entry.CampaignsCreated -gt 0)) {
+            $item.Foreground = $brushGreen
+        }
+        elseif ($entry.Reason -eq 'NoChanges') {
+            $item.Foreground = $brushGray
+        }
+
         $listBox.Items.Add($item) | Out-Null
     }
 }

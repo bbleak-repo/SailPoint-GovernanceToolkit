@@ -1159,7 +1159,7 @@
                         <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
                                 BorderBrush="#3D3D5C" BorderThickness="1">
                             <ListBox x:Name="DeltaCertHistoryList"
-                                     MaxHeight="120"
+                                     MaxHeight="150"
                                      Background="#2D2D44"
                                      Foreground="#E0E0E0"
                                      BorderThickness="0"
