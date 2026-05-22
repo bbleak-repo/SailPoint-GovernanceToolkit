@@ -285,6 +285,155 @@ summary. The detailed sections follow:
 | 3 | Authentication or API error |
 | 4 | Configuration error (settings.json missing or invalid) |
 
+### Delta Cert: Invoke-SPADDeltaCert.ps1
+
+Daily AD access change detection. Queries SailPoint ISC for `GRANT_ACCESS` events on specified AD sources within a configurable time window, groups affected identities by manager, and creates one SEARCH-type certification campaign per manager group. On quiet days with no new access grants, the script exits with code 1 (expected no-op).
+
+**Scope requirement:** `GET /v3/account-activities` requires `sp:scopes:all` or a browser token. The standard read-only PAT scopes are not sufficient for this endpoint.
+
+```powershell
+# Basic daily run -- create campaigns for managers of identities who got new AD access
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123'
+
+# Dry-run -- show what campaigns would be created without making write API calls
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -WhatIf
+
+# Multiple AD sources with extended look-back window and 3-day deadline
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId @('src-abc','src-def') -HoursBack 48 -DeadlineDays 3
+
+# SourceOwner mode -- ISC routes certification items to each source's owner
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -ReviewerMode SourceOwner
+
+# Run cleanup of stale campaigns before creating new ones
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -RunCleanup
+
+# Use a browser token instead of OAuth credentials
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -Token 'eyJhbGciOiJSUzI1...'
+
+# Include manager-less identities, routing them to a fallback reviewer
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -FallbackReviewerIdentityId 'mgr-fallback-id'
+```
+
+**Reviewer modes:**
+
+| Mode | Behavior |
+|------|----------|
+| `Manager` (default) | One SEARCH campaign per manager. Each manager reviews only their direct reports who received new AD access. |
+| `SourceOwner` | One SOURCE_OWNER campaign per source ID. ISC routes items to whoever owns each source. |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Campaigns created (or WhatIf completed) |
+| 1 | No AD grant events found in the time window |
+| 2 | Parameter error |
+| 3 | Authentication error |
+| 4 | Configuration error |
+| 5 | Campaign creation/activation error |
+
+### Delta Cert Escalation: Invoke-SPDeltaCertEscalate.ps1
+
+Escalates stale delta cert certifications by reassigning them up the org tree. Finds active delta cert certifications with no reviewer action past a configurable threshold and reassigns each to the current reviewer's manager. ISC sends its own notification email to the new reviewer on reassignment.
+
+```powershell
+# Dry-run -- show which stale certifications would be escalated
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
+
+# Escalate stale certifications using a browser token
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
+
+# Aggressive escalation -- 12-hour threshold, max 1 hop
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 12 -MaxEscalationLevels 1
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Escalation completed (or WhatIf) |
+| 1 | No stale certifications found |
+| 3 | Authentication error |
+| 4 | Configuration error |
+| 5 | Escalation error |
+
+**Configuration (settings.json DeltaCert section):**
+
+```json
+"DeltaCert": {
+    "SourceIds": ["src-abc123"],
+    "DefaultHoursBack": 24,
+    "DefaultDeadlineDays": 2,
+    "FallbackReviewerIdentityId": "",
+    "CampaignNamePrefix": "AD Delta Cert",
+    "MaxCampaignsPerRun": 50,
+    "CleanupDaysStale": 3,
+    "OutputPath": ".\\DeltaCert",
+    "DefaultReviewerMode": "Manager",
+    "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+    "ExcludeDisplayNamePatterns": [],
+    "ExcludeIdentityIds": [],
+    "Escalation": {
+        "DefaultStaleHours": 24,
+        "MaxEscalationLevels": 2,
+        "CampaignNamePrefix": "AD Delta Cert"
+    }
+}
+```
+
+### Delta Cert GUI Tab
+
+The Delta Cert tab in the WPF dashboard provides a streamlined interface for running and monitoring delta certifications. The tab layout after the Phase 7 declutter:
+
+- **Row 0 -- Summary + Actions:** A summary label shows current parameters (e.g., `Sources: src-ad-001 | 24h | 2d deadline | Manager`). Two buttons: **Configure...** opens a parameters dialog without running, **Run Delta Cert** opens the same dialog then executes on OK.
+- **Row 1 -- Results DataGrid:** Displays campaign results from the most recent run.
+- **Row 2 -- Secondary Actions:** Run Cleanup (completes stale campaigns), Run Escalation (reassigns unactioned certifications), Open Output Folder.
+- **Row 3 -- Progress:** Progress bar and status label during async operations.
+- **Row 4 -- History:** Color-coded list of recent runs (green = campaigns created, gray = no changes, orange = errors).
+
+Delta Cert parameters are configured in the Settings tab and persist to `settings.json`. Session overrides via the dialog are remembered for the duration of the GUI session.
+
+### Delta Cert Daily Operations
+
+Recommended setup for automated daily delta certification with escalation follow-up.
+
+**Windows Task Scheduler (production):**
+
+```powershell
+# Daily at 06:00 -- create delta cert campaigns for overnight AD changes
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPADDeltaCert.ps1" -SourceId "src-abc123" -RunCleanup'
+$trigger = New-ScheduledTaskTrigger -Daily -At '06:00'
+Register-ScheduledTask -TaskName 'SailPoint-DeltaCert-Daily' -Action $action -Trigger $trigger `
+    -Description 'Daily AD delta certification' -RunLevel Highest
+
+# Every 4 hours during business hours -- escalate stale certifications
+$action2 = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPDeltaCertEscalate.ps1" -StaleHours 24'
+$trigger2 = New-ScheduledTaskTrigger -Daily -At '10:00'
+# Add repetition for 4-hour intervals during business day
+$trigger2.Repetition.Interval = 'PT4H'
+$trigger2.Repetition.Duration = 'PT12H'
+Register-ScheduledTask -TaskName 'SailPoint-DeltaCert-Escalate' -Action $action2 -Trigger $trigger2 `
+    -Description 'Escalate stale delta cert certifications' -RunLevel Highest
+```
+
+**Linux/macOS cron (development/testing):**
+
+```bash
+# Daily at 06:00
+0 6 * * * pwsh -NoProfile -File /opt/toolkit/Scripts/Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -RunCleanup >> /var/log/deltacert.log 2>&1
+
+# Every 4 hours from 10:00-22:00
+0 10,14,18,22 * * * pwsh -NoProfile -File /opt/toolkit/Scripts/Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 >> /var/log/deltacert-escalate.log 2>&1
+```
+
+**Recommended daily workflow:**
+
+1. **06:00** -- `Invoke-SPADDeltaCert.ps1 -RunCleanup` creates campaigns and cleans up stale ones from prior days.
+2. **10:00, 14:00, 18:00, 22:00** -- `Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24` escalates unactioned certifications.
+3. **Ad-hoc** -- Use the GUI Delta Cert tab or `Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'AD Delta Cert'` to audit completed delta cert campaigns.
+
 ### Vault: New-SPVault.ps1
 
 One-time setup to store OAuth credentials in an encrypted vault (recommended for non-development environments).
@@ -314,11 +463,12 @@ Launches the WPF interactive dashboard (Windows only, requires .NET Framework 4.
 .\Scripts\Show-SPDashboard.ps1 -ConfigPath 'C:\Toolkit\Config\settings.json'
 ```
 
-The dashboard provides four tabs:
+The dashboard provides five tabs:
 - **Campaigns** - load CSV data, select and run tests, view progress and results
 - **Evidence** - browse Evidence/ folder, view JSONL events in a grid
-- **Settings** - edit all settings.json fields with form validation, test connectivity, and paste a browser token for quick authentication without OAuth setup
+- **Settings** - edit all settings.json fields with form validation, test connectivity, paste a browser token for quick authentication, and configure Delta Cert parameters
 - **Audit** - query campaigns by keyword or substring search, select for audit, generate HTML compliance reports with reviewer performance metrics
+- **Delta Cert** - configure and run daily AD delta certifications, run cleanup and escalation, view color-coded run history
 
 ---
 
@@ -392,6 +542,8 @@ SailPoint-GovernanceToolkit/
     Scripts/                             # Thin-wrapper CLI entry points
         Invoke-GovernanceTest.ps1        # Primary test runner
         Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting
+        Invoke-SPADDeltaCert.ps1         # Daily AD delta certification
+        Invoke-SPDeltaCertEscalate.ps1   # Stale certification escalation
         Test-SPConnectivity.ps1          # Quick smoke test (config -> token -> API)
         New-SPVault.ps1                  # One-time vault setup
         Show-SPDashboard.ps1             # WPF GUI launcher
@@ -417,6 +569,13 @@ SailPoint-GovernanceToolkit/
             SP.AuditQueries.psm1         # Campaign/cert/item/event API queries
             SP.AuditReport.psm1          # Decision grouping, HTML/text/JSONL export
 
+        SP.DeltaCert/                    # AD delta certification layer
+            SP.DeltaCert.psd1            # Module manifest
+            SP.DeltaCert.Core.psm1       # Grant event query + identity grouping
+            SP.DeltaCert.Campaign.psm1   # Campaign creation + activation
+            SP.DeltaCert.Cleanup.psm1    # Stale campaign completion
+            SP.DeltaCert.Escalation.psm1 # Stale certification reassignment
+
         SP.Gui/                          # WPF presentation layer
             SP.GuiBridge.psm1            # GUI-to-module bridge adapter
             SP.MainWindow.psm1           # WPF window host + event wiring
@@ -427,6 +586,10 @@ SailPoint-GovernanceToolkit/
         EvidenceTab.xaml
         SettingsTab.xaml
         AuditTab.xaml
+        DeltaCertTab.xaml
+        DeltaCertRunDialog.xaml          # Modal: delta cert run parameters
+        DeltaCertEscalateDialog.xaml     # Modal: escalation parameters
+        AuditQueryDialog.xaml            # Modal: audit query filters
 
     Config/
         settings.json                    # Runtime configuration
@@ -444,7 +607,8 @@ SailPoint-GovernanceToolkit/
 - `SP.Api` depends on `SP.Core` only
 - `SP.Testing` depends on `SP.Core` and `SP.Api`
 - `SP.Audit` depends on `SP.Core` and `SP.Api` only (same level as SP.Testing)
-- `SP.Gui` depends on SP.Core, SP.Api, SP.Testing, and SP.Audit (Audit tab bridge functions)
+- `SP.DeltaCert` depends on `SP.Core` and `SP.Api` only (same level as SP.Testing and SP.Audit)
+- `SP.Gui` depends on SP.Core, SP.Api, SP.Testing, SP.Audit, and SP.DeltaCert
 - Scripts are thin wrappers: module load -> config -> WhatIf guard -> dispatch
 
 ---
