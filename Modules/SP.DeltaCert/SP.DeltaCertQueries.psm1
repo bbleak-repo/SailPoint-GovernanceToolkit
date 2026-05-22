@@ -34,8 +34,9 @@ function Get-SPDeltaIdentityDetail {
     .SYNOPSIS
         Resolves an identity ID to its manager and active status, with in-memory caching.
     .DESCRIPTION
-        Calls GET /v3/identities/{id} once per unique ID per session.
+        Calls GET /v3/search/identities/{id} once per unique ID per session.
         Caches the result (including failures) so repeated lookups do not re-call the API.
+        Requires sp:search:read scope.
     .PARAMETER IdentityId
         The SailPoint ISC identity ID to resolve.
     .PARAMETER CorrelationID
@@ -405,7 +406,7 @@ function Get-SPDeltaAffectedIdentities {
     .SYNOPSIS
         Resolves and filters identities from grant events to active identities with managers.
     .DESCRIPTION
-        Deduplicates identity IDs from GrantEvents, then calls GET /v3/identities/{id}
+        Deduplicates identity IDs from GrantEvents, then calls GET /v3/search/identities/{id}
         for each (results cached per session). Filters out:
           - Identities not found in ISC
           - Identities whose cloudLifecycleState is terminated, inactive, leaver, or prehire

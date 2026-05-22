@@ -17,9 +17,10 @@ Import-Module (Join-Path $modulesRoot 'SP.Core\SP.Core.psd1') -Force
 # 2. API adapter
 Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Api.psd1') -Force
 
-# 3. Business logic (choose one or both)
+# 3. Business logic (choose as needed)
 Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.Testing.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.Audit.psd1') -Force
+Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCert.psd1') -Force
 
 # 4. GUI (optional, Windows only)
 Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.Gui.psd1') -Force
@@ -217,6 +218,34 @@ Internal (not exported): `Build-ExecutiveSummaryHtml` -- renders the status badg
 
 ---
 
+## SP.DeltaCert Module Internals
+
+### SP.DeltaCertQueries.psm1
+
+Data retrieval and identity resolution for delta certifications:
+
+| Function | Purpose |
+|----------|---------|
+| `Get-SPDeltaGrantEvents` | Query `GET /v3/account-activities` for `GRANT_ACCESS` events on specified AD sources within a time window |
+| `Get-SPDeltaAffectedIdentities` | Resolve and filter identities from grant events. Calls `GET /v3/search/identities/{id}` (cached per session). Filters by lifecycle state and manager assignment. |
+| `Group-SPDeltaByManager` | Group affected identities by their manager ID for per-manager campaign creation |
+| `Get-SPDeltaCertStaleCertifications` | Find active delta cert certifications with no reviewer action past a configurable threshold |
+| `Get-SPDeltaIdentityDetail` | Resolve a single identity ID to manager and lifecycle state via `GET /v3/search/identities/{id}`. Results cached in module scope. |
+
+Internal (not exported): identity resolution cache stored in `$script:IdentityCache` to avoid redundant API calls within a session.
+
+### SP.DeltaCertRunner.psm1
+
+Campaign lifecycle orchestration for delta certifications:
+
+| Function | Purpose |
+|----------|---------|
+| `Invoke-SPDeltaCertRun` | End-to-end delta cert run: query grants, group by manager, create and activate SEARCH campaigns. Supports Manager and SourceOwner reviewer modes. |
+| `Invoke-SPDeltaCertCleanup` | Complete stale delta cert campaigns past the configured `CleanupDaysStale` threshold |
+| `Invoke-SPDeltaCertEscalate` | Reassign stale certifications up the org tree. Uses `Get-SPDeltaIdentityDetail` to resolve the current reviewer's manager. |
+
+---
+
 ## Testing
 
 ### Running Tests
@@ -246,6 +275,7 @@ Test IDs follow the pattern `{MODULE}-{NNN}`:
 - `LOAD-001` through `LOAD-005` -- SP.TestLoader
 - `EVD-001` through `EVD-005` -- SP.Evidence
 - `ASRT-001` through `ASRT-005` -- SP.Assertions
+- `DC-*` -- SP.DeltaCert (SP.DeltaCert.Tests.ps1)
 
 ### Mock Scoping
 
@@ -328,7 +358,8 @@ These were discovered during development and are documented here for reference:
 | `/v3/certifications/{id}/reassign` | POST | SP.Decisions | Sync reassignment |
 | `/v3/certifications/{id}/reassign-async` | POST | SP.Decisions | Async reassignment |
 | `/v3/certifications/{id}/sign-off` | POST | SP.Decisions | Sign off certification |
-| `/v3/account-activities` | GET | SP.AuditQueries | Identity lifecycle events |
+| `/v3/account-activities` | GET | SP.AuditQueries | Identity lifecycle events. Requires `sp:scopes:all` (no granular scope). |
+| `/v3/search/identities/{id}` | GET | SP.DeltaCert | Identity detail resolution (manager, lifecycle state). Requires `sp:search:read`. Note: `GET /v3/identities/{id}` does not exist -- use this search endpoint. |
 | `/v3/sources/{id}` | GET | SP.AuditQueries | Source name resolution |
 | `/v3/accounts` | GET | SP.AuditQueries | Identity account resolution (UPN/sAMAccountName) |
 | `/v3/reports/{id}` | GET | SP.AuditQueries | CSV report download (v3, preferred) |
@@ -344,3 +375,9 @@ These were discovered during development and are documented here for reference:
 - Campaign report CSV download tries v3 `GET /reports/{id}?fileFormat=csv` first, falls back to legacy `/cc/api`
 - Campaign status machine: STAGED -> ACTIVATING -> ACTIVE -> COMPLETING -> COMPLETED
 - `POST /campaigns/{id}/complete` only works on past-due campaigns
+- `GET /v3/identities/{id}` does not exist in the ISC v3 API -- use `GET /v3/search/identities/{id}` instead (returns IdentityDocument)
+- `GET /v3/account-activities` has no granular scope -- requires `sp:scopes:all` or a browser token
+
+### PAT Scopes
+
+Read-only audit requires 6 scopes: `idn:campaign:read`, `idn:campaign-report:read`, `sp:report:read`, `sp:search:read`, `idn:sources:read`, `idn:accounts:read`. The `sp:search:read` scope was added for Delta Cert identity resolution via `GET /v3/search/identities/{id}`. See `docs/SANDBOX-API-SETUP.md` for full details.

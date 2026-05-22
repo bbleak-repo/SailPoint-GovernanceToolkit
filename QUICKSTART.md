@@ -9,7 +9,7 @@ For full documentation, see [README.md](README.md).
 ## What You Need
 
 - **Windows 10/11 or Server 2019+** with PowerShell 5.1 Desktop (pre-installed)
-- **SailPoint ISC API credentials** (OAuth 2.0 client_credentials with certification scope)
+- **SailPoint ISC API credentials** (OAuth 2.0 client_credentials -- read-only audit requires 6 PAT scopes; see below)
 - **10 minutes** for CLI setup, +5 for optional vault and GUI
 
 ---
@@ -51,6 +51,21 @@ Open `Config\settings.json` and replace all `CHANGE_ME` values:
 ```
 
 Replace `acme` with your ISC tenant name. Leave all other fields at their defaults.
+
+**Required PAT scopes (read-only audit):**
+
+```
+idn:campaign:read
+idn:campaign-report:read
+sp:report:read
+sp:search:read
+idn:sources:read
+idn:accounts:read
+```
+
+`sp:search:read` is required for identity resolution (manager lookup in Delta Cert). For full sandbox scope details including write permissions, see `docs/SANDBOX-API-SETUP.md`.
+
+> **Note:** Delta Cert's `GET /v3/account-activities` endpoint requires `sp:scopes:all` or a browser token. The granular scopes above are not sufficient for that endpoint.
 
 > **Tip:** If the toolkit detects `CHANGE_ME` values on first run, it will exit with guidance. You do not need to fill in every field -- only the ones shown above.
 
@@ -158,12 +173,35 @@ Open the HTML reports in a browser to review results.
 .\Scripts\Show-SPDashboard.ps1
 ```
 
-The WPF dashboard provides three tabs:
+The WPF dashboard provides five tabs:
 - **Campaigns** -- load CSVs, select tests, run with progress tracking
 - **Evidence** -- browse evidence folders, view JSONL events in a grid
-- **Settings** -- edit settings.json fields with form validation
+- **Settings** -- edit settings.json fields with form validation, test connectivity, paste a browser token, and configure Delta Cert parameters
+- **Audit** -- query campaigns by keyword or substring search, select for audit, generate HTML compliance reports
+- **Delta Cert** -- configure and run daily AD delta certifications, run cleanup and escalation, view run history
 
 > **Note:** The GUI requires .NET Framework 4.5+ and a Single-Threaded Apartment (STA) thread. The script handles STA relaunching automatically.
+
+---
+
+## Step 9: Delta Cert Quick Start (Optional)
+
+Delta Cert creates daily SEARCH-type certification campaigns for identities who received new AD access grants.
+
+```powershell
+# Dry-run -- see what campaigns would be created (no API writes)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -WhatIf
+
+# Create delta cert campaigns for overnight AD changes
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123'
+
+# Escalate stale certifications (no reviewer action in 24 hours)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
+```
+
+> **Note:** Delta Cert requires `sp:scopes:all` or a browser token (`-Token`) because `GET /v3/account-activities` has no granular scope. The 6 read-only PAT scopes listed above are not sufficient for Delta Cert operations. See `docs/SANDBOX-API-SETUP.md` for full scope details.
+
+Configure Delta Cert parameters in `Config\settings.json` under the `DeltaCert` section, or use the Settings tab in the GUI. See [README.md](README.md) for the full DeltaCert configuration reference and daily operations workflow.
 
 ---
 
