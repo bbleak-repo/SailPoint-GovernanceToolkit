@@ -258,7 +258,7 @@ Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePref
 $runStart = Get-Date
 
 # WhatIf short-circuit: describe what would run
-if ($WhatIfPreference.IsPresent) {
+if (($WhatIfPreference -eq $true)) {
     Write-Host '  [WhatIf] Dry-run mode. No write API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
     Write-Host '  Would run escalation with:' -ForegroundColor Cyan
@@ -345,7 +345,7 @@ try {
         Escalated           = $escalatedIds.Count
         Skipped             = $skippedIds.Count
         Errors              = $errorMsgs
-        WhatIf              = $WhatIfPreference.IsPresent
+        WhatIf              = ($WhatIfPreference -eq $true)
         DurationSeconds     = [math]::Round($runDuration, 2)
     }
 
@@ -397,7 +397,7 @@ switch ($OutputMode) {
     }
     default {
         Write-Host ''
-        if ($WhatIfPreference.IsPresent) {
+        if (($WhatIfPreference -eq $true)) {
             Write-Host '  Escalation WhatIf Summary' -ForegroundColor Cyan
         }
         else {

@@ -171,7 +171,7 @@ Write-SPLog -Message "Invoke-GovernanceTest started" `
 #region WhatIf Guard
 
 $isProdEnvironment = $config.Safety.RequireWhatIfOnProd
-$isWhatIf          = $WhatIfPreference.IsPresent
+$isWhatIf          = ($WhatIfPreference -eq $true)
 
 if ($isProdEnvironment -and -not $isWhatIf) {
     $envName = $config.Global.EnvironmentName

@@ -236,7 +236,7 @@ function Invoke-SPDeltaCertRun {
 
     $runStartTime = [System.Diagnostics.Stopwatch]::StartNew()
 
-    Write-SPLog -Message "Invoke-SPDeltaCertRun: Sources='$($SourceIds -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays WhatIf=$($WhatIfPreference.IsPresent)" `
+    Write-SPLog -Message "Invoke-SPDeltaCertRun: Sources='$($SourceIds -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays WhatIf=$(($WhatIfPreference -eq $true))" `
         -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
         -CorrelationID $CorrelationID
 
@@ -358,7 +358,7 @@ function Invoke-SPDeltaCertRun {
             }
 
             # WhatIf
-            if ($WhatIfPreference.IsPresent) {
+            if (($WhatIfPreference -eq $true)) {
                 $whatIfGroups = @{}
                 foreach ($srcId in $uniqueSourceIds) {
                     $whatIfGroups[$srcId] = @{
@@ -595,7 +595,7 @@ function Invoke-SPDeltaCertRun {
         }
 
         # WhatIf: describe without writing
-        if ($WhatIfPreference.IsPresent) {
+        if (($WhatIfPreference -eq $true)) {
             $whatIfGroups = @{}
             foreach ($managerId in $managerGroups.Keys) {
                 $identities  = $managerGroups[$managerId]
@@ -904,7 +904,7 @@ function Invoke-SPDeltaCertEscalate {
             $reason = "SLA escalation: $hoursOpen hours without action"
 
             # WhatIf: describe without making API calls
-            if ($WhatIfPreference.IsPresent) {
+            if (($WhatIfPreference -eq $true)) {
                 Write-SPLog -Message "WhatIf: Would reassign cert '$certId' ($($reviewItemIds.Count) items) from '$reviewerId' to '$escalationTarget'" `
                     -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
@@ -1030,7 +1030,7 @@ function Invoke-SPDeltaCertCleanup {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Invoke-SPDeltaCertCleanup: Prefix='$CampaignNamePrefix' DaysStale=$DaysStale WhatIf=$($WhatIfPreference.IsPresent)" `
+    Write-SPLog -Message "Invoke-SPDeltaCertCleanup: Prefix='$CampaignNamePrefix' DaysStale=$DaysStale WhatIf=$(($WhatIfPreference -eq $true))" `
         -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
         -CorrelationID $CorrelationID
 
@@ -1155,7 +1155,7 @@ function Invoke-SPDeltaCertCleanup {
             }
 
             # WhatIf: describe without completing
-            if ($WhatIfPreference.IsPresent) {
+            if (($WhatIfPreference -eq $true)) {
                 Write-SPLog -Message "WhatIf: Would complete stale campaign '$campaignName' ($campaignId)" `
                     -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
                     -CorrelationID $CorrelationID

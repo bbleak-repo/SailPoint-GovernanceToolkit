@@ -329,7 +329,7 @@ if ($RunCleanup) {
 $runStart = Get-Date
 
 # WhatIf short-circuit: validate config and describe what would run
-if ($WhatIfPreference.IsPresent) {
+if (($WhatIfPreference -eq $true)) {
     Write-Host '  [WhatIf] Dry-run mode. No write API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
     Write-Host '  Would run delta certification with:' -ForegroundColor Cyan

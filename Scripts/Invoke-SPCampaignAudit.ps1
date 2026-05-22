@@ -286,7 +286,7 @@ $runStart = Get-Date
 # -WhatIf short-circuit: validate config + filters, describe what would be
 # queried, and exit without any API calls. Useful for smoke-checking a new
 # config or CI pipeline before it has OAuth credentials.
-if ($WhatIfPreference.IsPresent) {
+if (($WhatIfPreference -eq $true)) {
     Write-Host ''
     Write-Host '  [WhatIf] Dry-run mode enabled. No API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
