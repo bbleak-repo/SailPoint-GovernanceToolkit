@@ -283,6 +283,33 @@ function Get-SPConfigTemplate {
             RequireWhatIfOnProd   = $true
             AllowCompleteCampaign = $false
         }
+        Audit = [ordered]@{
+            OutputPath               = '.\Audit'
+            DefaultDaysBack          = 30
+            DefaultIdentityEventDays = 2
+            DefaultStatuses          = @('COMPLETED', 'ACTIVE')
+            IncludeCampaignReports   = $true
+            IncludeIdentityEvents    = $true
+        }
+        DeltaCert = [ordered]@{
+            SourceIds                  = @()
+            DefaultHoursBack           = 24
+            DefaultDeadlineDays        = 2
+            FallbackReviewerIdentityId = ''
+            CampaignNamePrefix         = 'AD Delta Cert'
+            MaxCampaignsPerRun         = 50
+            CleanupDaysStale           = 3
+            OutputPath                 = '.\DeltaCert'
+            DefaultReviewerMode        = 'Manager'
+            ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+            ExcludeDisplayNamePatterns = @()
+            ExcludeIdentityIds         = @()
+            Escalation = [ordered]@{
+                DefaultStaleHours   = 24
+                MaxEscalationLevels = 2
+                CampaignNamePrefix  = 'AD Delta Cert'
+            }
+        }
     }
 
     return $template | ConvertTo-Json -Depth 10
