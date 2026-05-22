@@ -27,7 +27,7 @@ Cross-phase dependencies are noted explicitly.
 | Phase | Scope | Features | Status |
 |-------|-------|----------|--------|
 | 1 | Core delta detection + manager campaigns | (complete) | DONE |
-| 2 | Campaign lifecycle (deadline, dedup, cleanup, audit trail) | F-01 to F-04 | PENDING |
+| 2 | Campaign lifecycle (deadline, dedup, cleanup, audit trail) | F-01 to F-04 | DONE |
 | 3 | Reviewer routing (SOURCE_OWNER / app owner mode) | F-05 | DONE |
 | 4 | OOO escalation (stale detection, org tree walk, reassignment) | F-06 to F-08 | DONE |
 | 5 | GUI tab integration (XAML, bridge, wiring) | F-09 | DONE |
