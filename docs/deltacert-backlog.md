@@ -346,7 +346,7 @@ and skip with a WARN log.
 ### F-08: Escalation CLI Script + Config
 
 - **Status:** `DONE`
-- **Commit:** PENDING_COMMIT
+- **Commit:** f94df31
 - **Depends On:** F-06, F-07
 
 **Description:**
