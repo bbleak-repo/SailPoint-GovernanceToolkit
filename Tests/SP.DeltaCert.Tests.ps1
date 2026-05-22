@@ -486,6 +486,10 @@ Describe "DC-012: Invoke-SPDeltaCertRun creates one SEARCH campaign per manager 
                 return @{ Success = $true; Data = $groups; Error = $null }
             }
 
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
             Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
                 param($Name)
                 return @{ Success = $true; Data = [PSCustomObject]@{ id = "camp-$([guid]::NewGuid().ToString('N').Substring(0,8))" }; Error = $null }
@@ -553,6 +557,10 @@ Describe "DC-013: Invoke-SPDeltaCertRun returns WhatIf preview without creating 
                 $groups = @{}
                 $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
                 return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
             }
 
             Mock New-SPCampaign   -ModuleName SP.DeltaCertRunner { }
@@ -628,6 +636,131 @@ Describe "DC-014: Invoke-SPDeltaCertRun aborts when manager group count exceeds 
             Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 2
 
             Should -Not -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-017: Duplicate campaign guard returns DuplicatesExist when match found
+# ---------------------------------------------------------------------------
+
+Describe "DC-017: Invoke-SPDeltaCertRun returns DuplicatesExist when campaigns already exist for today" {
+
+    Context "When Search-SPCampaigns finds existing campaigns matching today's prefix" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true })
+                    Error   = $null
+                }
+            }
+
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ id = 'camp-existing'; name = 'AD Delta Cert 2026-05-22 - Mgr One'; status = 'ACTIVE' })
+                    Error   = $null
+                }
+            }
+
+            Mock New-SPCampaign   -ModuleName SP.DeltaCertRunner { }
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return Success=true with Reason=DuplicatesExist" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 0
+            $result.Data.Reason           | Should -Be 'DuplicatesExist'
+        }
+
+        It "Should not call New-SPCampaign when duplicates exist" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            Should -Not -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-018: Duplicate campaign guard allows creation when no match found
+# ---------------------------------------------------------------------------
+
+Describe "DC-018: Invoke-SPDeltaCertRun creates campaigns normally when no duplicates exist" {
+
+    Context "When Search-SPCampaigns returns empty results" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true })
+                    Error   = $null
+                }
+            }
+
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
+            Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'camp-new-001' }; Error = $null }
+            }
+
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+        }
+
+        It "Should return Success=true with Reason=Created" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 1
+            $result.Data.Reason           | Should -Be 'Created'
+        }
+
+        It "Should call New-SPCampaign when no duplicates exist" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            Should -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner -Times 1
         }
     }
 }

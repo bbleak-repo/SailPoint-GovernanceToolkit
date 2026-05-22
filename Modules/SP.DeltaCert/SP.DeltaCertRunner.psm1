@@ -106,7 +106,8 @@ function Invoke-SPDeltaCertRun {
                 IdentityCount    = [int]
                 ManagerGroups    = [int]
                 Reason           = [string]    # NoChanges | NoActiveIdentities |
-                                               # NoManagerGroups | WhatIf | Created
+                                               # NoManagerGroups | DuplicatesExist |
+                                               # WhatIf | Created
                 Errors           = [string[]]  # per-campaign errors (partial failure)
                 WhatIfGroups     = [hashtable] # only present when WhatIf=true
             }
@@ -143,7 +144,10 @@ function Invoke-SPDeltaCertRun {
         [int]$MaxCampaignsPerRun = 50,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [switch]$Force
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -269,6 +273,37 @@ function Invoke-SPDeltaCertRun {
             return @{ Success = $false; Data = $null; Error = $errMsg }
         }
 
+        $dateStamp = Get-Date -Format 'yyyy-MM-dd'
+
+        # Duplicate campaign guard
+        if (-not $Force) {
+            Write-SPLog -Message "Checking for existing campaigns matching '$CampaignNamePrefix $dateStamp'" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+
+            $searchResult = Search-SPCampaigns -Keyword "$CampaignNamePrefix $dateStamp" `
+                -CorrelationID $CorrelationID
+
+            if ($searchResult.Success -and @($searchResult.Data).Count -gt 0) {
+                $existingCount = @($searchResult.Data).Count
+                Write-SPLog -Message "Duplicate guard: Found $existingCount existing campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+                return @{
+                    Success = $true
+                    Data    = @{
+                        CampaignsCreated = 0
+                        CampaignIds      = @()
+                        IdentityCount    = $affectedIdentities.Count
+                        ManagerGroups    = $managerGroups.Count
+                        Reason           = 'DuplicatesExist'
+                        Errors           = @()
+                    }
+                    Error   = $null
+                }
+            }
+        }
+
         # WhatIf: describe without writing
         if ($WhatIfPreference.IsPresent) {
             $whatIfGroups = @{}
@@ -282,7 +317,7 @@ function Invoke-SPDeltaCertRun {
                     ManagerName   = $managerName
                     IdentityCount = $identities.Count
                     IdentityIds   = @($identities | Select-Object -ExpandProperty IdentityId)
-                    CampaignName  = "$CampaignNamePrefix $(Get-Date -Format 'yyyy-MM-dd') - $managerName"
+                    CampaignName  = "$CampaignNamePrefix $dateStamp - $managerName"
                     Deadline      = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-dd')
                 }
             }
@@ -313,7 +348,6 @@ function Invoke-SPDeltaCertRun {
 
         $campaignIds    = [System.Collections.Generic.List[string]]::new()
         $campaignErrors = [System.Collections.Generic.List[string]]::new()
-        $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
         $deadlineStr    = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
 
         foreach ($managerId in $managerGroups.Keys) {

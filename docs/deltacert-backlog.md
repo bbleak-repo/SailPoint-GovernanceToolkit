@@ -103,8 +103,8 @@ ISC uses its tenant default, which may not match the intended delta cert review 
 
 ### F-02: Duplicate Campaign Guard
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2205e7c
 - **Depends On:** none
 
 **Description:**
