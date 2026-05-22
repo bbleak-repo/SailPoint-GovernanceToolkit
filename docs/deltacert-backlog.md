@@ -176,8 +176,8 @@ check this guard and log a clear warning if it's blocked.
 
 ### F-04: Delta Cert Run JSONL Audit Trail
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** bce09b5
 - **Depends On:** none
 
 **Description:**

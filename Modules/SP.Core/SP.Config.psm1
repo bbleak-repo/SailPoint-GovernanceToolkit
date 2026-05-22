@@ -103,6 +103,7 @@ function Get-SPConfigDefaults {
             CampaignNamePrefix         = 'AD Delta Cert'
             MaxCampaignsPerRun         = 50
             CleanupDaysStale           = 3
+            OutputPath                 = '.\DeltaCert'
         }
     }
 }

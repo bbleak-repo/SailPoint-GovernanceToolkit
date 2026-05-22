@@ -59,6 +59,75 @@ function Build-SPDeltaSearchFilter {
     return ($escaped -join ' OR ')
 }
 
+function Write-SPDeltaCertAuditEvent {
+    <#
+    .SYNOPSIS
+        Appends a JSONL audit event for a delta cert run.
+    .DESCRIPTION
+        Writes a single JSON line to {OutputPath}/deltacert-audit.jsonl following
+        the Export-SPAuditJsonl pattern (UTF-8 no BOM, AppendAllText).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$CorrelationID,
+        [Parameter(Mandatory)][string[]]$SourceIds,
+        [Parameter(Mandatory)][int]$HoursBack,
+        [Parameter(Mandatory)][int]$GrantEventsFound,
+        [Parameter(Mandatory)][int]$IdentitiesProcessed,
+        [Parameter(Mandatory)][int]$ManagerGroups,
+        [Parameter(Mandatory)][int]$CampaignsCreated,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CampaignIds,
+        [Parameter(Mandatory)][string]$Reason,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Errors,
+        [Parameter(Mandatory)][double]$DurationSeconds
+    )
+
+    try {
+        $config = Get-SPConfig
+        $outputPath = '.\DeltaCert'
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+            $outputPath = $config.DeltaCert.OutputPath
+        }
+
+        if (-not (Test-Path -Path $outputPath -PathType Container)) {
+            New-Item -Path $outputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $event = [ordered]@{
+            Timestamp           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            CorrelationID       = $CorrelationID
+            Action              = 'DeltaCertRun'
+            SourceIds           = $SourceIds
+            HoursBack           = $HoursBack
+            GrantEventsFound    = $GrantEventsFound
+            IdentitiesProcessed = $IdentitiesProcessed
+            ManagerGroups       = $ManagerGroups
+            CampaignsCreated    = $CampaignsCreated
+            CampaignIds         = $CampaignIds
+            Reason              = $Reason
+            Errors              = $Errors
+            DurationSeconds     = [math]::Round($DurationSeconds, 2)
+        }
+
+        $jsonLine = $event | ConvertTo-Json -Depth 5 -Compress
+        $filePath = Join-Path -Path $outputPath -ChildPath 'deltacert-audit.jsonl'
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($filePath, "$jsonLine`n", $utf8NoBom)
+
+        Write-SPLog -Message "Audit event written to $filePath" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Write-SPDeltaCertAuditEvent' `
+            -CorrelationID $CorrelationID
+    }
+    catch {
+        Write-SPLog -Message "Failed to write audit JSONL event: $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Write-SPDeltaCertAuditEvent' `
+            -CorrelationID $CorrelationID
+    }
+}
+
 #endregion
 
 #region Public Functions
@@ -154,6 +223,8 @@ function Invoke-SPDeltaCertRun {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
+    $runStartTime = [System.Diagnostics.Stopwatch]::StartNew()
+
     Write-SPLog -Message "Invoke-SPDeltaCertRun: Sources='$($SourceIds -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays WhatIf=$($WhatIfPreference.IsPresent)" `
         -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
         -CorrelationID $CorrelationID
@@ -168,6 +239,13 @@ function Invoke-SPDeltaCertRun {
             -CorrelationID $CorrelationID
 
         if (-not $eventsResult.Success) {
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound 0 -IdentitiesProcessed 0 `
+                -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+                -Reason 'Error' -Errors @("Grant event query failed: $($eventsResult.Error)") `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $false
                 Data    = $null
@@ -181,6 +259,13 @@ function Invoke-SPDeltaCertRun {
             Write-SPLog -Message "No AD GRANT_ACCESS events found in the last $HoursBack hours -- no campaigns created" `
                 -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
                 -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound 0 -IdentitiesProcessed 0 `
+                -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+                -Reason 'NoChanges' -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $true
                 Data    = @{
@@ -204,6 +289,13 @@ function Invoke-SPDeltaCertRun {
             -FallbackManagerId $FallbackManagerId -CorrelationID $CorrelationID
 
         if (-not $identResult.Success) {
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count -IdentitiesProcessed 0 `
+                -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+                -Reason 'Error' -Errors @("Identity resolution failed: $($identResult.Error)") `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $false
                 Data    = $null
@@ -217,6 +309,13 @@ function Invoke-SPDeltaCertRun {
             Write-SPLog -Message "No active identities with managers after filtering -- no campaigns created" `
                 -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
                 -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count -IdentitiesProcessed 0 `
+                -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+                -Reason 'NoActiveIdentities' -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $true
                 Data    = @{
@@ -240,6 +339,14 @@ function Invoke-SPDeltaCertRun {
             -CorrelationID $CorrelationID
 
         if (-not $groupResult.Success) {
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() `
+                -Reason 'Error' -Errors @("Manager grouping failed: $($groupResult.Error)") `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $false
                 Data    = $null
@@ -250,6 +357,13 @@ function Invoke-SPDeltaCertRun {
         $managerGroups = $groupResult.Data
 
         if ($managerGroups.Count -eq 0) {
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'NoManagerGroups' `
+                -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{
                 Success = $true
                 Data    = @{
@@ -270,6 +384,14 @@ function Invoke-SPDeltaCertRun {
                       "Increase DeltaCert.MaxCampaignsPerRun in settings.json if expected."
             Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
                 -Action 'Invoke-SPDeltaCertRun' -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups $managerGroups.Count `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'Error' -Errors @($errMsg) `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
             return @{ Success = $false; Data = $null; Error = $errMsg }
         }
 
@@ -289,6 +411,14 @@ function Invoke-SPDeltaCertRun {
                 Write-SPLog -Message "Duplicate guard: Found $existingCount existing campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
                     -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                    -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                    -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups $managerGroups.Count `
+                    -CampaignsCreated 0 -CampaignIds @() -Reason 'DuplicatesExist' `
+                    -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
                 return @{
                     Success = $true
                     Data    = @{
@@ -325,6 +455,13 @@ function Invoke-SPDeltaCertRun {
             Write-SPLog -Message "WhatIf: Would create $($managerGroups.Count) campaign(s) for $($affectedIdentities.Count) identit(ies)" `
                 -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
                 -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups $managerGroups.Count `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'WhatIf' `
+                -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
 
             return @{
                 Success = $true
@@ -413,6 +550,14 @@ function Invoke-SPDeltaCertRun {
             -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
             -CorrelationID $CorrelationID
 
+        $runStartTime.Stop()
+        Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+            -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+            -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups $managerGroups.Count `
+            -CampaignsCreated $campaignIds.Count -CampaignIds $campaignIds.ToArray() `
+            -Reason 'Created' -Errors $campaignErrors.ToArray() `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
         return @{
             Success = $overallSuccess
             Data    = @{
@@ -430,6 +575,14 @@ function Invoke-SPDeltaCertRun {
         $errMsg = "Invoke-SPDeltaCertRun failed: $($_.Exception.Message)"
         Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
             -Action 'Invoke-SPDeltaCertRun' -CorrelationID $CorrelationID
+
+        $runStartTime.Stop()
+        Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+            -HoursBack $HoursBack -GrantEventsFound 0 -IdentitiesProcessed 0 `
+            -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+            -Reason 'Error' -Errors @($errMsg) `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
         return @{ Success = $false; Data = $null; Error = $errMsg }
     }
 }

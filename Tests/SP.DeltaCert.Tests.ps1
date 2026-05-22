@@ -981,3 +981,115 @@ Describe "DC-021: Invoke-SPDeltaCertCleanup does not complete campaigns that are
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region DC-022: JSONL audit file is written after a successful run
+# ---------------------------------------------------------------------------
+
+Describe "DC-022: Invoke-SPDeltaCertRun writes a JSONL audit event after completion" {
+
+    Context "When a run completes with NoChanges (no grant events)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @()
+                    Error   = $null
+                }
+            }
+
+            # Mock Get-SPConfig to return an OutputPath pointing to a temp directory
+            $script:testOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) "dc-test-$([guid]::NewGuid().ToString('N'))"
+            Mock Get-SPConfig -ModuleName SP.DeltaCertRunner {
+                return [PSCustomObject]@{
+                    DeltaCert = [PSCustomObject]@{
+                        OutputPath = $script:testOutputPath
+                    }
+                }
+            }
+        }
+
+        AfterEach {
+            if (Test-Path $script:testOutputPath) {
+                Remove-Item -Path $script:testOutputPath -Recurse -Force
+            }
+        }
+
+        It "Should create the deltacert-audit.jsonl file" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            $jsonlPath = Join-Path $script:testOutputPath 'deltacert-audit.jsonl'
+            $jsonlPath | Should -Exist
+        }
+
+        It "Should write exactly one JSONL line" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            $jsonlPath = Join-Path $script:testOutputPath 'deltacert-audit.jsonl'
+            $lines = @(Get-Content -Path $jsonlPath | Where-Object { $_ -ne '' })
+            $lines.Count | Should -Be 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-023: JSONL audit line contains expected fields
+# ---------------------------------------------------------------------------
+
+Describe "DC-023: JSONL audit line contains all required fields" {
+
+    Context "When a run completes with NoChanges" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @()
+                    Error   = $null
+                }
+            }
+
+            $script:testOutputPath = Join-Path ([System.IO.Path]::GetTempPath()) "dc-test-$([guid]::NewGuid().ToString('N'))"
+            Mock Get-SPConfig -ModuleName SP.DeltaCertRunner {
+                return [PSCustomObject]@{
+                    DeltaCert = [PSCustomObject]@{
+                        OutputPath = $script:testOutputPath
+                    }
+                }
+            }
+        }
+
+        AfterEach {
+            if (Test-Path $script:testOutputPath) {
+                Remove-Item -Path $script:testOutputPath -Recurse -Force
+            }
+        }
+
+        It "Should contain Timestamp, CorrelationID, Action, SourceIds, HoursBack, Reason, and DurationSeconds" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -HoursBack 12 -MaxCampaignsPerRun 50
+
+            $jsonlPath = Join-Path $script:testOutputPath 'deltacert-audit.jsonl'
+            $line = (Get-Content -Path $jsonlPath | Where-Object { $_ -ne '' })[0]
+            $event = $line | ConvertFrom-Json
+
+            $event.Timestamp       | Should -Not -BeNullOrEmpty
+            $event.CorrelationID   | Should -Not -BeNullOrEmpty
+            $event.Action          | Should -Be 'DeltaCertRun'
+            $event.SourceIds       | Should -Contain 'src-ad-001'
+            $event.HoursBack       | Should -Be 12
+            $event.Reason          | Should -Be 'NoChanges'
+            $event.DurationSeconds | Should -BeGreaterOrEqual 0
+            $event.GrantEventsFound    | Should -Be 0
+            $event.IdentitiesProcessed | Should -Be 0
+            $event.ManagerGroups       | Should -Be 0
+            $event.CampaignsCreated    | Should -Be 0
+        }
+    }
+}
+
+#endregion
