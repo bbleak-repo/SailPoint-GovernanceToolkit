@@ -95,6 +95,25 @@ function Get-SPConfigDefaults {
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
         }
+        DeltaCert = @{
+            SourceIds                  = @()
+            DefaultHoursBack           = 24
+            DefaultDeadlineDays        = 2
+            FallbackReviewerIdentityId = ''
+            CampaignNamePrefix         = 'AD Delta Cert'
+            MaxCampaignsPerRun         = 50
+            CleanupDaysStale           = 3
+            OutputPath                 = '.\DeltaCert'
+            DefaultReviewerMode        = 'Manager'
+            ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+            ExcludeDisplayNamePatterns = @()
+            ExcludeIdentityIds         = @()
+            Escalation = @{
+                DefaultStaleHours      = 24
+                MaxEscalationLevels    = 2
+                CampaignNamePrefix     = 'AD Delta Cert'
+            }
+        }
     }
 }
 

@@ -953,6 +953,224 @@
                 </Grid>
             </TabItem>
 
+            <!-- Delta Cert Tab -->
+            <TabItem Header="Delta Cert" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="DeltaCertTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Config inputs -->
+                        <RowDefinition Height="*"/>     <!-- Row 1: Results DataGrid -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 2: Action buttons -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent run history -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Config inputs -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="Source IDs:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <TextBox Grid.Column="1" x:Name="TxtDeltaCertSourceIds"
+                                 Width="220" Background="#2D2D44" Foreground="#888899"
+                                 BorderBrush="#3D3D5C" BorderThickness="1"
+                                 Padding="6,4" FontSize="12"
+                                 Text="Comma-separated source IDs..."
+                                 Margin="0,0,12,0"/>
+
+                        <TextBlock Grid.Column="2" Text="Hours Back:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <TextBox Grid.Column="3" x:Name="TxtDeltaCertHoursBack"
+                                 Width="50" Background="#2D2D44" Foreground="#E0E0E0"
+                                 BorderBrush="#3D3D5C" BorderThickness="1"
+                                 Padding="6,4" FontSize="12"
+                                 Text="24" Margin="0,0,12,0"/>
+
+                        <TextBlock Grid.Column="4" Text="Deadline Days:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <TextBox Grid.Column="5" x:Name="TxtDeltaCertDeadlineDays"
+                                 Width="50" Background="#2D2D44" Foreground="#E0E0E0"
+                                 BorderBrush="#3D3D5C" BorderThickness="1"
+                                 Padding="6,4" FontSize="12"
+                                 Text="2" Margin="0,0,12,0"/>
+
+                        <TextBlock Grid.Column="6" Text="Reviewer:" Foreground="#AAAACC"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+
+                        <ComboBox Grid.Column="7" x:Name="CboDeltaCertReviewerMode"
+                                  Width="120" Background="#2D2D44"
+                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                  SelectedIndex="0" Margin="0,0,8,0" FontSize="12">
+                            <ComboBoxItem Content="Manager" IsSelected="True"/>
+                            <ComboBoxItem Content="SourceOwner"/>
+                        </ComboBox>
+
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="8"/>
+                    </Grid>
+
+                    <!-- Row 1: Results DataGrid -->
+                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                        <DataGrid x:Name="DeltaCertResultGrid"
+                                  AutoGenerateColumns="False"
+                                  Background="#2D2D44"
+                                  Foreground="#E0E0E0"
+                                  BorderThickness="0"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#3D3D5C"
+                                  RowBackground="#2D2D44"
+                                  AlternatingRowBackground="#252538"
+                                  SelectionMode="Single"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  IsReadOnly="True"
+                                  HeadersVisibility="Column"
+                                  ColumnHeaderHeight="32"
+                                  RowHeight="28"
+                                  Margin="2">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="Background"      Value="#252538"/>
+                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
+                                    <Setter Property="FontWeight"      Value="SemiBold"/>
+                                    <Setter Property="Padding"         Value="8,4"/>
+                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Timestamp"
+                                                    Binding="{Binding Timestamp}"
+                                                    Width="160"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Campaigns Created"
+                                                    Binding="{Binding CampaignsCreated}"
+                                                    Width="120"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Identities"
+                                                    Binding="{Binding Identities}"
+                                                    Width="80"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Manager Groups"
+                                                    Binding="{Binding ManagerGroups}"
+                                                    Width="110"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Reason"
+                                                    Binding="{Binding Reason}"
+                                                    Width="*"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Errors"
+                                                    Binding="{Binding Errors}"
+                                                    Width="80"
+                                                    IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+
+                    <!-- Row 2: Action buttons -->
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" x:Name="BtnRunDeltaCert"
+                                Content="Run Delta Cert"
+                                Style="{StaticResource ToolkitButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="1" x:Name="BtnCleanupDeltaCert"
+                                Content="Run Cleanup"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="2" x:Name="BtnEscalateDeltaCert"
+                                Content="Run Escalation"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="3"/>
+
+                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
+                                Content="Open Output Folder"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 3: Progress bar + status label -->
+                    <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="DeltaCertStatusLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="0,0,12,0"/>
+
+                        <ProgressBar Grid.Column="1" x:Name="DeltaCertProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     Visibility="Collapsed"/>
+
+                        <TextBlock Grid.Column="2" x:Name="DeltaCertProgressPercent"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="8,0,0,0"/>
+                    </Grid>
+
+                    <!-- Row 4: Recent run history from JSONL audit trail -->
+                    <Grid Grid.Row="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Recent Delta Cert Runs"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                            <Button Grid.Column="1" x:Name="BtnRefreshDeltaCertHistory"
+                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                    Padding="10,4" FontSize="11"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1">
+                            <ListBox x:Name="DeltaCertHistoryList"
+                                     MaxHeight="120"
+                                     Background="#2D2D44"
+                                     Foreground="#E0E0E0"
+                                     BorderThickness="0"
+                                     Margin="4"
+                                     FontSize="12"/>
+                        </Border>
+                    </Grid>
+
+                </Grid>
+            </TabItem>
+
         </TabControl>
 
         <!-- Status Bar -->

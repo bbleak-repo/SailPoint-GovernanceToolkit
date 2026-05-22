@@ -1,8 +1,7 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-04-03
-**Status:** IMPLEMENTATION COMPLETE + 3 Feature Additions (Campaign Search, Browser Token Auth, Reviewer Performance Metrics)
-**Plan File:** `/Users/xand/.claude/plans/cheeky-brewing-hellman.md`
+**Last Updated:** 2026-05-21
+**Status:** IMPLEMENTATION COMPLETE + SP.DeltaCert module added (AD delta certification)
 
 ---
 
@@ -10,8 +9,8 @@
 
 ```
 Read this file. All production files are implemented.
-3 features added 2026-04-03: campaign substring search, browser token auth, reviewer performance metrics.
-Next step: Run Pester tests on Windows PS 5.1 to validate mock-scoping fixes.
+Latest addition 2026-05-21: SP.DeltaCert module -- daily AD delta certification campaigns.
+Open items: Run Pester tests on Windows PS 5.1, WPF GUI smoke test.
 ```
 
 ---
@@ -34,9 +33,9 @@ SP.Core (Config, Logging, Auth, Vault)
     v
 SP.Api (ApiClient, Campaigns, Certifications, Decisions)
     |
-    +----------+
-    v          v
-SP.Testing    SP.Audit (AuditQueries, AuditReport)
+    +----------+----------+
+    v          v          v
+SP.Testing  SP.Audit   SP.DeltaCert (DeltaCertQueries, DeltaCertRunner)
     |
     v
 SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
@@ -102,9 +101,14 @@ SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
 | | TestData/valid-settings.json | DONE | A |
 | | TestData/sample-identities.csv | DONE | C |
 | | TestData/sample-campaigns.csv | DONE | C |
+| **SP.DeltaCert** | SP.DeltaCertQueries.psm1 | DONE (Get-SPDeltaGrantEvents, Get-SPDeltaAffectedIdentities, Group-SPDeltaByManager) | - |
+| | SP.DeltaCertRunner.psm1 | DONE (Invoke-SPDeltaCertRun) | - |
+| | SP.DeltaCert.psd1 | DONE | - |
+| **Scripts** | Invoke-SPADDeltaCert.ps1 | DONE (CLI thin wrapper, browser token, WhatIf, fallback reviewer) | - |
+| **Tests** | SP.DeltaCert.Tests.ps1 | DONE - 14 tests (DC-001 to DC-014), PS 5.1 target | - |
 | **Docs** | README.md | DONE | D |
 
-### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-20)
+### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-20, pre-SP.DeltaCert)
 
 **152 PASS / 55 FAIL / 207 total (73%)**
 
@@ -401,7 +405,7 @@ No Pester tests were broken (existing tests don't test the changed parameters).
 
 ## Next Steps (Windows PS 5.1 Validation)
 
-1. Copy toolkit to Windows machine
+1. Pull latest from GitHub on Windows machine (3 commits added 2026-05-21: SP.DeltaCert module, tests, status doc)
 2. Run `Invoke-Pester -Path .\Tests\ -Output Detailed` on PS 5.1 Desktop
    -- Expect all 207 tests pass (55 mock-scoping failures are PS7-only)
 3. If failures remain, investigate PS 5.1-specific behaviors
@@ -458,6 +462,7 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 - [x] Invoke-SPCampaignAudit.ps1 CLI script implemented
 - [x] All 11 original Pester test files implemented
 - [x] SP.AuditQueries.Tests.ps1 and SP.AuditReport.Tests.ps1 implemented (13 tests total)
+- [x] SP.DeltaCert.Tests.ps1 implemented (14 tests: DC-001 to DC-014)
 - [x] Module import chain loads on pwsh 7 (41 functions)
 - [x] Cross-module function name verification (zero mismatches)
 - [x] Zero PS7-only syntax (`??`, ternary, `&&`, `||`)

@@ -38,13 +38,16 @@ function Import-SPTestModules {
         Imports SP.AuditQueries, SP.AuditReport.
     .PARAMETER Testing
         Imports SP.TestLoader, SP.Assertions, SP.Evidence, SP.BatchRunner.
+    .PARAMETER DeltaCert
+        Imports SP.DeltaCertQueries, SP.DeltaCertRunner.
     #>
     [CmdletBinding()]
     param(
         [switch]$Core,
         [switch]$Api,
         [switch]$Audit,
-        [switch]$Testing
+        [switch]$Testing,
+        [switch]$DeltaCert
     )
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
@@ -70,5 +73,9 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.Assertions.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.Evidence.psm1')   -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.BatchRunner.psm1')-Force -DisableNameChecking
+    }
+    if ($DeltaCert) {
+        Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertQueries.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertRunner.psm1')  -Force -DisableNameChecking
     }
 }

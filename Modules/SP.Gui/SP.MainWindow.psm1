@@ -39,8 +39,10 @@ $script:ToolkitRoot        = $null
 $script:MainWindow         = $null
 $script:CampaignDataSource      = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsRunning               = $false
-$script:AuditCampaignDataSource = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
-$script:IsAuditRunning          = $false
+$script:AuditCampaignDataSource     = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:IsAuditRunning              = $false
+$script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:IsDeltaCertRunning          = $false
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -1427,6 +1429,624 @@ function Resolve-AuditOutputPath {
 
 #endregion
 
+#region Delta Cert Tab
+
+function Initialize-DeltaCertTab {
+    <#
+    .SYNOPSIS
+        Wires up the Delta Cert tab controls and event handlers.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
+    $btnCleanup      = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
+    $btnEscalate     = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
+    $btnOpenFolder   = Find-Control -Parent $TabContent -Name 'BtnOpenDeltaCertFolder'
+    $btnRefresh      = Find-Control -Parent $TabContent -Name 'BtnRefreshDeltaCertHistory'
+    $grid            = Find-Control -Parent $TabContent -Name 'DeltaCertResultGrid'
+
+    # Bind DataGrid to observable collection
+    if ($null -ne $grid) {
+        $grid.ItemsSource = $script:DeltaCertResultDataSource
+    }
+
+    # Run Delta Cert button
+    if ($btnRun) {
+        $btnRun.Add_Click({
+            Invoke-GuiDeltaCertRun -TabContent $TabContent
+        }.GetNewClosure())
+    }
+
+    # Run Cleanup button
+    if ($btnCleanup) {
+        $btnCleanup.Add_Click({
+            Invoke-GuiDeltaCertCleanup -TabContent $TabContent
+        }.GetNewClosure())
+    }
+
+    # Run Escalation button
+    if ($btnEscalate) {
+        $btnEscalate.Add_Click({
+            Invoke-GuiDeltaCertEscalation -TabContent $TabContent
+        }.GetNewClosure())
+    }
+
+    # Open Output Folder button
+    if ($btnOpenFolder) {
+        $btnOpenFolder.Add_Click({
+            $outputPath = Resolve-DeltaCertOutputPath
+            if (-not (Test-Path $outputPath)) {
+                [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            }
+            Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        }.GetNewClosure())
+    }
+
+    # Refresh history button
+    if ($btnRefresh) {
+        $btnRefresh.Add_Click({
+            Load-DeltaCertHistory -TabContent $TabContent
+        }.GetNewClosure())
+    }
+
+    # Populate history on init
+    Load-DeltaCertHistory -TabContent $TabContent
+}
+
+function Invoke-GuiDeltaCertRun {
+    <#
+    .SYNOPSIS
+        Runs delta cert in a background runspace. Follows the Audit tab pattern.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsDeltaCertRunning) {
+        Set-StatusMessage -Message 'A delta cert run is already in progress.' -IsError
+        return
+    }
+
+    $progressBar     = Find-Control -Parent $TabContent -Name 'DeltaCertProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'DeltaCertProgressPercent'
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
+    $txtSourceIds    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertSourceIds'
+    $txtHoursBack    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertHoursBack'
+    $txtDeadlineDays = Find-Control -Parent $TabContent -Name 'TxtDeltaCertDeadlineDays'
+    $cboReviewerMode = Find-Control -Parent $TabContent -Name 'CboDeltaCertReviewerMode'
+
+    # Extract source IDs
+    $sourceIdText = ''
+    if ($null -ne $txtSourceIds -and $txtSourceIds.Text -ne 'Comma-separated source IDs...') {
+        $sourceIdText = $txtSourceIds.Text.Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
+        # Try config
+        try {
+            $configParams = @{}
+            if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+            $config = Get-SPConfig @configParams
+            if ($null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $null -ne $config.DeltaCert -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'SourceIds' -and
+                @($config.DeltaCert.SourceIds).Count -gt 0) {
+                $sourceIdText = ($config.DeltaCert.SourceIds) -join ','
+            }
+        }
+        catch { }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
+        Set-StatusMessage -Message 'No source IDs specified. Enter source IDs or configure DeltaCert.SourceIds in settings.' -IsError
+        return
+    }
+
+    $sourceIds = @($sourceIdText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    # Extract numeric values
+    $hoursBack = 24
+    if ($null -ne $txtHoursBack -and $txtHoursBack.Text) {
+        [int]::TryParse($txtHoursBack.Text.Trim(), [ref]$hoursBack) | Out-Null
+    }
+
+    $deadlineDays = 2
+    if ($null -ne $txtDeadlineDays -and $txtDeadlineDays.Text) {
+        [int]::TryParse($txtDeadlineDays.Text.Trim(), [ref]$deadlineDays) | Out-Null
+    }
+
+    $reviewerMode = 'Manager'
+    if ($null -ne $cboReviewerMode -and $null -ne $cboReviewerMode.SelectedItem) {
+        $reviewerMode = $cboReviewerMode.SelectedItem.Content
+    }
+
+    $script:IsDeltaCertRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Starting delta cert run. CorrelationID: $correlationID"
+
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = 'Running delta cert...'
+    }
+
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+
+    if ($null -ne $progressPercent) {
+        $progressPercent.Text = '0%'
+    }
+
+    if ($null -ne $btnRun) {
+        $btnRun.IsEnabled = $false
+    }
+
+    # Create background runspace (STA)
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('SourceIds',      $sourceIds)
+    $runspace.SessionStateProxy.SetVariable('HoursBack',      $hoursBack)
+    $runspace.SessionStateProxy.SetVariable('DeadlineDays',   $deadlineDays)
+    $runspace.SessionStateProxy.SetVariable('ReviewerMode',   $reviewerMode)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',  $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',    $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent', $progressPercent)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',    $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # Load modules in runspace
+        $coreModule      = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule       = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $deltaCertModule = Join-Path $ToolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+        $guiModule       = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $deltaCertModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $runResult = Invoke-SPGuiDeltaCertRun `
+            -SourceIds      $SourceIds `
+            -HoursBack      $HoursBack `
+            -DeadlineDays   $DeadlineDays `
+            -ReviewerMode   $ReviewerMode `
+            -CorrelationID  $CorrelationID
+
+        # Marshal result back to UI thread
+        $dispatcher       = $MainWindow.Dispatcher
+        $capturedResult   = $runResult
+        $capturedProgress = $ProgressBar
+        $capturedPercent  = $ProgressPercent
+        $capturedLabel    = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgress) {
+                $capturedProgress.Value = 100
+            }
+            if ($null -ne $capturedPercent) {
+                $capturedPercent.Text = '100%'
+            }
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $data = $capturedResult.Data
+                    $capturedLabel.Text = "Delta cert complete. Campaigns: $($data.CampaignsCreated), Reason: $($data.Reason)"
+                } else {
+                    $capturedLabel.Text = "Delta cert failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $runResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms interval)
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnRun
+    $capturedProg     = $progressBar
+    $capturedPercent2 = $progressPercent
+
+    $timer.Add_Tick({
+        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
+            $capturedTimer.Stop()
+
+            if ($capturedPs.HadErrors) {
+                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
+                Set-StatusMessage -Message "Delta cert run failed: $errMsg" -IsError
+            } else {
+                Set-StatusMessage -Message 'Delta cert run complete.'
+
+                # Update DataGrid with result
+                try {
+                    $psResult = $capturedPs.EndInvoke($capturedAsync)
+                    if ($null -ne $psResult -and $psResult.Count -gt 0) {
+                        $finalResult = $psResult[0]
+                        if ($null -ne $finalResult -and $finalResult.Success -and $null -ne $finalResult.Data) {
+                            $script:DeltaCertResultDataSource.Add($finalResult.Data)
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            # Re-enable button and hide progress bar
+            if ($null -ne $capturedBtn) {
+                $capturedBtn.IsEnabled = $true
+            }
+            if ($null -ne $capturedProg) {
+                $capturedProg.Visibility = [System.Windows.Visibility]::Collapsed
+            }
+            if ($null -ne $capturedPercent2) {
+                $capturedPercent2.Text = ''
+            }
+
+            # Refresh history
+            Load-DeltaCertHistory -TabContent $capturedTab
+
+            try {
+                $capturedPs.Dispose()
+                $capturedRunspace.Close()
+            }
+            catch { }
+
+            $script:IsDeltaCertRunning = $false
+        }
+    })
+
+    $timer.Start()
+}
+
+function Invoke-GuiDeltaCertCleanup {
+    <#
+    .SYNOPSIS
+        Runs delta cert cleanup in a background runspace.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsDeltaCertRunning) {
+        Set-StatusMessage -Message 'A delta cert operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnCleanup  = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
+
+    $script:IsDeltaCertRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message 'Running delta cert cleanup...'
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running cleanup...' }
+    if ($null -ne $btnCleanup) { $btnCleanup.IsEnabled = $false }
+
+    # Read config for cleanup params
+    $campaignNamePrefix = 'AD Delta Cert'
+    $daysStale = 3
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'DeltaCert' -and $null -ne $config.DeltaCert) {
+            if ($config.DeltaCert.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.CampaignNamePrefix)) {
+                $campaignNamePrefix = $config.DeltaCert.CampaignNamePrefix
+            }
+            if ($config.DeltaCert.PSObject.Properties.Name -contains 'CleanupDaysStale') {
+                $daysStale = [int]$config.DeltaCert.CleanupDaysStale
+            }
+        }
+    }
+    catch { }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CampaignNamePrefix', $campaignNamePrefix)
+    $runspace.SessionStateProxy.SetVariable('DaysStale',          $daysStale)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',      $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',        $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',         $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',        $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        $coreModule      = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule       = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $deltaCertModule = Join-Path $ToolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+        $guiModule       = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $deltaCertModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $cleanupResult = Invoke-SPGuiDeltaCertCleanup `
+            -CampaignNamePrefix $CampaignNamePrefix `
+            -DaysStale          $DaysStale `
+            -CorrelationID      $CorrelationID
+
+        $dispatcher    = $MainWindow.Dispatcher
+        $capturedResult = $cleanupResult
+        $capturedLabel  = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = $capturedResult.Message
+                } else {
+                    $capturedLabel.Text = "Cleanup failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $cleanupResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedBtn      = $btnCleanup
+
+    $timer.Add_Tick({
+        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
+            $capturedTimer.Stop()
+
+            if ($capturedPs.HadErrors) {
+                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
+                Set-StatusMessage -Message "Cleanup failed: $errMsg" -IsError
+            } else {
+                Set-StatusMessage -Message 'Cleanup complete.'
+            }
+
+            if ($null -ne $capturedBtn) { $capturedBtn.IsEnabled = $true }
+
+            try {
+                $capturedPs.EndInvoke($capturedAsync) | Out-Null
+                $capturedPs.Dispose()
+                $capturedRunspace.Close()
+            }
+            catch { }
+
+            $script:IsDeltaCertRunning = $false
+        }
+    })
+
+    $timer.Start()
+}
+
+function Invoke-GuiDeltaCertEscalation {
+    <#
+    .SYNOPSIS
+        Runs delta cert escalation in a background runspace.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsDeltaCertRunning) {
+        Set-StatusMessage -Message 'A delta cert operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel  = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnEscalate  = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
+
+    $script:IsDeltaCertRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message 'Running delta cert escalation...'
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running escalation...' }
+    if ($null -ne $btnEscalate) { $btnEscalate.IsEnabled = $false }
+
+    # Read escalation config
+    $campaignNamePrefix  = 'AD Delta Cert'
+    $staleHours          = 24
+    $maxEscalationLevels = 2
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'DeltaCert' -and $null -ne $config.DeltaCert) {
+            if ($config.DeltaCert.PSObject.Properties.Name -contains 'Escalation' -and $null -ne $config.DeltaCert.Escalation) {
+                $esc = $config.DeltaCert.Escalation
+                if ($esc.PSObject.Properties.Name -contains 'CampaignNamePrefix' -and
+                    -not [string]::IsNullOrWhiteSpace($esc.CampaignNamePrefix)) {
+                    $campaignNamePrefix = $esc.CampaignNamePrefix
+                }
+                if ($esc.PSObject.Properties.Name -contains 'DefaultStaleHours') {
+                    $staleHours = [int]$esc.DefaultStaleHours
+                }
+                if ($esc.PSObject.Properties.Name -contains 'MaxEscalationLevels') {
+                    $maxEscalationLevels = [int]$esc.MaxEscalationLevels
+                }
+            }
+        }
+    }
+    catch { }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CampaignNamePrefix',  $campaignNamePrefix)
+    $runspace.SessionStateProxy.SetVariable('StaleHours',          $staleHours)
+    $runspace.SessionStateProxy.SetVariable('MaxEscalationLevels', $maxEscalationLevels)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',       $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',         $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',          $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',         $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        $coreModule      = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule       = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $deltaCertModule = Join-Path $ToolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+        $guiModule       = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $deltaCertModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $escResult = Invoke-SPGuiDeltaCertEscalate `
+            -CampaignNamePrefix  $CampaignNamePrefix `
+            -StaleHours          $StaleHours `
+            -MaxEscalationLevels $MaxEscalationLevels `
+            -CorrelationID       $CorrelationID
+
+        $dispatcher    = $MainWindow.Dispatcher
+        $capturedResult = $escResult
+        $capturedLabel  = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = $capturedResult.Message
+                } else {
+                    $capturedLabel.Text = "Escalation failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $escResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedBtn      = $btnEscalate
+
+    $timer.Add_Tick({
+        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
+            $capturedTimer.Stop()
+
+            if ($capturedPs.HadErrors) {
+                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
+                Set-StatusMessage -Message "Escalation failed: $errMsg" -IsError
+            } else {
+                Set-StatusMessage -Message 'Escalation complete.'
+            }
+
+            if ($null -ne $capturedBtn) { $capturedBtn.IsEnabled = $true }
+
+            try {
+                $capturedPs.EndInvoke($capturedAsync) | Out-Null
+                $capturedPs.Dispose()
+                $capturedRunspace.Close()
+            }
+            catch { }
+
+            $script:IsDeltaCertRunning = $false
+        }
+    })
+
+    $timer.Start()
+}
+
+function Load-DeltaCertHistory {
+    <#
+    .SYNOPSIS
+        Populates the DeltaCertHistoryList ListBox with recent run entries from JSONL.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $listBox = Find-Control -Parent $TabContent -Name 'DeltaCertHistoryList'
+    if ($null -eq $listBox) { return }
+
+    $outputPath = Resolve-DeltaCertOutputPath
+
+    $result = Get-SPGuiDeltaCertHistory -OutputPath $outputPath
+
+    $listBox.Items.Clear()
+
+    if (-not $result.Success -or $result.Data.Count -eq 0) {
+        $item         = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = "No recent runs found (path: $outputPath)"
+        $item.Foreground = [System.Windows.Media.Brushes]::Gray
+        $listBox.Items.Add($item) | Out-Null
+        return
+    }
+
+    foreach ($entry in $result.Data) {
+        $item         = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = "$($entry.Timestamp) | Campaigns: $($entry.CampaignsCreated) | $($entry.Reason)"
+        $item.ToolTip = "Identities: $($entry.Identities), Groups: $($entry.ManagerGroups), Errors: $($entry.Errors)"
+        $listBox.Items.Add($item) | Out-Null
+    }
+}
+
+function Resolve-DeltaCertOutputPath {
+    <#
+    .SYNOPSIS
+        Resolves the absolute path to the DeltaCert output directory.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $configDeltaCertPath = $null
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $null -ne $config.DeltaCert -and
+            $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+            $configDeltaCertPath = $config.DeltaCert.OutputPath
+        }
+    }
+    catch { }
+
+    $rawPath = if ($configDeltaCertPath) { $configDeltaCertPath } else { '.\DeltaCert' }
+
+    if (-not [System.IO.Path]::IsPathRooted($rawPath)) {
+        $rawPath = Join-Path $script:ToolkitRoot $rawPath
+    }
+
+    return [System.IO.Path]::GetFullPath($rawPath)
+}
+
+#endregion
+
 #region Menu Handlers
 
 function Wire-MenuHandlers {
@@ -1579,6 +2199,12 @@ function Show-SPDashboard {
         $auditTab = Find-Control -Parent $window -Name 'AuditTabContent'
         if ($null -ne $auditTab) {
             Initialize-AuditTab -TabContent $auditTab
+        }
+
+        # Delta Cert tab
+        $deltaCertTab = Find-Control -Parent $window -Name 'DeltaCertTabContent'
+        if ($null -ne $deltaCertTab) {
+            Initialize-DeltaCertTab -TabContent $deltaCertTab
         }
     }
 

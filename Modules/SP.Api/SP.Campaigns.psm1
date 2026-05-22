@@ -34,6 +34,9 @@ function Build-SPCampaignBody {
         Required for ROLE_COMPOSITION campaigns.
     .PARAMETER Description
         Optional campaign description.
+    .PARAMETER Deadline
+        Optional ISO 8601 deadline string (e.g. '2026-06-01T23:59:59Z').
+        When provided, sets the ISC-enforced campaign deadline.
     .OUTPUTS
         [hashtable] Campaign body ready for ConvertTo-Json.
     #>
@@ -60,13 +63,20 @@ function Build-SPCampaignBody {
         [string]$RoleId,
 
         [Parameter()]
-        [string]$Description
+        [string]$Description,
+
+        [Parameter()]
+        [string]$Deadline
     )
 
     $body = @{
         name        = $Name
         description = if ($Description) { $Description } else { '' }
         type        = $Type
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Deadline)) {
+        $body['deadline'] = $Deadline
     }
 
     switch ($Type) {
@@ -138,6 +148,9 @@ function New-SPCampaign {
         Role or governance group ID for ROLE_COMPOSITION campaigns.
     .PARAMETER Description
         Optional campaign description.
+    .PARAMETER Deadline
+        Optional ISO 8601 deadline string (e.g. '2026-06-01T23:59:59Z').
+        When provided, sets the ISC-enforced campaign deadline.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries.
     .PARAMETER CampaignTestId
@@ -175,6 +188,9 @@ function New-SPCampaign {
         [string]$Description,
 
         [Parameter()]
+        [string]$Deadline,
+
+        [Parameter()]
         [string]$CorrelationID,
 
         [Parameter()]
@@ -193,7 +209,7 @@ function New-SPCampaign {
         $body = Build-SPCampaignBody -Name $Name -Type $Type `
             -CertifierIdentityId $CertifierIdentityId `
             -SourceId $SourceId -SearchFilter $SearchFilter `
-            -RoleId $RoleId -Description $Description
+            -RoleId $RoleId -Description $Description -Deadline $Deadline
 
         $result = Invoke-SPApiRequest -Method POST -Endpoint '/campaigns' `
             -Body $body -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
