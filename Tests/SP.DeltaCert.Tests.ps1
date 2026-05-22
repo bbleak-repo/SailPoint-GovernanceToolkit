@@ -633,3 +633,62 @@ Describe "DC-014: Invoke-SPDeltaCertRun aborts when manager group count exceeds 
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region DC-015: New-SPCampaign includes deadline in API body when -Deadline is provided
+# ---------------------------------------------------------------------------
+
+Describe "DC-015: New-SPCampaign includes deadline in API body when -Deadline is provided" {
+
+    Context "When -Deadline is specified" {
+        BeforeEach {
+            Mock Write-SPLog        -ModuleName SP.Campaigns { }
+            Mock Invoke-SPApiRequest -ModuleName SP.Campaigns {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'camp-001' }; Error = $null }
+            }
+        }
+
+        It "Should include 'deadline' key in the POST body" {
+            $result = New-SPCampaign -Name 'Test' -Type SEARCH `
+                -SearchFilter 'id:"x"' -CertifierIdentityId 'y' `
+                -Deadline '2026-06-01T23:59:59Z'
+
+            $result.Success | Should -Be $true
+
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.Campaigns -ParameterFilter {
+                $Body -is [hashtable] -and $Body.ContainsKey('deadline') -and $Body['deadline'] -eq '2026-06-01T23:59:59Z'
+            }
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-016: New-SPCampaign omits deadline from body when -Deadline is not provided
+# ---------------------------------------------------------------------------
+
+Describe "DC-016: New-SPCampaign omits deadline from body when -Deadline is not provided" {
+
+    Context "When -Deadline is omitted" {
+        BeforeEach {
+            Mock Write-SPLog        -ModuleName SP.Campaigns { }
+            Mock Invoke-SPApiRequest -ModuleName SP.Campaigns {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'camp-002' }; Error = $null }
+            }
+        }
+
+        It "Should NOT include 'deadline' key in the POST body" {
+            $result = New-SPCampaign -Name 'Test' -Type SEARCH `
+                -SearchFilter 'id:"x"' -CertifierIdentityId 'y'
+
+            $result.Success | Should -Be $true
+
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.Campaigns -ParameterFilter {
+                $Body -is [hashtable] -and -not $Body.ContainsKey('deadline')
+            }
+        }
+    }
+}
+
+#endregion

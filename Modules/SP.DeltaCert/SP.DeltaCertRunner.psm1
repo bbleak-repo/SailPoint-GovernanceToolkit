@@ -314,6 +314,7 @@ function Invoke-SPDeltaCertRun {
         $campaignIds    = [System.Collections.Generic.List[string]]::new()
         $campaignErrors = [System.Collections.Generic.List[string]]::new()
         $dateStamp      = Get-Date -Format 'yyyy-MM-dd'
+        $deadlineStr    = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
 
         foreach ($managerId in $managerGroups.Keys) {
             $identities  = $managerGroups[$managerId]
@@ -336,6 +337,7 @@ function Invoke-SPDeltaCertRun {
                 -SearchFilter        $searchFilter `
                 -CertifierIdentityId $managerId `
                 -Description         "Daily AD delta certification: $($identityIds.Count) identit(ies) with new AD access assigned $dateStamp." `
+                -Deadline            $deadlineStr `
                 -CorrelationID       $CorrelationID
 
             if (-not $createResult.Success) {

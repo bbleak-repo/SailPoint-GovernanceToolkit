@@ -74,8 +74,8 @@ Do not duplicate logic that already exists in the toolkit:
 
 ### F-01: Campaign Deadline Support
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 5b602d4
 - **Depends On:** none
 
 **Description:**
