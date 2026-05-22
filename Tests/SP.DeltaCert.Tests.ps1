@@ -1,0 +1,635 @@
+#Requires -Version 5.1
+#Requires -Modules Pester
+
+<#
+.SYNOPSIS
+    Pester 5.x tests for SP.DeltaCert module (SP.DeltaCertQueries + SP.DeltaCertRunner)
+.DESCRIPTION
+    Tests: DC-001 through DC-014
+    Covers:
+        DC-001 to DC-004: Get-SPDeltaGrantEvents  -- event retrieval, time-window filtering, API errors
+        DC-005 to DC-008: Get-SPDeltaAffectedIdentities -- active/inactive filtering, fallback manager
+        DC-009 to DC-010: Group-SPDeltaByManager  -- grouping and consolidation
+        DC-011 to DC-014: Invoke-SPDeltaCertRun   -- no-changes guard, campaign creation, WhatIf, safety cap
+
+    Note on mock-scoping:
+        DC-011 to DC-014 mock cross-module calls (e.g. Get-SPDeltaGrantEvents called from within
+        SP.DeltaCertRunner). These use -ModuleName SP.DeltaCertRunner and are expected to pass on
+        PS 5.1 Desktop. On PS7 + Pester 5 strict scoping they may require -ModuleName adjustments.
+        DC-001 to DC-010 mock only within their own modules and pass on both PS5.1 and PS7.
+#>
+
+BeforeAll {
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -DeltaCert
+
+    # Minimal mock config used by pagination-ceiling logic inside query functions
+    function New-MockDeltaConfig {
+        return [PSCustomObject]@{
+            Api = [PSCustomObject]@{
+                BaseUrl                    = 'https://test.api.identitynow.com/v3'
+                TimeoutSeconds             = 30
+                RetryCount                 = 1
+                RetryDelaySeconds          = 1
+                RateLimitRequestsPerWindow = 95
+                RateLimitWindowSeconds     = 10
+                MaxPaginationPages         = 200
+            }
+            DeltaCert = [PSCustomObject]@{
+                DefaultHoursBack           = 24
+                DefaultDeadlineDays        = 2
+                FallbackReviewerIdentityId = ''
+                CampaignNamePrefix         = 'AD Delta Cert'
+                MaxCampaignsPerRun         = 50
+            }
+        }
+    }
+
+    # Builds a minimal mock grant-activity response with one ADD item
+    function New-MockGrantActivity {
+        param(
+            [string]$IdentityId   = 'id-001',
+            [string]$SourceId     = 'src-ad-001',
+            [string]$ItemValue    = 'CN=GroupA,OU=Groups,DC=corp,DC=com',
+            [int]$HoursAgo        = 1
+        )
+        return [PSCustomObject]@{
+            id           = "act-$IdentityId"
+            type         = 'GRANT_ACCESS'
+            created      = (Get-Date).AddHours(-$HoursAgo).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            requestedFor = @([PSCustomObject]@{ id = $IdentityId; name = "User $IdentityId" })
+            items        = @(
+                [PSCustomObject]@{
+                    operation = 'ADD'
+                    type      = 'ENTITLEMENT'
+                    sourceId  = $SourceId
+                    value     = $ItemValue
+                    name      = 'GroupA'
+                }
+            )
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+#region DC-001: Get-SPDeltaGrantEvents returns matching ADD events
+# ---------------------------------------------------------------------------
+
+Describe "DC-001: Get-SPDeltaGrantEvents returns ADD events for specified source" {
+
+    Context "When the API returns a GRANT_ACCESS activity with an ADD item" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = @( New-MockGrantActivity -IdentityId 'id-001' -SourceId 'src-ad-001' )
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should return Success=true with one grant event" {
+            $result = Get-SPDeltaGrantEvents -SourceIds @('src-ad-001') -HoursBack 24
+
+            $result.Success      | Should -Be $true
+            $result.Data.Count   | Should -Be 1
+            $result.Data[0].IdentityId | Should -Be 'id-001'
+            $result.Data[0].SourceId   | Should -Be 'src-ad-001'
+        }
+
+        It "Should call GET /account-activities with GRANT_ACCESS type filter" {
+            Get-SPDeltaGrantEvents -SourceIds @('src-ad-001') -HoursBack 24
+
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries -ParameterFilter {
+                $Method -eq 'GET' -and $Endpoint -eq '/account-activities'
+            }
+        }
+
+        It "Should exclude items from sources not in SourceIds" {
+            $result = Get-SPDeltaGrantEvents -SourceIds @('src-other') -HoursBack 24
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-002: Get-SPDeltaGrantEvents returns empty array when no events
+# ---------------------------------------------------------------------------
+
+Describe "DC-002: Get-SPDeltaGrantEvents returns empty data when API returns no activities" {
+
+    Context "When the API returns an empty page" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{ Success = $true; StatusCode = 200; Data = @(); Error = $null }
+            }
+        }
+
+        It "Should return Success=true with empty Data array" {
+            $result = Get-SPDeltaGrantEvents -SourceIds @('src-ad-001') -HoursBack 24
+
+            $result.Success      | Should -Be $true
+            $result.Data.Count   | Should -Be 0
+            $result.Error        | Should -BeNullOrEmpty
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-003: Get-SPDeltaGrantEvents excludes events older than HoursBack
+# ---------------------------------------------------------------------------
+
+Describe "DC-003: Get-SPDeltaGrantEvents excludes events outside the time window" {
+
+    Context "When the API returns a mix of recent and old activities" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = @(
+                        # Recent: 2 hours ago - should be included with 24h window
+                        New-MockGrantActivity -IdentityId 'id-recent' -SourceId 'src-ad-001' -HoursAgo 2
+                        # Old: 48 hours ago - should be excluded with 24h window
+                        New-MockGrantActivity -IdentityId 'id-old'    -SourceId 'src-ad-001' -HoursAgo 48
+                    )
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should include only the recent event within the HoursBack window" {
+            $result = Get-SPDeltaGrantEvents -SourceIds @('src-ad-001') -HoursBack 24
+
+            $result.Success      | Should -Be $true
+            $result.Data.Count   | Should -Be 1
+            $result.Data[0].IdentityId | Should -Be 'id-recent'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-004: Get-SPDeltaGrantEvents propagates API failure
+# ---------------------------------------------------------------------------
+
+Describe "DC-004: Get-SPDeltaGrantEvents returns failure when API call fails" {
+
+    Context "When Invoke-SPApiRequest returns Success=false" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig   -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{ Success = $false; StatusCode = 503; Data = $null; Error = 'Service unavailable' }
+            }
+        }
+
+        It "Should return Success=false with an error message" {
+            $result = Get-SPDeltaGrantEvents -SourceIds @('src-ad-001') -HoursBack 24
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'unavailable'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-005: Get-SPDeltaAffectedIdentities includes active identities with managers
+# ---------------------------------------------------------------------------
+
+Describe "DC-005: Get-SPDeltaAffectedIdentities includes active identities with a manager" {
+
+    Context "When the identity is active and has a manager" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-001'
+                        displayName = 'Jane Smith'
+                        manager     = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Manager One' }
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should return the identity with correct manager ID" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success           | Should -Be $true
+            $result.Data.Count        | Should -Be 1
+            $result.Data[0].IdentityId | Should -Be 'id-001'
+            $result.Data[0].ManagerId  | Should -Be 'mgr-001'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-006: Get-SPDeltaAffectedIdentities skips inactive identities
+# ---------------------------------------------------------------------------
+
+Describe "DC-006: Get-SPDeltaAffectedIdentities skips identities with terminated lifecycle state" {
+
+    Context "When the identity's cloudLifecycleState is terminated" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-terminated'
+                        displayName = 'Former Employee'
+                        manager     = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Manager' }
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'terminated' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should return an empty Data array" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-terminated'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-007: Get-SPDeltaAffectedIdentities uses fallback manager for orphaned identities
+# ---------------------------------------------------------------------------
+
+Describe "DC-007: Get-SPDeltaAffectedIdentities uses FallbackManagerId for identities with no manager" {
+
+    Context "When the identity has no manager and FallbackManagerId is provided" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-orphan'
+                        displayName = 'Orphaned User'
+                        manager     = $null
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should include the identity with the fallback manager ID" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-orphan'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events `
+                -FallbackManagerId 'mgr-fallback'
+
+            $result.Success           | Should -Be $true
+            $result.Data.Count        | Should -Be 1
+            $result.Data[0].ManagerId  | Should -Be 'mgr-fallback'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-008: Get-SPDeltaAffectedIdentities skips orphaned identities with no fallback
+# ---------------------------------------------------------------------------
+
+Describe "DC-008: Get-SPDeltaAffectedIdentities skips manager-less identities when no fallback configured" {
+
+    Context "When the identity has no manager and FallbackManagerId is not provided" {
+        BeforeEach {
+            Mock Write-SPLog    -ModuleName SP.DeltaCertQueries { }
+            Mock Invoke-SPApiRequest -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success    = $true
+                    StatusCode = 200
+                    Data       = [PSCustomObject]@{
+                        id          = 'id-orphan'
+                        displayName = 'Orphaned User'
+                        manager     = $null
+                        attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                    }
+                    Error      = $null
+                }
+            }
+        }
+
+        It "Should return an empty Data array" {
+            $events = @([PSCustomObject]@{ IdentityId = 'id-orphan'; SourceId = 'src-ad-001' })
+            $result = Get-SPDeltaAffectedIdentities -GrantEvents $events
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-009: Group-SPDeltaByManager groups identities by manager ID
+# ---------------------------------------------------------------------------
+
+Describe "DC-009: Group-SPDeltaByManager groups identities by manager ID" {
+
+    Context "When two identities have different managers" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
+        }
+
+        It "Should produce two groups with one identity each" {
+            $identities = @(
+                [PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true }
+                [PSCustomObject]@{ IdentityId = 'id-002'; ManagerId = 'mgr-002'; ManagerName = 'Mgr Two'; DisplayName = 'User Two'; IsActive = $true }
+            )
+            $result = Group-SPDeltaByManager -AffectedIdentities $identities
+
+            $result.Success        | Should -Be $true
+            $result.Data.Count     | Should -Be 2
+            $result.Data['mgr-001'].Count | Should -Be 1
+            $result.Data['mgr-002'].Count | Should -Be 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-010: Group-SPDeltaByManager consolidates identities under same manager
+# ---------------------------------------------------------------------------
+
+Describe "DC-010: Group-SPDeltaByManager consolidates multiple identities under the same manager" {
+
+    Context "When three identities all report to the same manager" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
+        }
+
+        It "Should produce one group with all three identities" {
+            $identities = @(
+                [PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One';   IsActive = $true }
+                [PSCustomObject]@{ IdentityId = 'id-002'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User Two';   IsActive = $true }
+                [PSCustomObject]@{ IdentityId = 'id-003'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User Three'; IsActive = $true }
+            )
+            $result = Group-SPDeltaByManager -AffectedIdentities $identities
+
+            $result.Success                  | Should -Be $true
+            $result.Data.Count               | Should -Be 1
+            $result.Data['mgr-001'].Count    | Should -Be 3
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-011: Invoke-SPDeltaCertRun returns NoChanges when no grant events found
+# ---------------------------------------------------------------------------
+
+Describe "DC-011: Invoke-SPDeltaCertRun returns NoChanges when no grant events found" {
+
+    Context "When Get-SPDeltaGrantEvents returns an empty result" {
+        BeforeEach {
+            Mock Write-SPLog              -ModuleName SP.DeltaCertRunner { }
+            Mock Get-SPDeltaGrantEvents   -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+            Mock New-SPCampaign           -ModuleName SP.DeltaCertRunner { }
+            Mock Start-SPCampaign         -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return Success=true with CampaignsCreated=0 and Reason=NoChanges" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -HoursBack 24
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 0
+            $result.Data.Reason           | Should -Be 'NoChanges'
+        }
+
+        It "Should not call New-SPCampaign when there are no grant events" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -HoursBack 24
+
+            Should -Not -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-012: Invoke-SPDeltaCertRun creates one campaign per manager group
+# ---------------------------------------------------------------------------
+
+Describe "DC-012: Invoke-SPDeltaCertRun creates one SEARCH campaign per manager group" {
+
+    Context "When two manager groups are resolved from grant events" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' }
+                        [PSCustomObject]@{ IdentityId = 'id-002'; SourceId = 'src-ad-001' }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true }
+                        [PSCustomObject]@{ IdentityId = 'id-002'; ManagerId = 'mgr-002'; ManagerName = 'Mgr Two'; DisplayName = 'User Two'; IsActive = $true }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
+                $groups['mgr-002'] = @([PSCustomObject]@{ IdentityId = 'id-002'; ManagerId = 'mgr-002'; ManagerName = 'Mgr Two' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
+                param($Name)
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = "camp-$([guid]::NewGuid().ToString('N').Substring(0,8))" }; Error = $null }
+            }
+
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+        }
+
+        It "Should return CampaignsCreated=2 and Reason=Created" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 2
+            $result.Data.Reason           | Should -Be 'Created'
+            $result.Data.ManagerGroups    | Should -Be 2
+        }
+
+        It "Should call New-SPCampaign with Type=SEARCH for each manager group" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            Should -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner -Times 2 -ParameterFilter {
+                $Type -eq 'SEARCH'
+            }
+        }
+
+        It "Should call Start-SPCampaign once per successful campaign creation" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50
+
+            Should -Invoke Start-SPCampaign -ModuleName SP.DeltaCertRunner -Times 2
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-013: Invoke-SPDeltaCertRun returns WhatIf data without writing
+# ---------------------------------------------------------------------------
+
+Describe "DC-013: Invoke-SPDeltaCertRun returns WhatIf preview without creating campaigns" {
+
+    Context "When -WhatIf is specified" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true })
+                    Error   = $null
+                }
+            }
+
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock New-SPCampaign   -ModuleName SP.DeltaCertRunner { }
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return Reason=WhatIf with WhatIfGroups populated" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50 -WhatIf
+
+            $result.Success            | Should -Be $true
+            $result.Data.Reason        | Should -Be 'WhatIf'
+            $result.Data.CampaignsCreated | Should -Be 0
+            $result.Data.WhatIfGroups  | Should -Not -BeNullOrEmpty
+        }
+
+        It "Should not call New-SPCampaign in WhatIf mode" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 50 -WhatIf
+
+            Should -Not -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-014: Invoke-SPDeltaCertRun aborts when MaxCampaignsPerRun is exceeded
+# ---------------------------------------------------------------------------
+
+Describe "DC-014: Invoke-SPDeltaCertRun aborts when manager group count exceeds MaxCampaignsPerRun" {
+
+    Context "When Group-SPDeltaByManager returns more groups than the safety cap" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true })
+                    Error   = $null
+                }
+            }
+
+            # Return 3 groups but MaxCampaignsPerRun will be set to 2
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'M1' })
+                $groups['mgr-002'] = @([PSCustomObject]@{ IdentityId = 'id-002'; ManagerId = 'mgr-002'; ManagerName = 'M2' })
+                $groups['mgr-003'] = @([PSCustomObject]@{ IdentityId = 'id-003'; ManagerId = 'mgr-003'; ManagerName = 'M3' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock New-SPCampaign   -ModuleName SP.DeltaCertRunner { }
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return Success=false with an error about the safety cap" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 2
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'MaxCampaignsPerRun'
+        }
+
+        It "Should not call New-SPCampaign when the safety cap is exceeded" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') -MaxCampaignsPerRun 2
+
+            Should -Not -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
