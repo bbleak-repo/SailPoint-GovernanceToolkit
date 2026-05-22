@@ -45,6 +45,7 @@ $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.Observable
 $script:IsDeltaCertRunning          = $false
 $script:LastDeltaCertParams         = $null
 $script:LastEscalationParams        = $null
+$script:LastAuditQueryParams        = $null
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -1218,39 +1219,41 @@ function Initialize-AuditTab {
 
     $module = $script:ThisModule
 
-    $txtName              = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
-    $cboStatus            = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
-    $cboTimespan          = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    $btnConfigure         = Find-Control -Parent $TabContent -Name 'BtnConfigureAudit'
     $btnQuery             = Find-Control -Parent $TabContent -Name 'BtnQueryCampaigns'
-    $btnClear             = Find-Control -Parent $TabContent -Name 'BtnClearFilter'
     $btnRunAudit          = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
     $btnOpenFolder        = Find-Control -Parent $TabContent -Name 'BtnOpenAuditFolder'
     $btnRefreshReports    = Find-Control -Parent $TabContent -Name 'BtnRefreshAuditReports'
     $auditReportList      = Find-Control -Parent $TabContent -Name 'AuditReportList'
 
-    # Query Campaigns button
+    # Configure button -- opens dialog, stores params, updates summary (does NOT query)
+    if ($btnConfigure) {
+        $btnConfigure.Add_Click({
+            & $module {
+                param($tc)
+
+                $dialogXaml = Get-XamlPath -FileName 'AuditQueryDialog.xaml'
+                $defaults   = Get-AuditQueryDialogDefaults
+                $dialogResult = Show-SPGuiDialog `
+                    -XamlPath      $dialogXaml `
+                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+                    -Defaults      $defaults
+
+                if ($null -ne $dialogResult) {
+                    $script:LastAuditQueryParams = $dialogResult
+                    Update-AuditSummaryLabel -TabContent $tc
+                }
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Query Campaigns button -- opens dialog then queries on OK
     if ($btnQuery) {
         $btnQuery.Add_Click({
             & $module {
                 param($tc)
                 Invoke-AuditCampaignQuery -TabContent $tc
             } $TabContent
-        }.GetNewClosure())
-    }
-
-    # Clear filter button
-    if ($btnClear) {
-        $btnClear.Add_Click({
-            if ($null -ne $txtName) {
-                $txtName.Text       = 'Search by keyword...'
-                $txtName.Foreground = [System.Windows.Media.Brushes]::Gray
-            }
-            if ($null -ne $cboStatus) {
-                $cboStatus.SelectedIndex = 0
-            }
-            if ($null -ne $cboTimespan) {
-                $cboTimespan.SelectedIndex = 2
-            }
         }.GetNewClosure())
     }
 
@@ -1295,48 +1298,59 @@ function Initialize-AuditTab {
         }.GetNewClosure())
     }
 
-    # Populate recent reports on init
+    # Populate summary label and recent reports on init
+    Update-AuditSummaryLabel -TabContent $TabContent
     Load-AuditReportList -TabContent $TabContent
 }
 
 function Invoke-AuditCampaignQuery {
     <#
     .SYNOPSIS
-        Queries ISC for campaigns matching the current filter values and populates
-        the AuditCampaignGrid. Synchronous (runs on UI thread).
+        Shows query parameters dialog, then queries ISC for campaigns matching
+        the filter values and populates the AuditCampaignGrid.
     #>
     [CmdletBinding()]
     param($TabContent)
 
-    $txtName     = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
-    $cboStatus   = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
-    $cboTimespan = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
+    # Show parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'AuditQueryDialog.xaml'
+    $defaults   = Get-AuditQueryDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+        -Defaults      $defaults
+
+    if ($null -eq $dialogResult) { return }
+
+    # Persist for next open and update summary label
+    $script:LastAuditQueryParams = $dialogResult
+    Update-AuditSummaryLabel -TabContent $TabContent
+
     $grid        = Find-Control -Parent $TabContent -Name 'AuditCampaignGrid'
     $statusLabel = Find-Control -Parent $TabContent -Name 'AuditStatusLabel'
     $btnRunAudit = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
 
     Set-StatusMessage -Message 'Querying campaigns...'
 
-    # Extract filter values
+    # Extract filter values from dialog result
     $campaignName = ''
-    if ($null -ne $txtName -and $txtName.Text -ne 'Search by keyword...') {
-        $campaignName = $txtName.Text.Trim()
+    if ($dialogResult['TxtCampaignName']) {
+        $campaignName = $dialogResult['TxtCampaignName'].Trim()
     }
 
     $statusFilter = $null
-    if ($null -ne $cboStatus -and $null -ne $cboStatus.SelectedItem) {
-        $selectedContent = $cboStatus.SelectedItem.Content
-        if ($selectedContent -ne '(All)') {
-            $statusFilter = $selectedContent
-        }
+    if ($dialogResult['CboStatus'] -and $dialogResult['CboStatus'] -ne '(All)') {
+        $statusFilter = $dialogResult['CboStatus']
     }
 
-    $daysBack = 3
-    if ($null -ne $cboTimespan -and $null -ne $cboTimespan.SelectedItem) {
-        $tagValue = $cboTimespan.SelectedItem.Tag
-        if ($null -ne $tagValue) {
-            [int]::TryParse($tagValue.ToString(), [ref]$daysBack) | Out-Null
+    $daysBack = 30
+    if ($dialogResult['CboTimespan']) {
+        $timespanText = $dialogResult['CboTimespan']
+        $parsed = 30
+        if ($timespanText -match '(\d+)') {
+            [int]::TryParse($Matches[1], [ref]$parsed) | Out-Null
         }
+        $daysBack = $parsed
     }
 
     # Build parameters
@@ -1377,6 +1391,61 @@ function Invoke-AuditCampaignQuery {
     }
 
     Set-StatusMessage -Message "Query complete. $count campaign(s) found."
+}
+
+function Get-AuditQueryDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns audit query dialog defaults: last-used params if available, otherwise sensible defaults.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastAuditQueryParams) {
+        return $script:LastAuditQueryParams
+    }
+
+    return @{
+        TxtCampaignName = ''
+        CboStatus       = '(All)'
+        CboTimespan     = '30 days'
+    }
+}
+
+function Update-AuditSummaryLabel {
+    <#
+    .SYNOPSIS
+        Updates the Audit summary label to reflect current query parameters.
+    .DESCRIPTION
+        Shows "Status: (All) | Timespan: 30 days" when no campaign name filter,
+        or "Campaign: test | Status: COMPLETED | Timespan: 14 days" when set.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'AuditSummaryLabel'
+    if ($null -eq $label) { return }
+
+    $params = $script:LastAuditQueryParams
+    if ($null -eq $params) {
+        $params = Get-AuditQueryDialogDefaults
+    }
+
+    $status   = if ($params['CboStatus'])   { $params['CboStatus'] }   else { '(All)' }
+    $timespan = if ($params['CboTimespan']) { $params['CboTimespan'] } else { '30 days' }
+
+    $campaignName = ''
+    if ($params['TxtCampaignName']) {
+        $campaignName = $params['TxtCampaignName'].Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($campaignName)) {
+        $label.Text = "Status: $status | Timespan: $timespan"
+    }
+    else {
+        $label.Text = "Campaign: $campaignName | Status: $status | Timespan: $timespan"
+    }
 }
 
 function Invoke-GuiAuditRun {

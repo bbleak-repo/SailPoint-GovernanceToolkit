@@ -788,75 +788,34 @@
             <TabItem Header="Audit" Style="{StaticResource ToolkitTabItem}">
                 <Grid x:Name="AuditTabContent" Background="#1E1E2E" Margin="12,8">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>  <!-- Row 0: Query filters -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Query -->
                         <RowDefinition Height="*"/>     <!-- Row 1: Campaign results DataGrid -->
                         <RowDefinition Height="Auto"/>  <!-- Row 2: Audit options + run buttons -->
                         <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
                         <RowDefinition Height="Auto"/>  <!-- Row 4: Recent audit reports -->
                     </Grid.RowDefinitions>
 
-                    <!-- Row 0: Query filters -->
+                    <!-- Row 0: Summary + Configure + Query -->
                     <Grid Grid.Row="0" Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="0" Text="Campaign:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
+                        <TextBlock Grid.Column="0" x:Name="AuditSummaryLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Text="Status: (All) | Timespan: 30 days"/>
 
-                        <TextBox Grid.Column="1" x:Name="TxtAuditCampaignName"
-                                 Width="200" Background="#2D2D44" Foreground="#888899"
-                                 BorderBrush="#3D3D5C" BorderThickness="1"
-                                 Padding="6,4" FontSize="12"
-                                 Text="Search by keyword..."
-                                 Margin="0,0,8,0"/>
-
-                        <TextBlock Grid.Column="2" Text="Status:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
-
-                        <ComboBox Grid.Column="3" x:Name="CboAuditStatus"
-                                  Width="120" Background="#2D2D44"
-                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                  SelectedIndex="0" Margin="0,0,8,0" FontSize="12">
-                            <ComboBoxItem Content="(All)" IsSelected="True"/>
-                            <ComboBoxItem Content="COMPLETED"/>
-                            <ComboBoxItem Content="ACTIVE"/>
-                            <ComboBoxItem Content="STAGED"/>
-                            <ComboBoxItem Content="COMPLETING"/>
-                        </ComboBox>
-
-                        <TextBlock Grid.Column="4" Text="Timespan:" Foreground="#AAAACC"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" FontSize="12"/>
-
-                        <ComboBox Grid.Column="5" x:Name="CboAuditTimespan"
-                                  Width="90" Background="#2D2D44"
-                                  Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                  SelectedIndex="2" Margin="0,0,8,0" FontSize="12">
-                            <ComboBoxItem Content="1 day"  Tag="1"/>
-                            <ComboBoxItem Content="2 days" Tag="2"/>
-                            <ComboBoxItem Content="3 days" Tag="3" IsSelected="True"/>
-                            <ComboBoxItem Content="5 days" Tag="5"/>
-                        </ComboBox>
-
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="6"/>
-
-                        <Button Grid.Column="7" x:Name="BtnQueryCampaigns"
-                                Content="Query Campaigns"
-                                Style="{StaticResource ToolkitButton}"
+                        <Button Grid.Column="1" x:Name="BtnConfigureAudit"
+                                Content="Configure..."
+                                Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="8" x:Name="BtnClearFilter"
-                                Content="Clear"
-                                Style="{StaticResource SecondaryButton}"/>
+                        <Button Grid.Column="2" x:Name="BtnQueryCampaigns"
+                                Content="Query Campaigns"
+                                Style="{StaticResource ToolkitButton}"/>
                     </Grid>
 
                     <!-- Row 1: Campaign results DataGrid -->
