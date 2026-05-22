@@ -841,6 +841,332 @@ function Get-SPGuiAuditReports {
 
 #endregion
 
+#region Delta Cert Bridge Functions
+
+function Invoke-SPGuiDeltaCertRun {
+    <#
+    .SYNOPSIS
+        Execute a delta cert run from the GUI.
+    .DESCRIPTION
+        Bridge function that wraps Invoke-SPDeltaCertRun for the WPF GUI.
+        Transforms the result into a display-ready PSCustomObject suitable
+        for DataGrid binding.
+    .PARAMETER SourceIds
+        Array of AD source IDs to scan for GRANT_ACCESS events.
+    .PARAMETER HoursBack
+        Number of hours to look back for grant events. Default: 24.
+    .PARAMETER DeadlineDays
+        Number of days for campaign deadline. Default: 2.
+    .PARAMETER ReviewerMode
+        Reviewer routing mode: Manager or SourceOwner. Default: Manager.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=[PSCustomObject]; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$HoursBack = 24,
+
+        [Parameter()]
+        [int]$DeadlineDays = 2,
+
+        [Parameter()]
+        [ValidateSet('Manager', 'SourceOwner')]
+        [string]$ReviewerMode = 'Manager',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertRun started: SourceIds=$($SourceIds -join ','), HoursBack=$HoursBack, ReviewerMode=$ReviewerMode" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertRun' -CorrelationID $CorrelationID
+
+        $runParams = @{
+            SourceIds    = $SourceIds
+            HoursBack    = $HoursBack
+            DeadlineDays = $DeadlineDays
+            ReviewerMode = $ReviewerMode
+            CorrelationID = $CorrelationID
+        }
+
+        $result = Invoke-SPDeltaCertRun @runParams
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = $null; Error = $result.Error }
+        }
+
+        $displayItem = [PSCustomObject]@{
+            Timestamp        = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            CampaignsCreated = $result.Data.CampaignsCreated
+            Identities       = $result.Data.IdentityCount
+            ManagerGroups    = $result.Data.ManagerGroups
+            Reason           = $result.Data.Reason
+            Errors           = @($result.Data.Errors).Count
+        }
+
+        return @{ Success = $true; Data = $displayItem; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertRun failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertRun'
+        return @{ Success = $false; Data = $null; Error = "Invoke-SPGuiDeltaCertRun failed: $($_.Exception.Message)" }
+    }
+}
+
+function Invoke-SPGuiDeltaCertCleanup {
+    <#
+    .SYNOPSIS
+        Run delta cert cleanup (auto-complete stale campaigns) from the GUI.
+    .DESCRIPTION
+        Bridge function that wraps Invoke-SPDeltaCertCleanup for the WPF GUI.
+        Returns a summary suitable for status bar display.
+    .PARAMETER CampaignNamePrefix
+        Campaign name prefix to search for. Default: 'AD Delta Cert'.
+    .PARAMETER DaysStale
+        Number of days before a campaign is considered stale. Default: 3.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{Completed; StillActive; Errors}; Message=$string; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNamePrefix = 'AD Delta Cert',
+
+        [Parameter()]
+        [int]$DaysStale = 3,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertCleanup started: Prefix='$CampaignNamePrefix', DaysStale=$DaysStale" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertCleanup' -CorrelationID $CorrelationID
+
+        $result = Invoke-SPDeltaCertCleanup -CampaignNamePrefix $CampaignNamePrefix `
+            -DaysStale $DaysStale -CorrelationID $CorrelationID
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = $null; Message = $null; Error = $result.Error }
+        }
+
+        $completedCount  = @($result.Data.Completed).Count
+        $stillActiveCount = @($result.Data.StillActive).Count
+        $errorCount      = @($result.Data.Errors).Count
+        $message = "Cleanup complete: $completedCount completed, $stillActiveCount still active, $errorCount error(s)"
+
+        return @{
+            Success = $true
+            Data    = $result.Data
+            Message = $message
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertCleanup failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertCleanup'
+        return @{ Success = $false; Data = $null; Message = $null; Error = "Invoke-SPGuiDeltaCertCleanup failed: $($_.Exception.Message)" }
+    }
+}
+
+function Invoke-SPGuiDeltaCertEscalate {
+    <#
+    .SYNOPSIS
+        Run delta cert escalation (detect stale certs + reassign) from the GUI.
+    .DESCRIPTION
+        Bridge function that wraps Get-SPDeltaCertStaleCertifications and
+        Invoke-SPDeltaCertEscalate for the WPF GUI. Performs both stale detection
+        and escalation in a single call for GUI convenience.
+    .PARAMETER CampaignNamePrefix
+        Campaign name prefix to search for. Default: 'AD Delta Cert'.
+    .PARAMETER StaleHours
+        Hours without reviewer action before a cert is considered stale. Default: 24.
+    .PARAMETER MaxEscalationLevels
+        Maximum org tree levels to escalate. Default: 2.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{StaleCerts; Escalated; Skipped; Errors}; Message=$string; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNamePrefix = 'AD Delta Cert',
+
+        [Parameter()]
+        [int]$StaleHours = 24,
+
+        [Parameter()]
+        [int]$MaxEscalationLevels = 2,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertEscalate started: Prefix='$CampaignNamePrefix', StaleHours=$StaleHours" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertEscalate' -CorrelationID $CorrelationID
+
+        # Step 1: Detect stale certifications
+        $staleCerts = Get-SPDeltaCertStaleCertifications `
+            -CampaignNamePrefix $CampaignNamePrefix `
+            -StaleHours $StaleHours `
+            -CorrelationID $CorrelationID
+
+        if ($null -eq $staleCerts -or @($staleCerts).Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{ StaleCerts = 0; Escalated = @(); Skipped = @(); Errors = @() }
+                Message = 'No stale certifications found. Nothing to escalate.'
+                Error   = $null
+            }
+        }
+
+        $staleCount = @($staleCerts).Count
+
+        # Step 2: Escalate
+        $result = Invoke-SPDeltaCertEscalate `
+            -StaleCertifications $staleCerts `
+            -MaxEscalationLevels $MaxEscalationLevels `
+            -CorrelationID $CorrelationID
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = $null; Message = $null; Error = $result.Error }
+        }
+
+        $escalatedCount = @($result.Data.Escalated).Count
+        $skippedCount   = @($result.Data.Skipped).Count
+        $errorCount     = @($result.Data.Errors).Count
+        $message = "Escalation complete: $staleCount stale, $escalatedCount escalated, $skippedCount skipped, $errorCount error(s)"
+
+        return @{
+            Success = $true
+            Data    = @{
+                StaleCerts = $staleCount
+                Escalated  = $result.Data.Escalated
+                Skipped    = $result.Data.Skipped
+                Errors     = $result.Data.Errors
+            }
+            Message = $message
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiDeltaCertEscalate failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaCertEscalate'
+        return @{ Success = $false; Data = $null; Message = $null; Error = "Invoke-SPGuiDeltaCertEscalate failed: $($_.Exception.Message)" }
+    }
+}
+
+function Get-SPGuiDeltaCertHistory {
+    <#
+    .SYNOPSIS
+        Read recent delta cert run history from the JSONL audit trail.
+    .DESCRIPTION
+        Reads the deltacert-audit.jsonl file and returns the most recent 20
+        entries as PSCustomObjects suitable for display in the GUI ListBox
+        or DataGrid.
+    .PARAMETER OutputPath
+        Directory containing deltacert-audit.jsonl. If not specified, reads
+        from DeltaCert.OutputPath in config.
+    .OUTPUTS
+        @{ Success=$bool; Data=@([PSCustomObject],...); Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$OutputPath
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            $toolkitRoot = Resolve-SPToolkitRoot
+            try {
+                $configPath = Join-Path $toolkitRoot 'Config\settings.json'
+                $config = Get-SPConfig -ConfigPath $configPath
+                if ($null -ne $config -and
+                    $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                    $null -ne $config.DeltaCert -and
+                    $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                    -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                    $OutputPath = Resolve-SPRelativePath -Path $config.DeltaCert.OutputPath -BasePath $toolkitRoot
+                }
+            }
+            catch { }
+
+            if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+                $OutputPath = Join-Path $toolkitRoot 'DeltaCert'
+            }
+        }
+
+        $jsonlPath = Join-Path $OutputPath 'deltacert-audit.jsonl'
+
+        if (-not (Test-Path -Path $jsonlPath -PathType Leaf)) {
+            return @{ Success = $true; Data = @(); Error = $null }
+        }
+
+        $lines = @(Get-Content -Path $jsonlPath -Encoding UTF8 -ErrorAction Stop |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+        # Take last 20 entries (most recent)
+        if ($lines.Count -gt 20) {
+            $lines = $lines[($lines.Count - 20)..($lines.Count - 1)]
+        }
+
+        # Parse and reverse so newest first
+        $items = [System.Collections.Generic.List[PSObject]]::new()
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            try {
+                $entry = $lines[$i] | ConvertFrom-Json
+                $items.Add([PSCustomObject]@{
+                    Timestamp        = if ($null -ne $entry.Timestamp) { [string]$entry.Timestamp } else { '' }
+                    CampaignsCreated = if ($null -ne $entry.CampaignsCreated) { [int]$entry.CampaignsCreated } else { 0 }
+                    Identities       = if ($null -ne $entry.IdentitiesProcessed) { [int]$entry.IdentitiesProcessed } else { 0 }
+                    ManagerGroups    = if ($null -ne $entry.ManagerGroups) { [int]$entry.ManagerGroups } else { 0 }
+                    Reason           = if ($null -ne $entry.Reason) { [string]$entry.Reason } else { '' }
+                    Errors           = if ($null -ne $entry.Errors) { @($entry.Errors).Count } else { 0 }
+                })
+            }
+            catch {
+                # Skip malformed JSONL lines
+            }
+        }
+
+        return @{ Success = $true; Data = @($items); Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Get-SPGuiDeltaCertHistory failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Get-SPGuiDeltaCertHistory'
+        return @{ Success = $false; Data = @(); Error = "Get-SPGuiDeltaCertHistory failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
 #region Browser Token Functions
 
 function Set-SPGuiBrowserToken {
@@ -966,5 +1292,9 @@ Export-ModuleMember -Function @(
     'Set-SPGuiBrowserToken',
     'Get-SPGuiAuditCampaigns',
     'Invoke-SPGuiAudit',
-    'Get-SPGuiAuditReports'
+    'Get-SPGuiAuditReports',
+    'Invoke-SPGuiDeltaCertRun',
+    'Invoke-SPGuiDeltaCertCleanup',
+    'Invoke-SPGuiDeltaCertEscalate',
+    'Get-SPGuiDeltaCertHistory'
 )

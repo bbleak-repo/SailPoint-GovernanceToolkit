@@ -30,7 +30,7 @@ Cross-phase dependencies are noted explicitly.
 | 2 | Campaign lifecycle (deadline, dedup, cleanup, audit trail) | F-01 to F-04 | PENDING |
 | 3 | Reviewer routing (SOURCE_OWNER / app owner mode) | F-05 | DONE |
 | 4 | OOO escalation (stale detection, org tree walk, reassignment) | F-06 to F-08 | DONE |
-| 5 | GUI tab integration (XAML, bridge, wiring) | F-09 | PENDING |
+| 5 | GUI tab integration (XAML, bridge, wiring) | F-09 | DONE |
 | 6 | Hardening (identity exclusion filters) | F-10 | PENDING |
 
 ---
@@ -405,8 +405,8 @@ F-04 audit trail) for compliance evidence.
 
 ### F-09: DeltaCert GUI Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** PENDING_COMMIT
 - **Depends On:** F-01 through F-08 (all CLI features should be stable before GUI)
 
 **Description:**
