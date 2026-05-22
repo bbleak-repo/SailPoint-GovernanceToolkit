@@ -109,9 +109,9 @@ Write-Host "  $('=' * 56)" -ForegroundColor DarkGray
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
 
-# Resolve config path
+# Resolve config path (honors settings.local.json override)
 if (-not $ConfigPath) {
-    $ConfigPath = Join-Path $toolkitRoot 'Config\settings.json'
+    $ConfigPath = Resolve-SPConfigPath -ToolkitRoot $toolkitRoot
 }
 
 # Step 1: Load and validate configuration

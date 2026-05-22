@@ -14,6 +14,9 @@ GovernanceToolkit_*.json
 # Vault data (encrypted credentials)
 Data/*.enc
 
+# Local config overrides (per-developer, not for commit)
+Config/settings.local.json
+
 # Keep directory structure with .gitkeep
 !Logs/.gitkeep
 !Evidence/.gitkeep
