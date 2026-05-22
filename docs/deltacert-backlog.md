@@ -213,7 +213,7 @@ Add `DeltaCert.OutputPath` to config (default: `.\DeltaCert`).
 ### F-05: SOURCE_OWNER Reviewer Mode (Application Owner)
 
 - **Status:** `DONE`
-- **Commit:** (pending)
+- **Commit:** 2908e2a
 - **Depends On:** F-01 (deadline support should be in place)
 
 **Description:**
