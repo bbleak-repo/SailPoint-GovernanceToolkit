@@ -262,7 +262,7 @@ Get-SPDeltaGrantEvents (same as Manager mode)
 ### F-06: Stale Certification Detection
 
 - **Status:** `DONE`
-- **Commit:** 85b6aec
+- **Commit:** 6097f81
 - **Depends On:** none (uses existing SP.AuditQueries functions)
 
 **Description:**
