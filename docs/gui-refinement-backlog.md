@@ -28,7 +28,7 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| G-01 | WPF Modal Dialog Helper | none | PENDING |
+| G-01 | WPF Modal Dialog Helper | none | DONE |
 | G-05 | History Display Upgrade | none | PENDING |
 | G-06 | DeltaCert Config in Settings Tab | none | PENDING |
 | G-02 | DeltaCert Run Parameters Dialog | G-01 | PENDING |
@@ -90,8 +90,8 @@ if ($dialog.ShowDialog()) { <read control values> } else { <cancelled> }
 
 ## G-01: WPF Modal Dialog Helper
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** c863462
 - **Depends On:** none
 
 **Description:**

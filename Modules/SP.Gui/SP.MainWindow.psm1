@@ -142,6 +142,130 @@ function Invoke-OnDispatcher {
     }
 }
 
+function Show-SPGuiDialog {
+    <#
+    .SYNOPSIS
+        Loads a XAML dialog, shows it as a modal, and returns control values.
+    .DESCRIPTION
+        Reusable modal dialog helper. Loads XAML from file, sets Owner to the
+        main window, wires OK/Cancel buttons, optionally pre-populates controls,
+        and returns a hashtable of named control values on OK or $null on Cancel.
+    .PARAMETER XamlPath
+        Absolute path to the dialog XAML file.
+    .PARAMETER ControlNames
+        Array of x:Name strings whose values to read on OK.
+    .PARAMETER Defaults
+        Optional hashtable of control-name -> default-value to pre-populate.
+    .PARAMETER OkButtonName
+        x:Name of the OK button (default: BtnOK).
+    .PARAMETER CancelButtonName
+        x:Name of the Cancel button (default: BtnCancel).
+    .OUTPUTS
+        Hashtable of control values on OK, or $null on Cancel/error.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$XamlPath,
+        [Parameter(Mandatory)][string[]]$ControlNames,
+        [Parameter()][hashtable]$Defaults,
+        [Parameter()][string]$OkButtonName = 'BtnOK',
+        [Parameter()][string]$CancelButtonName = 'BtnCancel'
+    )
+
+    if (-not (Test-Path $XamlPath)) {
+        try { Write-SPLog -Message "Dialog XAML not found: $XamlPath" -Severity ERROR -Component 'SP.Gui' -Action 'ShowDialog' } catch { }
+        return $null
+    }
+
+    try {
+        [xml]$xaml = [System.IO.File]::ReadAllText($XamlPath)
+        $reader = [System.Xml.XmlNodeReader]::new($xaml)
+        $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+        $reader.Close()
+
+        # Set owner for centering
+        if ($null -ne $script:MainWindow) {
+            $dialog.Owner = $script:MainWindow
+        }
+
+        # Wire OK button
+        $btnOK = $dialog.FindName($OkButtonName)
+        if ($null -ne $btnOK) {
+            $btnOK.Add_Click({ $dialog.DialogResult = $true }.GetNewClosure())
+        }
+
+        # Wire Cancel button
+        $btnCancel = $dialog.FindName($CancelButtonName)
+        if ($null -ne $btnCancel) {
+            $btnCancel.Add_Click({ $dialog.Close() }.GetNewClosure())
+        }
+
+        # Apply defaults
+        if ($null -ne $Defaults) {
+            foreach ($key in $Defaults.Keys) {
+                $ctrl = $dialog.FindName($key)
+                if ($null -eq $ctrl) { continue }
+                $value = $Defaults[$key]
+                if ($ctrl -is [System.Windows.Controls.TextBox]) {
+                    $ctrl.Text = if ($null -ne $value) { [string]$value } else { '' }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.ComboBox]) {
+                    # Match item by Content string
+                    foreach ($item in $ctrl.Items) {
+                        $itemContent = if ($item -is [System.Windows.Controls.ComboBoxItem]) {
+                            $item.Content
+                        } else { $item }
+                        if ([string]$itemContent -eq [string]$value) {
+                            $ctrl.SelectedItem = $item
+                            break
+                        }
+                    }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.CheckBox]) {
+                    $ctrl.IsChecked = [bool]$value
+                }
+            }
+        }
+
+        # Show modal
+        $result = $dialog.ShowDialog()
+
+        if ($result -eq $true) {
+            $values = @{}
+            foreach ($name in $ControlNames) {
+                $ctrl = $dialog.FindName($name)
+                if ($null -eq $ctrl) {
+                    $values[$name] = $null
+                }
+                elseif ($ctrl -is [System.Windows.Controls.TextBox]) {
+                    $values[$name] = $ctrl.Text
+                }
+                elseif ($ctrl -is [System.Windows.Controls.ComboBox]) {
+                    $selected = $ctrl.SelectedItem
+                    $values[$name] = if ($selected -is [System.Windows.Controls.ComboBoxItem]) {
+                        $selected.Content
+                    } else { $selected }
+                }
+                elseif ($ctrl -is [System.Windows.Controls.CheckBox]) {
+                    $values[$name] = $ctrl.IsChecked
+                }
+                else {
+                    $values[$name] = $null
+                }
+            }
+            return $values
+        }
+        else {
+            return $null
+        }
+    }
+    catch {
+        try { Write-SPLog -Message "Dialog error ($XamlPath): $($_.Exception.Message)" -Severity ERROR -Component 'SP.Gui' -Action 'ShowDialog' } catch { }
+        return $null
+    }
+}
+
 #endregion
 
 #region Status Bar Helpers
