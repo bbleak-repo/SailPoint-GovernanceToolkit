@@ -312,6 +312,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" x:Name="CurrentTestLabel"
                                        Foreground="#AAAACC" VerticalAlignment="Center"
@@ -321,6 +322,9 @@
                                          Foreground="#5B9BD5"
                                          BorderBrush="#3D3D5C" BorderThickness="1"
                                          Visibility="Collapsed"/>
+                            <TextBlock Grid.Column="2" x:Name="SuiteProgressPercent"
+                                       Foreground="#AAAACC" VerticalAlignment="Center"
+                                       FontSize="12" Margin="8,0,0,0"/>
                         </Grid>
 
                         <TextBlock Grid.Row="1" x:Name="ResultSummaryText"
@@ -740,15 +744,11 @@
 
                                 <Button Grid.Column="2" x:Name="BtnApplyToken"
                                         Content="Apply Token"
-                                        Background="#5B9BD5" Foreground="#FFFFFF"
-                                        BorderThickness="0" Padding="14,6"
-                                        FontSize="12" FontFamily="Segoe UI" Cursor="Hand"/>
+                                        Style="{StaticResource ToolkitButton}"/>
 
                                 <Button Grid.Column="4" x:Name="BtnClearToken"
-                                        Content="Clear"
-                                        Background="#2D2D44" Foreground="#E0E0E0"
-                                        BorderBrush="#5B9BD5" BorderThickness="1"
-                                        Padding="14,6" FontSize="12" FontFamily="Segoe UI" Cursor="Hand"/>
+                                        Content="Clear Token"
+                                        Style="{StaticResource SecondaryButton}"/>
                             </Grid>
 
                             <TextBlock Grid.Row="4" x:Name="BrowserTokenStatus"

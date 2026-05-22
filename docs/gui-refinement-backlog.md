@@ -35,7 +35,7 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 | G-04 | Escalation Parameters Dialog | G-01 | DONE |
 | G-03 | DeltaCert Tab Declutter | G-02 | DONE |
 | G-07 | Audit Tab Dialog Retrofit | G-01 | DONE |
-| G-08 | UI Consistency Pass | G-03, G-07 | PENDING |
+| G-08 | UI Consistency Pass | G-03, G-07 | DONE |
 | G-09 | Update toolkit-status.md | G-08 | PENDING |
 | G-10 | README DeltaCert Section | G-08 | PENDING |
 | G-11 | Portable Zip Rebuild | G-09, G-10 | PENDING |
@@ -380,8 +380,8 @@ they're action modifiers, not query filters.
 
 ## G-08: UI Consistency Pass
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2f5e3c7
 - **Depends On:** G-03, G-07
 
 **Description:**

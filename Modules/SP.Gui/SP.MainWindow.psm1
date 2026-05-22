@@ -323,9 +323,10 @@ function Initialize-CampaignTab {
     $btnRunSmoke    = Find-Control -Parent $TabContent -Name 'BtnRunSmoke'
     $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshCampaigns'
     $tagFilter      = Find-Control -Parent $TabContent -Name 'TagFilterCombo'
-    $progressBar    = Find-Control -Parent $TabContent -Name 'SuiteProgressBar'
-    $progressLabel  = Find-Control -Parent $TabContent -Name 'CurrentTestLabel'
-    $resultSummary  = Find-Control -Parent $TabContent -Name 'ResultSummaryText'
+    $progressBar     = Find-Control -Parent $TabContent -Name 'SuiteProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'SuiteProgressPercent'
+    $progressLabel   = Find-Control -Parent $TabContent -Name 'CurrentTestLabel'
+    $resultSummary   = Find-Control -Parent $TabContent -Name 'ResultSummaryText'
 
     # Load initial data
     Load-CampaignData -Grid $campaignGrid -TagFilter $tagFilter -ProgressLabel $progressLabel
@@ -344,15 +345,15 @@ function Initialize-CampaignTab {
     if ($btnRunSelected) {
         $btnRunSelected.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $selected = @($script:LoadedCampaigns | Where-Object { $_.IsSelected -eq $true })
                 if ($selected.Count -eq 0) {
                     Set-StatusMessage -Message 'No campaigns selected. Use the checkbox column to select tests.' -IsError
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $selected -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
@@ -360,15 +361,15 @@ function Initialize-CampaignTab {
     if ($btnRunAll) {
         $btnRunAll.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $all = @($script:LoadedCampaigns | ForEach-Object { $_._Original })
                 if ($all.Count -eq 0) {
                     Set-StatusMessage -Message 'No campaigns loaded.' -IsError
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $all -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
@@ -376,7 +377,7 @@ function Initialize-CampaignTab {
     if ($btnRunSmoke) {
         $btnRunSmoke.Add_Click({
             & $module {
-                param($pb, $pl, $rs)
+                param($pb, $pp, $pl, $rs)
                 $smoke = @($script:LoadedCampaigns | Where-Object {
                     $tags = $_._Original.Tags -split ',' | ForEach-Object { $_.Trim().ToLower() }
                     $tags -contains 'smoke'
@@ -387,8 +388,8 @@ function Initialize-CampaignTab {
                     return
                 }
                 Invoke-GuiTestRun -Campaigns $smoke -ProgressBar $pb `
-                    -ProgressLabel $pl -ResultSummary $rs
-            } $progressBar $progressLabel $resultSummary
+                    -ProgressPercent $pp -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressPercent $progressLabel $resultSummary
         }.GetNewClosure())
     }
 }
@@ -435,7 +436,7 @@ function Load-CampaignData {
 
 function Invoke-GuiTestRun {
     [CmdletBinding()]
-    param($Campaigns, $ProgressBar, $ProgressLabel, $ResultSummary)
+    param($Campaigns, $ProgressBar, $ProgressPercent, $ProgressLabel, $ResultSummary)
 
     if ($script:IsRunning) {
         Set-StatusMessage -Message 'A test run is already in progress.' -IsError
@@ -486,6 +487,10 @@ function Invoke-GuiTestRun {
         $ProgressBar.Visibility = [System.Windows.Visibility]::Visible
     }
 
+    if ($null -ne $ProgressPercent) {
+        $ProgressPercent.Text = '0%'
+    }
+
     # Run in a background runspace to avoid freezing the UI
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $runspace.ApartmentState = 'STA'
@@ -497,6 +502,7 @@ function Invoke-GuiTestRun {
     $runspace.SessionStateProxy.SetVariable('CorrelationID',    $correlationID)
     $runspace.SessionStateProxy.SetVariable('ToolkitRoot',      $script:ToolkitRoot)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',      $ProgressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',  $ProgressPercent)
     $runspace.SessionStateProxy.SetVariable('ProgressLabel',    $ProgressLabel)
     $runspace.SessionStateProxy.SetVariable('ResultSummary',    $ResultSummary)
     $runspace.SessionStateProxy.SetVariable('MainWindow',       $script:MainWindow)
@@ -522,15 +528,19 @@ function Invoke-GuiTestRun {
 
         # Marshal result back to UI thread
         $dispatcher = $MainWindow.Dispatcher
-        $capturedResult = $suiteResult
+        $capturedResult   = $suiteResult
         $capturedProgress = $ProgressBar
-        $capturedLabel = $ProgressLabel
-        $capturedSummary = $ResultSummary
+        $capturedPercent  = $ProgressPercent
+        $capturedLabel    = $ProgressLabel
+        $capturedSummary  = $ResultSummary
 
         $dispatcher.Invoke([System.Action]{
             if ($null -ne $capturedProgress) {
                 $capturedProgress.Value      = $capturedResult.PassCount + $capturedResult.FailCount + $capturedResult.SkipCount
                 $capturedProgress.Visibility = [System.Windows.Visibility]::Visible
+            }
+            if ($null -ne $capturedPercent) {
+                $capturedPercent.Text = '100%'
             }
             if ($null -ne $capturedLabel) {
                 $capturedLabel.Content = 'Complete'
@@ -632,6 +642,7 @@ function Initialize-EvidenceTab {
     $evidenceTree   = Find-Control -Parent $TabContent -Name 'EvidenceTree'
     $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshEvidence'
     $btnOpenBrowser = Find-Control -Parent $TabContent -Name 'BtnOpenInBrowser'
+    $btnExportAll   = Find-Control -Parent $TabContent -Name 'BtnExportAll'
     $detailGrid     = Find-Control -Parent $TabContent -Name 'EvidenceDetailGrid'
 
     if ($btnRefresh) {
@@ -660,6 +671,20 @@ function Initialize-EvidenceTab {
             $selectedNode = $evidenceTree.SelectedItem
             if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
                 Start-Process $selectedNode.Tag
+            }
+        }.GetNewClosure())
+    }
+
+    if ($btnExportAll) {
+        $btnExportAll.Add_Click({
+            & $module {
+                $evidenceRoot = Join-Path $script:ToolkitRoot 'Evidence'
+                if (-not (Test-Path $evidenceRoot)) {
+                    Set-StatusMessage -Message 'Evidence directory not found.' -IsError
+                    return
+                }
+                Start-Process 'explorer.exe' -ArgumentList "`"$evidenceRoot`""
+                Set-StatusMessage -Message "Opened evidence folder: $evidenceRoot"
             }
         }.GetNewClosure())
     }
