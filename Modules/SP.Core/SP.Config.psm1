@@ -105,6 +105,11 @@ function Get-SPConfigDefaults {
             CleanupDaysStale           = 3
             OutputPath                 = '.\DeltaCert'
             DefaultReviewerMode        = 'Manager'
+            Escalation = @{
+                DefaultStaleHours      = 24
+                MaxEscalationLevels    = 2
+                CampaignNamePrefix     = 'AD Delta Cert'
+            }
         }
     }
 }

@@ -67,6 +67,11 @@
         "MaxCampaignsPerRun": 50,
         "CleanupDaysStale": 3,
         "OutputPath": ".\\DeltaCert",
-        "DefaultReviewerMode": "Manager"
+        "DefaultReviewerMode": "Manager",
+        "Escalation": {
+            "DefaultStaleHours": 24,
+            "MaxEscalationLevels": 2,
+            "CampaignNamePrefix": "AD Delta Cert"
+        }
     }
 }
