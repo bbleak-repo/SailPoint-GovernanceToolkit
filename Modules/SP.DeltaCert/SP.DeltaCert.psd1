@@ -33,6 +33,7 @@
         'Get-SPDeltaGrantEvents'
         'Get-SPDeltaAffectedIdentities'
         'Group-SPDeltaByManager'
+        'Get-SPDeltaCertStaleCertifications'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

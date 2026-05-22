@@ -607,10 +607,199 @@ function Group-SPDeltaByManager {
     }
 }
 
+function Get-SPDeltaCertStaleCertifications {
+    <#
+    .SYNOPSIS
+        Finds active delta cert certifications that have been open longer than a threshold.
+    .DESCRIPTION
+        Searches for active delta cert campaigns matching a name prefix, retrieves all
+        certifications for each campaign, and filters to certifications where:
+          - signed is null (not completed by the reviewer)
+          - created date is older than StaleHours
+
+        Returns enough context per stale certification for downstream escalation
+        (F-07: cert ID, reviewer ID, campaign name, hours open).
+    .PARAMETER CampaignNamePrefix
+        Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
+    .PARAMETER StaleHours
+        Number of hours with no reviewer action before a certification is considered
+        stale. Default: 24.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @([PSCustomObject] with CertificationId, CampaignId, CampaignName,
+                        ReviewerIdentityId, ReviewerName, HoursOpen, ReviewerClassification)
+            Error   = $string
+        }
+    .EXAMPLE
+        $result = Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 24
+        $result.Data | Format-Table CertificationId, ReviewerName, HoursOpen
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNamePrefix = 'AD Delta Cert',
+
+        [Parameter()]
+        [int]$StaleHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDeltaCertStaleCertifications: Prefix='$CampaignNamePrefix' StaleHours=$StaleHours" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Find active delta cert campaigns
+        $searchResult = Search-SPCampaigns -Keyword $CampaignNamePrefix -Status @('ACTIVE') `
+            -CorrelationID $CorrelationID
+
+        if (-not $searchResult.Success) {
+            $errMsg = "Campaign search failed: $($searchResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+                -Action 'Get-SPDeltaCertStaleCertifications' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $activeCampaigns = @($searchResult.Data)
+
+        if ($activeCampaigns.Count -eq 0) {
+            Write-SPLog -Message "No active campaigns found matching '$CampaignNamePrefix'" `
+                -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+                -CorrelationID $CorrelationID
+            return @{ Success = $true; Data = @(); Error = $null }
+        }
+
+        Write-SPLog -Message "Found $($activeCampaigns.Count) active campaign(s) -- retrieving certifications" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+            -CorrelationID $CorrelationID
+
+        $nowUtc        = (Get-Date).ToUniversalTime()
+        $staleCutoff   = $nowUtc.AddHours(-$StaleHours)
+        $staleCerts    = [System.Collections.Generic.List[object]]::new()
+
+        # Step 2: For each campaign, get certifications and filter
+        foreach ($campaign in $activeCampaigns) {
+            $campaignId   = $campaign.id
+            $campaignName = $campaign.name
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campaignId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Failed to get certifications for campaign '$campaignName' ($campaignId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+
+            foreach ($cert in $certs) {
+                # Skip completed certifications (signed is not null)
+                $signedValue = $null
+                if ($cert.PSObject.Properties.Name -contains 'signed') {
+                    $signedValue = $cert.signed
+                }
+                if ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue)) {
+                    continue
+                }
+
+                # Check created date against stale threshold
+                $certCreatedStr = $null
+                if ($cert.PSObject.Properties.Name -contains 'created') {
+                    $certCreatedStr = $cert.created
+                }
+                if ([string]::IsNullOrWhiteSpace($certCreatedStr)) {
+                    continue
+                }
+
+                $certCreated = $null
+                try {
+                    if ($certCreatedStr -is [datetime]) {
+                        $certCreated = ([datetime]$certCreatedStr).ToUniversalTime()
+                    }
+                    else {
+                        $certCreated = [datetime]::Parse([string]$certCreatedStr).ToUniversalTime()
+                    }
+                }
+                catch {
+                    Write-SPLog -Message "Failed to parse created date for certification '$($cert.id)': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+
+                if ($certCreated -ge $staleCutoff) {
+                    continue
+                }
+
+                $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
+
+                # Extract reviewer info from EffectiveReviewer (added by Get-SPAuditCertifications)
+                $reviewerId   = ''
+                $reviewerName = ''
+                $reviewerClassification = ''
+
+                if ($cert.PSObject.Properties.Name -contains 'EffectiveReviewer' -and $null -ne $cert.EffectiveReviewer) {
+                    $reviewer = $cert.EffectiveReviewer
+                    if ($null -ne $reviewer.PSObject.Properties['id'] -and
+                        -not [string]::IsNullOrWhiteSpace($reviewer.id)) {
+                        $reviewerId = [string]$reviewer.id
+                    }
+                    foreach ($prop in @('displayName', 'name')) {
+                        if ($null -ne $reviewer.PSObject.Properties[$prop] -and
+                            -not [string]::IsNullOrWhiteSpace($reviewer.$prop)) {
+                            $reviewerName = [string]$reviewer.$prop
+                            break
+                        }
+                    }
+                }
+
+                if ($cert.PSObject.Properties.Name -contains 'ReviewerClassification') {
+                    $reviewerClassification = [string]$cert.ReviewerClassification
+                }
+
+                $staleCerts.Add([PSCustomObject]@{
+                    CertificationId        = [string]$cert.id
+                    CampaignId             = $campaignId
+                    CampaignName           = $campaignName
+                    ReviewerIdentityId     = $reviewerId
+                    ReviewerName           = $reviewerName
+                    HoursOpen              = $hoursOpen
+                    ReviewerClassification = $reviewerClassification
+                })
+            }
+        }
+
+        Write-SPLog -Message "Found $($staleCerts.Count) stale certification(s) across $($activeCampaigns.Count) active campaign(s)" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $staleCerts.ToArray(); Error = $null }
+    }
+    catch {
+        $errMsg = "Get-SPDeltaCertStaleCertifications failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Get-SPDeltaCertStaleCertifications' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
     'Get-SPDeltaGrantEvents',
     'Get-SPDeltaAffectedIdentities',
-    'Group-SPDeltaByManager'
+    'Group-SPDeltaByManager',
+    'Get-SPDeltaCertStaleCertifications'
 )

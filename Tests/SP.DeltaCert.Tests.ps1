@@ -21,7 +21,7 @@
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
-    Import-SPTestModules -Core -Api -DeltaCert
+    Import-SPTestModules -Core -Api -Audit -DeltaCert
 
     # Minimal mock config used by pagination-ceiling logic inside query functions
     function New-MockDeltaConfig {
@@ -1207,6 +1207,129 @@ Describe "DC-026: Invoke-SPDeltaCertRun SourceOwner mode skips identity resoluti
                 -ReviewerMode SourceOwner -MaxCampaignsPerRun 50
 
             Should -Not -Invoke Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-027: Stale cert detection returns only unsigned certs past threshold
+# ---------------------------------------------------------------------------
+
+Describe "DC-027: Get-SPDeltaCertStaleCertifications returns only unsigned certs past threshold" {
+
+    Context "When one cert is signed and one is unsigned and stale" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id     = 'camp-001'
+                            name   = 'AD Delta Cert 2026-05-20 - Mgr One'
+                            status = 'ACTIVE'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPAuditCertifications -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        # Signed (completed) cert -- should be excluded
+                        [PSCustomObject]@{
+                            id                     = 'cert-signed-001'
+                            created                = (Get-Date).AddHours(-48).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            signed                 = (Get-Date).AddHours(-24).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            EffectiveReviewer      = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Mgr One' }
+                            ReviewerClassification = 'Primary'
+                        },
+                        # Unsigned stale cert -- should be included
+                        [PSCustomObject]@{
+                            id                     = 'cert-unsigned-001'
+                            created                = (Get-Date).AddHours(-48).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            signed                 = $null
+                            EffectiveReviewer      = [PSCustomObject]@{ id = 'mgr-002'; displayName = 'Mgr Two' }
+                            ReviewerClassification = 'Primary'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Should return only the unsigned cert" {
+            $result = Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 24
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 1
+            $result.Data[0].CertificationId    | Should -Be 'cert-unsigned-001'
+            $result.Data[0].ReviewerIdentityId  | Should -Be 'mgr-002'
+            $result.Data[0].ReviewerName        | Should -Be 'Mgr Two'
+            $result.Data[0].CampaignId          | Should -Be 'camp-001'
+            $result.Data[0].HoursOpen           | Should -BeGreaterOrEqual 47
+            $result.Data[0].ReviewerClassification | Should -Be 'Primary'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-028: Stale cert detection returns empty when all certs are within threshold
+# ---------------------------------------------------------------------------
+
+Describe "DC-028: Get-SPDeltaCertStaleCertifications returns empty when all certs are within threshold" {
+
+    Context "When all unsigned certs are newer than StaleHours" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
+            Mock Get-SPConfig -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id     = 'camp-002'
+                            name   = 'AD Delta Cert 2026-05-22 - Mgr One'
+                            status = 'ACTIVE'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPAuditCertifications -ModuleName SP.DeltaCertQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        # Unsigned but recent cert -- within threshold, should be excluded
+                        [PSCustomObject]@{
+                            id                     = 'cert-recent-001'
+                            created                = (Get-Date).AddHours(-6).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            signed                 = $null
+                            EffectiveReviewer      = [PSCustomObject]@{ id = 'mgr-001'; displayName = 'Mgr One' }
+                            ReviewerClassification = 'Primary'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Should return an empty Data array" {
+            $result = Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 24
+
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 0
+            $result.Error      | Should -BeNullOrEmpty
         }
     }
 }
