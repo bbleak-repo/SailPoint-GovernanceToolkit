@@ -406,7 +406,7 @@ F-04 audit trail) for compliance evidence.
 ### F-09: DeltaCert GUI Tab
 
 - **Status:** `DONE`
-- **Commit:** PENDING_COMMIT
+- **Commit:** 5e50e31
 - **Depends On:** F-01 through F-08 (all CLI features should be stable before GUI)
 
 **Description:**
