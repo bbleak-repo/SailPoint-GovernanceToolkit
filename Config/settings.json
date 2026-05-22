@@ -64,6 +64,7 @@
         "DefaultDeadlineDays": 2,
         "FallbackReviewerIdentityId": "",
         "CampaignNamePrefix": "AD Delta Cert",
-        "MaxCampaignsPerRun": 50
+        "MaxCampaignsPerRun": 50,
+        "CleanupDaysStale": 3
     }
 }

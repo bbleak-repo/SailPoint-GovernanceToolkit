@@ -434,8 +434,231 @@ function Invoke-SPDeltaCertRun {
     }
 }
 
+function Invoke-SPDeltaCertCleanup {
+    <#
+    .SYNOPSIS
+        Finds past-due delta cert campaigns and completes them.
+    .DESCRIPTION
+        Intended to run daily before creating new campaigns, preventing campaign
+        pile-up from managers who never action their reviews.
+
+        Flow:
+        1. Search for active campaigns matching the name prefix
+        2. For each campaign, check if deadline has passed or if created date
+           is older than DaysStale
+        3. Complete past-due campaigns via Complete-SPCampaign
+        4. Return summary of completed, still-active, and errored campaigns
+
+        Guarded by Safety.AllowCompleteCampaign (default false). If this setting
+        is false, cleanup returns an error without making any API calls.
+    .PARAMETER CampaignNamePrefix
+        Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
+    .PARAMETER DaysStale
+        Number of days after which a campaign without a deadline is considered
+        stale based on its created date. Default: 3.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                Completed   = [string[]]  # campaign IDs completed
+                StillActive = [string[]]  # campaign IDs not yet stale
+                Errors      = [string[]]  # per-campaign error messages
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+    .EXAMPLE
+        Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNamePrefix = 'AD Delta Cert',
+
+        [Parameter()]
+        [int]$DaysStale = 3,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Invoke-SPDeltaCertCleanup: Prefix='$CampaignNamePrefix' DaysStale=$DaysStale WhatIf=$($WhatIfPreference.IsPresent)" `
+        -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Safety guard: check AllowCompleteCampaign before any API calls
+        $config = Get-SPConfig
+        if (-not $config.Safety.AllowCompleteCampaign) {
+            $errMsg = "Invoke-SPDeltaCertCleanup blocked: Safety.AllowCompleteCampaign is set to false in settings.json. " +
+                      "Campaign completion requires this setting to be true."
+            Write-SPLog -Message $errMsg -Severity WARN -Component 'SP.DeltaCertRunner' `
+                -Action 'Invoke-SPDeltaCertCleanup' -CorrelationID $CorrelationID
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = $errMsg
+            }
+        }
+
+        # Step 1: Find active delta cert campaigns
+        Write-SPLog -Message "Searching for active campaigns matching '$CampaignNamePrefix'" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+            -CorrelationID $CorrelationID
+
+        $searchResult = Search-SPCampaigns -Keyword $CampaignNamePrefix -Status @('ACTIVE') `
+            -CorrelationID $CorrelationID
+
+        if (-not $searchResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Campaign search failed: $($searchResult.Error)"
+            }
+        }
+
+        $activeCampaigns = @($searchResult.Data)
+
+        if ($activeCampaigns.Count -eq 0) {
+            Write-SPLog -Message "No active campaigns found matching '$CampaignNamePrefix'" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    Completed   = @()
+                    StillActive = @()
+                    Errors      = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # Step 2: Evaluate staleness and complete past-due campaigns
+        $nowUtc         = (Get-Date).ToUniversalTime()
+        $staleThreshold = $nowUtc.AddDays(-$DaysStale)
+        $completed      = [System.Collections.Generic.List[string]]::new()
+        $stillActive    = [System.Collections.Generic.List[string]]::new()
+        $errors         = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($campaign in $activeCampaigns) {
+            $campaignId   = $campaign.id
+            $campaignName = $campaign.name
+            $isStale      = $false
+
+            # Check if deadline has passed
+            $deadlineStr = $null
+            if ($campaign -is [PSCustomObject] -and $campaign.PSObject.Properties.Name -contains 'deadline') {
+                $deadlineStr = $campaign.deadline
+            }
+            elseif ($campaign -is [hashtable] -and $campaign.ContainsKey('deadline')) {
+                $deadlineStr = $campaign['deadline']
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
+                try {
+                    $deadline = [datetime]::Parse([string]$deadlineStr).ToUniversalTime()
+                    if ($deadline -lt $nowUtc) {
+                        $isStale = $true
+                    }
+                }
+                catch {
+                    Write-SPLog -Message "Failed to parse deadline for campaign '$campaignName': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+
+            # Fallback: check if created date is older than DaysStale
+            if (-not $isStale) {
+                $createdStr = $null
+                if ($campaign -is [PSCustomObject] -and $campaign.PSObject.Properties.Name -contains 'created') {
+                    $createdStr = $campaign.created
+                }
+                elseif ($campaign -is [hashtable] -and $campaign.ContainsKey('created')) {
+                    $createdStr = $campaign['created']
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+                    try {
+                        $created = [datetime]::Parse([string]$createdStr).ToUniversalTime()
+                        if ($created -lt $staleThreshold) {
+                            $isStale = $true
+                        }
+                    }
+                    catch {
+                        Write-SPLog -Message "Failed to parse created date for campaign '$campaignName': $($_.Exception.Message)" `
+                            -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+                            -CorrelationID $CorrelationID
+                    }
+                }
+            }
+
+            if (-not $isStale) {
+                $stillActive.Add($campaignId)
+                continue
+            }
+
+            # WhatIf: describe without completing
+            if ($WhatIfPreference.IsPresent) {
+                Write-SPLog -Message "WhatIf: Would complete stale campaign '$campaignName' ($campaignId)" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+                    -CorrelationID $CorrelationID
+                $completed.Add($campaignId)
+                continue
+            }
+
+            # Step 3: Complete the stale campaign
+            Write-SPLog -Message "Completing stale campaign '$campaignName' ($campaignId)" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+                -CorrelationID $CorrelationID
+
+            $completeResult = Complete-SPCampaign -CampaignId $campaignId -CorrelationID $CorrelationID
+
+            if ($completeResult.Success) {
+                $completed.Add($campaignId)
+            }
+            else {
+                $errMsg = "Failed to complete campaign '$campaignName' ($campaignId): $($completeResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertCleanup' -CorrelationID $CorrelationID
+                $errors.Add($errMsg)
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPDeltaCertCleanup complete: Completed=$($completed.Count) StillActive=$($stillActive.Count) Errors=$($errors.Count)" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertCleanup' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Completed   = $completed.ToArray()
+                StillActive = $stillActive.ToArray()
+                Errors      = $errors.ToArray()
+            }
+            Error   = if ($errors.Count -gt 0) { $errors -join '; ' } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDeltaCertCleanup failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+            -Action 'Invoke-SPDeltaCertCleanup' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
-    'Invoke-SPDeltaCertRun'
+    'Invoke-SPDeltaCertRun',
+    'Invoke-SPDeltaCertCleanup'
 )

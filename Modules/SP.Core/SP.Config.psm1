@@ -102,6 +102,7 @@ function Get-SPConfigDefaults {
             FallbackReviewerIdentityId = ''
             CampaignNamePrefix         = 'AD Delta Cert'
             MaxCampaignsPerRun         = 50
+            CleanupDaysStale           = 3
         }
     }
 }

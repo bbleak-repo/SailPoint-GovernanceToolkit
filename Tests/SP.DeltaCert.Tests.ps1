@@ -825,3 +825,159 @@ Describe "DC-016: New-SPCampaign omits deadline from body when -Deadline is not 
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region DC-019: Invoke-SPDeltaCertCleanup completes stale campaigns
+# ---------------------------------------------------------------------------
+
+Describe "DC-019: Invoke-SPDeltaCertCleanup completes campaigns older than DaysStale" {
+
+    Context "When Search-SPCampaigns returns a stale campaign and AllowCompleteCampaign is true" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPConfig -ModuleName SP.DeltaCertRunner {
+                return [PSCustomObject]@{
+                    Safety = [PSCustomObject]@{
+                        AllowCompleteCampaign = $true
+                    }
+                }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id       = 'camp-stale-001'
+                            name     = 'AD Delta Cert 2026-05-18 - Mgr One'
+                            status   = 'ACTIVE'
+                            created  = (Get-Date).AddDays(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            deadline = (Get-Date).AddDays(-2).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Complete-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Error = $null }
+            }
+        }
+
+        It "Should return Success=true with the stale campaign in Completed" {
+            $result = Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            $result.Success                 | Should -Be $true
+            $result.Data.Completed.Count    | Should -Be 1
+            $result.Data.Completed[0]       | Should -Be 'camp-stale-001'
+            $result.Data.StillActive.Count  | Should -Be 0
+        }
+
+        It "Should call Complete-SPCampaign for the stale campaign" {
+            Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            Should -Invoke Complete-SPCampaign -ModuleName SP.DeltaCertRunner -Times 1 -ParameterFilter {
+                $CampaignId -eq 'camp-stale-001'
+            }
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-020: Invoke-SPDeltaCertCleanup blocked when AllowCompleteCampaign is false
+# ---------------------------------------------------------------------------
+
+Describe "DC-020: Invoke-SPDeltaCertCleanup returns error when AllowCompleteCampaign is false" {
+
+    Context "When Safety.AllowCompleteCampaign is false" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPConfig -ModuleName SP.DeltaCertRunner {
+                return [PSCustomObject]@{
+                    Safety = [PSCustomObject]@{
+                        AllowCompleteCampaign = $false
+                    }
+                }
+            }
+
+            Mock Search-SPCampaigns  -ModuleName SP.DeltaCertRunner { }
+            Mock Complete-SPCampaign -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return Success=false with a clear error about the safety guard" {
+            $result = Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'AllowCompleteCampaign'
+        }
+
+        It "Should not call Search-SPCampaigns or Complete-SPCampaign" {
+            Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            Should -Not -Invoke Search-SPCampaigns  -ModuleName SP.DeltaCertRunner
+            Should -Not -Invoke Complete-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-021: Invoke-SPDeltaCertCleanup does not complete non-stale campaigns
+# ---------------------------------------------------------------------------
+
+Describe "DC-021: Invoke-SPDeltaCertCleanup does not complete campaigns that are not stale" {
+
+    Context "When all active campaigns are within the staleness threshold" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPConfig -ModuleName SP.DeltaCertRunner {
+                return [PSCustomObject]@{
+                    Safety = [PSCustomObject]@{
+                        AllowCompleteCampaign = $true
+                    }
+                }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id       = 'camp-recent-001'
+                            name     = 'AD Delta Cert 2026-05-22 - Mgr One'
+                            status   = 'ACTIVE'
+                            created  = (Get-Date).AddHours(-6).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            deadline = (Get-Date).AddDays(1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Complete-SPCampaign -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should return the campaign in StillActive, not Completed" {
+            $result = Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            $result.Success                 | Should -Be $true
+            $result.Data.Completed.Count    | Should -Be 0
+            $result.Data.StillActive.Count  | Should -Be 1
+            $result.Data.StillActive[0]     | Should -Be 'camp-recent-001'
+        }
+
+        It "Should not call Complete-SPCampaign for non-stale campaigns" {
+            Invoke-SPDeltaCertCleanup -CampaignNamePrefix 'AD Delta Cert' -DaysStale 3
+
+            Should -Not -Invoke Complete-SPCampaign -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion

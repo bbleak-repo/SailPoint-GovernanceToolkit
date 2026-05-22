@@ -132,7 +132,7 @@ SP.Campaigns.psm1) to find matches.
 
 ### F-03: Campaign Cleanup (Auto-Complete Stale Campaigns)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Commit:** --
 - **Depends On:** F-01 (deadline must exist for meaningful staleness check)
 

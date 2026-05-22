@@ -36,6 +36,11 @@
 .PARAMETER MaxCampaignsPerRun
     Abort before creating any campaigns if the number of manager groups exceeds this.
     Defaults to DeltaCert.MaxCampaignsPerRun in settings.json (fallback: 50).
+.PARAMETER RunCleanup
+    When set, runs Invoke-SPDeltaCertCleanup before creating new campaigns.
+    Completes past-due delta cert campaigns that have exceeded their deadline
+    or are older than DeltaCert.CleanupDaysStale (default: 3 days).
+    Requires Safety.AllowCompleteCampaign = true in settings.json.
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to ..\Config\settings.json relative to this script.
 .PARAMETER Token
@@ -107,6 +112,9 @@ param(
 
     [Parameter()]
     [int]$TokenExpiryMinutes = 10,
+
+    [Parameter()]
+    [switch]$RunCleanup,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -251,6 +259,44 @@ if ([string]::IsNullOrWhiteSpace($effectiveFallback)) {
 
 Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays" `
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Start' -CorrelationID $correlationID
+
+#endregion
+
+#region Cleanup
+
+if ($RunCleanup) {
+    Write-Host '  Running campaign cleanup...' -ForegroundColor Cyan
+
+    $effectiveCleanupDays = 3
+    if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+        $null -ne $config.DeltaCert -and
+        $null -ne $config.DeltaCert.PSObject.Properties['CleanupDaysStale'] -and
+        [int]$config.DeltaCert.CleanupDaysStale -gt 0) {
+        $effectiveCleanupDays = [int]$config.DeltaCert.CleanupDaysStale
+    }
+
+    $cleanupParams = @{
+        CampaignNamePrefix = $effectivePrefix
+        DaysStale          = $effectiveCleanupDays
+        CorrelationID      = $correlationID
+    }
+
+    $cleanupResult = Invoke-SPDeltaCertCleanup @cleanupParams
+
+    if ($cleanupResult.Success) {
+        $cData = $cleanupResult.Data
+        Write-Host "  Cleanup: Completed=$($cData.Completed.Count) StillActive=$($cData.StillActive.Count) Errors=$($cData.Errors.Count)" -ForegroundColor Green
+        if ($cData.Errors.Count -gt 0) {
+            foreach ($cErr in $cData.Errors) {
+                Write-Host "    $cErr" -ForegroundColor Yellow
+            }
+        }
+    }
+    else {
+        Write-Host "  Cleanup warning: $($cleanupResult.Error)" -ForegroundColor Yellow
+    }
+    Write-Host ''
+}
 
 #endregion
 

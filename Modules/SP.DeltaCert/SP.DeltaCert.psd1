@@ -36,6 +36,7 @@
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'
+        'Invoke-SPDeltaCertCleanup'
     )
 
     # Do not export variables or aliases from nested modules
