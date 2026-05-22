@@ -1318,42 +1318,41 @@ function Invoke-GuiAuditRun {
     $capturedBtn      = $btnRunAudit
     $capturedProg     = $progressBar
     $capturedPercent2 = $progressPercent
+    $capturedModule   = $script:ThisModule
 
     $timer.Add_Tick({
-        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
-            $capturedTimer.Stop()
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
 
-            if ($capturedPs.HadErrors) {
-                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
-                Set-StatusMessage -Message "Audit run failed: $errMsg" -IsError
-            } else {
-                Set-StatusMessage -Message 'Audit run complete.'
-            }
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
 
-            # Re-enable the Run Audit button and hide progress bar
-            if ($null -ne $capturedBtn) {
-                $capturedBtn.IsEnabled = $true
-            }
-            if ($null -ne $capturedProg) {
-                $capturedProg.Visibility = [System.Windows.Visibility]::Collapsed
-            }
-            if ($null -ne $capturedPercent2) {
-                $capturedPercent2.Text = ''
-            }
-
-            # Refresh report list
-            Load-AuditReportList -TabContent $capturedTab
+            $t.Stop()
 
             try {
-                $capturedPs.EndInvoke($capturedAsync) | Out-Null
-                $capturedPs.Dispose()
-                $capturedRunspace.Close()
-            }
-            catch { }
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Audit run failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Audit run complete.'
+                }
 
-            $script:IsAuditRunning = $false
-        }
-    })
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                Load-AuditReportList -TabContent $tab
+
+                try {
+                    $ps.EndInvoke($async) | Out-Null
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsAuditRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPercent2
+    }.GetNewClosure())
 
     $timer.Start()
 }
@@ -1439,6 +1438,8 @@ function Initialize-DeltaCertTab {
     [CmdletBinding()]
     param($TabContent)
 
+    $module = $script:ThisModule
+
     $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
     $btnCleanup      = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
     $btnEscalate     = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
@@ -1454,28 +1455,37 @@ function Initialize-DeltaCertTab {
     # Run Delta Cert button
     if ($btnRun) {
         $btnRun.Add_Click({
-            Invoke-GuiDeltaCertRun -TabContent $TabContent
+            & $module {
+                param($tc)
+                Invoke-GuiDeltaCertRun -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
     # Run Cleanup button
     if ($btnCleanup) {
         $btnCleanup.Add_Click({
-            Invoke-GuiDeltaCertCleanup -TabContent $TabContent
+            & $module {
+                param($tc)
+                Invoke-GuiDeltaCertCleanup -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
     # Run Escalation button
     if ($btnEscalate) {
         $btnEscalate.Add_Click({
-            Invoke-GuiDeltaCertEscalation -TabContent $TabContent
+            & $module {
+                param($tc)
+                Invoke-GuiDeltaCertEscalation -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
     # Open Output Folder button
     if ($btnOpenFolder) {
         $btnOpenFolder.Add_Click({
-            $outputPath = Resolve-DeltaCertOutputPath
+            $outputPath = & $module { Resolve-DeltaCertOutputPath }
             if (-not (Test-Path $outputPath)) {
                 [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
             }
@@ -1486,7 +1496,10 @@ function Initialize-DeltaCertTab {
     # Refresh history button
     if ($btnRefresh) {
         $btnRefresh.Add_Click({
-            Load-DeltaCertHistory -TabContent $TabContent
+            & $module {
+                param($tc)
+                Load-DeltaCertHistory -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
@@ -1665,53 +1678,52 @@ function Invoke-GuiDeltaCertRun {
     $capturedBtn      = $btnRun
     $capturedProg     = $progressBar
     $capturedPercent2 = $progressPercent
+    $capturedModule   = $script:ThisModule
 
     $timer.Add_Tick({
-        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
-            $capturedTimer.Stop()
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
 
-            if ($capturedPs.HadErrors) {
-                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
-                Set-StatusMessage -Message "Delta cert run failed: $errMsg" -IsError
-            } else {
-                Set-StatusMessage -Message 'Delta cert run complete.'
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
 
-                # Update DataGrid with result
-                try {
-                    $psResult = $capturedPs.EndInvoke($capturedAsync)
-                    if ($null -ne $psResult -and $psResult.Count -gt 0) {
-                        $finalResult = $psResult[0]
-                        if ($null -ne $finalResult -and $finalResult.Success -and $null -ne $finalResult.Data) {
-                            $script:DeltaCertResultDataSource.Add($finalResult.Data)
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            # Re-enable button and hide progress bar
-            if ($null -ne $capturedBtn) {
-                $capturedBtn.IsEnabled = $true
-            }
-            if ($null -ne $capturedProg) {
-                $capturedProg.Visibility = [System.Windows.Visibility]::Collapsed
-            }
-            if ($null -ne $capturedPercent2) {
-                $capturedPercent2.Text = ''
-            }
-
-            # Refresh history
-            Load-DeltaCertHistory -TabContent $capturedTab
+            $t.Stop()
 
             try {
-                $capturedPs.Dispose()
-                $capturedRunspace.Close()
-            }
-            catch { }
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Delta cert run failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Delta cert run complete.'
 
-            $script:IsDeltaCertRunning = $false
-        }
-    })
+                    # Update DataGrid with result
+                    try {
+                        $psResult = $ps.EndInvoke($async)
+                        if ($null -ne $psResult -and $psResult.Count -gt 0) {
+                            $finalResult = $psResult[0]
+                            if ($null -ne $finalResult -and $finalResult.Success -and $null -ne $finalResult.Data) {
+                                $script:DeltaCertResultDataSource.Add($finalResult.Data)
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                Load-DeltaCertHistory -TabContent $tab
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsDeltaCertRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPercent2
+    }.GetNewClosure())
 
     $timer.Start()
 }
@@ -1815,30 +1827,37 @@ function Invoke-GuiDeltaCertCleanup {
     $capturedRunspace = $runspace
     $capturedAsync    = $asyncResult
     $capturedBtn      = $btnCleanup
+    $capturedModule   = $script:ThisModule
 
     $timer.Add_Tick({
-        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
-            $capturedTimer.Stop()
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $btn)
 
-            if ($capturedPs.HadErrors) {
-                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
-                Set-StatusMessage -Message "Cleanup failed: $errMsg" -IsError
-            } else {
-                Set-StatusMessage -Message 'Cleanup complete.'
-            }
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
 
-            if ($null -ne $capturedBtn) { $capturedBtn.IsEnabled = $true }
+            $t.Stop()
 
             try {
-                $capturedPs.EndInvoke($capturedAsync) | Out-Null
-                $capturedPs.Dispose()
-                $capturedRunspace.Close()
-            }
-            catch { }
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Cleanup failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Cleanup complete.'
+                }
 
-            $script:IsDeltaCertRunning = $false
-        }
-    })
+                if ($null -ne $btn) { $btn.IsEnabled = $true }
+
+                try {
+                    $ps.EndInvoke($async) | Out-Null
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsDeltaCertRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedBtn
+    }.GetNewClosure())
 
     $timer.Start()
 }
@@ -1951,30 +1970,37 @@ function Invoke-GuiDeltaCertEscalation {
     $capturedRunspace = $runspace
     $capturedAsync    = $asyncResult
     $capturedBtn      = $btnEscalate
+    $capturedModule   = $script:ThisModule
 
     $timer.Add_Tick({
-        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
-            $capturedTimer.Stop()
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $btn)
 
-            if ($capturedPs.HadErrors) {
-                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
-                Set-StatusMessage -Message "Escalation failed: $errMsg" -IsError
-            } else {
-                Set-StatusMessage -Message 'Escalation complete.'
-            }
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
 
-            if ($null -ne $capturedBtn) { $capturedBtn.IsEnabled = $true }
+            $t.Stop()
 
             try {
-                $capturedPs.EndInvoke($capturedAsync) | Out-Null
-                $capturedPs.Dispose()
-                $capturedRunspace.Close()
-            }
-            catch { }
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Escalation failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Escalation complete.'
+                }
 
-            $script:IsDeltaCertRunning = $false
-        }
-    })
+                if ($null -ne $btn) { $btn.IsEnabled = $true }
+
+                try {
+                    $ps.EndInvoke($async) | Out-Null
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsDeltaCertRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedBtn
+    }.GetNewClosure())
 
     $timer.Start()
 }
