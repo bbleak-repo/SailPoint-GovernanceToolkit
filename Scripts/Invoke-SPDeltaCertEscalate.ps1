@@ -66,7 +66,6 @@
     Exit codes:
         0 = Escalation completed (or WhatIf)
         1 = No stale certifications found
-        2 = Parameter error
         3 = Authentication error
         4 = Configuration error
         5 = Escalation error (partial or full failure)

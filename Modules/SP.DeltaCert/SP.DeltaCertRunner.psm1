@@ -1037,7 +1037,14 @@ function Invoke-SPDeltaCertCleanup {
     try {
         # Safety guard: check AllowCompleteCampaign before any API calls
         $config = Get-SPConfig
-        if (-not $config.Safety.AllowCompleteCampaign) {
+        $allowComplete = $false
+        if ($null -ne $config -and
+            $null -ne $config.PSObject.Properties['Safety'] -and
+            $null -ne $config.Safety -and
+            $config.Safety.PSObject.Properties.Name -contains 'AllowCompleteCampaign') {
+            $allowComplete = [bool]$config.Safety.AllowCompleteCampaign
+        }
+        if (-not $allowComplete) {
             $errMsg = "Invoke-SPDeltaCertCleanup blocked: Safety.AllowCompleteCampaign is set to false in settings.json. " +
                       "Campaign completion requires this setting to be true."
             Write-SPLog -Message $errMsg -Severity WARN -Component 'SP.DeltaCertRunner' `
