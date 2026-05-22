@@ -36,6 +36,13 @@
 .PARAMETER MaxCampaignsPerRun
     Abort before creating any campaigns if the number of manager groups exceeds this.
     Defaults to DeltaCert.MaxCampaignsPerRun in settings.json (fallback: 50).
+.PARAMETER ReviewerMode
+    Determines who reviews the delta cert campaigns.
+    Manager (default): One SEARCH campaign per manager group. Each manager
+        reviews only their direct reports who received new AD access.
+    SourceOwner: One SOURCE_OWNER campaign per source ID. ISC automatically
+        routes certification items to whoever owns each source.
+    Defaults to DeltaCert.DefaultReviewerMode in settings.json (fallback: Manager).
 .PARAMETER RunCleanup
     When set, runs Invoke-SPDeltaCertCleanup before creating new campaigns.
     Completes past-due delta cert campaigns that have exceeded their deadline
@@ -103,6 +110,10 @@ param(
 
     [Parameter()]
     [int]$MaxCampaignsPerRun = 0,
+
+    [Parameter()]
+    [ValidateSet('Manager', 'SourceOwner')]
+    [string]$ReviewerMode,
 
     [Parameter()]
     [string]$ConfigPath,
@@ -257,6 +268,19 @@ if ([string]::IsNullOrWhiteSpace($effectiveFallback)) {
     }
 }
 
+$effectiveReviewerMode = $ReviewerMode
+if ([string]::IsNullOrWhiteSpace($effectiveReviewerMode)) {
+    if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+        $null -ne $config.DeltaCert -and
+        $null -ne $config.DeltaCert.PSObject.Properties['DefaultReviewerMode'] -and
+        -not [string]::IsNullOrWhiteSpace($config.DeltaCert.DefaultReviewerMode)) {
+        $effectiveReviewerMode = [string]$config.DeltaCert.DefaultReviewerMode
+    }
+    else {
+        $effectiveReviewerMode = 'Manager'
+    }
+}
+
 Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays" `
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Start' -CorrelationID $correlationID
 
@@ -314,6 +338,7 @@ if ($WhatIfPreference.IsPresent) {
     Write-Host "    DeadlineDays:   $DeadlineDays"
     Write-Host "    NamePrefix:     $effectivePrefix"
     Write-Host "    MaxCampaigns:   $effectiveMaxCampaigns"
+    Write-Host "    ReviewerMode:   $effectiveReviewerMode"
     if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
         Write-Host "    FallbackMgr:    $effectiveFallback"
     }
@@ -328,6 +353,7 @@ $runParams = @{
     DeadlineDays         = $DeadlineDays
     CampaignNamePrefix   = $effectivePrefix
     MaxCampaignsPerRun   = $effectiveMaxCampaigns
+    ReviewerMode         = $effectiveReviewerMode
     CorrelationID        = $correlationID
 }
 if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {

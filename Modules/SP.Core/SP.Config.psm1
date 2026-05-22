@@ -104,6 +104,7 @@ function Get-SPConfigDefaults {
             MaxCampaignsPerRun         = 50
             CleanupDaysStale           = 3
             OutputPath                 = '.\DeltaCert'
+            DefaultReviewerMode        = 'Manager'
         }
     }
 }

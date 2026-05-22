@@ -161,6 +161,13 @@ function Invoke-SPDeltaCertRun {
     .PARAMETER FallbackManagerId
         Identity ID used as reviewer for identities who have no manager in ISC.
         If omitted, manager-less identities are skipped.
+    .PARAMETER ReviewerMode
+        Determines how campaigns are created and who reviews them.
+        Manager (default): One SEARCH campaign per manager group. Each manager
+            reviews only their direct reports who received new AD access.
+        SourceOwner: One SOURCE_OWNER campaign per source ID. ISC automatically
+            routes certification items to whoever owns each source. Skips
+            identity resolution and manager grouping (faster, fewer API calls).
     .PARAMETER MaxCampaignsPerRun
         Abort before creating any campaigns if manager group count exceeds this.
         Default: 50.
@@ -208,6 +215,10 @@ function Invoke-SPDeltaCertRun {
 
         [Parameter()]
         [string]$FallbackManagerId,
+
+        [Parameter()]
+        [ValidateSet('Manager', 'SourceOwner')]
+        [string]$ReviewerMode = 'Manager',
 
         [Parameter()]
         [int]$MaxCampaignsPerRun = 50,
@@ -279,6 +290,194 @@ function Invoke-SPDeltaCertRun {
                 Error   = $null
             }
         }
+
+        $dateStamp = Get-Date -Format 'yyyy-MM-dd'
+
+        # Duplicate campaign guard (applies to both modes)
+        if (-not $Force) {
+            Write-SPLog -Message "Checking for existing campaigns matching '$CampaignNamePrefix $dateStamp'" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+
+            $searchResult = Search-SPCampaigns -Keyword "$CampaignNamePrefix $dateStamp" `
+                -CorrelationID $CorrelationID
+
+            if ($searchResult.Success -and @($searchResult.Data).Count -gt 0) {
+                $existingCount = @($searchResult.Data).Count
+                Write-SPLog -Message "Duplicate guard: Found $existingCount existing campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                    -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                    -IdentitiesProcessed 0 -ManagerGroups 0 `
+                    -CampaignsCreated 0 -CampaignIds @() -Reason 'DuplicatesExist' `
+                    -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
+                return @{
+                    Success = $true
+                    Data    = @{
+                        CampaignsCreated = 0
+                        CampaignIds      = @()
+                        IdentityCount    = 0
+                        ManagerGroups    = 0
+                        Reason           = 'DuplicatesExist'
+                        Errors           = @()
+                    }
+                    Error   = $null
+                }
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # SourceOwner mode: one SOURCE_OWNER campaign per unique source ID
+        # ---------------------------------------------------------------
+        if ($ReviewerMode -eq 'SourceOwner') {
+            Write-SPLog -Message "SourceOwner mode: creating one SOURCE_OWNER campaign per source (skipping identity/manager resolution)" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+
+            $uniqueSourceIds = @($grantEvents | Select-Object -ExpandProperty SourceId | Sort-Object -Unique)
+
+            # Safety guard
+            if ($uniqueSourceIds.Count -gt $MaxCampaignsPerRun) {
+                $errMsg = "Source count ($($uniqueSourceIds.Count)) exceeds MaxCampaignsPerRun ($MaxCampaignsPerRun). " +
+                          "Increase DeltaCert.MaxCampaignsPerRun in settings.json if expected."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertRun' -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                    -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                    -IdentitiesProcessed 0 -ManagerGroups 0 `
+                    -CampaignsCreated 0 -CampaignIds @() -Reason 'Error' -Errors @($errMsg) `
+                    -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            # WhatIf
+            if ($WhatIfPreference.IsPresent) {
+                $whatIfGroups = @{}
+                foreach ($srcId in $uniqueSourceIds) {
+                    $whatIfGroups[$srcId] = @{
+                        SourceId     = $srcId
+                        CampaignName = "$CampaignNamePrefix $dateStamp - Source $srcId"
+                        Deadline     = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-dd')
+                    }
+                }
+
+                Write-SPLog -Message "WhatIf: Would create $($uniqueSourceIds.Count) SOURCE_OWNER campaign(s)" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                    -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                    -IdentitiesProcessed 0 -ManagerGroups 0 `
+                    -CampaignsCreated 0 -CampaignIds @() -Reason 'WhatIf' `
+                    -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
+                return @{
+                    Success = $true
+                    Data    = @{
+                        CampaignsCreated = 0
+                        CampaignIds      = @()
+                        IdentityCount    = 0
+                        ManagerGroups    = 0
+                        Reason           = 'WhatIf'
+                        Errors           = @()
+                        WhatIfGroups     = $whatIfGroups
+                    }
+                    Error   = $null
+                }
+            }
+
+            # Create and activate SOURCE_OWNER campaigns
+            $campaignIds    = [System.Collections.Generic.List[string]]::new()
+            $campaignErrors = [System.Collections.Generic.List[string]]::new()
+            $deadlineStr    = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+            foreach ($srcId in $uniqueSourceIds) {
+                $campaignName = "$CampaignNamePrefix $dateStamp - Source $srcId"
+
+                Write-SPLog -Message "Creating SOURCE_OWNER campaign '$campaignName' (source='$srcId')" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+
+                $createResult = New-SPCampaign `
+                    -Name        $campaignName `
+                    -Type        'SOURCE_OWNER' `
+                    -SourceId    $srcId `
+                    -Description "Daily AD delta certification: SOURCE_OWNER review for source $srcId, $dateStamp." `
+                    -Deadline    $deadlineStr `
+                    -CorrelationID $CorrelationID
+
+                if (-not $createResult.Success) {
+                    $errMsg = "Campaign '$campaignName' create failed: $($createResult.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                        -Action 'Invoke-SPDeltaCertRun' -CorrelationID $CorrelationID
+                    $campaignErrors.Add($errMsg)
+                    continue
+                }
+
+                $campaignId = $createResult.Data.id
+
+                $activateResult = Start-SPCampaign -CampaignId $campaignId -CorrelationID $CorrelationID
+
+                if (-not $activateResult.Success) {
+                    $errMsg = "Campaign '$campaignName' ($campaignId) created but activation failed: $($activateResult.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                        -Action 'Invoke-SPDeltaCertRun' -CorrelationID $CorrelationID
+                    $campaignErrors.Add($errMsg)
+                    $campaignIds.Add($campaignId)
+                    continue
+                }
+
+                Write-SPLog -Message "Campaign '$campaignName' ($campaignId) created and activation requested" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+                $campaignIds.Add($campaignId)
+            }
+
+            $overallSuccess = ($campaignErrors.Count -eq 0)
+
+            if ($campaignErrors.Count -gt 0) {
+                Write-SPLog -Message "$($campaignErrors.Count) campaign(s) had creation/activation errors" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                    -CorrelationID $CorrelationID
+            }
+
+            Write-SPLog -Message "Invoke-SPDeltaCertRun (SourceOwner) complete: $($campaignIds.Count) campaign(s) for $($uniqueSourceIds.Count) source(s)" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
+                -IdentitiesProcessed 0 -ManagerGroups 0 `
+                -CampaignsCreated $campaignIds.Count -CampaignIds $campaignIds.ToArray() `
+                -Reason 'Created' -Errors $campaignErrors.ToArray() `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+
+            return @{
+                Success = $overallSuccess
+                Data    = @{
+                    CampaignsCreated = $campaignIds.Count
+                    CampaignIds      = $campaignIds.ToArray()
+                    IdentityCount    = 0
+                    ManagerGroups    = 0
+                    Reason           = 'Created'
+                    Errors           = $campaignErrors.ToArray()
+                }
+                Error   = if ($campaignErrors.Count -gt 0) { $campaignErrors -join '; ' } else { $null }
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Manager mode (default): SEARCH campaign per manager group
+        # ---------------------------------------------------------------
 
         # Step 2: Resolve active identities with managers
         Write-SPLog -Message "Step 2: Resolving $($grantEvents.Count) event(s) to active identities" `
@@ -393,45 +592,6 @@ function Invoke-SPDeltaCertRun {
                 -DurationSeconds $runStartTime.Elapsed.TotalSeconds
 
             return @{ Success = $false; Data = $null; Error = $errMsg }
-        }
-
-        $dateStamp = Get-Date -Format 'yyyy-MM-dd'
-
-        # Duplicate campaign guard
-        if (-not $Force) {
-            Write-SPLog -Message "Checking for existing campaigns matching '$CampaignNamePrefix $dateStamp'" `
-                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
-                -CorrelationID $CorrelationID
-
-            $searchResult = Search-SPCampaigns -Keyword "$CampaignNamePrefix $dateStamp" `
-                -CorrelationID $CorrelationID
-
-            if ($searchResult.Success -and @($searchResult.Data).Count -gt 0) {
-                $existingCount = @($searchResult.Data).Count
-                Write-SPLog -Message "Duplicate guard: Found $existingCount existing campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
-                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
-                    -CorrelationID $CorrelationID
-
-                $runStartTime.Stop()
-                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
-                    -HoursBack $HoursBack -GrantEventsFound $grantEvents.Count `
-                    -IdentitiesProcessed $affectedIdentities.Count -ManagerGroups $managerGroups.Count `
-                    -CampaignsCreated 0 -CampaignIds @() -Reason 'DuplicatesExist' `
-                    -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
-
-                return @{
-                    Success = $true
-                    Data    = @{
-                        CampaignsCreated = 0
-                        CampaignIds      = @()
-                        IdentityCount    = $affectedIdentities.Count
-                        ManagerGroups    = $managerGroups.Count
-                        Reason           = 'DuplicatesExist'
-                        Errors           = @()
-                    }
-                    Error   = $null
-                }
-            }
         }
 
         # WhatIf: describe without writing

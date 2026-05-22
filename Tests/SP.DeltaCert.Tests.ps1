@@ -1037,6 +1037,183 @@ Describe "DC-022: Invoke-SPDeltaCertRun writes a JSONL audit event after complet
 #endregion
 
 # ---------------------------------------------------------------------------
+#region DC-024: SourceOwner mode calls New-SPCampaign -Type SOURCE_OWNER
+# ---------------------------------------------------------------------------
+
+Describe "DC-024: Invoke-SPDeltaCertRun SourceOwner mode creates SOURCE_OWNER campaigns" {
+
+    Context "When ReviewerMode is SourceOwner and grant events exist" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' }
+                        [PSCustomObject]@{ IdentityId = 'id-002'; SourceId = 'src-ad-002' }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
+            Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
+                param($Name)
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = "camp-$([guid]::NewGuid().ToString('N').Substring(0,8))" }; Error = $null }
+            }
+
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+
+            # These should NOT be called in SourceOwner mode
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner { }
+            Mock Group-SPDeltaByManager        -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should call New-SPCampaign with Type=SOURCE_OWNER for each unique source" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001', 'src-ad-002') `
+                -ReviewerMode SourceOwner -MaxCampaignsPerRun 50
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 2
+            $result.Data.Reason           | Should -Be 'Created'
+
+            Should -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner -Times 2 -ParameterFilter {
+                $Type -eq 'SOURCE_OWNER'
+            }
+        }
+
+        It "Should call Start-SPCampaign for each SOURCE_OWNER campaign" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001', 'src-ad-002') `
+                -ReviewerMode SourceOwner -MaxCampaignsPerRun 50
+
+            Should -Invoke Start-SPCampaign -ModuleName SP.DeltaCertRunner -Times 2
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-025: Manager mode still calls New-SPCampaign -Type SEARCH (regression)
+# ---------------------------------------------------------------------------
+
+Describe "DC-025: Invoke-SPDeltaCertRun Manager mode creates SEARCH campaigns (regression)" {
+
+    Context "When ReviewerMode is Manager (explicit) and grant events exist" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One'; DisplayName = 'User One'; IsActive = $true })
+                    Error   = $null
+                }
+            }
+
+            Mock Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner {
+                $groups = @{}
+                $groups['mgr-001'] = @([PSCustomObject]@{ IdentityId = 'id-001'; ManagerId = 'mgr-001'; ManagerName = 'Mgr One' })
+                return @{ Success = $true; Data = $groups; Error = $null }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
+            Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'camp-mgr-001' }; Error = $null }
+            }
+
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+        }
+
+        It "Should call New-SPCampaign with Type=SEARCH" {
+            $result = Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') `
+                -ReviewerMode Manager -MaxCampaignsPerRun 50
+
+            $result.Success               | Should -Be $true
+            $result.Data.CampaignsCreated | Should -Be 1
+            $result.Data.Reason           | Should -Be 'Created'
+
+            Should -Invoke New-SPCampaign -ModuleName SP.DeltaCertRunner -Times 1 -ParameterFilter {
+                $Type -eq 'SEARCH'
+            }
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DC-026: SourceOwner mode does NOT call Get-SPDeltaAffectedIdentities
+# ---------------------------------------------------------------------------
+
+Describe "DC-026: Invoke-SPDeltaCertRun SourceOwner mode skips identity resolution" {
+
+    Context "When ReviewerMode is SourceOwner" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaGrantEvents -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @([PSCustomObject]@{ IdentityId = 'id-001'; SourceId = 'src-ad-001' })
+                    Error   = $null
+                }
+            }
+
+            Mock Search-SPCampaigns -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
+            Mock New-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'camp-so-001' }; Error = $null }
+            }
+
+            Mock Start-SPCampaign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+
+            Mock Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner { }
+            Mock Group-SPDeltaByManager        -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should NOT call Get-SPDeltaAffectedIdentities" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') `
+                -ReviewerMode SourceOwner -MaxCampaignsPerRun 50
+
+            Should -Not -Invoke Get-SPDeltaAffectedIdentities -ModuleName SP.DeltaCertRunner
+        }
+
+        It "Should NOT call Group-SPDeltaByManager" {
+            Invoke-SPDeltaCertRun -SourceIds @('src-ad-001') `
+                -ReviewerMode SourceOwner -MaxCampaignsPerRun 50
+
+            Should -Not -Invoke Group-SPDeltaByManager -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
 #region DC-023: JSONL audit line contains expected fields
 # ---------------------------------------------------------------------------
 
