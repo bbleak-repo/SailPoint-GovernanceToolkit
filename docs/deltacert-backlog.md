@@ -29,7 +29,7 @@ Cross-phase dependencies are noted explicitly.
 | 1 | Core delta detection + manager campaigns | (complete) | DONE |
 | 2 | Campaign lifecycle (deadline, dedup, cleanup, audit trail) | F-01 to F-04 | PENDING |
 | 3 | Reviewer routing (SOURCE_OWNER / app owner mode) | F-05 | DONE |
-| 4 | OOO escalation (stale detection, org tree walk, reassignment) | F-06 to F-08 | IN PROGRESS |
+| 4 | OOO escalation (stale detection, org tree walk, reassignment) | F-06 to F-08 | IN PROGRESS (F-06, F-07 DONE) |
 | 5 | GUI tab integration (XAML, bridge, wiring) | F-09 | PENDING |
 | 6 | Hardening (identity exclusion filters) | F-10 | PENDING |
 
@@ -294,8 +294,8 @@ Flow:
 
 ### F-07: Org Tree Escalation + Reassignment
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 8a68ba9
 - **Depends On:** F-06 (stale detection provides input)
 
 **Description:**
