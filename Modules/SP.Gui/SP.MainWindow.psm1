@@ -43,6 +43,7 @@ $script:AuditCampaignDataSource     = [System.Collections.ObjectModel.Observable
 $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
+$script:LastDeltaCertParams         = $null
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -1714,10 +1715,57 @@ function Initialize-DeltaCertTab {
     Load-DeltaCertHistory -TabContent $TabContent
 }
 
+function Get-DeltaCertDialogDefaults {
+    <#
+    .SYNOPSIS
+        Returns dialog defaults: last-used params if available, otherwise from config.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param()
+
+    if ($null -ne $script:LastDeltaCertParams) {
+        return $script:LastDeltaCertParams
+    }
+
+    $defaults = @{
+        TxtSourceIds    = ''
+        TxtHoursBack    = '24'
+        TxtDeadlineDays = '2'
+        CboReviewerMode = 'Manager'
+    }
+
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $null -ne $config.DeltaCert) {
+            $dc = $config.DeltaCert
+            if ($dc.PSObject.Properties.Name -contains 'SourceIds' -and $dc.SourceIds) {
+                $defaults['TxtSourceIds'] = ($dc.SourceIds -join ', ')
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultHoursBack' -and $dc.DefaultHoursBack) {
+                $defaults['TxtHoursBack'] = [string]$dc.DefaultHoursBack
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultDeadlineDays' -and $dc.DefaultDeadlineDays) {
+                $defaults['TxtDeadlineDays'] = [string]$dc.DefaultDeadlineDays
+            }
+            if ($dc.PSObject.Properties.Name -contains 'DefaultReviewerMode' -and $dc.DefaultReviewerMode) {
+                $defaults['CboReviewerMode'] = $dc.DefaultReviewerMode
+            }
+        }
+    }
+    catch { }
+
+    return $defaults
+}
+
 function Invoke-GuiDeltaCertRun {
     <#
     .SYNOPSIS
-        Runs delta cert in a background runspace. Follows the Audit tab pattern.
+        Shows run parameters dialog, then runs delta cert in a background runspace.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -1727,60 +1775,45 @@ function Invoke-GuiDeltaCertRun {
         return
     }
 
-    $progressBar     = Find-Control -Parent $TabContent -Name 'DeltaCertProgressBar'
-    $progressPercent = Find-Control -Parent $TabContent -Name 'DeltaCertProgressPercent'
-    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
-    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
-    $txtSourceIds    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertSourceIds'
-    $txtHoursBack    = Find-Control -Parent $TabContent -Name 'TxtDeltaCertHoursBack'
-    $txtDeadlineDays = Find-Control -Parent $TabContent -Name 'TxtDeltaCertDeadlineDays'
-    $cboReviewerMode = Find-Control -Parent $TabContent -Name 'CboDeltaCertReviewerMode'
+    # Show parameters dialog
+    $dialogXaml = Get-XamlPath -FileName 'DeltaCertRunDialog.xaml'
+    $defaults   = Get-DeltaCertDialogDefaults
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath      $dialogXaml `
+        -ControlNames  @('TxtSourceIds', 'TxtHoursBack', 'TxtDeadlineDays', 'CboReviewerMode') `
+        -Defaults      $defaults
 
-    # Extract source IDs
-    $sourceIdText = ''
-    if ($null -ne $txtSourceIds -and $txtSourceIds.Text -ne 'Comma-separated source IDs...') {
-        $sourceIdText = $txtSourceIds.Text.Trim()
-    }
+    if ($null -eq $dialogResult) { return }
 
-    if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
-        # Try config
-        try {
-            $configParams = @{}
-            if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
-            $config = Get-SPConfig @configParams
-            if ($null -ne $config -and
-                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
-                $null -ne $config.DeltaCert -and
-                $config.DeltaCert.PSObject.Properties.Name -contains 'SourceIds' -and
-                @($config.DeltaCert.SourceIds).Count -gt 0) {
-                $sourceIdText = ($config.DeltaCert.SourceIds) -join ','
-            }
-        }
-        catch { }
-    }
+    # Persist for next open
+    $script:LastDeltaCertParams = $dialogResult
+
+    # Extract values from dialog result
+    $sourceIdText = if ($dialogResult['TxtSourceIds']) { $dialogResult['TxtSourceIds'].Trim() } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
-        Set-StatusMessage -Message 'No source IDs specified. Enter source IDs or configure DeltaCert.SourceIds in settings.' -IsError
+        Set-StatusMessage -Message 'No source IDs specified. Configure Source IDs in the dialog or Settings tab.' -IsError
         return
     }
 
     $sourceIds = @($sourceIdText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-    # Extract numeric values
     $hoursBack = 24
-    if ($null -ne $txtHoursBack -and $txtHoursBack.Text) {
-        [int]::TryParse($txtHoursBack.Text.Trim(), [ref]$hoursBack) | Out-Null
+    if ($dialogResult['TxtHoursBack']) {
+        [int]::TryParse($dialogResult['TxtHoursBack'].Trim(), [ref]$hoursBack) | Out-Null
     }
 
     $deadlineDays = 2
-    if ($null -ne $txtDeadlineDays -and $txtDeadlineDays.Text) {
-        [int]::TryParse($txtDeadlineDays.Text.Trim(), [ref]$deadlineDays) | Out-Null
+    if ($dialogResult['TxtDeadlineDays']) {
+        [int]::TryParse($dialogResult['TxtDeadlineDays'].Trim(), [ref]$deadlineDays) | Out-Null
     }
 
-    $reviewerMode = 'Manager'
-    if ($null -ne $cboReviewerMode -and $null -ne $cboReviewerMode.SelectedItem) {
-        $reviewerMode = $cboReviewerMode.SelectedItem.Content
-    }
+    $reviewerMode = if ($dialogResult['CboReviewerMode']) { $dialogResult['CboReviewerMode'] } else { 'Manager' }
+
+    $progressBar     = Find-Control -Parent $TabContent -Name 'DeltaCertProgressBar'
+    $progressPercent = Find-Control -Parent $TabContent -Name 'DeltaCertProgressPercent'
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
 
     $script:IsDeltaCertRunning = $true
     $correlationID = [guid]::NewGuid().ToString()

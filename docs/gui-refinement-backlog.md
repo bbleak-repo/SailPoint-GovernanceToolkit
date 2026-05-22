@@ -31,7 +31,7 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 | G-01 | WPF Modal Dialog Helper | none | DONE |
 | G-05 | History Display Upgrade | none | DONE |
 | G-06 | DeltaCert Config in Settings Tab | none | DONE |
-| G-02 | DeltaCert Run Parameters Dialog | G-01 | PENDING |
+| G-02 | DeltaCert Run Parameters Dialog | G-01 | DONE |
 | G-04 | Escalation Parameters Dialog | G-01 | PENDING |
 | G-03 | DeltaCert Tab Declutter | G-02 | PENDING |
 | G-07 | Audit Tab Dialog Retrofit | G-01 | PENDING |
@@ -213,8 +213,8 @@ as JSON array; empty string saves as `[]`.
 
 ## G-02: DeltaCert Run Parameters Dialog
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** a17cda6
 - **Depends On:** G-01
 
 **Description:**
