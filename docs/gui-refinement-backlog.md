@@ -36,7 +36,7 @@ G-01 -> G-05 -> G-06 -> G-02 -> G-04 -> G-03 -> G-07 -> G-08 -> G-09 -> G-10 -> 
 | G-03 | DeltaCert Tab Declutter | G-02 | DONE |
 | G-07 | Audit Tab Dialog Retrofit | G-01 | DONE |
 | G-08 | UI Consistency Pass | G-03, G-07 | DONE |
-| G-09 | Update toolkit-status.md | G-08 | PENDING |
+| G-09 | Update toolkit-status.md | G-08 | DONE |
 | G-10 | README DeltaCert Section | G-08 | PENDING |
 | G-11 | Portable Zip Rebuild | G-09, G-10 | PENDING |
 
@@ -408,8 +408,8 @@ After dialog refactoring, sweep all 5 tabs + 3 dialogs for consistency:
 
 ## G-09: Update toolkit-status.md
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** e89e40a
 - **Depends On:** G-08
 
 **Description:**
