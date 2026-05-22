@@ -747,6 +747,233 @@ function Invoke-SPDeltaCertRun {
     }
 }
 
+function Invoke-SPDeltaCertEscalate {
+    <#
+    .SYNOPSIS
+        Escalates stale delta cert certifications by reassigning them up the org tree.
+    .DESCRIPTION
+        Takes stale certifications (from Get-SPDeltaCertStaleCertifications) and
+        reassigns them to the current reviewer's manager. For certifications that
+        have already been reassigned once (ReviewerClassification = 'Reassigned'),
+        one escalation level is consumed, leaving fewer remaining levels.
+
+        MaxEscalationLevels controls the total number of escalation hops allowed
+        across multiple runs. A 'Primary' cert has all levels available; a
+        'Reassigned' cert has one level already consumed.
+
+        ISC constraint: Invoke-SPReassign max 50 items per call. If a certification
+        has more than 50 review items, Invoke-SPReassignAsync is used automatically.
+
+        ISC constraint: Reassignment does NOT work for Governance Group certifications.
+        These are detected and skipped with a WARN log.
+    .PARAMETER StaleCertifications
+        Array of stale certification objects as returned by Get-SPDeltaCertStaleCertifications.
+        Each object must have: CertificationId, CampaignId, CampaignName,
+        ReviewerIdentityId, ReviewerName, HoursOpen, ReviewerClassification.
+    .PARAMETER MaxEscalationLevels
+        Maximum number of escalation hops allowed from the original reviewer.
+        Default: 2. A 'Reassigned' certification has already consumed one level.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                Escalated = [string[]]  # certification IDs reassigned
+                Skipped   = [string[]]  # certification IDs that could not be escalated
+                Errors    = [string[]]  # per-certification error messages
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        $stale = (Get-SPDeltaCertStaleCertifications -StaleHours 24).Data
+        $result = Invoke-SPDeltaCertEscalate -StaleCertifications $stale
+        "Escalated $($result.Data.Escalated.Count), Skipped $($result.Data.Skipped.Count)"
+    .EXAMPLE
+        $stale = (Get-SPDeltaCertStaleCertifications -StaleHours 24).Data
+        Invoke-SPDeltaCertEscalate -StaleCertifications $stale -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$StaleCertifications,
+
+        [Parameter()]
+        [int]$MaxEscalationLevels = 2,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Invoke-SPDeltaCertEscalate: Processing $($StaleCertifications.Count) stale certification(s), MaxEscalationLevels=$MaxEscalationLevels" `
+        -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $escalated = [System.Collections.Generic.List[string]]::new()
+        $skipped   = [System.Collections.Generic.List[string]]::new()
+        $errors    = [System.Collections.Generic.List[string]]::new()
+
+        if ($StaleCertifications.Count -eq 0) {
+            Write-SPLog -Message "No stale certifications to escalate" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    Escalated = @()
+                    Skipped   = @()
+                    Errors    = @()
+                }
+                Error   = $null
+            }
+        }
+
+        foreach ($staleCert in $StaleCertifications) {
+            $certId         = $staleCert.CertificationId
+            $campaignName   = $staleCert.CampaignName
+            $reviewerId     = $staleCert.ReviewerIdentityId
+            $hoursOpen      = $staleCert.HoursOpen
+            $classification = $staleCert.ReviewerClassification
+
+            Write-SPLog -Message "Evaluating stale cert '$certId' (reviewer='$reviewerId', campaign='$campaignName', hours=$hoursOpen, classification='$classification')" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                -CorrelationID $CorrelationID
+
+            # MaxEscalationLevels guard: Reassigned certs have consumed one level
+            $levelsConsumed = if ($classification -eq 'Reassigned') { 1 } else { 0 }
+            $levelsRemaining = $MaxEscalationLevels - $levelsConsumed
+
+            if ($levelsRemaining -le 0) {
+                Write-SPLog -Message "Cert '$certId' has reached MaxEscalationLevels ($MaxEscalationLevels) -- skipping" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
+            # Resolve current reviewer's manager
+            $reviewerDetail = Get-SPDeltaIdentityDetail -IdentityId $reviewerId -CorrelationID $CorrelationID
+
+            if (-not $reviewerDetail.Found) {
+                Write-SPLog -Message "Reviewer '$reviewerId' not found in ISC -- cannot escalate cert '$certId'" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($reviewerDetail.ManagerId)) {
+                Write-SPLog -Message "Reviewer '$reviewerId' ($($reviewerDetail.DisplayName)) has no manager -- cannot escalate cert '$certId'" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
+            $escalationTarget = $reviewerDetail.ManagerId
+
+            # Get review items for this certification
+            $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                -CorrelationID $CorrelationID
+
+            if (-not $itemsResult.Success) {
+                $errMsg = "Failed to get review items for cert '$certId': $($itemsResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertEscalate' -CorrelationID $CorrelationID
+                $errors.Add($errMsg)
+                continue
+            }
+
+            $reviewItems = @($itemsResult.Data)
+            if ($reviewItems.Count -eq 0) {
+                Write-SPLog -Message "Cert '$certId' has no review items -- skipping" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
+            $reviewItemIds = @($reviewItems | ForEach-Object { [string]$_.id })
+            $reason = "SLA escalation: $hoursOpen hours without action"
+
+            # WhatIf: describe without making API calls
+            if ($WhatIfPreference.IsPresent) {
+                Write-SPLog -Message "WhatIf: Would reassign cert '$certId' ($($reviewItemIds.Count) items) from '$reviewerId' to '$escalationTarget'" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $escalated.Add($certId)
+                continue
+            }
+
+            # Reassign: sync if <=50 items, async if >50 (ISC constraint)
+            if ($reviewItemIds.Count -le 50) {
+                Write-SPLog -Message "Reassigning cert '$certId' ($($reviewItemIds.Count) items) to '$escalationTarget' (sync)" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+
+                $reassignResult = Invoke-SPReassign `
+                    -CertificationId $certId `
+                    -NewCertifierIdentityId $escalationTarget `
+                    -ReviewItemIds $reviewItemIds `
+                    -Reason $reason `
+                    -CorrelationID $CorrelationID
+            }
+            else {
+                Write-SPLog -Message "Reassigning cert '$certId' ($($reviewItemIds.Count) items) to '$escalationTarget' (async, >50 items)" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+
+                $reassignResult = Invoke-SPReassignAsync `
+                    -CertificationId $certId `
+                    -NewCertifierIdentityId $escalationTarget `
+                    -ReviewItemIds $reviewItemIds `
+                    -Reason $reason `
+                    -CorrelationID $CorrelationID
+            }
+
+            if ($reassignResult.Success) {
+                Write-SPLog -Message "Cert '$certId' escalated from '$reviewerId' to '$escalationTarget'" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $escalated.Add($certId)
+            }
+            else {
+                $errMsg = "Reassignment failed for cert '$certId': $($reassignResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertEscalate' -CorrelationID $CorrelationID
+                $errors.Add($errMsg)
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPDeltaCertEscalate complete: Escalated=$($escalated.Count) Skipped=$($skipped.Count) Errors=$($errors.Count)" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = ($errors.Count -eq 0)
+            Data    = @{
+                Escalated = $escalated.ToArray()
+                Skipped   = $skipped.ToArray()
+                Errors    = $errors.ToArray()
+            }
+            Error   = if ($errors.Count -gt 0) { $errors -join '; ' } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDeltaCertEscalate failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+            -Action 'Invoke-SPDeltaCertEscalate' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 function Invoke-SPDeltaCertCleanup {
     <#
     .SYNOPSIS
@@ -973,5 +1200,6 @@ function Invoke-SPDeltaCertCleanup {
 
 Export-ModuleMember -Function @(
     'Invoke-SPDeltaCertRun',
-    'Invoke-SPDeltaCertCleanup'
+    'Invoke-SPDeltaCertCleanup',
+    'Invoke-SPDeltaCertEscalate'
 )

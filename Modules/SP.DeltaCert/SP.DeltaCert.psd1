@@ -34,10 +34,12 @@
         'Get-SPDeltaAffectedIdentities'
         'Group-SPDeltaByManager'
         'Get-SPDeltaCertStaleCertifications'
+        'Get-SPDeltaIdentityDetail'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'
         'Invoke-SPDeltaCertCleanup'
+        'Invoke-SPDeltaCertEscalate'
     )
 
     # Do not export variables or aliases from nested modules

@@ -801,5 +801,6 @@ Export-ModuleMember -Function @(
     'Get-SPDeltaGrantEvents',
     'Get-SPDeltaAffectedIdentities',
     'Group-SPDeltaByManager',
-    'Get-SPDeltaCertStaleCertifications'
+    'Get-SPDeltaCertStaleCertifications',
+    'Get-SPDeltaIdentityDetail'
 )

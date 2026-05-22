@@ -1393,3 +1393,208 @@ Describe "DC-023: JSONL audit line contains all required fields" {
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region DC-029: Stale cert with reviewer who has a manager triggers Invoke-SPReassign
+# ---------------------------------------------------------------------------
+
+Describe "DC-029: Invoke-SPDeltaCertEscalate reassigns stale cert to reviewer's manager" {
+
+    Context "When stale cert reviewer has a manager in ISC" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaIdentityDetail -ModuleName SP.DeltaCertRunner {
+                return @{
+                    IdentityId  = $IdentityId
+                    DisplayName = 'Reviewer One'
+                    ManagerId   = 'mgr-boss-001'
+                    ManagerName = 'Boss One'
+                    IsActive    = $true
+                    Found       = $true
+                }
+            }
+
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = 'item-001' }
+                        [PSCustomObject]@{ id = 'item-002' }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Invoke-SPReassign -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = $null; Error = $null }
+            }
+
+            Mock Invoke-SPReassignAsync -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should call Invoke-SPReassign with the manager's identity ID" {
+            $staleCerts = @(
+                [PSCustomObject]@{
+                    CertificationId        = 'cert-stale-001'
+                    CampaignId             = 'camp-001'
+                    CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr One'
+                    ReviewerIdentityId     = 'reviewer-001'
+                    ReviewerName           = 'Reviewer One'
+                    HoursOpen              = 36
+                    ReviewerClassification = 'Primary'
+                }
+            )
+
+            $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts
+
+            $result.Success              | Should -Be $true
+            $result.Data.Escalated.Count | Should -Be 1
+            $result.Data.Escalated[0]    | Should -Be 'cert-stale-001'
+            $result.Data.Skipped.Count   | Should -Be 0
+
+            Should -Invoke Invoke-SPReassign -ModuleName SP.DeltaCertRunner -Times 1 -ParameterFilter {
+                $CertificationId -eq 'cert-stale-001' -and
+                $NewCertifierIdentityId -eq 'mgr-boss-001' -and
+                $Reason -match '36 hours'
+            }
+        }
+
+        It "Should return Escalated count and no errors" {
+            $staleCerts = @(
+                [PSCustomObject]@{
+                    CertificationId        = 'cert-stale-002'
+                    CampaignId             = 'camp-002'
+                    CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr Two'
+                    ReviewerIdentityId     = 'reviewer-002'
+                    ReviewerName           = 'Reviewer Two'
+                    HoursOpen              = 48
+                    ReviewerClassification = 'Primary'
+                }
+            )
+
+            $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts
+
+            $result.Success            | Should -Be $true
+            $result.Data.Errors.Count  | Should -Be 0
+        }
+    }
+}
+
+#endregion DC-029
+
+# ---------------------------------------------------------------------------
+#region DC-030: Reviewer with no manager is skipped, not errored
+# ---------------------------------------------------------------------------
+
+Describe "DC-030: Invoke-SPDeltaCertEscalate skips reviewer with no manager" {
+
+    Context "When reviewer has no manager in ISC" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaIdentityDetail -ModuleName SP.DeltaCertRunner {
+                return @{
+                    IdentityId  = $IdentityId
+                    DisplayName = 'Top Level Exec'
+                    ManagerId   = ''
+                    ManagerName = ''
+                    IsActive    = $true
+                    Found       = $true
+                }
+            }
+
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DeltaCertRunner { }
+            Mock Invoke-SPReassign             -ModuleName SP.DeltaCertRunner { }
+            Mock Invoke-SPReassignAsync         -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should skip the cert and not call Invoke-SPReassign" {
+            $staleCerts = @(
+                [PSCustomObject]@{
+                    CertificationId        = 'cert-nomanager-001'
+                    CampaignId             = 'camp-003'
+                    CampaignName           = 'AD Delta Cert 2026-05-20 - Top Exec'
+                    ReviewerIdentityId     = 'exec-001'
+                    ReviewerName           = 'Top Level Exec'
+                    HoursOpen              = 48
+                    ReviewerClassification = 'Primary'
+                }
+            )
+
+            $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts
+
+            $result.Success             | Should -Be $true
+            $result.Data.Skipped.Count  | Should -Be 1
+            $result.Data.Skipped[0]     | Should -Be 'cert-nomanager-001'
+            $result.Data.Escalated.Count | Should -Be 0
+            $result.Data.Errors.Count   | Should -Be 0
+
+            Should -Not -Invoke Invoke-SPReassign      -ModuleName SP.DeltaCertRunner
+            Should -Not -Invoke Invoke-SPReassignAsync  -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion DC-030
+
+# ---------------------------------------------------------------------------
+#region DC-031: WhatIf mode does not call Invoke-SPReassign
+# ---------------------------------------------------------------------------
+
+Describe "DC-031: Invoke-SPDeltaCertEscalate WhatIf does not call reassignment APIs" {
+
+    Context "When -WhatIf is specified" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+
+            Mock Get-SPDeltaIdentityDetail -ModuleName SP.DeltaCertRunner {
+                return @{
+                    IdentityId  = $IdentityId
+                    DisplayName = 'Reviewer One'
+                    ManagerId   = 'mgr-boss-001'
+                    ManagerName = 'Boss One'
+                    IsActive    = $true
+                    Found       = $true
+                }
+            }
+
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DeltaCertRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = 'item-001' }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Invoke-SPReassign      -ModuleName SP.DeltaCertRunner { }
+            Mock Invoke-SPReassignAsync  -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Should not call Invoke-SPReassign or Invoke-SPReassignAsync" {
+            $staleCerts = @(
+                [PSCustomObject]@{
+                    CertificationId        = 'cert-whatif-001'
+                    CampaignId             = 'camp-004'
+                    CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr One'
+                    ReviewerIdentityId     = 'reviewer-whatif-001'
+                    ReviewerName           = 'Reviewer One'
+                    HoursOpen              = 36
+                    ReviewerClassification = 'Primary'
+                }
+            )
+
+            $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts -WhatIf
+
+            $result.Success              | Should -Be $true
+            $result.Data.Escalated.Count | Should -Be 1
+
+            Should -Not -Invoke Invoke-SPReassign      -ModuleName SP.DeltaCertRunner
+            Should -Not -Invoke Invoke-SPReassignAsync  -ModuleName SP.DeltaCertRunner
+        }
+    }
+}
+
+#endregion DC-031
