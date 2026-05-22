@@ -118,9 +118,9 @@ if ($Tags -and $TestId) {
     exit 4
 }
 
-# Resolve config path
+# Resolve config path (honors settings.local.json override)
 if (-not $ConfigPath) {
-    $ConfigPath = Join-Path $toolkitRoot 'Config\settings.json'
+    $ConfigPath = Resolve-SPConfigPath -ToolkitRoot $toolkitRoot
 }
 
 # Initialize logging (best-effort -- logging may depend on config)

@@ -54,6 +54,7 @@
     FunctionsToExport = @(
         # SP.Config exports
         'Get-SPConfig',
+        'Resolve-SPConfigPath',
         'Test-SPConfig',
         'Test-SPConfigFirstRun',
         'New-SPConfigFile',

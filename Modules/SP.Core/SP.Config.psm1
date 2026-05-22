@@ -308,6 +308,47 @@ function Write-SPFirstRunMessage {
 
 #region Public Functions
 
+function Resolve-SPConfigPath {
+    <#
+    .SYNOPSIS
+        Returns the toolkit's config file path, honoring the settings.local.json override.
+    .DESCRIPTION
+        Convention: when settings.local.json exists next to settings.json, the local
+        file is used. This lets the tracked settings.json template stay as the
+        CHANGE_ME example while developers run against a gitignored
+        settings.local.json with stubs or real values. Entry-point scripts call this
+        instead of hardcoding the settings.json path so every entry point — GUI,
+        CLI runner, audit, vault setup, connectivity test — respects the same rule.
+    .PARAMETER ToolkitRoot
+        Path to the toolkit root (containing the Config\ directory). If omitted,
+        resolves relative to this module's location.
+    .OUTPUTS
+        [string] Absolute path to the config file. The file is NOT required to exist;
+        Get-SPConfig handles the missing-file first-run flow.
+    .EXAMPLE
+        $ConfigPath = Resolve-SPConfigPath -ToolkitRoot $myRoot
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [string]$ToolkitRoot
+    )
+
+    if ([string]::IsNullOrEmpty($ToolkitRoot)) {
+        $ToolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    }
+
+    $configDir   = [System.IO.Path]::GetFullPath((Join-Path $ToolkitRoot 'Config'))
+    $localPath   = Join-Path $configDir 'settings.local.json'
+    $defaultPath = Join-Path $configDir 'settings.json'
+
+    if (Test-Path -Path $localPath -PathType Leaf) {
+        return $localPath
+    }
+    return $defaultPath
+}
+
 function Get-SPConfig {
     <#
     .SYNOPSIS
@@ -315,9 +356,15 @@ function Get-SPConfig {
     .DESCRIPTION
         Reads the configuration file, merges with defaults, and returns a PSCustomObject.
         Caches the result by path. Use -Force to bypass cache.
+
+        Local override convention: when -ConfigPath is omitted, settings.local.json
+        next to settings.json wins if present. This lets the tracked settings.json
+        stay as the CHANGE_ME template while developers run against a gitignored
+        settings.local.json with stubs or real values.
     .PARAMETER ConfigPath
-        Path to the settings.json file. Defaults to ..\..\Config\settings.json
-        relative to the module location.
+        Path to the settings.json file. Defaults to ..\..\Config\settings.local.json
+        if present, otherwise ..\..\Config\settings.json (relative to the module
+        location).
     .PARAMETER Force
         Force reload even if cached.
     .OUTPUTS
@@ -339,10 +386,11 @@ function Get-SPConfig {
         [switch]$Force
     )
 
-    # Determine config path
+    # Determine config path. When -ConfigPath is not supplied, defer to
+    # Resolve-SPConfigPath which honors the settings.local.json override.
     if (-not $ConfigPath) {
-        $ConfigPath = Join-Path -Path $PSScriptRoot -ChildPath '..\..\Config\settings.json'
-        $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+        $ConfigPath = Resolve-SPConfigPath
+        Write-Verbose "Resolved default config path: $ConfigPath"
     }
 
     # Return cached config if available and not forced
@@ -558,6 +606,7 @@ function New-SPConfigFile {
 # Export public functions
 Export-ModuleMember -Function @(
     'Get-SPConfig',
+    'Resolve-SPConfigPath',
     'Test-SPConfig',
     'Test-SPConfigFirstRun',
     'New-SPConfigFile'

@@ -42,6 +42,16 @@ $script:IsRunning               = $false
 $script:AuditCampaignDataSource = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsAuditRunning          = $false
 
+# Module reference used to re-enter module scope from WPF event handlers.
+# Populated by Show-SPDashboard / headless harness before handlers are wired.
+# WPF stores click handlers as delegates and PowerShell 5.1 drops module
+# SessionState during delegate conversion, so function-name lookup inside a
+# fired handler resolves against the global scope instead of this module.
+# Wrap handler bodies in & $script:ThisModule { ... } to re-enter module
+# scope so private helpers (Set-StatusMessage, Invoke-GuiTestRun, Load-*,
+# Save-*, etc.) resolve at fire-time.
+$script:ThisModule = $null
+
 #endregion
 
 #region Internal XAML Helpers
@@ -174,6 +184,10 @@ function Initialize-CampaignTab {
     [CmdletBinding()]
     param($TabContent)
 
+    # Local capture of module reference. .GetNewClosure() preserves locals
+    # across the WPF delegate conversion; $script:* lookups don't survive it.
+    $module = $script:ThisModule
+
     $campaignGrid   = Find-Control -Parent $TabContent -Name 'CampaignGrid'
     $btnRunSelected = Find-Control -Parent $TabContent -Name 'BtnRunSelected'
     $btnRunAll      = Find-Control -Parent $TabContent -Name 'BtnRunAll'
@@ -190,50 +204,62 @@ function Initialize-CampaignTab {
     # Refresh button
     if ($btnRefresh) {
         $btnRefresh.Add_Click({
-            Load-CampaignData -Grid $campaignGrid -TagFilter $tagFilter -ProgressLabel $progressLabel
+            & $module {
+                param($grid, $tf, $pl)
+                Load-CampaignData -Grid $grid -TagFilter $tf -ProgressLabel $pl
+            } $campaignGrid $tagFilter $progressLabel
         }.GetNewClosure())
     }
 
     # Run Selected
     if ($btnRunSelected) {
         $btnRunSelected.Add_Click({
-            $selected = @($script:LoadedCampaigns | Where-Object { $_.IsSelected -eq $true })
-            if ($selected.Count -eq 0) {
-                Set-StatusMessage -Message 'No campaigns selected. Use the checkbox column to select tests.' -IsError
-                return
-            }
-            Invoke-GuiTestRun -Campaigns $selected -ProgressBar $progressBar `
-                -ProgressLabel $progressLabel -ResultSummary $resultSummary
+            & $module {
+                param($pb, $pl, $rs)
+                $selected = @($script:LoadedCampaigns | Where-Object { $_.IsSelected -eq $true })
+                if ($selected.Count -eq 0) {
+                    Set-StatusMessage -Message 'No campaigns selected. Use the checkbox column to select tests.' -IsError
+                    return
+                }
+                Invoke-GuiTestRun -Campaigns $selected -ProgressBar $pb `
+                    -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
     # Run All
     if ($btnRunAll) {
         $btnRunAll.Add_Click({
-            $all = @($script:LoadedCampaigns | ForEach-Object { $_._Original })
-            if ($all.Count -eq 0) {
-                Set-StatusMessage -Message 'No campaigns loaded.' -IsError
-                return
-            }
-            Invoke-GuiTestRun -Campaigns $all -ProgressBar $progressBar `
-                -ProgressLabel $progressLabel -ResultSummary $resultSummary
+            & $module {
+                param($pb, $pl, $rs)
+                $all = @($script:LoadedCampaigns | ForEach-Object { $_._Original })
+                if ($all.Count -eq 0) {
+                    Set-StatusMessage -Message 'No campaigns loaded.' -IsError
+                    return
+                }
+                Invoke-GuiTestRun -Campaigns $all -ProgressBar $pb `
+                    -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressLabel $resultSummary
         }.GetNewClosure())
     }
 
     # Run Smoke
     if ($btnRunSmoke) {
         $btnRunSmoke.Add_Click({
-            $smoke = @($script:LoadedCampaigns | Where-Object {
-                $tags = $_._Original.Tags -split ',' | ForEach-Object { $_.Trim().ToLower() }
-                $tags -contains 'smoke'
-            } | ForEach-Object { $_._Original })
+            & $module {
+                param($pb, $pl, $rs)
+                $smoke = @($script:LoadedCampaigns | Where-Object {
+                    $tags = $_._Original.Tags -split ',' | ForEach-Object { $_.Trim().ToLower() }
+                    $tags -contains 'smoke'
+                } | ForEach-Object { $_._Original })
 
-            if ($smoke.Count -eq 0) {
-                Set-StatusMessage -Message 'No smoke-tagged campaigns found. Add Tags=smoke to test cases.' -IsError
-                return
-            }
-            Invoke-GuiTestRun -Campaigns $smoke -ProgressBar $progressBar `
-                -ProgressLabel $progressLabel -ResultSummary $resultSummary
+                if ($smoke.Count -eq 0) {
+                    Set-StatusMessage -Message 'No smoke-tagged campaigns found. Add Tags=smoke to test cases.' -IsError
+                    return
+                }
+                Invoke-GuiTestRun -Campaigns $smoke -ProgressBar $pb `
+                    -ProgressLabel $pl -ResultSummary $rs
+            } $progressBar $progressLabel $resultSummary
         }.GetNewClosure())
     }
 }
@@ -268,9 +294,9 @@ function Load-CampaignData {
         } | Where-Object { $_ } | Sort-Object -Unique
 
         $TagFilter.Items.Clear()
-        $TagFilter.Items.Add('(All)')
+        [void]$TagFilter.Items.Add('(All)')
         foreach ($tag in $allTags) {
-            $TagFilter.Items.Add($tag)
+            [void]$TagFilter.Items.Add($tag)
         }
         $TagFilter.SelectedIndex = 0
     }
@@ -285,6 +311,39 @@ function Invoke-GuiTestRun {
     if ($script:IsRunning) {
         Set-StatusMessage -Message 'A test run is already in progress.' -IsError
         return
+    }
+
+    # Safety guard: honor Safety.RequireWhatIfOnProd. The CLI (Invoke-GovernanceTest.ps1)
+    # gates live execution behind ShouldProcess; the GUI previously bypassed this entirely
+    # by hardcoding -WhatIf:$false in Invoke-SPGuiTest. If the flag is set in config, prompt
+    # the user before spawning the live runspace. Defaults to safe (prompt) if config can't
+    # be read for any reason.
+    $requireConfirm = $true
+    $envName        = 'Unknown'
+    try {
+        $cfg = Get-SPConfig -ConfigPath $script:ConfigPath
+        if ($cfg -and $cfg.Safety -and ($cfg.Safety.PSObject.Properties.Name -contains 'RequireWhatIfOnProd')) {
+            $requireConfirm = [bool]$cfg.Safety.RequireWhatIfOnProd
+        }
+        if ($cfg -and $cfg.Global -and ($cfg.Global.PSObject.Properties.Name -contains 'EnvironmentName')) {
+            $envName = [string]$cfg.Global.EnvironmentName
+        }
+    } catch { }
+
+    if ($requireConfirm) {
+        $msg = "Safety.RequireWhatIfOnProd is enabled in settings.json.`n`n" +
+               "About to run $($Campaigns.Count) live test campaign(s) against environment: $envName`n`n" +
+               "Continue with live API execution?"
+        $choice = [System.Windows.MessageBox]::Show(
+            $msg,
+            'Confirm Live Test Run',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($choice -ne [System.Windows.MessageBoxResult]::Yes) {
+            Set-StatusMessage -Message 'Run cancelled by user (Safety.RequireWhatIfOnProd).'
+            return
+        }
     }
 
     $script:IsRunning = $true
@@ -367,37 +426,62 @@ function Invoke-GuiTestRun {
 
     $asyncResult = $psInstance.BeginInvoke()
 
-    # Register callback to clean up and update status when done
+    # Register callback to clean up and update status when done.
+    # Also enforces a max-wait ceiling so a deadlocked runspace can't leak forever.
     $timer = [System.Windows.Threading.DispatcherTimer]::new()
     $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
 
-    $capturedTimer    = $timer
-    $capturedPs       = $psInstance
-    $capturedRunspace = $runspace
-    $capturedAsync    = $asyncResult
+    # 30 min ceiling for any single GUI-launched suite. The CLI doesn't impose this
+    # — it inherits user-controllable command-line behavior — but the GUI has no
+    # cancel button, so an upper bound prevents permanent IsRunning lockout if the
+    # runspace deadlocks (network hang, infinite retry, etc.).
+    $maxWaitSeconds = 1800
+
+    $capturedTimer       = $timer
+    $capturedPs          = $psInstance
+    $capturedRunspace    = $runspace
+    $capturedAsync       = $asyncResult
+    $capturedStartTime   = Get-Date
+    $capturedMaxWaitSec  = $maxWaitSeconds
+    $capturedModule      = $script:ThisModule
 
     $timer.Add_Tick({
-        if ($capturedPs.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')) {
-            $capturedTimer.Stop()
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $start, $maxSec)
 
-            if ($capturedPs.HadErrors) {
-                $errMsg = ($capturedPs.Streams.Error | Select-Object -First 1).Exception.Message
-                Set-StatusMessage -Message "Test run failed: $errMsg" -IsError
-            }
-            else {
-                Set-StatusMessage -Message 'Test run complete.'
-            }
+            $elapsed = ((Get-Date) - $start).TotalSeconds
+            $done    = $ps.InvocationStateInfo.State -in @('Completed', 'Failed', 'Stopped')
+            $timeout = (-not $done) -and ($elapsed -gt $maxSec)
 
+            if (-not ($done -or $timeout)) { return }
+
+            $t.Stop()
             try {
-                $capturedPs.EndInvoke($capturedAsync) | Out-Null
-                $capturedPs.Dispose()
-                $capturedRunspace.Close()
-            }
-            catch { }
+                if ($timeout) {
+                    try { $ps.Stop() } catch { }
+                    Set-StatusMessage -Message ("Test run aborted: exceeded {0}s ceiling." -f $maxSec) -IsError
+                }
+                elseif ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Test run failed: $errMsg" -IsError
+                }
+                else {
+                    Set-StatusMessage -Message 'Test run complete.'
+                }
 
-            $script:IsRunning = $false
-        }
-    })
+                try {
+                    if (-not $timeout) {
+                        $ps.EndInvoke($async) | Out-Null
+                    }
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedStartTime $capturedMaxWaitSec
+    }.GetNewClosure())
 
     $timer.Start()
 }
@@ -414,6 +498,8 @@ function Initialize-EvidenceTab {
     [CmdletBinding()]
     param($TabContent)
 
+    $module = $script:ThisModule
+
     $evidenceTree   = Find-Control -Parent $TabContent -Name 'EvidenceTree'
     $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshEvidence'
     $btnOpenBrowser = Find-Control -Parent $TabContent -Name 'BtnOpenInBrowser'
@@ -421,16 +507,22 @@ function Initialize-EvidenceTab {
 
     if ($btnRefresh) {
         $btnRefresh.Add_Click({
-            Load-EvidenceTree -Tree $evidenceTree
+            & $module {
+                param($tree)
+                Load-EvidenceTree -Tree $tree
+            } $evidenceTree
         }.GetNewClosure())
     }
 
     if ($evidenceTree) {
         $evidenceTree.Add_SelectedItemChanged({
-            $selectedNode = $evidenceTree.SelectedItem
-            if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
-                Load-EvidenceDetail -FilePath $selectedNode.Tag -DetailGrid $detailGrid
-            }
+            & $module {
+                param($tree, $dg)
+                $selectedNode = $tree.SelectedItem
+                if ($null -ne $selectedNode -and $selectedNode.Tag -and (Test-Path $selectedNode.Tag)) {
+                    Load-EvidenceDetail -FilePath $selectedNode.Tag -DetailGrid $dg
+                }
+            } $evidenceTree $detailGrid
         }.GetNewClosure())
     }
 
@@ -529,6 +621,8 @@ function Initialize-SettingsTab {
     [CmdletBinding()]
     param($TabContent)
 
+    $module = $script:ThisModule
+
     $btnSave         = Find-Control -Parent $TabContent -Name 'BtnSaveSettings'
     $btnReset        = Find-Control -Parent $TabContent -Name 'BtnResetDefaults'
     $btnTestConn     = Find-Control -Parent $TabContent -Name 'BtnTestConnectivity'
@@ -548,7 +642,10 @@ function Initialize-SettingsTab {
     # Save settings
     if ($btnSave) {
         $btnSave.Add_Click({
-            Save-SettingsForm -TabContent $TabContent
+            & $module {
+                param($tc)
+                Save-SettingsForm -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
@@ -562,7 +659,10 @@ function Initialize-SettingsTab {
                 [System.Windows.MessageBoxImage]::Warning
             )
             if ($result -eq [System.Windows.MessageBoxResult]::Yes) {
-                Load-SettingsForm -TabContent $TabContent
+                & $module {
+                    param($tc)
+                    Load-SettingsForm -TabContent $tc
+                } $TabContent
             }
         }.GetNewClosure())
     }
@@ -570,97 +670,110 @@ function Initialize-SettingsTab {
     # Test connectivity
     if ($btnTestConn) {
         $btnTestConn.Add_Click({
-            try {
-                # Re-find the control inside the handler: local vars from the outer
-                # Initialize-SettingsTab scope are not reliably visible here under
-                # Set-StrictMode in a module. $script:MainWindow is module-scoped and safe.
-                $connStatusCtl = Find-Control -Parent $script:MainWindow -Name 'ConnectivityStatusText'
-                if ($null -ne $connStatusCtl) {
-                    $connStatusCtl.Text = 'Testing connectivity...'
-                    $connStatusCtl.Foreground = [System.Windows.Media.Brushes]::LightGray
-                }
-                Set-StatusMessage -Message 'Running connectivity test...'
-
-                $statusResult = Test-SPGuiConnectivity -ConfigPath $script:ConfigPath
-
-                if ($null -ne $connStatusCtl) {
-                    $connStatusCtl.Text = $statusResult.OverallMessage
-                    $connStatusCtl.Foreground = if ($statusResult.Success) {
-                        [System.Windows.Media.Brushes]::LightGreen
-                    } else {
-                        [System.Windows.Media.Brushes]::Salmon
+            & $module {
+                try {
+                    $connStatusCtl = Find-Control -Parent $script:MainWindow -Name 'ConnectivityStatusText'
+                    if ($null -ne $connStatusCtl) {
+                        $connStatusCtl.Text = 'Testing connectivity...'
+                        $connStatusCtl.Foreground = [System.Windows.Media.Brushes]::LightGray
                     }
+                    Set-StatusMessage -Message 'Running connectivity test...'
+
+                    $statusResult = Test-SPGuiConnectivity -ConfigPath $script:ConfigPath
+
+                    if ($null -ne $connStatusCtl) {
+                        $connStatusCtl.Text = $statusResult.OverallMessage
+                        $connStatusCtl.Foreground = if ($statusResult.Success) {
+                            [System.Windows.Media.Brushes]::LightGreen
+                        } else {
+                            [System.Windows.Media.Brushes]::Salmon
+                        }
+                    }
+                    Set-StatusMessage -Message $statusResult.OverallMessage -IsError:(-not $statusResult.Success)
                 }
-                Set-StatusMessage -Message $statusResult.OverallMessage -IsError:(-not $statusResult.Success)
+                catch {
+                    $errMsg = "Test Connectivity handler failed: $($_.Exception.Message)"
+                    try { Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Gui' -Action 'TestConnectivity' } catch { }
+                    try { Set-StatusMessage -Message $errMsg -IsError } catch { }
+                }
             }
-            catch {
-                $errMsg = "Test Connectivity handler failed: $($_.Exception.Message)"
-                try { Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Gui' -Action 'TestConnectivity' } catch { }
-                try { Set-StatusMessage -Message $errMsg -IsError } catch { }
-            }
-        })
+        }.GetNewClosure())
     }
 
     # Apply browser token
     if ($btnApplyToken) {
         $btnApplyToken.Add_Click({
-            $tokenValue = ''
-            if ($null -ne $pbBrowserToken) {
-                $tokenValue = $pbBrowserToken.Password
-            }
-
-            $result = Set-SPGuiBrowserToken -Token $tokenValue
-
-            if ($null -ne $tokenStatus) {
-                $tokenStatus.Text = $result.Message
-                $tokenStatus.Foreground = if ($result.Success) {
-                    [System.Windows.Media.Brushes]::LightGreen
-                } else {
-                    [System.Windows.Media.Brushes]::Salmon
+            & $module {
+                param($pb, $ts)
+                $tokenValue = ''
+                if ($null -ne $pb) {
+                    $tokenValue = $pb.Password
                 }
-            }
 
-            Set-StatusMessage -Message $result.Message -IsError:(-not $result.Success)
+                $result = Set-SPGuiBrowserToken -Token $tokenValue
+
+                if ($null -ne $ts) {
+                    $ts.Text = $result.Message
+                    $ts.Foreground = if ($result.Success) {
+                        [System.Windows.Media.Brushes]::LightGreen
+                    } else {
+                        [System.Windows.Media.Brushes]::Salmon
+                    }
+                }
+
+                Set-StatusMessage -Message $result.Message -IsError:(-not $result.Success)
+            } $pbBrowserToken $tokenStatus
         }.GetNewClosure())
     }
 
     # Clear browser token
     if ($btnClearToken) {
         $btnClearToken.Add_Click({
-            Clear-SPAuthToken
+            & $module {
+                param($pb, $ts)
+                Clear-SPAuthToken
 
-            if ($null -ne $pbBrowserToken) {
-                $pbBrowserToken.Clear()
-            }
+                if ($null -ne $pb) {
+                    $pb.Clear()
+                }
 
-            if ($null -ne $tokenStatus) {
-                $tokenStatus.Text = 'Browser token cleared. Toolkit will use configured OAuth credentials.'
-                $tokenStatus.Foreground = [System.Windows.Media.Brushes]::LightGray
-            }
+                if ($null -ne $ts) {
+                    $ts.Text = 'Browser token cleared. Toolkit will use configured OAuth credentials.'
+                    $ts.Foreground = [System.Windows.Media.Brushes]::LightGray
+                }
 
-            Set-StatusMessage -Message 'Browser token cleared.'
+                Set-StatusMessage -Message 'Browser token cleared.'
+            } $pbBrowserToken $tokenStatus
         }.GetNewClosure())
     }
 
     # Browse buttons: wire file picker for CSVs, folder picker for directories
     if ($btnBrowseIds) {
         $btnBrowseIds.Add_Click({
-            Invoke-GuiFilePicker -TargetName 'TxtIdentitiesCsvPath' -Title 'Select test-identities.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+            & $module {
+                Invoke-GuiFilePicker -TargetName 'TxtIdentitiesCsvPath' -Title 'Select test-identities.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+            }
         }.GetNewClosure())
     }
     if ($btnBrowseCamps) {
         $btnBrowseCamps.Add_Click({
-            Invoke-GuiFilePicker -TargetName 'TxtCampaignsCsvPath' -Title 'Select test-campaigns.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+            & $module {
+                Invoke-GuiFilePicker -TargetName 'TxtCampaignsCsvPath' -Title 'Select test-campaigns.csv' -Filter 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+            }
         }.GetNewClosure())
     }
     if ($btnBrowseEvid) {
         $btnBrowseEvid.Add_Click({
-            Invoke-GuiFolderPicker -TargetName 'TxtEvidencePath' -Description 'Select Evidence output folder'
+            & $module {
+                Invoke-GuiFolderPicker -TargetName 'TxtEvidencePath' -Description 'Select Evidence output folder'
+            }
         }.GetNewClosure())
     }
     if ($btnBrowseReps) {
         $btnBrowseReps.Add_Click({
-            Invoke-GuiFolderPicker -TargetName 'TxtReportsPath' -Description 'Select Reports output folder'
+            & $module {
+                Invoke-GuiFolderPicker -TargetName 'TxtReportsPath' -Description 'Select Reports output folder'
+            }
         }.GetNewClosure())
     }
 }
@@ -774,7 +887,7 @@ function Save-SettingsForm {
 
     $configPath = $script:ConfigPath
     if (-not $configPath) {
-        $configPath = Join-Path $script:ToolkitRoot 'Config\settings.json'
+        $configPath = Resolve-SPConfigPath -ToolkitRoot $script:ToolkitRoot
     }
 
     $getField = {
@@ -905,6 +1018,8 @@ function Initialize-AuditTab {
     [CmdletBinding()]
     param($TabContent)
 
+    $module = $script:ThisModule
+
     $txtName              = Find-Control -Parent $TabContent -Name 'TxtAuditCampaignName'
     $cboStatus            = Find-Control -Parent $TabContent -Name 'CboAuditStatus'
     $cboTimespan          = Find-Control -Parent $TabContent -Name 'CboAuditTimespan'
@@ -918,7 +1033,10 @@ function Initialize-AuditTab {
     # Query Campaigns button
     if ($btnQuery) {
         $btnQuery.Add_Click({
-            Invoke-AuditCampaignQuery -TabContent $TabContent
+            & $module {
+                param($tc)
+                Invoke-AuditCampaignQuery -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
@@ -941,14 +1059,17 @@ function Initialize-AuditTab {
     # Run Audit button
     if ($btnRunAudit) {
         $btnRunAudit.Add_Click({
-            Invoke-GuiAuditRun -TabContent $TabContent
+            & $module {
+                param($tc)
+                Invoke-GuiAuditRun -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
     # Open Reports Folder button
     if ($btnOpenFolder) {
         $btnOpenFolder.Add_Click({
-            $outputPath = Resolve-AuditOutputPath
+            $outputPath = & $module { Resolve-AuditOutputPath }
             if (-not (Test-Path $outputPath)) {
                 [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
             }
@@ -959,7 +1080,10 @@ function Initialize-AuditTab {
     # Refresh audit reports button
     if ($btnRefreshReports) {
         $btnRefreshReports.Add_Click({
-            Load-AuditReportList -TabContent $TabContent
+            & $module {
+                param($tc)
+                Load-AuditReportList -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
@@ -1399,13 +1523,18 @@ function Show-SPDashboard {
         [string]$ConfigPath
     )
 
+    # Capture this module so handler bodies can re-enter module scope at fire time.
+    # See $script:ThisModule comment near the top of this file.
+    $script:ThisModule = $ExecutionContext.SessionState.Module
+
     # Resolve toolkit root from module location
     # Module is at: <toolkit>\Modules\SP.Gui\SP.MainWindow.psm1
     $script:ToolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
     $script:ConfigPath  = $ConfigPath
 
     if (-not $script:ConfigPath) {
-        $script:ConfigPath = Join-Path $script:ToolkitRoot 'Config\settings.json'
+        # Honor settings.local.json override convention.
+        $script:ConfigPath = Resolve-SPConfigPath -ToolkitRoot $script:ToolkitRoot
     }
 
     # Initialize structured logging so handler/dispatcher errors have somewhere to go.

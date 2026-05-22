@@ -952,7 +952,15 @@ function Resolve-SPRelativePath {
     if ([System.IO.Path]::IsPathRooted($Path)) {
         return $Path
     }
-    $cleaned = $Path.TrimStart('.\').TrimStart('./')
+    # Strip exactly one leading .\ or ./ if present. The previous TrimStart(char[])
+    # form collapsed inputs like '..\..\foo' to 'foo' by removing every leading
+    # '.' and '\' character.
+    if ($Path.StartsWith('.\') -or $Path.StartsWith('./')) {
+        $cleaned = $Path.Substring(2)
+    }
+    else {
+        $cleaned = $Path
+    }
     return [System.IO.Path]::GetFullPath((Join-Path $BasePath $cleaned))
 }
 
