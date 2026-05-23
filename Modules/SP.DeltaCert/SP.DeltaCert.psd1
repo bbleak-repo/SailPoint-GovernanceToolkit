@@ -25,6 +25,7 @@
     NestedModules     = @(
         'SP.DeltaCertQueries.psm1'
         'SP.DeltaCertRunner.psm1'
+        'SP.DeltaCertReport.psm1'
     )
 
     # Public functions exported by this module
@@ -41,6 +42,10 @@
         'Invoke-SPDeltaCertRun'
         'Invoke-SPDeltaCertCleanup'
         'Invoke-SPDeltaCertEscalate'
+
+        # SP.DeltaCertReport - Delta report generation
+        'Get-SPDeltaReportData'
+        'Export-SPDeltaReportHtml'
     )
 
     # Do not export variables or aliases from nested modules
