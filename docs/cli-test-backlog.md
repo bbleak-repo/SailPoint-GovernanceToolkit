@@ -80,19 +80,19 @@ Stop-Process -Name pwsh -ErrorAction SilentlyContinue  # kills mock
 
 | ID | Test Battery | Tests | Depends On | Status |
 |----|-------------|-------|------------|--------|
-| T-01 | Test-SPConnectivity.ps1 | 1 | none | PENDING |
-| T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | PENDING |
-| T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | PENDING |
-| T-04 | Invoke-SPDeltaReport.ps1 | 3 | T-01 | PENDING |
-| T-05 | Invoke-SPDeltaCertEscalate.ps1 | 2 | T-01 | PENDING |
-| T-06 | Integration Test (full workflow) | 5 | T-02 to T-05 | PENDING |
+| T-01 | Test-SPConnectivity.ps1 | 1 | none | DONE |
+| T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | DONE |
+| T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | DONE |
+| T-04 | Invoke-SPDeltaReport.ps1 | 3 | T-01 | DONE |
+| T-05 | Invoke-SPDeltaCertEscalate.ps1 | 2 | T-01 | DONE |
+| T-06 | Integration Test (full workflow) | 5 | T-02 to T-05 | DONE |
 
 ---
 
 ## T-01: Test-SPConnectivity.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 1a6a413
 - **Depends On:** none
 
 **Tests:**
@@ -111,8 +111,8 @@ TC-01-01: .\Scripts\Test-SPConnectivity.ps1
 
 ## T-02: Invoke-SPCampaignAudit.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 3a31506
 - **Depends On:** T-01
 
 **Tests (7 parameter combos):**
@@ -160,8 +160,8 @@ TC-02-07: -Status COMPLETED -DaysBack 365 -IncludeLeadershipRollup -LeadershipDe
 
 ## T-03: Invoke-SPADDeltaCert.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 8cab65b
 - **Depends On:** T-01
 
 **IMPORTANT:** Restart mock server between tests that create campaigns (to reset state
@@ -201,9 +201,10 @@ TC-03-05: -SourceId 'src-ad-001' -HoursBack 1 -CampaignNamePrefix 'Test-DC-05' -
 
 ## T-04: Invoke-SPDeltaReport.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2da9d48
 - **Depends On:** T-01
+- **Bugs Found:** UTC/Local DateTime Kind mismatch in client-side date filtering (PS7 ConvertFrom-Json returns DateTime with Kind=Utc, but cutoff used Kind=Local). Fixed in SP.DeltaCertQueries.psm1 and SP.DeltaCertReport.psm1 (3 instances). Also fixed mock server to resolve relative timestamps in campaigns and certifications (not just accountActivities).
 
 **Tests (3 parameter combos):**
 
@@ -231,9 +232,10 @@ TC-04-03: -SourceId 'src-ad-001' -HoursBack 1 -OutputMode Console
 
 ## T-05: Invoke-SPDeltaCertEscalate.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2da9d48
 - **Depends On:** T-01
+- **Mock Fixes:** Added 2 source-owner identities (id-mgr-001, id-mgr-002) to seed data (were referenced as cert reviewers but not in identities array). Added 6 ARIs for delta certs (2 per cert) so escalation has items to reassign.
 
 **Tests (2):**
 
@@ -257,8 +259,8 @@ TC-05-02: -StaleHours 1 -OutputMode Console
 
 ## T-06: Integration Test (Full Workflow)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 2da9d48
 - **Depends On:** T-02 through T-05
 
 **Sequential flow -- all in one round, fresh mock state:**
