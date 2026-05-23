@@ -7163,6 +7163,197 @@ $($bodyRows -join "`n")
 
 #endregion
 
+#region Entitlement Inventory HTML (P11-07)
+
+function Export-SPEntitlementInventoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML entitlement inventory report grouped by source.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source entitlement tables.
+        Privileged entitlements are highlighted in red, unreviewed entitlements
+        in orange. Includes a summary card with total counts and coverage percentage.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER InventoryData
+        Hashtable output from Get-SPEntitlementInventory (the .Data property).
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $inv = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $path = Export-SPEntitlementInventoryHtml -InventoryData $inv.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$InventoryData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "EntitlementInventory-${timestamp}.html"
+
+    $summary = $InventoryData.Summary
+    $sources = $InventoryData.Sources
+
+    $hasReviewData = ($null -ne $summary.ReviewCoverage)
+    $coverageDisplay = if ($hasReviewData) { "$($summary.ReviewCoverage)%" } else { 'N/A' }
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary.TotalSources)</span>
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Total Entitlements<br/><span style="font-size:22px;">$($summary.TotalEntitlements)</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Privileged<br/><span style="font-size:22px;">$($summary.TotalPrivileged)</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Review Coverage<br/><span style="font-size:22px;">$coverageDisplay</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source sections ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($srcId in ($sources.Keys | Sort-Object)) {
+        $srcData = $sources[$srcId]
+        $srcName = ConvertTo-SafeHtml $srcData.SourceName
+
+        $sectionHeader = @"
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:4px;">$srcName</h2>
+<p style="font-size:12px; color:#666666; margin-top:0; margin-bottom:8px;">Source ID: $(ConvertTo-SafeHtml $srcId) | Entitlements: $($srcData.TotalEntitlements) | Privileged: $($srcData.Privileged)</p>
+"@
+
+        if ($srcData.TotalEntitlements -eq 0) {
+            $sourceSections.Add("${sectionHeader}<p style=""font-style:italic; color:#999999;"">No entitlements found for this source.</p>")
+            continue
+        }
+
+        # Build table headers
+        $headers = @('Name', 'Display Name', 'Type', 'Privileged', 'Owner')
+        if ($hasReviewData) {
+            $headers += @('Reviewed', 'Last Review')
+        }
+
+        $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; border:1px solid #dddddd;"'
+        $headerRow = "<thead><tr>" + (($headers | ForEach-Object { "<th $thStyle>$_</th>" }) -join '') + "</tr></thead>"
+
+        $bodyRows = [System.Collections.Generic.List[string]]::new()
+        $rowIdx = 0
+
+        foreach ($ent in $srcData.Entitlements) {
+            $rowIdx++
+            $bgColor = if (($rowIdx % 2) -eq 0) { '#f8f9fa' } else { '#ffffff' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-size:13px;"
+
+            # Highlight privileged in red, unreviewed in orange
+            $rowBg = $bgColor
+            if ($ent.Privileged) {
+                $rowBg = '#fce4e4'
+            } elseif ($hasReviewData -and $ent.Reviewed -eq $false) {
+                $rowBg = '#fff3e0'
+            }
+
+            $privDisplay = if ($ent.Privileged) { '<span style="color:#c0392b; font-weight:bold;">Yes</span>' } else { 'No' }
+
+            $cells = @(
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.Name)</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.DisplayName)</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.Type)</td>"
+                "<td style=""$tdStyle"">$privDisplay</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.OwnerName)</td>"
+            )
+
+            if ($hasReviewData) {
+                $reviewDisplay = if ($ent.Reviewed) {
+                    '<span style="color:#27ae60;">Yes</span>'
+                } else {
+                    '<span style="color:#e67e22; font-weight:bold;">No</span>'
+                }
+                $lastReview = if (-not [string]::IsNullOrWhiteSpace($ent.LastReviewDate)) {
+                    ConvertTo-SafeHtml (Format-HtmlDate $ent.LastReviewDate)
+                } else { '' }
+                $cells += @(
+                    "<td style=""$tdStyle"">$reviewDisplay</td>"
+                    "<td style=""$tdStyle"">$lastReview</td>"
+                )
+            }
+
+            $bodyRows.Add("<tr style=""background:$rowBg;"">$($cells -join '')</tr>")
+        }
+
+        $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+        $sourceSections.Add("${sectionHeader}${tableHtml}")
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Entitlement Inventory Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Entitlement Inventory Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+$($sourceSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Entitlement inventory HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPEntitlementInventoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -7186,5 +7377,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditTrailHtml',
     'Export-SPAuditCsv',
     'Measure-SPCampaignTrends',
-    'Export-SPCampaignTrendHtml'
+    'Export-SPCampaignTrendHtml',
+    'Export-SPEntitlementInventoryHtml'
 )

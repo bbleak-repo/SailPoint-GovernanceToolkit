@@ -77,6 +77,12 @@
         # SP.AuditReport - Campaign Trend Analytics (P11-06)
         'Measure-SPCampaignTrends'
         'Export-SPCampaignTrendHtml'
+
+        # SP.AuditQueries - Entitlement Inventory (P11-07)
+        'Get-SPEntitlementInventory'
+
+        # SP.AuditReport - Entitlement Inventory HTML (P11-07)
+        'Export-SPEntitlementInventoryHtml'
     )
 
     # Do not export variables or aliases from nested modules

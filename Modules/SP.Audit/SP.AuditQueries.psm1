@@ -2647,6 +2647,345 @@ function Get-SPRemediationStatus {
 
 #endregion
 
+#region Entitlement Inventory (P11-07)
+
+function Get-SPEntitlementInventory {
+    <#
+    .SYNOPSIS
+        Queries ISC /v3/entitlements to build a per-source entitlement catalog.
+    .DESCRIPTION
+        Retrieves all entitlements for the specified sources (or all sources) via
+        paginated GET /v3/entitlements calls. Optionally cross-references entitlement
+        names against access review items from recent campaigns to identify
+        entitlements that have never been reviewed.
+
+        Uses the same pagination pattern as Get-SPAuditCampaigns and
+        Get-SPSourceCampaignCoverage.
+    .PARAMETER SourceIds
+        Optional array of source IDs to query. If omitted, queries all entitlements.
+    .PARAMETER IncludeReviewHistory
+        When set, cross-references entitlements against recent campaign access review
+        items to mark each as reviewed or unreviewed.
+    .PARAMETER DaysBack
+        Number of days to look back for review history. Default: 365.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Sources = @{ 'source-id' = @{ SourceName; TotalEntitlements; Privileged; Reviewed; Unreviewed; Entitlements } }
+                Summary = @{ TotalSources; TotalEntitlements; TotalPrivileged; ReviewCoverage }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $result = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $result.Data.Summary
+    .EXAMPLE
+        $result = Get-SPEntitlementInventory -DaysBack 180
+        $result.Data.Sources.Keys | ForEach-Object { $result.Data.Sources[$_].SourceName }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$IncludeReviewHistory,
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sourceLabel = if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) { $SourceIds -join ',' } else { 'ALL' }
+    Write-SPLog -Message "Getting entitlement inventory: Sources='$sourceLabel', IncludeReviewHistory=$IncludeReviewHistory, DaysBack=$DaysBack" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Pagination ceiling from config
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # -----------------------------------------------------------
+        # Step 1: Retrieve entitlements (paginated, per source or all)
+        # -----------------------------------------------------------
+        $sourceEntitlements = @{}  # sourceId -> list of entitlement objects
+
+        # Build list of queries: one per source ID, or one for all
+        $queries = [System.Collections.Generic.List[hashtable]]::new()
+        if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) {
+            foreach ($sid in $SourceIds) {
+                $queries.Add(@{ SourceId = $sid; Filter = "source.id eq `"$sid`"" })
+            }
+        } else {
+            $queries.Add(@{ SourceId = $null; Filter = $null })
+        }
+
+        foreach ($query in $queries) {
+            $allEntitlements = [System.Collections.Generic.List[object]]::new()
+            $pageSize = 250
+            $offset   = 0
+            $pageNum  = 0
+
+            do {
+                $pageNum++
+                if ($pageNum -gt $maxPages) {
+                    $errMsg = "Pagination ceiling reached fetching entitlements: $maxPages pages ($($allEntitlements.Count) entitlements). Raise Api.MaxPaginationPages if needed."
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                        -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+
+                $queryParams = @{
+                    'limit'  = $pageSize.ToString()
+                    'offset' = $offset.ToString()
+                }
+                if (-not [string]::IsNullOrWhiteSpace($query.Filter)) {
+                    $queryParams['filters'] = $query.Filter
+                }
+
+                $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/entitlements' `
+                    -QueryParams $queryParams -CorrelationID $CorrelationID
+
+                if (-not $result.Success) {
+                    $errMsg = "Failed to retrieve entitlements at page $pageNum (offset $offset): $($result.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                        -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+
+                $page = $result.Data
+                if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                    $page = $result.Data.items
+                }
+                $page = @($page)
+
+                if ($page.Count -gt 0) {
+                    foreach ($ent in $page) { $allEntitlements.Add($ent) }
+                }
+
+                Write-SPLog -Message "Entitlements page ${pageNum}: $($page.Count) items (running total: $($allEntitlements.Count))" `
+                    -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                    -CorrelationID $CorrelationID
+
+                $offset += $pageSize
+            } while ($page.Count -ge $pageSize)
+
+            # Group entitlements by source
+            foreach ($ent in $allEntitlements) {
+                $srcId = $null
+                if ($null -ne $ent.source) {
+                    if ($ent.source -is [string]) {
+                        $srcId = $ent.source
+                    } elseif ($null -ne $ent.source.id) {
+                        $srcId = $ent.source.id
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($srcId)) {
+                    $srcId = 'unknown'
+                }
+
+                if (-not $sourceEntitlements.ContainsKey($srcId)) {
+                    $sourceEntitlements[$srcId] = [System.Collections.Generic.List[object]]::new()
+                }
+                $sourceEntitlements[$srcId].Add($ent)
+            }
+        }
+
+        Write-SPLog -Message "Retrieved entitlements across $($sourceEntitlements.Count) source(s)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+            -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------
+        # Step 2: Build review history lookup (if requested)
+        # -----------------------------------------------------------
+        $reviewedEntitlements = @{}  # key = "sourceId|entitlementName" -> last review date
+
+        if ($IncludeReviewHistory) {
+            Write-SPLog -Message "Building review history from campaigns (DaysBack=$DaysBack)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                -CorrelationID $CorrelationID
+
+            $campResult = Get-SPAuditCampaigns -Status 'COMPLETED','ACTIVE' -DaysBack $DaysBack `
+                -CorrelationID $CorrelationID
+            if ($campResult.Success -and $null -ne $campResult.Data) {
+                foreach ($campaign in $campResult.Data) {
+                    $campId = $campaign.id
+                    if ([string]::IsNullOrWhiteSpace($campId)) { continue }
+
+                    $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                        -CorrelationID $CorrelationID
+                    if (-not $certResult.Success -or $null -eq $certResult.Data) { continue }
+
+                    foreach ($cert in $certResult.Data) {
+                        $certId = $cert.id
+                        if ([string]::IsNullOrWhiteSpace($certId)) { continue }
+
+                        $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                            -CorrelationID $CorrelationID
+                        if (-not $itemResult.Success -or $null -eq $itemResult.Data) { continue }
+
+                        foreach ($item in $itemResult.Data) {
+                            $itemSourceId = $null
+                            $entName = $null
+                            $reviewDate = $null
+
+                            # Extract source ID from access review item
+                            if ($null -ne $item.access -and $null -ne $item.access.source) {
+                                $itemSourceId = $item.access.source.id
+                            }
+                            if ($null -ne $item.access) {
+                                $entName = $item.access.name
+                            }
+                            if ($null -ne $item.completed) {
+                                $reviewDate = $item.completed
+                            } elseif ($null -ne $item.decision) {
+                                $reviewDate = $campaign.created
+                            }
+
+                            if (-not [string]::IsNullOrWhiteSpace($itemSourceId) -and
+                                -not [string]::IsNullOrWhiteSpace($entName)) {
+                                $lookupKey = "$itemSourceId|$entName"
+                                if (-not $reviewedEntitlements.ContainsKey($lookupKey) -or
+                                    (-not [string]::IsNullOrWhiteSpace($reviewDate) -and
+                                     $reviewDate -gt $reviewedEntitlements[$lookupKey])) {
+                                    $reviewedEntitlements[$lookupKey] = $reviewDate
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Write-SPLog -Message "Review history lookup built: $($reviewedEntitlements.Count) reviewed entitlement(s)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                -CorrelationID $CorrelationID
+        }
+
+        # -----------------------------------------------------------
+        # Step 3: Build per-source inventory with review status
+        # -----------------------------------------------------------
+        $sources = @{}
+        $totalEntitlements = 0
+        $totalPrivileged   = 0
+        $totalReviewed     = 0
+
+        foreach ($srcId in $sourceEntitlements.Keys) {
+            $entList = $sourceEntitlements[$srcId]
+            $sourceName = Get-SPAuditSourceName -SourceId $srcId -CorrelationID $CorrelationID
+
+            $entitlementRecords = [System.Collections.Generic.List[hashtable]]::new()
+            $privilegedCount = 0
+            $reviewedCount   = 0
+            $unreviewedCount = 0
+
+            foreach ($ent in $entList) {
+                $entName = if ($null -ne $ent.name) { $ent.name } else { '' }
+                $entDisplayName = if ($null -ne $ent.displayName) { $ent.displayName } else { $entName }
+                $entType = if ($null -ne $ent.type) { $ent.type } else { '' }
+                $entAttribute = if ($null -ne $ent.attribute) { $ent.attribute } else { '' }
+                $isPrivileged = $false
+                if ($null -ne $ent.privileged) {
+                    $isPrivileged = [bool]$ent.privileged
+                }
+                $ownerName = ''
+                if ($null -ne $ent.owner -and $null -ne $ent.owner.name) {
+                    $ownerName = $ent.owner.name
+                }
+
+                if ($isPrivileged) { $privilegedCount++ }
+
+                $reviewed = $null
+                $lastReviewDate = $null
+                if ($IncludeReviewHistory) {
+                    $lookupKey = "$srcId|$entName"
+                    if ($reviewedEntitlements.ContainsKey($lookupKey)) {
+                        $reviewed = $true
+                        $lastReviewDate = $reviewedEntitlements[$lookupKey]
+                        $reviewedCount++
+                    } else {
+                        $reviewed = $false
+                        $unreviewedCount++
+                    }
+                }
+
+                $entitlementRecords.Add(@{
+                    Name           = $entName
+                    DisplayName    = $entDisplayName
+                    Type           = $entType
+                    Attribute      = $entAttribute
+                    Privileged     = $isPrivileged
+                    OwnerName      = $ownerName
+                    Reviewed       = $reviewed
+                    LastReviewDate = $lastReviewDate
+                })
+            }
+
+            $sourceData = @{
+                SourceName        = $sourceName
+                TotalEntitlements = $entList.Count
+                Privileged        = $privilegedCount
+                Reviewed          = if ($IncludeReviewHistory) { $reviewedCount } else { $null }
+                Unreviewed        = if ($IncludeReviewHistory) { $unreviewedCount } else { $null }
+                Entitlements      = $entitlementRecords.ToArray()
+            }
+
+            $sources[$srcId] = $sourceData
+            $totalEntitlements += $entList.Count
+            $totalPrivileged   += $privilegedCount
+            $totalReviewed     += $reviewedCount
+        }
+
+        $reviewCoverage = if ($IncludeReviewHistory -and $totalEntitlements -gt 0) {
+            [Math]::Round(($totalReviewed / $totalEntitlements) * 100, 1)
+        } else { $null }
+
+        $summary = @{
+            TotalSources      = $sources.Count
+            TotalEntitlements = $totalEntitlements
+            TotalPrivileged   = $totalPrivileged
+            ReviewCoverage    = $reviewCoverage
+        }
+
+        Write-SPLog -Message "Entitlement inventory: $totalEntitlements entitlements across $($sources.Count) sources, $totalPrivileged privileged" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Sources = $sources
+                Summary = $summary
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPEntitlementInventory failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -2658,5 +2997,6 @@ Export-ModuleMember -Function @(
     'Get-SPReviewerWorkload',
     'Get-SPIdentityDecisionHistory',
     'Get-SPSourceCampaignCoverage',
-    'Get-SPRemediationStatus'
+    'Get-SPRemediationStatus',
+    'Get-SPEntitlementInventory'
 )
