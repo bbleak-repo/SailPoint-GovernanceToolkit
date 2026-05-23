@@ -742,6 +742,223 @@ function Measure-SPAuditReviewerMetrics {
     }
 }
 
+function Measure-SPAuditRubberStampRisk {
+    <#
+    .SYNOPSIS
+        Detects potential rubber-stamping patterns in certification review decisions.
+    .DESCRIPTION
+        Analyzes per-reviewer decision behavior to flag potential rubber-stamping.
+        Based on SOX/SOC2 auditor red flags:
+
+        1. Decision velocity: items decided per minute. Flagged if >50 items in <60 seconds.
+        2. Approval-only rate: % of decisions that are APPROVE. Flagged if 100% across >10 items.
+        3. Bulk decision detection: clusters of identical decisions within 30-second windows.
+        4. Response latency: time from campaign creation to first decision. Flagged if <1 minute.
+
+        Each reviewer receives a severity: None, Low, Medium, or High.
+        High = multiple red flags present.
+    .PARAMETER Decisions
+        Hashtable with Approved, Revoked, Pending arrays (output of Group-SPAuditDecisions).
+        Each item must have ReviewerName and DecisionDate properties.
+    .PARAMETER Certifications
+        Array of certification objects (for campaign creation timestamps).
+    .OUTPUTS
+        [hashtable] @{
+            ReviewerRisks = @( [PSCustomObject] per reviewer )
+            HasMediumOrHighRisk = [bool]
+        }
+    .EXAMPLE
+        $risk = Measure-SPAuditRubberStampRisk -Decisions $decisions -Certifications $certs
+        if ($risk.HasMediumOrHighRisk) { Write-Host "Rubber-stamping detected" }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Certifications
+    )
+
+    # Build a map of reviewer -> list of (decision, datetime) tuples
+    $reviewerDecisions = @{}
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        if (-not $Decisions.ContainsKey($category) -or $null -eq $Decisions[$category]) { continue }
+        $decisionLabel = $category  # Approved, Revoked, Pending
+        foreach ($item in @($Decisions[$category])) {
+            $reviewer = if ($null -ne $item.ReviewerName -and -not [string]::IsNullOrWhiteSpace($item.ReviewerName)) {
+                $item.ReviewerName
+            } else { 'Unknown' }
+
+            $dt = $null
+            $rawDate = if ($null -ne $item.DecisionDate -and -not [string]::IsNullOrWhiteSpace([string]$item.DecisionDate)) {
+                [string]$item.DecisionDate
+            } else { '' }
+
+            if (-not [string]::IsNullOrWhiteSpace($rawDate)) {
+                try {
+                    $dt = [datetime]::Parse($rawDate, [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind)
+                }
+                catch { $dt = $null }
+            }
+
+            if (-not $reviewerDecisions.ContainsKey($reviewer)) {
+                $reviewerDecisions[$reviewer] = [System.Collections.Generic.List[object]]::new()
+            }
+            $reviewerDecisions[$reviewer].Add(@{
+                Decision = $decisionLabel
+                DateTime = $dt
+            })
+        }
+    }
+
+    # Build campaign creation timestamp map (earliest cert created per reviewer)
+    $campaignCreatedMap = @{}
+    foreach ($cert in $Certifications) {
+        $reviewerName = ''
+        if ($null -ne $cert.reviewer -and $null -ne $cert.reviewer.name) {
+            $reviewerName = [string]$cert.reviewer.name
+        }
+        if ([string]::IsNullOrWhiteSpace($reviewerName)) { continue }
+
+        $createdStr = ''
+        if ($null -ne $cert.created -and -not [string]::IsNullOrWhiteSpace([string]$cert.created)) {
+            $createdStr = [string]$cert.created
+        }
+        if ([string]::IsNullOrWhiteSpace($createdStr)) { continue }
+
+        try {
+            $dtCreated = [datetime]::Parse($createdStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind)
+            if (-not $campaignCreatedMap.ContainsKey($reviewerName) -or $dtCreated -lt $campaignCreatedMap[$reviewerName]) {
+                $campaignCreatedMap[$reviewerName] = $dtCreated
+            }
+        }
+        catch { }
+    }
+
+    # Analyze each reviewer
+    $reviewerRisks = [System.Collections.Generic.List[object]]::new()
+    $hasMediumOrHigh = $false
+
+    foreach ($reviewer in $reviewerDecisions.Keys) {
+        $items = @($reviewerDecisions[$reviewer])
+        $totalItems = $items.Count
+        $flags = [System.Collections.Generic.List[string]]::new()
+
+        # --- Metric 1: Approval-only rate ---
+        $approveCount = @($items | Where-Object { $_['Decision'] -eq 'Approved' }).Count
+        $revokeCount  = @($items | Where-Object { $_['Decision'] -eq 'Revoked' }).Count
+        $approvalRate = if ($totalItems -gt 0) { [Math]::Round(($approveCount / $totalItems) * 100, 1) } else { 0 }
+        $approvalOnlyFlag = ($approvalRate -eq 100 -and $totalItems -gt 10)
+        if ($approvalOnlyFlag) {
+            $flags.Add('100% approval rate across ' + $totalItems + ' items')
+        }
+
+        # --- Get items with valid timestamps for velocity analysis ---
+        $timedItems = @($items | Where-Object { $null -ne $_['DateTime'] } | Sort-Object { $_['DateTime'] })
+
+        # --- Metric 2: Decision velocity (items per minute) ---
+        $velocityItemsPerMin = 0
+        $velocityFlag = $false
+        if ($timedItems.Count -ge 2) {
+            $firstDt = $timedItems[0]['DateTime']
+            $lastDt  = $timedItems[$timedItems.Count - 1]['DateTime']
+            $spanMinutes = ($lastDt - $firstDt).TotalMinutes
+            if ($spanMinutes -gt 0) {
+                $velocityItemsPerMin = [Math]::Round($timedItems.Count / $spanMinutes, 1)
+            }
+            else {
+                # All decisions at the same timestamp
+                $velocityItemsPerMin = $timedItems.Count
+            }
+            # Flag: >50 items in <60 seconds
+            $spanSeconds = ($lastDt - $firstDt).TotalSeconds
+            if ($timedItems.Count -gt 50 -and $spanSeconds -lt 60) {
+                $velocityFlag = $true
+                $flags.Add('' + $timedItems.Count + ' items in ' + [Math]::Round($spanSeconds, 0) + ' seconds')
+            }
+        }
+
+        # --- Metric 3: Bulk decision clusters (>5 identical decisions within 30-second windows) ---
+        $bulkClusters = 0
+        if ($timedItems.Count -ge 2) {
+            $windowStart = 0
+            while ($windowStart -lt $timedItems.Count) {
+                $windowEnd = $windowStart
+                $windowDecision = $timedItems[$windowStart]['Decision']
+                $windowStartDt = $timedItems[$windowStart]['DateTime']
+
+                # Extend window while within 30 seconds and same decision
+                while ($windowEnd + 1 -lt $timedItems.Count) {
+                    $nextDt = $timedItems[$windowEnd + 1]['DateTime']
+                    $nextDecision = $timedItems[$windowEnd + 1]['Decision']
+                    if ($nextDecision -eq $windowDecision -and ($nextDt - $windowStartDt).TotalSeconds -le 30) {
+                        $windowEnd++
+                    }
+                    else {
+                        break
+                    }
+                }
+
+                $clusterSize = $windowEnd - $windowStart + 1
+                if ($clusterSize -gt 5) {
+                    $bulkClusters++
+                }
+                $windowStart = $windowEnd + 1
+            }
+        }
+        if ($bulkClusters -gt 0) {
+            $flags.Add('' + $bulkClusters + ' bulk decision cluster(s) (>5 identical in 30s)')
+        }
+
+        # --- Metric 4: Response latency ---
+        $responseLatencyMinutes = $null
+        $latencyFlag = $false
+        if ($timedItems.Count -gt 0 -and $campaignCreatedMap.ContainsKey($reviewer)) {
+            $certCreated = $campaignCreatedMap[$reviewer]
+            $firstDecision = $timedItems[0]['DateTime']
+            $responseLatencyMinutes = [Math]::Round(($firstDecision - $certCreated).TotalMinutes, 1)
+            if ($responseLatencyMinutes -lt 0) { $responseLatencyMinutes = 0 }
+            if ($responseLatencyMinutes -lt 1 -and $totalItems -gt 5) {
+                $latencyFlag = $true
+                $flags.Add('First decision <1 min after assignment (' + $responseLatencyMinutes + ' min)')
+            }
+        }
+
+        # --- Determine severity ---
+        $flagCount = $flags.Count
+        $severity = if ($flagCount -ge 2) { 'High' }
+                    elseif ($flagCount -eq 1 -and ($velocityFlag -or $approvalOnlyFlag)) { 'Medium' }
+                    elseif ($flagCount -eq 1) { 'Low' }
+                    else { 'None' }
+
+        if ($severity -eq 'Medium' -or $severity -eq 'High') {
+            $hasMediumOrHigh = $true
+        }
+
+        $reviewerRisks.Add([PSCustomObject]@{
+            ReviewerName          = $reviewer
+            TotalItems            = $totalItems
+            ApprovalRate          = $approvalRate
+            VelocityItemsPerMin   = $velocityItemsPerMin
+            BulkClusters          = $bulkClusters
+            ResponseLatencyMin    = $responseLatencyMinutes
+            Severity              = $severity
+            Flags                 = @($flags)
+        })
+    }
+
+    return @{
+        ReviewerRisks       = $reviewerRisks.ToArray()
+        HasMediumOrHighRisk = $hasMediumOrHigh
+    }
+}
+
 function Group-SPAuditByLeadership {
     <#
     .SYNOPSIS
@@ -1783,6 +2000,7 @@ function Build-SingleCampaignHtml {
     $rptAvailable     = if ($CampaignAudit.ContainsKey('CampaignReportsAvailable')) { [bool]$CampaignAudit['CampaignReportsAvailable'] } else { $false }
     $reviewerMetrics  = if ($CampaignAudit.ContainsKey('ReviewerMetrics')   -and $null -ne $CampaignAudit['ReviewerMetrics'])   { $CampaignAudit['ReviewerMetrics']   } else { $null }
     $remediationProof = if ($CampaignAudit.ContainsKey('RemediationProof')  -and $null -ne $CampaignAudit['RemediationProof'])  { $CampaignAudit['RemediationProof']  } else { $null }
+    $rubberStampRisk  = if ($CampaignAudit.ContainsKey('RubberStampRisk')   -and $null -ne $CampaignAudit['RubberStampRisk'])   { $CampaignAudit['RubberStampRisk']   } else { $null }
 
     $statusColor = switch ($status) {
         'COMPLETED' { '#339933' }
@@ -2254,6 +2472,63 @@ function Build-SingleCampaignHtml {
                 $html += "</tbody></table>`n"
                 $html += "</details>`n"
             }
+        }
+    }
+
+    # --- Section 8: Anti-Rubber-Stamping Analytics ---
+    # Only shown when at least one Medium or High risk reviewer exists
+    if ($null -ne $rubberStampRisk -and $rubberStampRisk['HasMediumOrHighRisk']) {
+        $riskRows = @($rubberStampRisk['ReviewerRisks'])
+        $riskCount = @($riskRows | Where-Object { $_.Severity -eq 'Medium' -or $_.Severity -eq 'High' }).Count
+
+        $html += "<h3 $sectionHeadStyle>8. Anti-Rubber-Stamping Analytics</h3>`n"
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; color:#CC3333; margin-bottom:12px;"">$riskCount reviewer(s) flagged for potential rubber-stamping patterns. Review recommended before accepting audit evidence.</p>`n"
+
+        if ($DetailLevel -eq 'Summary') {
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px;"">Flagged Reviewers: $riskCount (expand to Detailed or Verbose mode for full breakdown)</p>`n"
+        }
+        else {
+            $s8OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            # Always auto-expand when risk is present
+            $html += "<details open>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">Reviewer Risk Assessment ($($riskRows.Count) reviewer(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Items', 'Velocity (items/min)', 'Approval Rate', 'Bulk Clusters', 'Response Latency', 'Risk Level', 'Flags'))
+            $html += "<tbody>`n"
+
+            $rowIdx = 0
+            foreach ($rr in $riskRows) {
+                $riskColor = switch ($rr.Severity) {
+                    'High'   { '#CC3333' }
+                    'Medium' { '#FF8800' }
+                    'Low'    { '#336699' }
+                    default  { '#339933' }
+                }
+
+                $velocityDisplay = if ($rr.VelocityItemsPerMin -gt 0) { [string]$rr.VelocityItemsPerMin } else { 'N/A' }
+                $approvalDisplay = '' + $rr.ApprovalRate + '%'
+                $bulkDisplay = [string]$rr.BulkClusters
+                $latencyDisplay = if ($null -ne $rr.ResponseLatencyMin) { '' + $rr.ResponseLatencyMin + ' min' } else { 'N/A' }
+                $flagsDisplay = if ($rr.Flags.Count -gt 0) { $rr.Flags -join '; ' } else { '--' }
+
+                $rowStyle  = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
+                $tdPadding = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+                $riskTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$riskColor; font-weight:bold;"""
+
+                $html += "<tr$rowStyle>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rr.ReviewerName)</td>"
+                $html += "<td $tdPadding>$($rr.TotalItems)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $velocityDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $approvalDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $bulkDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $latencyDisplay)</td>"
+                $html += "<td $riskTdStyle>$(ConvertTo-SafeHtml $rr.Severity)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $flagsDisplay)</td>"
+                $html += "</tr>`n"
+                $rowIdx++
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
     }
 

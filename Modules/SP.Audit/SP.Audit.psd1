@@ -43,6 +43,7 @@
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
+        'Measure-SPAuditRubberStampRisk'
         'Group-SPAuditByLeadership'
 
         # SP.AuditReport - Export functions

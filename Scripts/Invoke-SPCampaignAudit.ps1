@@ -555,6 +555,7 @@ foreach ($campaign in $campaigns) {
     $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
     $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
     $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications -AccountMap $accountMap
+    $rubberStampRisk  = Measure-SPAuditRubberStampRisk -Decisions $decisionGroups -Certifications $certifications
 
     # --- Build per-campaign audit data (hashtable, keys match Build-SingleCampaignHtml) ---
     $campaignAudit = @{
@@ -571,6 +572,7 @@ foreach ($campaign in $campaigns) {
         ReviewerMetrics          = $reviewerMetrics
         Events                   = $eventGroups
         RemediationProof         = $remediationProof
+        RubberStampRisk          = $rubberStampRisk
         CampaignReports          = $campaignReportRows
         CampaignReportsAvailable = ($null -ne $campaignReportRows)
     }
@@ -615,6 +617,27 @@ Export-SPAuditHtml `
 # --- JSONL audit trail ---
 $jsonlEvents = foreach ($audit in $allCampaignAudits) {
     $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+    $rs = if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) { $audit['RubberStampRisk'] } else { $null }
+
+    # Build rubber-stamp risk summary for JSONL
+    $rsData = $null
+    if ($null -ne $rs -and $null -ne $rs['ReviewerRisks']) {
+        $flaggedReviewers = @($rs['ReviewerRisks'] | Where-Object { $_.Severity -eq 'Medium' -or $_.Severity -eq 'High' })
+        $rsData = @{
+            HasMediumOrHighRisk = $rs['HasMediumOrHighRisk']
+            FlaggedReviewerCount = $flaggedReviewers.Count
+            FlaggedReviewers = @($flaggedReviewers | ForEach-Object {
+                @{
+                    Reviewer     = $_.ReviewerName
+                    Items        = $_.TotalItems
+                    ApprovalRate = $_.ApprovalRate
+                    Severity     = $_.Severity
+                    Flags        = $_.Flags
+                }
+            })
+        }
+    }
+
     @{
         Action           = 'CampaignAudited'
         CampaignId       = $audit['CampaignId']
@@ -622,6 +645,7 @@ $jsonlEvents = foreach ($audit in $allCampaignAudits) {
         DecisionsApproved = if ($null -ne $d -and $null -ne $d['Approved']) { @($d['Approved']).Count } else { 0 }
         DecisionsRevoked  = if ($null -ne $d -and $null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
         DecisionsPending  = if ($null -ne $d -and $null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
+        RubberStampRisk   = $rsData
     }
 }
 Export-SPAuditJsonl `
