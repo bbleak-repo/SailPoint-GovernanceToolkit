@@ -59,7 +59,7 @@ Audit/
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | L-01 | Org Tree Walker (Build-SPOrgTree) | none | DONE |
-| L-02 | Leadership Grouping (Group-SPAuditByLeadership) | L-01 | PENDING |
+| L-02 | Leadership Grouping (Group-SPAuditByLeadership) | L-01 | DONE |
 | L-03 | Executive Summary HTML | L-02 | PENDING |
 | L-04 | Director-Level HTML Reports | L-03 | PENDING |
 | L-05 | CLI Integration | L-04 | PENDING |
@@ -190,8 +190,8 @@ visited, stop walking that chain and log a WARN.
 
 ## L-02: Leadership Grouping (Group-SPAuditByLeadership)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** f319e07
 - **Depends On:** L-01
 
 **Description:**

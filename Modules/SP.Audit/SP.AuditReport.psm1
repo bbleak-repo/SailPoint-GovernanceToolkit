@@ -741,6 +741,295 @@ function Measure-SPAuditReviewerMetrics {
     }
 }
 
+function Group-SPAuditByLeadership {
+    <#
+    .SYNOPSIS
+        Groups audit decisions by leadership level using the org tree.
+    .DESCRIPTION
+        Takes the categorised decisions from Group-SPAuditDecisions and the
+        org tree from Build-SPOrgTree and produces per-director and per-executive
+        rollup summaries. Each director rollup contains per-manager aggregates.
+        Each executive rollup references its directors.
+
+        Identities whose name cannot be matched to a leaf node in the org tree,
+        or whose manager chain does not reach a director-level node, are grouped
+        under an 'Unmanaged' bucket.
+    .PARAMETER Decisions
+        Hashtable with Approved, Revoked, Pending arrays as returned by
+        Group-SPAuditDecisions. Each element has IdentityName, ReviewerName, etc.
+    .PARAMETER OrgTree
+        Hashtable from Build-SPOrgTree .Data containing Nodes, TopLeaders,
+        Directors, Managers, LeafCount, MaxDepthHit.
+    .PARAMETER ReviewerMetrics
+        Optional hashtable from Measure-SPAuditReviewerMetrics. When provided,
+        AvgHours per reviewer name is mapped to the corresponding manager entry.
+    .OUTPUTS
+        [hashtable] @{ Directors = @{...}; Executive = @{...} }
+    .EXAMPLE
+        $leadership = Group-SPAuditByLeadership -Decisions $grouped -OrgTree $tree.Data
+        $leadership.Directors.Keys | ForEach-Object { "$_: $($leadership.Directors[$_].Name)" }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter()]
+        [hashtable]$ReviewerMetrics
+    )
+
+    $nodes = $OrgTree.Nodes
+
+    # --- Build identity name -> leaf node ID reverse lookup ---
+    # Leaf nodes (level 0) represent the reviewed identities whose names
+    # appear in the Decisions output from Group-SPAuditDecisions.
+    $nameToLeafId = @{}
+    foreach ($nodeId in $nodes.Keys) {
+        $node = $nodes[$nodeId]
+        if ($node.Level -eq 0 -and $null -ne $node.Identity -and
+            -not [string]::IsNullOrWhiteSpace($node.Identity.Name)) {
+            $nameToLeafId[$node.Identity.Name] = $nodeId
+        }
+    }
+
+    # --- Build reviewer name -> AvgHours lookup from ReviewerMetrics ---
+    # In ISC manager campaigns, the reviewer IS the manager, so reviewer
+    # names map directly to manager node names in the org tree.
+    $reviewerAvgHours = @{}
+    if ($null -ne $ReviewerMetrics -and $null -ne $ReviewerMetrics['ReviewerMetrics']) {
+        foreach ($rm in @($ReviewerMetrics['ReviewerMetrics'])) {
+            if ($null -ne $rm -and -not [string]::IsNullOrWhiteSpace($rm.Name)) {
+                $reviewerAvgHours[$rm.Name] = $rm.AvgHours
+            }
+        }
+    }
+
+    # --- For each leaf node, determine its manager and director ---
+    # leafToManager: leafId -> managerId (level 1 node, or '' if missing)
+    # managerToDirector: managerId -> directorId (level 2+ node, or '' if missing)
+    $leafToManager     = @{}
+    $managerToDirector = @{}
+
+    foreach ($nodeId in $nodes.Keys) {
+        $node = $nodes[$nodeId]
+        if ($node.Level -ne 0) { continue }
+
+        $managerId = $node.ManagerId
+        if (-not [string]::IsNullOrWhiteSpace($managerId) -and $nodes.ContainsKey($managerId)) {
+            $leafToManager[$nodeId] = $managerId
+        }
+        else {
+            $leafToManager[$nodeId] = ''
+        }
+    }
+
+    # Determine director for each unique manager
+    foreach ($managerId in @($leafToManager.Values | Sort-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($managerId)) { continue }
+        if ($managerToDirector.ContainsKey($managerId)) { continue }
+
+        if (-not $nodes.ContainsKey($managerId)) {
+            $managerToDirector[$managerId] = ''
+            continue
+        }
+
+        $mgrNode = $nodes[$managerId]
+
+        # If the manager node itself is at level 2+, it IS the director
+        if ($mgrNode.Level -ge 2) {
+            $managerToDirector[$managerId] = $managerId
+            continue
+        }
+
+        # Walk one level up to find the director
+        $dirId = $mgrNode.ManagerId
+        if (-not [string]::IsNullOrWhiteSpace($dirId) -and $nodes.ContainsKey($dirId)) {
+            $managerToDirector[$managerId] = $dirId
+        }
+        else {
+            $managerToDirector[$managerId] = ''
+        }
+    }
+
+    # --- Count decisions per manager per director ---
+    $unmanagedKey = '__unmanaged__'
+    # Accumulator: directorId -> managerId -> @{ Approved; Revoked; Pending }
+    $buckets = @{}
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        $items = @()
+        if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+            $items = @($Decisions[$category])
+        }
+
+        foreach ($item in $items) {
+            $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+
+            # Resolve: identity name -> leaf node -> manager -> director
+            $managerId  = $unmanagedKey
+            $directorId = $unmanagedKey
+
+            if (-not [string]::IsNullOrWhiteSpace($identityName) -and
+                $nameToLeafId.ContainsKey($identityName)) {
+                $leafId = $nameToLeafId[$identityName]
+
+                if ($leafToManager.ContainsKey($leafId)) {
+                    $mgr = $leafToManager[$leafId]
+                    if (-not [string]::IsNullOrWhiteSpace($mgr)) {
+                        $managerId = $mgr
+                        if ($managerToDirector.ContainsKey($mgr) -and
+                            -not [string]::IsNullOrWhiteSpace($managerToDirector[$mgr])) {
+                            $directorId = $managerToDirector[$mgr]
+                        }
+                    }
+                }
+            }
+
+            if (-not $buckets.ContainsKey($directorId)) { $buckets[$directorId] = @{} }
+            if (-not $buckets[$directorId].ContainsKey($managerId)) {
+                $buckets[$directorId][$managerId] = @{ Approved = 0; Revoked = 0; Pending = 0 }
+            }
+
+            $buckets[$directorId][$managerId][$category]++
+        }
+    }
+
+    # --- Build Directors rollup ---
+    $directors = @{}
+
+    foreach ($dirId in $buckets.Keys) {
+        $managerBuckets = $buckets[$dirId]
+
+        # Director identity info
+        $dirName  = 'Unmanaged'
+        $dirEmail = ''
+        if ($dirId -ne $unmanagedKey -and $nodes.ContainsKey($dirId)) {
+            $dirNode = $nodes[$dirId]
+            $dirName = if ($null -ne $dirNode.Identity -and
+                -not [string]::IsNullOrWhiteSpace($dirNode.Identity.Name)) {
+                $dirNode.Identity.Name
+            } else { $dirId }
+        }
+
+        $totalApproved = 0
+        $totalRevoked  = 0
+        $totalPending  = 0
+        $managersMap   = @{}
+
+        foreach ($mgrId in $managerBuckets.Keys) {
+            $c = $managerBuckets[$mgrId]
+            $totalApproved += $c.Approved
+            $totalRevoked  += $c.Revoked
+            $totalPending  += $c.Pending
+
+            # Manager name and average hours from reviewer metrics
+            $mgrName = 'Unmanaged'
+            if ($mgrId -ne $unmanagedKey -and $nodes.ContainsKey($mgrId)) {
+                $mgrNode = $nodes[$mgrId]
+                $mgrName = if ($null -ne $mgrNode.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($mgrNode.Identity.Name)) {
+                    $mgrNode.Identity.Name
+                } else { $mgrId }
+            }
+
+            $avgHours = $null
+            if ($reviewerAvgHours.ContainsKey($mgrName)) {
+                $avgHours = $reviewerAvgHours[$mgrName]
+            }
+
+            $managersMap[$mgrId] = @{
+                Name     = $mgrName
+                Approved = $c.Approved
+                Revoked  = $c.Revoked
+                Pending  = $c.Pending
+                AvgHours = $avgHours
+            }
+        }
+
+        $totalItems    = $totalApproved + $totalRevoked + $totalPending
+        $completionPct = if ($totalItems -gt 0) {
+            [Math]::Round(($totalApproved + $totalRevoked) / $totalItems * 100, 1)
+        } else { 0.0 }
+
+        $directors[$dirId] = @{
+            Name          = $dirName
+            Email         = $dirEmail
+            TotalItems    = $totalItems
+            Approved      = $totalApproved
+            Revoked       = $totalRevoked
+            Pending       = $totalPending
+            CompletionPct = $completionPct
+            Managers      = $managersMap
+        }
+    }
+
+    # --- Build Executive rollup ---
+    # Each TopLeader aggregates across directors whose ManagerId points to it.
+    # A TopLeader at level 2 (no VP above) serves as its own director and executive.
+    $executive  = @{}
+    $topLeaders = @($OrgTree.TopLeaders)
+
+    foreach ($vpId in $topLeaders) {
+        if (-not $nodes.ContainsKey($vpId)) { continue }
+        $vpNode = $nodes[$vpId]
+        $vpName = if ($null -ne $vpNode.Identity -and
+            -not [string]::IsNullOrWhiteSpace($vpNode.Identity.Name)) {
+            $vpNode.Identity.Name
+        } else { $vpId }
+
+        # Find directors under this VP (directors whose ManagerId == this VP)
+        $vpDirectorIds = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($dirId in $directors.Keys) {
+            if ($dirId -eq $unmanagedKey) { continue }
+            if ($nodes.ContainsKey($dirId) -and $nodes[$dirId].ManagerId -eq $vpId) {
+                $vpDirectorIds.Add($dirId)
+            }
+        }
+
+        # If this VP is itself a director-level node (level 2 TopLeader with
+        # managers directly below it), include itself
+        if ($vpDirectorIds.Count -eq 0 -and $directors.ContainsKey($vpId)) {
+            $vpDirectorIds.Add($vpId)
+        }
+
+        $vpTotal = 0; $vpApproved = 0; $vpRevoked = 0; $vpPending = 0
+
+        foreach ($dirId in $vpDirectorIds) {
+            if ($directors.ContainsKey($dirId)) {
+                $d = $directors[$dirId]
+                $vpTotal    += $d.TotalItems
+                $vpApproved += $d.Approved
+                $vpRevoked  += $d.Revoked
+                $vpPending  += $d.Pending
+            }
+        }
+
+        $vpCompletionPct = if ($vpTotal -gt 0) {
+            [Math]::Round(($vpApproved + $vpRevoked) / $vpTotal * 100, 1)
+        } else { 0.0 }
+
+        $executive[$vpId] = @{
+            Name          = $vpName
+            TotalItems    = $vpTotal
+            Approved      = $vpApproved
+            Revoked       = $vpRevoked
+            Pending       = $vpPending
+            CompletionPct = $vpCompletionPct
+            Directors     = @($vpDirectorIds.ToArray())
+        }
+    }
+
+    return @{
+        Directors = $directors
+        Executive = $executive
+    }
+}
+
 #endregion
 
 #region Internal HTML Helpers
@@ -2323,6 +2612,7 @@ Export-ModuleMember -Function @(
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
+    'Group-SPAuditByLeadership',
     'Export-SPAuditHtml',
     'Export-SPAuditText',
     'Export-SPAuditJsonl'
