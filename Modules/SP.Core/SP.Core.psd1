@@ -57,6 +57,7 @@
         'Resolve-SPConfigPath',
         'Test-SPConfig',
         'Test-SPConfigFirstRun',
+        'Test-SPConfiguration',
         'New-SPConfigFile',
 
         # SP.Logging exports

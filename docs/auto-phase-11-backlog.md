@@ -43,7 +43,7 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| P11-01 | Configuration Validator | none | PENDING |
+| P11-01 | Configuration Validator | none | DONE |
 | P11-02 | Audit Trail Consolidator | none | PENDING |
 | P11-03 | CSV Export for Audit Data | none | PENDING |
 | P11-04 | Remediation Verification | none | PENDING |
@@ -88,8 +88,8 @@ Safe to modify:
 
 ## P11-01: Configuration Validator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

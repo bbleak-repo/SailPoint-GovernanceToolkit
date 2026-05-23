@@ -384,6 +384,389 @@ function Write-SPFirstRunMessage {
 
 #region Public Functions
 
+function Test-SPConfiguration {
+    <#
+    .SYNOPSIS
+        Comprehensive configuration validation for production readiness
+    .DESCRIPTION
+        Validates settings.json against the expected schema, checks field types,
+        validates cross-field dependencies, and optionally tests API connectivity
+        and ISC entity resolution. Returns a structured result with Errors,
+        Warnings, and Info messages.
+
+        Unlike Test-SPConfig (checks for missing top-level keys) and
+        Test-SPConfigFirstRun (checks for CHANGE_ME sentinels), this function
+        validates field types, range constraints, regex patterns, and whether
+        configured ISC entity IDs actually exist in the tenant.
+    .PARAMETER ConfigPath
+        Path to the settings.json file. Defaults to auto-resolved path.
+    .PARAMETER ValidateConnectivity
+        When set, tests API authentication and basic endpoint access.
+    .PARAMETER ResolveEntities
+        When set, verifies that configured SourceIds and FallbackReviewerIdentityId
+        exist in the ISC tenant. Implies -ValidateConnectivity.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Valid; Errors; Warnings; Info }
+    .EXAMPLE
+        $result = Test-SPConfiguration
+        if (-not $result.Valid) { $result.Errors | ForEach-Object { Write-Error $_ } }
+    .EXAMPLE
+        Test-SPConfiguration -ValidateConnectivity -ResolveEntities
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$ConfigPath,
+        [Parameter()][switch]$ValidateConnectivity,
+        [Parameter()][switch]$ResolveEntities,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $errors   = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    $info     = [System.Collections.Generic.List[string]]::new()
+
+    # --- Load config ---
+    $configParams = @{ Force = $true }
+    if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+
+    try {
+        $config = Get-SPConfig @configParams
+    }
+    catch {
+        $errors.Add("Failed to load configuration: $($_.Exception.Message)")
+        return @{ Valid = $false; Errors = @($errors); Warnings = @($warnings); Info = @($info) }
+    }
+
+    if ($null -eq $config) {
+        $errors.Add('Get-SPConfig returned null')
+        return @{ Valid = $false; Errors = @($errors); Warnings = @($warnings); Info = @($info) }
+    }
+
+    # First-run check
+    if (Test-SPConfigFirstRun -Config $config) {
+        $errors.Add('Configuration contains CHANGE_ME placeholder values. Complete first-run setup before validating.')
+        return @{ Valid = $false; Errors = @($errors); Warnings = @($warnings); Info = @($info) }
+    }
+
+    # --- Schema validation: detect unknown top-level keys ---
+    $defaults = Get-SPConfigDefaults
+    $knownTopKeys = $defaults.Keys
+    foreach ($prop in $config.PSObject.Properties) {
+        if ($prop.Name -notin $knownTopKeys) {
+            $warnings.Add("Unknown top-level key '$($prop.Name)' found")
+        }
+    }
+
+    # --- Required string fields must not be empty ---
+    $requiredStrings = @(
+        @('Authentication.ConfigFile.TenantUrl',  { $config.Authentication.ConfigFile.TenantUrl }),
+        @('Authentication.ConfigFile.OAuthTokenUrl', { $config.Authentication.ConfigFile.OAuthTokenUrl }),
+        @('Authentication.ConfigFile.ClientId',   { $config.Authentication.ConfigFile.ClientId }),
+        @('Authentication.ConfigFile.ClientSecret', { $config.Authentication.ConfigFile.ClientSecret }),
+        @('Api.BaseUrl',                          { $config.Api.BaseUrl }),
+        @('Authentication.Mode',                  { $config.Authentication.Mode })
+    )
+    foreach ($entry in $requiredStrings) {
+        $fieldName = $entry[0]
+        $getter    = $entry[1]
+        try {
+            $val = & $getter
+            if ([string]::IsNullOrWhiteSpace($val)) {
+                $errors.Add("$fieldName is empty")
+            }
+        }
+        catch {
+            $errors.Add("$fieldName is missing or inaccessible")
+        }
+    }
+
+    # --- Type checks: positive integers ---
+    $positiveIntegers = @(
+        @('Api.TimeoutSeconds',              { $config.Api.TimeoutSeconds }),
+        @('Api.RetryCount',                  { $config.Api.RetryCount }),
+        @('Api.RetryDelaySeconds',           { $config.Api.RetryDelaySeconds }),
+        @('Api.MaxRetryDelaySeconds',        { $config.Api.MaxRetryDelaySeconds }),
+        @('Api.RateLimitRequestsPerWindow',  { $config.Api.RateLimitRequestsPerWindow }),
+        @('Api.RateLimitWindowSeconds',      { $config.Api.RateLimitWindowSeconds }),
+        @('Api.MaxPaginationPages',          { $config.Api.MaxPaginationPages }),
+        @('Logging.RetentionDays',           { $config.Logging.RetentionDays }),
+        @('Audit.DefaultDaysBack',           { $config.Audit.DefaultDaysBack }),
+        @('Audit.DefaultIdentityEventDays',  { $config.Audit.DefaultIdentityEventDays }),
+        @('Audit.LeadershipDepth',           { $config.Audit.LeadershipDepth }),
+        @('Audit.Smtp.Port',                 { $config.Audit.Smtp.Port }),
+        @('Audit.RiskIndicators.StaleAccessDays', { $config.Audit.RiskIndicators.StaleAccessDays }),
+        @('DeltaCert.DefaultHoursBack',      { $config.DeltaCert.DefaultHoursBack }),
+        @('DeltaCert.DefaultDeadlineDays',   { $config.DeltaCert.DefaultDeadlineDays }),
+        @('DeltaCert.MaxCampaignsPerRun',    { $config.DeltaCert.MaxCampaignsPerRun }),
+        @('DeltaCert.CleanupDaysStale',      { $config.DeltaCert.CleanupDaysStale }),
+        @('DeltaCert.Escalation.DefaultStaleHours',   { $config.DeltaCert.Escalation.DefaultStaleHours }),
+        @('DeltaCert.Escalation.MaxEscalationLevels', { $config.DeltaCert.Escalation.MaxEscalationLevels }),
+        @('Safety.MaxCampaignsPerRun',       { $config.Safety.MaxCampaignsPerRun }),
+        @('Testing.DecisionBatchSize',       { $config.Testing.DecisionBatchSize }),
+        @('Testing.CampaignActivationTimeoutSeconds', { $config.Testing.CampaignActivationTimeoutSeconds }),
+        @('Testing.CampaignCompleteTimeoutSeconds',   { $config.Testing.CampaignCompleteTimeoutSeconds })
+    )
+    foreach ($entry in $positiveIntegers) {
+        $fieldName = $entry[0]
+        $getter    = $entry[1]
+        try {
+            $val = & $getter
+            if ($null -ne $val) {
+                $numVal = $val -as [int]
+                if ($null -eq $numVal -or $numVal -le 0) {
+                    $errors.Add("$fieldName must be a positive integer (got '$val')")
+                }
+            }
+        }
+        catch { }  # Field missing -- already covered by schema merge warnings
+    }
+
+    # --- Type checks: booleans ---
+    $boolFields = @(
+        @('Global.DebugMode',              { $config.Global.DebugMode }),
+        @('Safety.RequireWhatIfOnProd',    { $config.Safety.RequireWhatIfOnProd }),
+        @('Safety.AllowCompleteCampaign',  { $config.Safety.AllowCompleteCampaign }),
+        @('Audit.IncludeCampaignReports',  { $config.Audit.IncludeCampaignReports }),
+        @('Audit.IncludeIdentityEvents',   { $config.Audit.IncludeIdentityEvents }),
+        @('Audit.IncludeLeadershipRollup', { $config.Audit.IncludeLeadershipRollup }),
+        @('Audit.Smtp.Enabled',            { $config.Audit.Smtp.Enabled }),
+        @('Audit.Smtp.UseSsl',             { $config.Audit.Smtp.UseSsl }),
+        @('Testing.WhatIfByDefault',       { $config.Testing.WhatIfByDefault })
+    )
+    foreach ($entry in $boolFields) {
+        $fieldName = $entry[0]
+        $getter    = $entry[1]
+        try {
+            $val = & $getter
+            if ($null -ne $val -and $val -isnot [bool]) {
+                $errors.Add("$fieldName must be a boolean (got '$val')")
+            }
+        }
+        catch { }
+    }
+
+    # --- Type checks: arrays ---
+    $arrayFields = @(
+        @('Audit.DefaultStatuses',             { $config.Audit.DefaultStatuses }),
+        @('Audit.RiskIndicators.PrivilegedPatterns',    { $config.Audit.RiskIndicators.PrivilegedPatterns }),
+        @('Audit.RiskIndicators.ServiceAccountPatterns', { $config.Audit.RiskIndicators.ServiceAccountPatterns }),
+        @('DeltaCert.SourceIds',               { $config.DeltaCert.SourceIds }),
+        @('DeltaCert.ExcludeLifecycleStates',  { $config.DeltaCert.ExcludeLifecycleStates }),
+        @('DeltaCert.ExcludeDisplayNamePatterns', { $config.DeltaCert.ExcludeDisplayNamePatterns }),
+        @('DeltaCert.ExcludeIdentityIds',      { $config.DeltaCert.ExcludeIdentityIds })
+    )
+    foreach ($entry in $arrayFields) {
+        $fieldName = $entry[0]
+        $getter    = $entry[1]
+        try {
+            $val = & $getter
+            if ($null -ne $val -and $val -isnot [array] -and $val -isnot [System.Collections.IEnumerable]) {
+                # Allow single strings that JSON parsers may unwrap from one-element arrays
+                if ($val -isnot [string]) {
+                    $errors.Add("$fieldName must be an array (got type $($val.GetType().Name))")
+                }
+            }
+        }
+        catch { }
+    }
+
+    # --- Range checks ---
+    try {
+        $rateLimit = $config.Api.RateLimitRequestsPerWindow -as [int]
+        if ($null -ne $rateLimit -and $rateLimit -gt 100) {
+            $errors.Add("Api.RateLimitRequestsPerWindow must be <= 100 (got $rateLimit)")
+        }
+    } catch { }
+
+    try {
+        $maxCamp = $config.Safety.MaxCampaignsPerRun -as [int]
+        if ($null -ne $maxCamp -and $maxCamp -gt 250) {
+            $errors.Add("Safety.MaxCampaignsPerRun must be <= 250 (got $maxCamp)")
+        }
+    } catch { }
+
+    try {
+        $depth = $config.Audit.LeadershipDepth -as [int]
+        if ($null -ne $depth -and ($depth -lt 1 -or $depth -gt 10)) {
+            $errors.Add("Audit.LeadershipDepth must be between 1 and 10 (got $depth)")
+        }
+    } catch { }
+
+    # --- Cross-field dependencies ---
+    try {
+        if ($config.Authentication.Mode -eq 'Vault') {
+            $vaultPath = $config.Authentication.Vault.VaultPath
+            if ([string]::IsNullOrWhiteSpace($vaultPath)) {
+                $errors.Add("Authentication.Mode is 'Vault' but Vault.VaultPath is empty")
+            }
+        }
+    } catch { }
+
+    try {
+        $mainPrefix = $config.DeltaCert.CampaignNamePrefix
+        $escPrefix  = $config.DeltaCert.Escalation.CampaignNamePrefix
+        if (-not [string]::IsNullOrEmpty($mainPrefix) -and
+            -not [string]::IsNullOrEmpty($escPrefix) -and
+            $mainPrefix -ne $escPrefix) {
+            $warnings.Add("DeltaCert.CampaignNamePrefix ('$mainPrefix') differs from DeltaCert.Escalation.CampaignNamePrefix ('$escPrefix')")
+        }
+    } catch { }
+
+    # --- Path checks: parent directory must exist or be creatable ---
+    $pathFields = @(
+        @('Logging.Path',        { $config.Logging.Path }),
+        @('Audit.OutputPath',    { $config.Audit.OutputPath }),
+        @('DeltaCert.OutputPath', { $config.DeltaCert.OutputPath })
+    )
+    foreach ($entry in $pathFields) {
+        $fieldName = $entry[0]
+        $getter    = $entry[1]
+        try {
+            $pathVal = & $getter
+            if (-not [string]::IsNullOrWhiteSpace($pathVal)) {
+                $resolvedPath = $pathVal
+                # Resolve relative paths from toolkit root
+                if (-not [System.IO.Path]::IsPathRooted($resolvedPath)) {
+                    $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+                    $resolvedPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $resolvedPath))
+                }
+                $parentDir = Split-Path -Path $resolvedPath -Parent
+                if (-not [string]::IsNullOrEmpty($parentDir) -and -not (Test-Path -Path $parentDir -PathType Container)) {
+                    $warnings.Add("$fieldName parent directory does not exist: $parentDir")
+                }
+            }
+        }
+        catch { }
+    }
+
+    # --- Regex validation: ExcludeDisplayNamePatterns ---
+    try {
+        $patterns = $config.DeltaCert.ExcludeDisplayNamePatterns
+        if ($null -ne $patterns) {
+            foreach ($pattern in $patterns) {
+                if (-not [string]::IsNullOrWhiteSpace($pattern)) {
+                    try {
+                        [regex]::new($pattern) | Out-Null
+                    }
+                    catch {
+                        $errors.Add("DeltaCert.ExcludeDisplayNamePatterns contains invalid regex '$pattern': $($_.Exception.Message)")
+                    }
+                }
+            }
+        }
+    } catch { }
+
+    # Also validate ServiceAccountPatterns
+    try {
+        $svcPatterns = $config.Audit.RiskIndicators.ServiceAccountPatterns
+        if ($null -ne $svcPatterns) {
+            foreach ($pattern in $svcPatterns) {
+                if (-not [string]::IsNullOrWhiteSpace($pattern)) {
+                    try {
+                        [regex]::new($pattern) | Out-Null
+                    }
+                    catch {
+                        $errors.Add("Audit.RiskIndicators.ServiceAccountPatterns contains invalid regex '$pattern': $($_.Exception.Message)")
+                    }
+                }
+            }
+        }
+    } catch { }
+
+    $info.Add("Schema validation complete: $($errors.Count) error(s), $($warnings.Count) warning(s)")
+
+    # --- Connectivity validation (optional) ---
+    if ($ValidateConnectivity -or $ResolveEntities) {
+        try {
+            $token = Get-SPAuthToken -Config $config
+            if ($token) {
+                $info.Add('API authentication successful')
+            }
+            else {
+                $errors.Add('API authentication failed: Get-SPAuthToken returned null')
+            }
+        }
+        catch {
+            $errors.Add("API authentication failed: $($_.Exception.Message)")
+        }
+
+        if ($errors.Count -eq 0 -or ($errors | Where-Object { $_ -notmatch 'authentication' })) {
+            try {
+                $testResponse = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns?limit=1' -Config $config
+                if ($null -ne $testResponse) {
+                    $info.Add('API connectivity verified')
+                }
+            }
+            catch {
+                $errors.Add("API connectivity test failed: $($_.Exception.Message)")
+            }
+        }
+    }
+
+    # --- Entity resolution (optional) ---
+    if ($ResolveEntities) {
+        # Resolve SourceIds
+        try {
+            $sourceIds = $config.DeltaCert.SourceIds
+            if ($null -ne $sourceIds -and $sourceIds.Count -gt 0) {
+                foreach ($srcId in $sourceIds) {
+                    try {
+                        $source = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$srcId" -Config $config
+                        if ($null -ne $source -and $source.name) {
+                            $info.Add("Source $srcId resolved: $($source.name)")
+                        }
+                        else {
+                            $errors.Add("Source ID '$srcId' not found in tenant")
+                        }
+                    }
+                    catch {
+                        $errors.Add("Source ID '$srcId' could not be resolved: $($_.Exception.Message)")
+                    }
+                }
+            }
+        } catch { }
+
+        # Resolve FallbackReviewerIdentityId
+        try {
+            $reviewerId = $config.DeltaCert.FallbackReviewerIdentityId
+            if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
+                try {
+                    $identity = Invoke-SPApiRequest -Method GET -Endpoint "/v3/identities/$reviewerId" -Config $config
+                    if ($null -ne $identity -and $identity.name) {
+                        $info.Add("FallbackReviewer $reviewerId resolved: $($identity.name)")
+                    }
+                    else {
+                        $errors.Add("FallbackReviewerIdentityId '$reviewerId' not found in tenant")
+                    }
+                }
+                catch {
+                    $errors.Add("FallbackReviewerIdentityId '$reviewerId' could not be resolved: $($_.Exception.Message)")
+                }
+            }
+        } catch { }
+    }
+
+    # Log summary
+    $logComponent = 'SP.Config'
+    $logAction    = 'Test-SPConfiguration'
+    $logMsg = "Validation complete: Valid=$($errors.Count -eq 0), Errors=$($errors.Count), Warnings=$($warnings.Count)"
+    if ($CorrelationID) { $logMsg = "[$CorrelationID] $logMsg" }
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        $severity = if ($errors.Count -gt 0) { 'ERROR' } else { 'INFO' }
+        Write-SPLog -Message $logMsg -Severity $severity -Component $logComponent -Action $logAction
+    }
+
+    return @{
+        Valid    = ($errors.Count -eq 0)
+        Errors   = @($errors)
+        Warnings = @($warnings)
+        Info     = @($info)
+    }
+}
+
 function Resolve-SPConfigPath {
     <#
     .SYNOPSIS
@@ -685,5 +1068,6 @@ Export-ModuleMember -Function @(
     'Resolve-SPConfigPath',
     'Test-SPConfig',
     'Test-SPConfigFirstRun',
+    'Test-SPConfiguration',
     'New-SPConfigFile'
 )
