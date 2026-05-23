@@ -80,7 +80,7 @@ Stop-Process -Name pwsh -ErrorAction SilentlyContinue  # kills mock
 
 | ID | Test Battery | Tests | Depends On | Status |
 |----|-------------|-------|------------|--------|
-| T-01 | Test-SPConnectivity.ps1 | 1 | none | PENDING |
+| T-01 | Test-SPConnectivity.ps1 | 1 | none | DONE |
 | T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | PENDING |
 | T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | PENDING |
 | T-04 | Invoke-SPDeltaReport.ps1 | 3 | T-01 | PENDING |
@@ -91,8 +91,8 @@ Stop-Process -Name pwsh -ErrorAction SilentlyContinue  # kills mock
 
 ## T-01: Test-SPConnectivity.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 1a6a413
 - **Depends On:** none
 
 **Tests:**
