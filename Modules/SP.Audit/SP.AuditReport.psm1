@@ -46,7 +46,18 @@ function Group-SPAuditDecisions {
     .OUTPUTS
         [hashtable] @{ Approved = @(...); Revoked = @(...); Pending = @(...) }
         Each element is a PSCustomObject with: IdentityName, AccessName, AccessType,
-        ReviewerName, CertificationId, CertificationName, CampaignName, DecisionDate.
+        ReviewerName, CertificationId, CertificationName, CampaignName, DecisionDate,
+        plus compliance fields: Justification, RemediationStatus, SystemTimestamp,
+        CampaignStartDate, CampaignDueDate, ReviewerEmail, Decision, SourceName,
+        CampaignCompletionDate.
+    .PARAMETER CampaignMetadata
+        Optional hashtable with campaign-level dates for compliance output:
+            StartDate      - Campaign creation date (ISO 8601 string)
+            DueDate        - Campaign deadline (ISO 8601 string)
+            CompletionDate - Campaign completion date (ISO 8601 string)
+    .PARAMETER CertReviewerEmailMap
+        Optional hashtable mapping CertificationId to reviewer email address.
+        Used as fallback when the item-level reviewedBy object lacks an email.
     .EXAMPLE
         $grouped = Group-SPAuditDecisions -Items $enrichedItems
         Write-Host "Revoked: $($grouped.Revoked.Count)"
@@ -59,7 +70,13 @@ function Group-SPAuditDecisions {
         [object[]]$Items,
 
         [Parameter()]
-        [hashtable]$AccountMap = $null
+        [hashtable]$AccountMap = $null,
+
+        [Parameter()]
+        [hashtable]$CampaignMetadata = $null,
+
+        [Parameter()]
+        [hashtable]$CertReviewerEmailMap = $null
     )
 
     $approved = [System.Collections.Generic.List[object]]::new()
@@ -116,22 +133,99 @@ function Group-SPAuditDecisions {
                                  else { '' }
         }
 
-        # Build normalized output object
-        $out = [PSCustomObject]@{
-            IdentityId        = $identityId
-            IdentityName      = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
-            AccountName       = $accountName
-            AccountIdentifier = $accountIdentifier
-            AccessName        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
-            AccessType        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
-            ReviewerName      = $reviewerName
-            CertificationId   = $certId
-            CertificationName = $certName
-            CampaignName      = $campaignName
-            DecisionDate      = if ($null -ne $rawItem.decisionDate) { $rawItem.decisionDate } else { '' }
+        # Extract compliance fields
+        $justification = ''
+        if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['comment'] -and
+            $null -ne $rawItem.comment -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.comment)) {
+            $justification = [string]$rawItem.comment
         }
 
+        $systemTimestamp = ''
+        if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['modified'] -and
+            $null -ne $rawItem.modified) {
+            $systemTimestamp = [string]$rawItem.modified
+        }
+        elseif ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['created'] -and
+                $null -ne $rawItem.created) {
+            $systemTimestamp = [string]$rawItem.created
+        }
+
+        # Reviewer email: try item-level reviewedBy.email, fall back to cert-level map
+        $reviewerEmail = ''
+        if ($null -ne $rawItem.reviewedBy -and
+            $null -ne $rawItem.reviewedBy.PSObject.Properties['email'] -and
+            -not [string]::IsNullOrWhiteSpace([string]$rawItem.reviewedBy.email)) {
+            $reviewerEmail = [string]$rawItem.reviewedBy.email
+        }
+        elseif ($null -ne $CertReviewerEmailMap -and -not [string]::IsNullOrWhiteSpace($certId) -and
+                $CertReviewerEmailMap.ContainsKey($certId)) {
+            $reviewerEmail = [string]$CertReviewerEmailMap[$certId]
+        }
+
+        # Source/Application name
+        $sourceName = ''
+        if ($null -ne $rawItem.access -and
+            $null -ne $rawItem.access.PSObject.Properties['source'] -and
+            $null -ne $rawItem.access.source -and
+            $null -ne $rawItem.access.source.PSObject.Properties['name'] -and
+            $null -ne $rawItem.access.source.name) {
+            $sourceName = [string]$rawItem.access.source.name
+        }
+
+        # Campaign metadata fields
+        $campaignStartDate      = ''
+        $campaignDueDate        = ''
+        $campaignCompletionDate = ''
+        if ($null -ne $CampaignMetadata) {
+            if ($CampaignMetadata.ContainsKey('StartDate'))      { $campaignStartDate      = [string]$CampaignMetadata['StartDate'] }
+            if ($CampaignMetadata.ContainsKey('DueDate'))        { $campaignDueDate        = [string]$CampaignMetadata['DueDate'] }
+            if ($CampaignMetadata.ContainsKey('CompletionDate')) { $campaignCompletionDate = [string]$CampaignMetadata['CompletionDate'] }
+        }
+
+        # Decision and remediation status
         $decision = if ($null -ne $rawItem.decision) { [string]$rawItem.decision } else { '' }
+        $remediationStatus = 'N/A'
+        $remediationDate   = ''
+        if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+            $isCompleted = $false
+            if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['completed'] -and
+                $null -ne $rawItem.completed) {
+                try { $isCompleted = [bool]$rawItem.completed } catch { $isCompleted = $false }
+            }
+            if ($isCompleted) {
+                $remediationStatus = 'Provisioned'
+                # Use modified timestamp as best available remediation date
+                $remediationDate = $systemTimestamp
+            }
+            else {
+                $remediationStatus = 'Pending'
+            }
+        }
+
+        # Build normalized output object
+        $out = [PSCustomObject]@{
+            IdentityId             = $identityId
+            IdentityName           = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
+            AccountName            = $accountName
+            AccountIdentifier      = $accountIdentifier
+            AccessName             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
+            AccessType             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
+            SourceName             = $sourceName
+            ReviewerName           = $reviewerName
+            ReviewerEmail          = $reviewerEmail
+            Decision               = $decision
+            CertificationId        = $certId
+            CertificationName      = $certName
+            CampaignName           = $campaignName
+            DecisionDate           = if ($null -ne $rawItem.decisionDate) { $rawItem.decisionDate } else { '' }
+            Justification          = $justification
+            RemediationStatus      = $remediationStatus
+            RemediationDate        = $remediationDate
+            SystemTimestamp        = $systemTimestamp
+            CampaignStartDate      = $campaignStartDate
+            CampaignDueDate        = $campaignDueDate
+            CampaignCompletionDate = $campaignCompletionDate
+        }
 
         switch ($decision.ToUpperInvariant()) {
             'APPROVE' { $approved.Add($out) }
@@ -742,6 +836,488 @@ function Measure-SPAuditReviewerMetrics {
     }
 }
 
+function Measure-SPAuditRubberStampRisk {
+    <#
+    .SYNOPSIS
+        Detects potential rubber-stamping patterns in certification review decisions.
+    .DESCRIPTION
+        Analyzes per-reviewer decision behavior to flag potential rubber-stamping.
+        Based on SOX/SOC2 auditor red flags:
+
+        1. Decision velocity: items decided per minute. Flagged if >50 items in <60 seconds.
+        2. Approval-only rate: % of decisions that are APPROVE. Flagged if 100% across >10 items.
+        3. Bulk decision detection: clusters of identical decisions within 30-second windows.
+        4. Response latency: time from campaign creation to first decision. Flagged if <1 minute.
+
+        Each reviewer receives a severity: None, Low, Medium, or High.
+        High = multiple red flags present.
+    .PARAMETER Decisions
+        Hashtable with Approved, Revoked, Pending arrays (output of Group-SPAuditDecisions).
+        Each item must have ReviewerName and DecisionDate properties.
+    .PARAMETER Certifications
+        Array of certification objects (for campaign creation timestamps).
+    .OUTPUTS
+        [hashtable] @{
+            ReviewerRisks = @( [PSCustomObject] per reviewer )
+            HasMediumOrHighRisk = [bool]
+        }
+    .EXAMPLE
+        $risk = Measure-SPAuditRubberStampRisk -Decisions $decisions -Certifications $certs
+        if ($risk.HasMediumOrHighRisk) { Write-Host "Rubber-stamping detected" }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Certifications
+    )
+
+    # Build a map of reviewer -> list of (decision, datetime) tuples
+    $reviewerDecisions = @{}
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        if (-not $Decisions.ContainsKey($category) -or $null -eq $Decisions[$category]) { continue }
+        $decisionLabel = $category  # Approved, Revoked, Pending
+        foreach ($item in @($Decisions[$category])) {
+            $reviewer = if ($null -ne $item.ReviewerName -and -not [string]::IsNullOrWhiteSpace($item.ReviewerName)) {
+                $item.ReviewerName
+            } else { 'Unknown' }
+
+            $dt = $null
+            $rawDate = if ($null -ne $item.DecisionDate -and -not [string]::IsNullOrWhiteSpace([string]$item.DecisionDate)) {
+                [string]$item.DecisionDate
+            } else { '' }
+
+            if (-not [string]::IsNullOrWhiteSpace($rawDate)) {
+                try {
+                    $dt = [datetime]::Parse($rawDate, [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind)
+                }
+                catch { $dt = $null }
+            }
+
+            if (-not $reviewerDecisions.ContainsKey($reviewer)) {
+                $reviewerDecisions[$reviewer] = [System.Collections.Generic.List[object]]::new()
+            }
+            $reviewerDecisions[$reviewer].Add(@{
+                Decision = $decisionLabel
+                DateTime = $dt
+            })
+        }
+    }
+
+    # Build campaign creation timestamp map (earliest cert created per reviewer)
+    $campaignCreatedMap = @{}
+    foreach ($cert in $Certifications) {
+        $reviewerName = ''
+        if ($null -ne $cert.reviewer -and $null -ne $cert.reviewer.name) {
+            $reviewerName = [string]$cert.reviewer.name
+        }
+        if ([string]::IsNullOrWhiteSpace($reviewerName)) { continue }
+
+        $createdStr = ''
+        if ($null -ne $cert.created -and -not [string]::IsNullOrWhiteSpace([string]$cert.created)) {
+            $createdStr = [string]$cert.created
+        }
+        if ([string]::IsNullOrWhiteSpace($createdStr)) { continue }
+
+        try {
+            $dtCreated = [datetime]::Parse($createdStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind)
+            if (-not $campaignCreatedMap.ContainsKey($reviewerName) -or $dtCreated -lt $campaignCreatedMap[$reviewerName]) {
+                $campaignCreatedMap[$reviewerName] = $dtCreated
+            }
+        }
+        catch { }
+    }
+
+    # Analyze each reviewer
+    $reviewerRisks = [System.Collections.Generic.List[object]]::new()
+    $hasMediumOrHigh = $false
+
+    foreach ($reviewer in $reviewerDecisions.Keys) {
+        $items = @($reviewerDecisions[$reviewer])
+        $totalItems = $items.Count
+        $flags = [System.Collections.Generic.List[string]]::new()
+
+        # --- Metric 1: Approval-only rate ---
+        $approveCount = @($items | Where-Object { $_['Decision'] -eq 'Approved' }).Count
+        $revokeCount  = @($items | Where-Object { $_['Decision'] -eq 'Revoked' }).Count
+        $approvalRate = if ($totalItems -gt 0) { [Math]::Round(($approveCount / $totalItems) * 100, 1) } else { 0 }
+        $approvalOnlyFlag = ($approvalRate -eq 100 -and $totalItems -gt 10)
+        if ($approvalOnlyFlag) {
+            $flags.Add('100% approval rate across ' + $totalItems + ' items')
+        }
+
+        # --- Get items with valid timestamps for velocity analysis ---
+        $timedItems = @($items | Where-Object { $null -ne $_['DateTime'] } | Sort-Object { $_['DateTime'] })
+
+        # --- Metric 2: Decision velocity (items per minute) ---
+        $velocityItemsPerMin = 0
+        $velocityFlag = $false
+        if ($timedItems.Count -ge 2) {
+            $firstDt = $timedItems[0]['DateTime']
+            $lastDt  = $timedItems[$timedItems.Count - 1]['DateTime']
+            $spanMinutes = ($lastDt - $firstDt).TotalMinutes
+            if ($spanMinutes -gt 0) {
+                $velocityItemsPerMin = [Math]::Round($timedItems.Count / $spanMinutes, 1)
+            }
+            else {
+                # All decisions at the same timestamp
+                $velocityItemsPerMin = $timedItems.Count
+            }
+            # Flag: >50 items in <60 seconds
+            $spanSeconds = ($lastDt - $firstDt).TotalSeconds
+            if ($timedItems.Count -gt 50 -and $spanSeconds -lt 60) {
+                $velocityFlag = $true
+                $flags.Add('' + $timedItems.Count + ' items in ' + [Math]::Round($spanSeconds, 0) + ' seconds')
+            }
+        }
+
+        # --- Metric 3: Bulk decision clusters (>5 identical decisions within 30-second windows) ---
+        $bulkClusters = 0
+        if ($timedItems.Count -ge 2) {
+            $windowStart = 0
+            while ($windowStart -lt $timedItems.Count) {
+                $windowEnd = $windowStart
+                $windowDecision = $timedItems[$windowStart]['Decision']
+                $windowStartDt = $timedItems[$windowStart]['DateTime']
+
+                # Extend window while within 30 seconds and same decision
+                while ($windowEnd + 1 -lt $timedItems.Count) {
+                    $nextDt = $timedItems[$windowEnd + 1]['DateTime']
+                    $nextDecision = $timedItems[$windowEnd + 1]['Decision']
+                    if ($nextDecision -eq $windowDecision -and ($nextDt - $windowStartDt).TotalSeconds -le 30) {
+                        $windowEnd++
+                    }
+                    else {
+                        break
+                    }
+                }
+
+                $clusterSize = $windowEnd - $windowStart + 1
+                if ($clusterSize -gt 5) {
+                    $bulkClusters++
+                }
+                $windowStart = $windowEnd + 1
+            }
+        }
+        if ($bulkClusters -gt 0) {
+            $flags.Add('' + $bulkClusters + ' bulk decision cluster(s) (>5 identical in 30s)')
+        }
+
+        # --- Metric 4: Response latency ---
+        $responseLatencyMinutes = $null
+        $latencyFlag = $false
+        if ($timedItems.Count -gt 0 -and $campaignCreatedMap.ContainsKey($reviewer)) {
+            $certCreated = $campaignCreatedMap[$reviewer]
+            $firstDecision = $timedItems[0]['DateTime']
+            $responseLatencyMinutes = [Math]::Round(($firstDecision - $certCreated).TotalMinutes, 1)
+            if ($responseLatencyMinutes -lt 0) { $responseLatencyMinutes = 0 }
+            if ($responseLatencyMinutes -lt 1 -and $totalItems -gt 5) {
+                $latencyFlag = $true
+                $flags.Add('First decision <1 min after assignment (' + $responseLatencyMinutes + ' min)')
+            }
+        }
+
+        # --- Determine severity ---
+        $flagCount = $flags.Count
+        $severity = if ($flagCount -ge 2) { 'High' }
+                    elseif ($flagCount -eq 1 -and ($velocityFlag -or $approvalOnlyFlag)) { 'Medium' }
+                    elseif ($flagCount -eq 1) { 'Low' }
+                    else { 'None' }
+
+        if ($severity -eq 'Medium' -or $severity -eq 'High') {
+            $hasMediumOrHigh = $true
+        }
+
+        $reviewerRisks.Add([PSCustomObject]@{
+            ReviewerName          = $reviewer
+            TotalItems            = $totalItems
+            ApprovalRate          = $approvalRate
+            VelocityItemsPerMin   = $velocityItemsPerMin
+            BulkClusters          = $bulkClusters
+            ResponseLatencyMin    = $responseLatencyMinutes
+            Severity              = $severity
+            Flags                 = @($flags)
+        })
+    }
+
+    return @{
+        ReviewerRisks       = $reviewerRisks.ToArray()
+        HasMediumOrHighRisk = $hasMediumOrHigh
+    }
+}
+
+function Get-SPAuditRiskFlags {
+    <#
+    .SYNOPSIS
+        Evaluates per-identity risk flags for access review decision items.
+    .DESCRIPTION
+        Analyzes each decision item and assigns zero or more risk flags based
+        on identity attributes, entitlement patterns, and lifecycle state.
+
+        Risk flags:
+        - STALE (orange): Identity last login >N days ago (default 90).
+        - PRIVILEGED (red): Entitlement name matches admin/elevated patterns.
+        - ORPHAN (red): Identity has no manager.
+        - TERMINATED (red): Identity lifecycle state is terminated but still has access.
+        - SVC-ACCOUNT (gray): Identity matches service account naming patterns.
+
+        Patterns are configurable via the RiskIndicators parameter (sourced
+        from settings.json Audit.RiskIndicators).
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER Identities
+        Optional hashtable mapping identity ID to identity attribute objects.
+        Each value should have properties: lifecycleState, manager (or managerRef),
+        lastLogin (or attributes.lastLogin). When absent, only entitlement-based
+        flags (PRIVILEGED, SVC-ACCOUNT) are evaluated.
+    .PARAMETER RiskIndicators
+        Hashtable with configurable thresholds and patterns:
+            StaleAccessDays       - int, days since last login to flag as stale (default 90)
+            PrivilegedPatterns    - string[], entitlement name patterns (default @('Admin','Root','DBA','Domain Admins'))
+            ServiceAccountPatterns - string[], identity name regex patterns (default @('^SVC-','^svc-'))
+    .OUTPUTS
+        [hashtable] @{
+            Decisions = @{ Approved = @(...); Revoked = @(...); Pending = @(...) }
+            Summary   = @{ Total = int; Flagged = int; ByFlag = @{...} }
+        }
+        Each decision item in the returned Decisions gets a RiskFlags string[] property added.
+    .EXAMPLE
+        $flagged = Get-SPAuditRiskFlags -Decisions $decisions -RiskIndicators $config.Audit.RiskIndicators
+        $flagged.Summary.Flagged  # count of items with at least one flag
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter()]
+        [hashtable]$Identities = $null,
+
+        [Parameter()]
+        [hashtable]$RiskIndicators = $null
+    )
+
+    # --- Parse configuration with defaults ---
+    $staleAccessDays = 90
+    $privilegedPatterns = @('Admin', 'Root', 'DBA', 'Domain Admins')
+    $serviceAccountPatterns = @('^SVC-', '^svc-')
+
+    if ($null -ne $RiskIndicators) {
+        if ($RiskIndicators.ContainsKey('StaleAccessDays') -and $null -ne $RiskIndicators['StaleAccessDays']) {
+            $staleAccessDays = [int]$RiskIndicators['StaleAccessDays']
+        }
+        if ($RiskIndicators.ContainsKey('PrivilegedPatterns') -and $null -ne $RiskIndicators['PrivilegedPatterns']) {
+            $privilegedPatterns = @($RiskIndicators['PrivilegedPatterns'])
+        }
+        if ($RiskIndicators.ContainsKey('ServiceAccountPatterns') -and $null -ne $RiskIndicators['ServiceAccountPatterns']) {
+            $serviceAccountPatterns = @($RiskIndicators['ServiceAccountPatterns'])
+        }
+    }
+
+    # If all patterns are empty, return decisions unmodified (backwards compatible)
+    $hasPrivileged = ($privilegedPatterns.Count -gt 0)
+    $hasSvcPatterns = ($serviceAccountPatterns.Count -gt 0)
+    $hasIdentities = ($null -ne $Identities -and $Identities.Count -gt 0)
+
+    # Tracking counters
+    $totalItems = 0
+    $flaggedCount = 0
+    $flagCounts = @{
+        STALE         = 0
+        PRIVILEGED    = 0
+        ORPHAN        = 0
+        TERMINATED    = 0
+        'SVC-ACCOUNT' = 0
+    }
+
+    $now = Get-Date
+    $staleCutoff = $now.AddDays(-$staleAccessDays)
+
+    # --- Process each decision category ---
+    $resultDecisions = @{}
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        $items = @()
+        if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+            $items = @($Decisions[$category])
+        }
+
+        $outputItems = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($item in $items) {
+            $totalItems++
+            $flags = [System.Collections.Generic.List[string]]::new()
+
+            $identityName = ''
+            $identityId   = ''
+            $accessName   = ''
+
+            if ($null -ne $item) {
+                $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+                $identityId   = if ($null -ne $item.IdentityId)   { [string]$item.IdentityId }   else { '' }
+                $accessName   = if ($null -ne $item.AccessName)   { [string]$item.AccessName }   else { '' }
+            }
+
+            # --- Flag: PRIVILEGED (entitlement name pattern match) ---
+            if ($hasPrivileged -and -not [string]::IsNullOrWhiteSpace($accessName)) {
+                foreach ($pattern in $privilegedPatterns) {
+                    if ($accessName -match [regex]::Escape($pattern)) {
+                        $flags.Add('PRIVILEGED')
+                        break
+                    }
+                }
+            }
+
+            # --- Flag: SVC-ACCOUNT (identity name regex match) ---
+            if ($hasSvcPatterns -and -not [string]::IsNullOrWhiteSpace($identityName)) {
+                foreach ($pattern in $serviceAccountPatterns) {
+                    if ($identityName -match $pattern) {
+                        $flags.Add('SVC-ACCOUNT')
+                        break
+                    }
+                }
+            }
+
+            # --- Identity-dependent flags (require Identities map) ---
+            if ($hasIdentities -and -not [string]::IsNullOrWhiteSpace($identityId) -and $Identities.ContainsKey($identityId)) {
+                $identity = $Identities[$identityId]
+
+                # --- Flag: TERMINATED ---
+                $lifecycleState = ''
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        if ($identity.ContainsKey('lifecycleState')) { $lifecycleState = [string]$identity['lifecycleState'] }
+                    }
+                    elseif ($null -ne $identity.PSObject) {
+                        $lsProp = $identity.PSObject.Properties['lifecycleState']
+                        if ($null -ne $lsProp -and $null -ne $lsProp.Value) { $lifecycleState = [string]$lsProp.Value }
+                    }
+                }
+                if ($lifecycleState -eq 'terminated') {
+                    $flags.Add('TERMINATED')
+                }
+
+                # --- Flag: ORPHAN (no manager) ---
+                $hasManager = $false
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        $hasManager = ($identity.ContainsKey('manager') -and
+                            $null -ne $identity['manager'] -and
+                            -not [string]::IsNullOrWhiteSpace([string]$identity['manager']))
+                        if (-not $hasManager) {
+                            $hasManager = ($identity.ContainsKey('managerRef') -and $null -ne $identity['managerRef'])
+                        }
+                    }
+                    else {
+                        $mgrProp = $identity.PSObject.Properties['manager']
+                        $hasManager = ($null -ne $mgrProp -and $null -ne $mgrProp.Value -and
+                            -not [string]::IsNullOrWhiteSpace([string]$mgrProp.Value))
+                        if (-not $hasManager) {
+                            $mgrRefProp = $identity.PSObject.Properties['managerRef']
+                            $hasManager = ($null -ne $mgrRefProp -and $null -ne $mgrRefProp.Value)
+                        }
+                    }
+                }
+                if (-not $hasManager) {
+                    $flags.Add('ORPHAN')
+                }
+
+                # --- Flag: STALE (last login > N days ago) ---
+                $lastLoginStr = ''
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        if ($identity.ContainsKey('lastLogin')) {
+                            $lastLoginStr = [string]$identity['lastLogin']
+                        }
+                        elseif ($identity.ContainsKey('attributes') -and $null -ne $identity['attributes']) {
+                            $attrs = $identity['attributes']
+                            if ($attrs -is [hashtable] -and $attrs.ContainsKey('lastLogin')) {
+                                $lastLoginStr = [string]$attrs['lastLogin']
+                            }
+                            elseif ($null -ne $attrs.PSObject) {
+                                $llProp = $attrs.PSObject.Properties['lastLogin']
+                                if ($null -ne $llProp -and $null -ne $llProp.Value) {
+                                    $lastLoginStr = [string]$llProp.Value
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        $llProp = $identity.PSObject.Properties['lastLogin']
+                        if ($null -ne $llProp -and $null -ne $llProp.Value) {
+                            $lastLoginStr = [string]$llProp.Value
+                        }
+                        elseif ($null -ne $identity.PSObject.Properties['attributes']) {
+                            $attrs = $identity.attributes
+                            if ($null -ne $attrs) {
+                                $llAttr = $attrs.PSObject.Properties['lastLogin']
+                                if ($null -ne $llAttr -and $null -ne $llAttr.Value) {
+                                    $lastLoginStr = [string]$llAttr.Value
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($lastLoginStr)) {
+                    try {
+                        $lastLoginDt = [datetime]::Parse($lastLoginStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($lastLoginDt -lt $staleCutoff) {
+                            $flags.Add('STALE')
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            # --- Attach flags to item ---
+            $flagsArray = @($flags)
+
+            # Create new object with RiskFlags property added
+            $props = [ordered]@{}
+            if ($null -ne $item -and $null -ne $item.PSObject) {
+                foreach ($p in $item.PSObject.Properties) {
+                    $props[$p.Name] = $p.Value
+                }
+            }
+            $props['RiskFlags'] = $flagsArray
+            $enrichedItem = [PSCustomObject]$props
+
+            if ($flagsArray.Count -gt 0) {
+                $flaggedCount++
+                foreach ($f in $flagsArray) {
+                    if ($flagCounts.ContainsKey($f)) {
+                        $flagCounts[$f]++
+                    }
+                }
+            }
+
+            $outputItems.Add($enrichedItem)
+        }
+
+        $resultDecisions[$category] = $outputItems.ToArray()
+    }
+
+    return @{
+        Decisions = $resultDecisions
+        Summary   = @{
+            Total   = $totalItems
+            Flagged = $flaggedCount
+            ByFlag  = $flagCounts
+        }
+    }
+}
+
 function Group-SPAuditByLeadership {
     <#
     .SYNOPSIS
@@ -968,66 +1544,171 @@ function Group-SPAuditByLeadership {
         }
     }
 
-    # --- Build Executive rollup ---
-    # Each TopLeader aggregates across directors whose ManagerId points to it.
-    # A TopLeader at level 2 (no VP above) serves as its own director and executive.
+    # --- Build per-level Levels structure ---
+    $levelLabels = if ($OrgTree.ContainsKey('LevelLabels')) { $OrgTree.LevelLabels } else {
+        @{ 0 = 'Individual Contributors'; 1 = 'Managers'; 2 = 'Directors';
+           3 = 'Vice Presidents'; 4 = 'Senior Vice Presidents'; 5 = 'Executive Leadership' }
+    }
+
+    $discoveredTopLevel = 0
+    foreach ($nodeId in $nodes.Keys) {
+        $lvl = $nodes[$nodeId].Level
+        if ($lvl -gt $discoveredTopLevel) { $discoveredTopLevel = $lvl }
+    }
+
+    $levels = @{}
+
+    # Level 2 = Directors (from existing $directors computation above)
+    if ($directors.Count -gt 0) {
+        $label2 = if ($levelLabels.ContainsKey(2)) { $levelLabels[2] } else { 'Directors' }
+        $levels[2] = @{ Label = $label2; Leaders = $directors }
+    }
+
+    # Level 3+: each leader at level N aggregates subordinates from level N-1
+    for ($lvl = 3; $lvl -le $discoveredTopLevel; $lvl++) {
+        $lowerLevel = $lvl - 1
+        if (-not $levels.ContainsKey($lowerLevel)) { continue }
+        $lowerLeaders = $levels[$lowerLevel].Leaders
+        if ($null -eq $lowerLeaders -or $lowerLeaders.Count -eq 0) { continue }
+
+        $thisLevelLeaders = @{}
+
+        foreach ($subId in @($lowerLeaders.Keys)) {
+            if ($subId -eq $unmanagedKey) { continue }
+
+            # Find parent at this level
+            $parentId = $unmanagedKey
+            if ($nodes.ContainsKey($subId)) {
+                $subParent = $nodes[$subId].ManagerId
+                if (-not [string]::IsNullOrWhiteSpace($subParent) -and
+                    $nodes.ContainsKey($subParent) -and
+                    $nodes[$subParent].Level -eq $lvl) {
+                    $parentId = $subParent
+                }
+            }
+
+            if (-not $thisLevelLeaders.ContainsKey($parentId)) {
+                $parentName = 'Unmanaged'
+                if ($parentId -ne $unmanagedKey -and $nodes.ContainsKey($parentId)) {
+                    $pNode = $nodes[$parentId]
+                    $parentName = if ($null -ne $pNode.Identity -and
+                        -not [string]::IsNullOrWhiteSpace($pNode.Identity.Name)) {
+                        $pNode.Identity.Name
+                    } else { $parentId }
+                }
+                $thisLevelLeaders[$parentId] = @{
+                    Name          = $parentName
+                    TotalItems    = 0
+                    Approved      = 0
+                    Revoked       = 0
+                    Pending       = 0
+                    CompletionPct = 0.0
+                    Subordinates  = [System.Collections.Generic.List[string]]::new()
+                }
+            }
+
+            $thisLevelLeaders[$parentId].Subordinates.Add($subId)
+            $subData = $lowerLeaders[$subId]
+            $thisLevelLeaders[$parentId].TotalItems += $subData.TotalItems
+            $thisLevelLeaders[$parentId].Approved   += $subData.Approved
+            $thisLevelLeaders[$parentId].Revoked    += $subData.Revoked
+            $thisLevelLeaders[$parentId].Pending    += $subData.Pending
+        }
+
+        # Calculate completion pct and convert subordinate lists to arrays
+        foreach ($leaderId in @($thisLevelLeaders.Keys)) {
+            $leader = $thisLevelLeaders[$leaderId]
+            $leader.CompletionPct = if ($leader.TotalItems -gt 0) {
+                [Math]::Round(($leader.Approved + $leader.Revoked) / $leader.TotalItems * 100, 1)
+            } else { 0.0 }
+            if ($leader.Subordinates -is [System.Collections.Generic.List[string]]) {
+                $leader.Subordinates = @($leader.Subordinates.ToArray())
+            }
+        }
+
+        if ($thisLevelLeaders.Count -gt 0) {
+            $label = if ($levelLabels.ContainsKey($lvl)) { $levelLabels[$lvl] } else { 'Executive Leadership' }
+            $levels[$lvl] = @{ Label = $label; Leaders = $thisLevelLeaders }
+        }
+    }
+
+    # --- Backward-compatible Executive rollup ---
     $executive  = @{}
     $topLeaders = @($OrgTree.TopLeaders)
 
-    foreach ($vpId in $topLeaders) {
-        if (-not $nodes.ContainsKey($vpId)) { continue }
-        $vpNode = $nodes[$vpId]
-        $vpName = if ($null -ne $vpNode.Identity -and
-            -not [string]::IsNullOrWhiteSpace($vpNode.Identity.Name)) {
-            $vpNode.Identity.Name
-        } else { $vpId }
-
-        # Find directors under this VP (directors whose ManagerId == this VP)
-        $vpDirectorIds = [System.Collections.Generic.List[string]]::new()
-
-        foreach ($dirId in $directors.Keys) {
-            if ($dirId -eq $unmanagedKey) { continue }
-            if ($nodes.ContainsKey($dirId) -and $nodes[$dirId].ManagerId -eq $vpId) {
-                $vpDirectorIds.Add($dirId)
+    if ($discoveredTopLevel -ge 3) {
+        # Build Executive from the highest level in Levels
+        $execLevel = $discoveredTopLevel
+        while ($execLevel -ge 3 -and -not $levels.ContainsKey($execLevel)) {
+            $execLevel--
+        }
+        if ($levels.ContainsKey($execLevel)) {
+            foreach ($leaderId in $levels[$execLevel].Leaders.Keys) {
+                $leaderData = $levels[$execLevel].Leaders[$leaderId]
+                $executive[$leaderId] = @{
+                    Name          = $leaderData.Name
+                    TotalItems    = $leaderData.TotalItems
+                    Approved      = $leaderData.Approved
+                    Revoked       = $leaderData.Revoked
+                    Pending       = $leaderData.Pending
+                    CompletionPct = $leaderData.CompletionPct
+                    Directors     = if ($null -ne $leaderData.Subordinates) { $leaderData.Subordinates } else { @() }
+                }
             }
         }
+    }
+    else {
+        # Fallback: existing TopLeaders-based logic for 2-level orgs
+        foreach ($vpId in $topLeaders) {
+            if (-not $nodes.ContainsKey($vpId)) { continue }
+            $vpNode = $nodes[$vpId]
+            $vpName = if ($null -ne $vpNode.Identity -and
+                -not [string]::IsNullOrWhiteSpace($vpNode.Identity.Name)) {
+                $vpNode.Identity.Name
+            } else { $vpId }
 
-        # If this VP is itself a director-level node (level 2 TopLeader with
-        # managers directly below it), include itself
-        if ($vpDirectorIds.Count -eq 0 -and $directors.ContainsKey($vpId)) {
-            $vpDirectorIds.Add($vpId)
-        }
-
-        $vpTotal = 0; $vpApproved = 0; $vpRevoked = 0; $vpPending = 0
-
-        foreach ($dirId in $vpDirectorIds) {
-            if ($directors.ContainsKey($dirId)) {
-                $d = $directors[$dirId]
-                $vpTotal    += $d.TotalItems
-                $vpApproved += $d.Approved
-                $vpRevoked  += $d.Revoked
-                $vpPending  += $d.Pending
+            $vpDirectorIds = [System.Collections.Generic.List[string]]::new()
+            foreach ($dirId in $directors.Keys) {
+                if ($dirId -eq $unmanagedKey) { continue }
+                if ($nodes.ContainsKey($dirId) -and $nodes[$dirId].ManagerId -eq $vpId) {
+                    $vpDirectorIds.Add($dirId)
+                }
             }
-        }
+            if ($vpDirectorIds.Count -eq 0 -and $directors.ContainsKey($vpId)) {
+                $vpDirectorIds.Add($vpId)
+            }
 
-        $vpCompletionPct = if ($vpTotal -gt 0) {
-            [Math]::Round(($vpApproved + $vpRevoked) / $vpTotal * 100, 1)
-        } else { 0.0 }
+            $vpTotal = 0; $vpApproved = 0; $vpRevoked = 0; $vpPending = 0
+            foreach ($dirId in $vpDirectorIds) {
+                if ($directors.ContainsKey($dirId)) {
+                    $d = $directors[$dirId]
+                    $vpTotal    += $d.TotalItems
+                    $vpApproved += $d.Approved
+                    $vpRevoked  += $d.Revoked
+                    $vpPending  += $d.Pending
+                }
+            }
+            $vpCompletionPct = if ($vpTotal -gt 0) {
+                [Math]::Round(($vpApproved + $vpRevoked) / $vpTotal * 100, 1)
+            } else { 0.0 }
 
-        $executive[$vpId] = @{
-            Name          = $vpName
-            TotalItems    = $vpTotal
-            Approved      = $vpApproved
-            Revoked       = $vpRevoked
-            Pending       = $vpPending
-            CompletionPct = $vpCompletionPct
-            Directors     = @($vpDirectorIds.ToArray())
+            $executive[$vpId] = @{
+                Name          = $vpName
+                TotalItems    = $vpTotal
+                Approved      = $vpApproved
+                Revoked       = $vpRevoked
+                Pending       = $vpPending
+                CompletionPct = $vpCompletionPct
+                Directors     = @($vpDirectorIds.ToArray())
+            }
         }
     }
 
     return @{
         Directors = $directors
         Executive = $executive
+        Levels    = $levels
+        TopLevel  = $discoveredTopLevel
     }
 }
 
@@ -1159,6 +1840,46 @@ function Format-HoursDisplay {
         $rem   = [int][Math]::Round($h % 24)
         return "$days days, $rem hours"
     }
+}
+
+function Format-RiskFlagBadges {
+    <#
+    .SYNOPSIS
+        Renders risk flag badges as inline-styled HTML span elements.
+    .DESCRIPTION
+        Takes an array of risk flag strings and returns an HTML fragment with
+        colored badge spans. Returns empty string if no flags.
+        Colors: STALE=orange, PRIVILEGED=red, ORPHAN=red, TERMINATED=red, SVC-ACCOUNT=gray.
+    .PARAMETER Flags
+        Array of risk flag strings (e.g., 'TERMINATED', 'PRIVILEGED').
+    .OUTPUTS
+        [string] HTML badge markup or empty string.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$Flags
+    )
+
+    if ($null -eq $Flags -or $Flags.Count -eq 0) { return '' }
+
+    $badgeStyle = "display:inline-block; padding:2px 6px; margin:0 3px 2px 0; border-radius:3px; font-size:10px; font-weight:bold; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; line-height:14px; vertical-align:middle;"
+
+    $badges = foreach ($flag in $Flags) {
+        $color = switch ($flag) {
+            'STALE'       { 'color:#fff; background:#FF8800;' }
+            'PRIVILEGED'  { 'color:#fff; background:#CC3333;' }
+            'ORPHAN'      { 'color:#fff; background:#CC3333;' }
+            'TERMINATED'  { 'color:#fff; background:#CC3333;' }
+            'SVC-ACCOUNT' { 'color:#fff; background:#999999;' }
+            default       { 'color:#fff; background:#777777;' }
+        }
+        "<span style=""$badgeStyle $color"">$([System.Net.WebUtility]::HtmlEncode($flag))</span>"
+    }
+
+    return ' ' + ($badges -join '')
 }
 
 function Build-ExecutiveSummaryHtml {
@@ -1657,7 +2378,11 @@ function Build-SingleCampaignHtml {
         [hashtable]$CampaignAudit,
 
         [Parameter()]
-        [string]$AnchorId = ''
+        [string]$AnchorId = '',
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     $campaignName   = ConvertTo-SafeHtml ($CampaignAudit['CampaignName'])
@@ -1674,6 +2399,7 @@ function Build-SingleCampaignHtml {
     $rptAvailable     = if ($CampaignAudit.ContainsKey('CampaignReportsAvailable')) { [bool]$CampaignAudit['CampaignReportsAvailable'] } else { $false }
     $reviewerMetrics  = if ($CampaignAudit.ContainsKey('ReviewerMetrics')   -and $null -ne $CampaignAudit['ReviewerMetrics'])   { $CampaignAudit['ReviewerMetrics']   } else { $null }
     $remediationProof = if ($CampaignAudit.ContainsKey('RemediationProof')  -and $null -ne $CampaignAudit['RemediationProof'])  { $CampaignAudit['RemediationProof']  } else { $null }
+    $rubberStampRisk  = if ($CampaignAudit.ContainsKey('RubberStampRisk')   -and $null -ne $CampaignAudit['RubberStampRisk'])   { $CampaignAudit['RubberStampRisk']   } else { $null }
 
     $statusColor = switch ($status) {
         'COMPLETED' { '#339933' }
@@ -1750,59 +2476,74 @@ function Build-SingleCampaignHtml {
 
     # Primary Reviewers
     $primaryRows = $reviewers['Primary']
-    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">Primary Reviewers</p>`n"
-    $html += "<table $tableStyle>`n"
-    $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Certs Assigned', 'Decisions Made', 'Sign-Off Date', 'Phase'))
-    $html += "<tbody>`n"
-
-    if ($null -eq $primaryRows -or $primaryRows.Count -eq 0) {
-        $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No primary reviewers found.</td></tr>`n"
-    }
-    else {
-        $rowIdx = 0
-        foreach ($r in $primaryRows) {
-            $cells = @(
-                (ConvertTo-SafeHtml $r.Name),
-                (ConvertTo-SafeHtml $r.Email),
-                (ConvertTo-SafeHtml $r.CertsAssigned),
-                (ConvertTo-SafeHtml $r.DecisionsMade),
-                (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
-                (ConvertTo-SafeHtml $r.Phase)
-            )
-            $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-            $rowIdx++
-        }
-    }
-    $html += "</tbody></table>`n"
-
-    # Reassigned Reviewers
+    $primaryCount = if ($null -ne $primaryRows) { @($primaryRows).Count } else { 0 }
     $reassignedRows = $reviewers['Reassigned']
-    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px;"">Reassigned Reviewers</p>`n"
-    $html += "<table $tableStyle>`n"
-    $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Reassigned From', 'Decisions Made', 'Sign-Off Date', 'Phase', 'Proof of Action'))
-    $html += "<tbody>`n"
+    $reassignedCount = if ($null -ne $reassignedRows) { @($reassignedRows).Count } else { 0 }
 
-    if ($null -eq $reassignedRows -or $reassignedRows.Count -eq 0) {
-        $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+    if ($DetailLevel -eq 'Summary') {
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px;"">Primary Reviewers: $primaryCount | Reassigned Reviewers: $reassignedCount</p>`n"
     }
     else {
-        $rowIdx = 0
-        foreach ($r in $reassignedRows) {
-            $proofLabel = if ($r.ProofOfAction) { '<span style="color:#339933; font-weight:bold;">Yes</span>' } else { '<span style="color:#CC3333;">No</span>' }
-            $cells = @(
-                (ConvertTo-SafeHtml $r.Name),
-                (ConvertTo-SafeHtml $r.Email),
-                (ConvertTo-SafeHtml $r.ReassignedFrom),
-                (ConvertTo-SafeHtml $r.DecisionsMade),
-                (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
-                (ConvertTo-SafeHtml $r.Phase),
-                $proofLabel
-            )
-            $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-            $rowIdx++
+        $s2OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+
+        # Primary Reviewers
+        $html += "<details$s2OpenAttr>`n"
+        $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">Primary Reviewers ($primaryCount)</summary>`n"
+        $html += "<table $tableStyle>`n"
+        $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Certs Assigned', 'Decisions Made', 'Sign-Off Date', 'Phase'))
+        $html += "<tbody>`n"
+
+        if ($primaryCount -eq 0) {
+            $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No primary reviewers found.</td></tr>`n"
         }
+        else {
+            $rowIdx = 0
+            foreach ($r in $primaryRows) {
+                $cells = @(
+                    (ConvertTo-SafeHtml $r.Name),
+                    (ConvertTo-SafeHtml $r.Email),
+                    (ConvertTo-SafeHtml $r.CertsAssigned),
+                    (ConvertTo-SafeHtml $r.DecisionsMade),
+                    (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
+                    (ConvertTo-SafeHtml $r.Phase)
+                )
+                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                $rowIdx++
+            }
+        }
+        $html += "</tbody></table>`n"
+        $html += "</details>`n"
+
+        # Reassigned Reviewers
+        $html += "<details$s2OpenAttr>`n"
+        $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">Reassigned Reviewers ($reassignedCount)</summary>`n"
+        $html += "<table $tableStyle>`n"
+        $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Reassigned From', 'Decisions Made', 'Sign-Off Date', 'Phase', 'Proof of Action'))
+        $html += "<tbody>`n"
+
+        if ($reassignedCount -eq 0) {
+            $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+        }
+        else {
+            $rowIdx = 0
+            foreach ($r in $reassignedRows) {
+                $proofLabel = if ($r.ProofOfAction) { '<span style="color:#339933; font-weight:bold;">Yes</span>' } else { '<span style="color:#CC3333;">No</span>' }
+                $cells = @(
+                    (ConvertTo-SafeHtml $r.Name),
+                    (ConvertTo-SafeHtml $r.Email),
+                    (ConvertTo-SafeHtml $r.ReassignedFrom),
+                    (ConvertTo-SafeHtml $r.DecisionsMade),
+                    (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
+                    (ConvertTo-SafeHtml $r.Phase),
+                    $proofLabel
+                )
+                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                $rowIdx++
+            }
+        }
+        $html += "</tbody></table>`n"
+        $html += "</details>`n"
     }
-    $html += "</tbody></table>`n"
 
     # --- Section 3: Reviewer Performance ---
     $html += "<h3 $sectionHeadStyle>3. Reviewer Performance</h3>`n"
@@ -1811,7 +2552,7 @@ function Build-SingleCampaignHtml {
         $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Reviewer performance metrics not available (no certification timing data provided).</p>`n"
     }
     else {
-        # Campaign-level summary table
+        # Campaign-level summary table (always shown - it IS the summary)
         $campMinDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignMinHours']
         $campMaxDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignMaxHours']
         $campAvgDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignAvgHours']
@@ -1826,54 +2567,61 @@ function Build-SingleCampaignHtml {
         $html += "    </tbody>`n"
         $html += "</table>`n"
 
-        # Per-reviewer table
+        # Per-reviewer table (wrapped in <details> for Detailed/Verbose, omitted for Summary)
         $perReviewerRows = @($reviewerMetrics['ReviewerMetrics'])
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Classification', 'Certs', 'Decisions', 'Min Time', 'Max Time', 'Avg Time'))
-        $html += "<tbody>`n"
+        if ($DetailLevel -ne 'Summary') {
+            $s3OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            $s3ReviewerCount = if ($null -ne $perReviewerRows) { @($perReviewerRows).Count } else { 0 }
+            $html += "<details$s3OpenAttr>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">Per-Reviewer Breakdown ($s3ReviewerCount reviewer(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Classification', 'Certs', 'Decisions', 'Min Time', 'Max Time', 'Avg Time'))
+            $html += "<tbody>`n"
 
-        if ($null -eq $perReviewerRows -or $perReviewerRows.Count -eq 0) {
-            $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No completed certifications with timing data.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($rm in $perReviewerRows) {
-                # Color-code the avg time cell based on threshold
-                $avgHours = $rm.AvgHours
-                $avgColor = if ($null -eq $avgHours) {
-                    '#777777'
-                }
-                elseif ($avgHours -le 24) {
-                    '#339933'
-                }
-                elseif ($avgHours -le 72) {
-                    '#336699'
-                }
-                else {
-                    '#FF8800'
-                }
-
-                $minDisplay = Format-HoursDisplay $rm.MinHours
-                $maxDisplay = Format-HoursDisplay $rm.MaxHours
-                $avgDisplay = Format-HoursDisplay $rm.AvgHours
-
-                $rowStyle   = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
-                $tdPadding  = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
-                $avgTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$avgColor; font-weight:bold;"""
-
-                $html += "<tr$rowStyle>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Name)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Classification)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.CertsCompleted)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.DecisionsMade)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $minDisplay)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $maxDisplay)</td>"
-                $html += "<td $avgTdStyle>$(ConvertTo-SafeHtml $avgDisplay)</td>"
-                $html += "</tr>`n"
-                $rowIdx++
+            if ($null -eq $perReviewerRows -or $perReviewerRows.Count -eq 0) {
+                $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No completed certifications with timing data.</td></tr>`n"
             }
+            else {
+                $rowIdx = 0
+                foreach ($rm in $perReviewerRows) {
+                    # Color-code the avg time cell based on threshold
+                    $avgHours = $rm.AvgHours
+                    $avgColor = if ($null -eq $avgHours) {
+                        '#777777'
+                    }
+                    elseif ($avgHours -le 24) {
+                        '#339933'
+                    }
+                    elseif ($avgHours -le 72) {
+                        '#336699'
+                    }
+                    else {
+                        '#FF8800'
+                    }
+
+                    $minDisplay = Format-HoursDisplay $rm.MinHours
+                    $maxDisplay = Format-HoursDisplay $rm.MaxHours
+                    $avgDisplay = Format-HoursDisplay $rm.AvgHours
+
+                    $rowStyle   = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
+                    $tdPadding  = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+                    $avgTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$avgColor; font-weight:bold;"""
+
+                    $html += "<tr$rowStyle>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Name)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Classification)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.CertsCompleted)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.DecisionsMade)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $minDisplay)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $maxDisplay)</td>"
+                    $html += "<td $avgTdStyle>$(ConvertTo-SafeHtml $avgDisplay)</td>"
+                    $html += "</tr>`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
 
     # --- Section 4: Decision Summary ---
@@ -1890,81 +2638,135 @@ function Build-SingleCampaignHtml {
         $catColor = $cat['Color']
         $catLabel = $cat['Label']
 
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:$catColor; margin-bottom:6px; margin-top:12px;"">$catLabel ($($catItems.Count))</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
-        $html += "<tbody>`n"
+        $countLabel = "$($catItems.Count) item"
+        if ($catItems.Count -ne 1) { $countLabel += 's' }
 
-        if ($catItems.Count -eq 0) {
-            $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
+        if ($DetailLevel -eq 'Summary') {
+            # Summary mode: aggregate counts only, no detail tables
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:${catColor}; margin-bottom:6px; margin-top:12px;"">${catLabel}: $countLabel</p>`n"
         }
         else {
-            $rowIdx = 0
-            foreach ($item in $catItems) {
-                $cells = @(
-                    (ConvertTo-SafeHtml $item.IdentityName),
-                    (ConvertTo-SafeHtml $item.AccountIdentifier),
-                    (ConvertTo-SafeHtml $item.AccessName),
-                    (ConvertTo-SafeHtml $item.AccessType),
-                    (ConvertTo-SafeHtml $item.ReviewerName),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate))
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            # Detailed/Verbose: wrap in <details>/<summary>
+            # Detailed: revocations auto-expanded, others collapsed
+            # Verbose: all expanded
+            $openAttr = if ($DetailLevel -eq 'Verbose' -or $catLabel -eq 'Revoked') { ' open' } else { '' }
+            $summaryStyle = "style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:${catColor}; margin-bottom:6px; margin-top:12px; cursor:pointer;"""
+
+            $html += "<details$openAttr>`n"
+            $html += "<summary $summaryStyle>$catLabel ($countLabel)</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date', 'Justification', 'Remediation'))
+            $html += "<tbody>`n"
+
+            if ($catItems.Count -eq 0) {
+                $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
             }
+            else {
+                $rowIdx = 0
+                foreach ($item in $catItems) {
+                    $riskBadges = ''
+                    if ($null -ne $item.PSObject -and
+                        $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                        $null -ne $item.RiskFlags -and @($item.RiskFlags).Count -gt 0) {
+                        $riskBadges = Format-RiskFlagBadges -Flags @($item.RiskFlags)
+                    }
+
+                    # Justification display
+                    $justDisplay = 'N/A'
+                    if ($null -ne $item.PSObject.Properties['Justification'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.Justification)) {
+                        $justDisplay = $item.Justification
+                    }
+
+                    # Remediation status display with color coding
+                    $remStatus = 'N/A'
+                    $remHtml   = '<span style="color:#777777;">N/A</span>'
+                    if ($null -ne $item.PSObject.Properties['RemediationStatus'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.RemediationStatus)) {
+                        $remStatus = $item.RemediationStatus
+                    }
+                    if ($remStatus -eq 'Provisioned') {
+                        $remHtml = '<span style="color:#339933; font-weight:bold;">Provisioned</span>'
+                    }
+                    elseif ($remStatus -eq 'Pending') {
+                        $remHtml = '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
+                    }
+
+                    $cells = @(
+                        ((ConvertTo-SafeHtml $item.IdentityName) + $riskBadges),
+                        (ConvertTo-SafeHtml $item.AccountIdentifier),
+                        (ConvertTo-SafeHtml $item.AccessName),
+                        (ConvertTo-SafeHtml $item.AccessType),
+                        (ConvertTo-SafeHtml $item.ReviewerName),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate)),
+                        (ConvertTo-SafeHtml $justDisplay),
+                        $remHtml
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
 
     # --- Section 5: Campaign Reports ---
-    $html += "<h3 $sectionHeadStyle>5. Campaign Reports</h3>`n"
+    if ($DetailLevel -ne 'Summary') {
+        $html += "<h3 $sectionHeadStyle>5. Campaign Reports</h3>`n"
 
-    if (-not $rptAvailable -or $null -eq $campRpts) {
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Campaign reports not available for this campaign (API does not provide on-demand report data).</p>`n"
-    }
-    else {
-        # Render each report type as a table
-        foreach ($rptKey in $campRpts.Keys) {
-            $rptData = @($campRpts[$rptKey])
-            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">$([System.Net.WebUtility]::HtmlEncode($rptKey))</p>`n"
+        if (-not $rptAvailable -or $null -eq $campRpts) {
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Campaign reports not available for this campaign (API does not provide on-demand report data).</p>`n"
+        }
+        else {
+            $s5OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
 
-            if ($rptData.Count -eq 0) {
-                $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">No records.</p>`n"
-                continue
-            }
+            # Render each report type as a table wrapped in <details>
+            foreach ($rptKey in $campRpts.Keys) {
+                $rptData = @($campRpts[$rptKey])
 
-            # Derive headers from first row
-            $firstRow = $rptData[0]
-            $headers = @()
-            if ($firstRow -is [hashtable]) {
-                $headers = @($firstRow.Keys)
-            }
-            elseif ($null -ne $firstRow.PSObject) {
-                $headers = @($firstRow.PSObject.Properties.Name)
-            }
+                $html += "<details$s5OpenAttr>`n"
+                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">$([System.Net.WebUtility]::HtmlEncode($rptKey)) ($($rptData.Count) row(s))</summary>`n"
 
-            $html += "<table $tableStyle>`n"
-            $html += (Build-HtmlTableHeader -Headers $headers)
-            $html += "<tbody>`n"
-
-            $rowIdx = 0
-            foreach ($row in $rptData) {
-                $cells = @()
-                foreach ($h in $headers) {
-                    $val = ''
-                    if ($row -is [hashtable]) {
-                        $val = if ($row.ContainsKey($h)) { [string]$row[$h] } else { '' }
-                    }
-                    else {
-                        $prop = $row.PSObject.Properties[$h]
-                        $val  = if ($null -ne $prop) { [string]$prop.Value } else { '' }
-                    }
-                    $cells += [System.Net.WebUtility]::HtmlEncode($val)
+                if ($rptData.Count -eq 0) {
+                    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">No records.</p>`n"
                 }
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+                else {
+                    # Derive headers from first row
+                    $firstRow = $rptData[0]
+                    $headers = @()
+                    if ($firstRow -is [hashtable]) {
+                        $headers = @($firstRow.Keys)
+                    }
+                    elseif ($null -ne $firstRow.PSObject) {
+                        $headers = @($firstRow.PSObject.Properties.Name)
+                    }
+
+                    $html += "<table $tableStyle>`n"
+                    $html += (Build-HtmlTableHeader -Headers $headers)
+                    $html += "<tbody>`n"
+
+                    $rowIdx = 0
+                    foreach ($row in $rptData) {
+                        $cells = @()
+                        foreach ($h in $headers) {
+                            $val = ''
+                            if ($row -is [hashtable]) {
+                                $val = if ($row.ContainsKey($h)) { [string]$row[$h] } else { '' }
+                            }
+                            else {
+                                $prop = $row.PSObject.Properties[$h]
+                                $val  = if ($null -ne $prop) { [string]$prop.Value } else { '' }
+                            }
+                            $cells += [System.Net.WebUtility]::HtmlEncode($val)
+                        }
+                        $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                        $rowIdx++
+                    }
+                    $html += "</tbody></table>`n"
+                }
+                $html += "</details>`n"
             }
-            $html += "</tbody></table>`n"
         }
     }
 
@@ -1972,7 +2774,7 @@ function Build-SingleCampaignHtml {
     $html += "<h3 $sectionHeadStyle>6. Remediation &amp; Reassignment Proof</h3>`n"
 
     if ($null -ne $remediationProof) {
-        # Sub-section A: Remediation Summary
+        # Sub-section A: Remediation Summary (always shown - it IS the summary)
         $totalRevoked     = [int]$remediationProof['TotalRevoked']
         $completeCount    = [int]$remediationProof['RemediationCompleteCount']
         $pendingCount     = [int]$remediationProof['RemediationPendingCount']
@@ -1988,66 +2790,74 @@ function Build-SingleCampaignHtml {
         $html += "    </tbody>`n"
         $html += "</table>`n"
 
-        # Sub-section B: Revoked Items - Remediation Status
-        $revokedRows = @($remediationProof['RevokedItems'])
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;"">Revoked Items - Remediation Status</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
-        $html += "<tbody>`n"
+        if ($DetailLevel -ne 'Summary') {
+            # Sub-section B: Revoked Items - Remediation Status (wrapped in <details>)
+            $revokedRows = @($remediationProof['RevokedItems'])
+            # Revocations auto-expanded in both Detailed and Verbose
+            $html += "<details open>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px; cursor:pointer;"">Revoked Items - Remediation Status ($($revokedRows.Count) item(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
+            $html += "<tbody>`n"
 
-        if ($revokedRows.Count -eq 0) {
-            $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($ri in $revokedRows) {
-                $remLabel = if ($ri.RemediationComplete) {
-                    '<span style="color:#339933; font-weight:bold;">Complete</span>'
-                }
-                else {
-                    '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
-                }
-                $cells = @(
-                    (ConvertTo-SafeHtml $ri.IdentityName),
-                    (ConvertTo-SafeHtml $ri.AccountIdentifier),
-                    (ConvertTo-SafeHtml $ri.AccessName),
-                    (ConvertTo-SafeHtml $ri.AccessType),
-                    (ConvertTo-SafeHtml $ri.SourceName),
-                    (ConvertTo-SafeHtml $ri.ReviewerName),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $ri.DecisionDate)),
-                    $remLabel
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            if ($revokedRows.Count -eq 0) {
+                $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
             }
-        }
-        $html += "</tbody></table>`n"
-
-        # Sub-section C: Reassignment Chain
-        $chainRows = @($remediationProof['ReassignmentChain'])
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;"">Reassignment Chain</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Certification', 'Reassigned From', 'Current Reviewer', 'Sign-Off Date', 'Phase'))
-        $html += "<tbody>`n"
-
-        if ($chainRows.Count -eq 0) {
-            $html += "<tr><td colspan=""5"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($hop in $chainRows) {
-                $cells = @(
-                    (ConvertTo-SafeHtml $hop.CertificationName),
-                    (ConvertTo-SafeHtml $hop.ReassignedFrom),
-                    (ConvertTo-SafeHtml $hop.CurrentReviewer),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $hop.SignOffDate)),
-                    (ConvertTo-SafeHtml $hop.Phase)
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            else {
+                $rowIdx = 0
+                foreach ($ri in $revokedRows) {
+                    $remLabel = if ($ri.RemediationComplete) {
+                        '<span style="color:#339933; font-weight:bold;">Complete</span>'
+                    }
+                    else {
+                        '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
+                    }
+                    $cells = @(
+                        (ConvertTo-SafeHtml $ri.IdentityName),
+                        (ConvertTo-SafeHtml $ri.AccountIdentifier),
+                        (ConvertTo-SafeHtml $ri.AccessName),
+                        (ConvertTo-SafeHtml $ri.AccessType),
+                        (ConvertTo-SafeHtml $ri.SourceName),
+                        (ConvertTo-SafeHtml $ri.ReviewerName),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $ri.DecisionDate)),
+                        $remLabel
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
             }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
+
+            # Sub-section C: Reassignment Chain
+            $chainRows = @($remediationProof['ReassignmentChain'])
+            $s6cOpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            $html += "<details$s6cOpenAttr>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px; cursor:pointer;"">Reassignment Chain ($($chainRows.Count) record(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Certification', 'Reassigned From', 'Current Reviewer', 'Sign-Off Date', 'Phase'))
+            $html += "<tbody>`n"
+
+            if ($chainRows.Count -eq 0) {
+                $html += "<tr><td colspan=""5"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+            }
+            else {
+                $rowIdx = 0
+                foreach ($hop in $chainRows) {
+                    $cells = @(
+                        (ConvertTo-SafeHtml $hop.CertificationName),
+                        (ConvertTo-SafeHtml $hop.ReassignedFrom),
+                        (ConvertTo-SafeHtml $hop.CurrentReviewer),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $hop.SignOffDate)),
+                        (ConvertTo-SafeHtml $hop.Phase)
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
     else {
         # Backward-compatible fallback: render old account-activities data when RemediationProof is absent
@@ -2058,30 +2868,96 @@ function Build-SingleCampaignHtml {
 
         foreach ($pcat in $provCategories) {
             $pcatItems = @($pcat['Items'])
-            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px;"">$($pcat['Label']) ($($pcatItems.Count))</p>`n"
-            $html += "<table $tableStyle>`n"
-            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Actor', 'Source', 'Operation', 'Date', 'Status'))
-            $html += "<tbody>`n"
 
-            if ($pcatItems.Count -eq 0) {
-                $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No events recorded.</td></tr>`n"
+            if ($DetailLevel -eq 'Summary') {
+                $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px; margin-top:12px;"">$($pcat['Label']): $($pcatItems.Count) event(s)</p>`n"
             }
             else {
-                $rowIdx = 0
-                foreach ($ev in $pcatItems) {
-                    $cells = @(
-                        (ConvertTo-SafeHtml $ev.TargetName),
-                        (ConvertTo-SafeHtml $ev.Actor),
-                        (ConvertTo-SafeHtml $ev.SourceName),
-                        (ConvertTo-SafeHtml $ev.Operation),
-                        (ConvertTo-SafeHtml (Format-HtmlDate $ev.Date)),
-                        (ConvertTo-SafeHtml $ev.Status)
-                    )
-                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                    $rowIdx++
+                $s6fOpenAttr = if ($DetailLevel -eq 'Verbose' -or $pcat['Label'] -eq 'Access Revoked Events') { ' open' } else { '' }
+                $html += "<details$s6fOpenAttr>`n"
+                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">$($pcat['Label']) ($($pcatItems.Count))</summary>`n"
+                $html += "<table $tableStyle>`n"
+                $html += (Build-HtmlTableHeader -Headers @('Identity', 'Actor', 'Source', 'Operation', 'Date', 'Status'))
+                $html += "<tbody>`n"
+
+                if ($pcatItems.Count -eq 0) {
+                    $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No events recorded.</td></tr>`n"
                 }
+                else {
+                    $rowIdx = 0
+                    foreach ($ev in $pcatItems) {
+                        $cells = @(
+                            (ConvertTo-SafeHtml $ev.TargetName),
+                            (ConvertTo-SafeHtml $ev.Actor),
+                            (ConvertTo-SafeHtml $ev.SourceName),
+                            (ConvertTo-SafeHtml $ev.Operation),
+                            (ConvertTo-SafeHtml (Format-HtmlDate $ev.Date)),
+                            (ConvertTo-SafeHtml $ev.Status)
+                        )
+                        $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                        $rowIdx++
+                    }
+                }
+                $html += "</tbody></table>`n"
+                $html += "</details>`n"
+            }
+        }
+    }
+
+    # --- Section 8: Anti-Rubber-Stamping Analytics ---
+    # Only shown when at least one Medium or High risk reviewer exists
+    if ($null -ne $rubberStampRisk -and $rubberStampRisk['HasMediumOrHighRisk']) {
+        $riskRows = @($rubberStampRisk['ReviewerRisks'])
+        $riskCount = @($riskRows | Where-Object { $_.Severity -eq 'Medium' -or $_.Severity -eq 'High' }).Count
+
+        $html += "<h3 $sectionHeadStyle>8. Anti-Rubber-Stamping Analytics</h3>`n"
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; color:#CC3333; margin-bottom:12px;"">$riskCount reviewer(s) flagged for potential rubber-stamping patterns. Review recommended before accepting audit evidence.</p>`n"
+
+        if ($DetailLevel -eq 'Summary') {
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px;"">Flagged Reviewers: $riskCount (expand to Detailed or Verbose mode for full breakdown)</p>`n"
+        }
+        else {
+            $s8OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            # Always auto-expand when risk is present
+            $html += "<details open>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">Reviewer Risk Assessment ($($riskRows.Count) reviewer(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Items', 'Velocity (items/min)', 'Approval Rate', 'Bulk Clusters', 'Response Latency', 'Risk Level', 'Flags'))
+            $html += "<tbody>`n"
+
+            $rowIdx = 0
+            foreach ($rr in $riskRows) {
+                $riskColor = switch ($rr.Severity) {
+                    'High'   { '#CC3333' }
+                    'Medium' { '#FF8800' }
+                    'Low'    { '#336699' }
+                    default  { '#339933' }
+                }
+
+                $velocityDisplay = if ($rr.VelocityItemsPerMin -gt 0) { [string]$rr.VelocityItemsPerMin } else { 'N/A' }
+                $approvalDisplay = '' + $rr.ApprovalRate + '%'
+                $bulkDisplay = [string]$rr.BulkClusters
+                $latencyDisplay = if ($null -ne $rr.ResponseLatencyMin) { '' + $rr.ResponseLatencyMin + ' min' } else { 'N/A' }
+                $flagsDisplay = if ($rr.Flags.Count -gt 0) { $rr.Flags -join '; ' } else { '--' }
+
+                $rowStyle  = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
+                $tdPadding = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+                $riskTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$riskColor; font-weight:bold;"""
+
+                $html += "<tr$rowStyle>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rr.ReviewerName)</td>"
+                $html += "<td $tdPadding>$($rr.TotalItems)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $velocityDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $approvalDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $bulkDisplay)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $latencyDisplay)</td>"
+                $html += "<td $riskTdStyle>$(ConvertTo-SafeHtml $rr.Severity)</td>"
+                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $flagsDisplay)</td>"
+                $html += "</tr>`n"
+                $rowIdx++
             }
             $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
     }
 
@@ -2149,7 +3025,11 @@ function Export-SPAuditHtml {
         [string]$CorrelationID,
 
         [Parameter()]
-        [hashtable]$RunMetadata
+        [hashtable]$RunMetadata,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     $writtenFiles = [System.Collections.Generic.List[string]]::new()
@@ -2220,7 +3100,7 @@ function Export-SPAuditHtml {
         $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
 
         $anchorId  = "campaign-$safeName"
-        $bodyHtml  = Build-SingleCampaignHtml -CampaignAudit $audit -AnchorId $anchorId
+        $bodyHtml  = Build-SingleCampaignHtml -CampaignAudit $audit -AnchorId $anchorId -DetailLevel $DetailLevel
 
         $perCampaignHtml = $htmlOpen + $bodyHtml + $metaSection + $footerHtml + $htmlClose
         $perCampaignHtml | Set-Content -Path $filePath -Encoding UTF8
@@ -3026,7 +3906,11 @@ function Export-SPLeadershipDirectorHtml {
         [string]$OutputPath,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -3111,6 +3995,14 @@ function Export-SPLeadershipDirectorHtml {
                 $dirMgrItems[$directorId][$managerId] = [System.Collections.Generic.List[object]]::new()
             }
 
+            # Carry forward RiskFlags from enriched decisions (if present)
+            $dirItemRiskFlags = @()
+            if ($null -ne $item.PSObject -and
+                $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                $null -ne $item.RiskFlags) {
+                $dirItemRiskFlags = @($item.RiskFlags)
+            }
+
             $dirMgrItems[$directorId][$managerId].Add(@{
                 IdentityName = $identityName
                 AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
@@ -3118,6 +4010,7 @@ function Export-SPLeadershipDirectorHtml {
                 Decision     = $category
                 ReviewerName = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
                 DecisionDate = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                RiskFlags    = $dirItemRiskFlags
             })
         }
     }
@@ -3252,48 +4145,57 @@ $mgrTableBody
 </table>
 "@
 
-        # --- Per-manager identity detail sections ---
+        # --- Per-manager identity detail sections (skipped in Summary mode) ---
         $detailSectionsHtml = ''
-        $mgrItemsForDir = if ($dirMgrItems.ContainsKey($dirId)) { $dirMgrItems[$dirId] } else { @{} }
+        if ($DetailLevel -ne 'Summary') {
+            $mgrItemsForDir = if ($dirMgrItems.ContainsKey($dirId)) { $dirMgrItems[$dirId] } else { @{} }
 
-        foreach ($mr in $managerRows) {
-            $mgrId   = $mr.Id
-            $mgrName = $mr.Name
-            $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
+            foreach ($mr in $managerRows) {
+                $mgrId   = $mr.Id
+                $mgrName = $mr.Name
+                $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
 
-            $itemList = @()
-            if ($mgrItemsForDir.ContainsKey($mgrId)) {
-                $itemList = @($mgrItemsForDir[$mgrId])
-            }
-
-            # Sort items: Pending first, then Revoked, then Approved (attention-worthy first)
-            $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
-            $itemList = @($itemList | Sort-Object {
-                $so = $sortOrder[$_.Decision]
-                if ($null -eq $so) { 3 } else { $so }
-            }, { $_.IdentityName })
-
-            $detailRows = ''
-            $detailIndex = 0
-            foreach ($di in $itemList) {
-                $isAlt = ($detailIndex % 2 -eq 1)
-                $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
-
-                $decisionColor = switch ($di.Decision) {
-                    'Approved' { '#339933' }
-                    'Revoked'  { '#CC3333' }
-                    'Pending'  { '#FF8800' }
-                    default    { '#333333' }
+                $itemList = @()
+                if ($mgrItemsForDir.ContainsKey($mgrId)) {
+                    $itemList = @($mgrItemsForDir[$mgrId])
                 }
-                $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
 
-                $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
-                $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
-                $safeAccess   = ConvertTo-SafeHtml $di.AccessName
-                $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
-                $safeDate     = Format-HtmlDate $di.DecisionDate
+                # Sort items: Pending first, then Revoked, then Approved (attention-worthy first)
+                $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
+                $itemList = @($itemList | Sort-Object {
+                    $so = $sortOrder[$_.Decision]
+                    if ($null -eq $so) { 3 } else { $so }
+                }, { $_.IdentityName })
 
-                $detailRows += @"
+                $detailRows = ''
+                $detailIndex = 0
+                foreach ($di in $itemList) {
+                    $isAlt = ($detailIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $decisionColor = switch ($di.Decision) {
+                        'Approved' { '#339933' }
+                        'Revoked'  { '#CC3333' }
+                        'Pending'  { '#FF8800' }
+                        default    { '#333333' }
+                    }
+                    $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
+
+                    $diRiskBadges = ''
+                    $diRiskFlags = if ($di -is [hashtable] -and $di.ContainsKey('RiskFlags')) { @($di['RiskFlags']) }
+                                   elseif ($null -ne $di.PSObject -and $null -ne $di.PSObject.Properties['RiskFlags']) { @($di.RiskFlags) }
+                                   else { @() }
+                    if ($diRiskFlags.Count -gt 0) {
+                        $diRiskBadges = Format-RiskFlagBadges -Flags $diRiskFlags
+                    }
+
+                    $safeIdentity = (ConvertTo-SafeHtml $di.IdentityName) + $diRiskBadges
+                    $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
+                    $safeAccess   = ConvertTo-SafeHtml $di.AccessName
+                    $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
+                    $safeDate     = Format-HtmlDate $di.DecisionDate
+
+                    $detailRows += @"
 <tr$rowBg>
     <td $tdStyle>$safeIdentity</td>
     <td $tdStyle>$safeAccount</td>
@@ -3303,15 +4205,20 @@ $mgrTableBody
     <td $tdStyle>$safeDate</td>
 </tr>
 "@
-                $detailIndex++
-            }
+                    $detailIndex++
+                }
 
-            $itemCountLabel = "$($itemList.Count) item"
-            if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
+                $itemCountLabel = "$($itemList.Count) item"
+                if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
 
-            $detailSectionsHtml += @"
-<div style="margin-top:24px; page-break-inside:avoid;">
-<h4 style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></h4>
+                # Wrap in <details>/<summary> for Detailed/Verbose modes
+                $dirHasRevocations = @($itemList | Where-Object { $_.Decision -eq 'Revoked' }).Count -gt 0
+                $dirMgrOpenAttr = if ($DetailLevel -eq 'Verbose' -or $dirHasRevocations) { ' open' } else { '' }
+
+                $detailSectionsHtml += @"
+<details$dirMgrOpenAttr>
+<summary style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-top:24px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6; cursor:pointer;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></summary>
+<div style="page-break-inside:avoid;">
 <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
 <thead>
 <tr>
@@ -3328,7 +4235,9 @@ $detailRows
 </tbody>
 </table>
 </div>
+</details>
 "@
+            }
         }
 
         # --- Navigation link ---
@@ -3365,9 +4274,10 @@ $summaryCardsHtml
 
 $managerTableHtml
 
-<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Identity Decision Detail</h3>
-
-$detailSectionsHtml
+$(if (-not [string]::IsNullOrWhiteSpace($detailSectionsHtml)) {
+"<h3 style=""font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;"">Identity Decision Detail</h3>
+$detailSectionsHtml"
+})
 
 $footerHtml
 
@@ -3383,6 +4293,669 @@ $footerHtml
         if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
             Write-SPLog -Message "Director report written: $filePath" `
                 -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLeadershipDirectorHtml' `
+                -CorrelationID $CorrelationID
+        }
+
+        $outputPaths.Add($filePath)
+    }
+
+    return @($outputPaths.ToArray())
+}
+
+function Export-SPLeadershipLevelHtml {
+    <#
+    .SYNOPSIS
+        Generates per-level leadership HTML reports dynamically for any org level.
+    .DESCRIPTION
+        Unified report generator that replaces the fixed executive/director approach.
+        Produces one HTML file per leader at a given org level. Each report includes:
+        - Level-appropriate header (e.g., "VP Report: Alice Johnson")
+        - Summary cards: total items, approval rate, revocation rate, completion %
+        - Subordinate table: next-level-down leaders with aggregate metrics
+        - Navigation links: up to parent report, down to child reports
+        - Identity decision detail at the lowest generated level
+
+        All CSS is inline on elements for Word copy-paste compatibility.
+        No flexbox, no grid, no external resources.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership with Levels and TopLevel keys.
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER OrgTree
+        Hashtable from Build-SPOrgTree .Data containing Nodes, LevelLabels, etc.
+    .PARAMETER Level
+        The org level to generate reports for. Each leader at this level gets a report.
+    .PARAMETER StartLevel
+        The highest level being generated (controls executive summary logic).
+    .PARAMETER LowestLevel
+        The lowest level being generated (controls per-identity detail inclusion).
+    .PARAMETER CampaignName
+        Display name of the campaign (or combined campaign label).
+    .PARAMETER DateRange
+        Descriptive date range string for the report header.
+    .PARAMETER OutputPath
+        Directory in which to write the HTML files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in each report footer.
+    .OUTPUTS
+        [string[]] Array of file paths written.
+    .EXAMPLE
+        $paths = Export-SPLeadershipLevelHtml -LeadershipData $leadership `
+                    -Decisions $grouped -OrgTree $tree.Data -Level 3 `
+                    -StartLevel 4 -LowestLevel 2 `
+                    -CampaignName 'Q1 Review' -OutputPath 'C:\Reports\leadership'
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [int]$Level,
+
+        [Parameter(Mandatory)]
+        [int]$StartLevel,
+
+        [Parameter(Mandatory)]
+        [int]$LowestLevel,
+
+        [Parameter(Mandatory)]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $nodes       = $OrgTree.Nodes
+    $levels      = if ($LeadershipData.ContainsKey('Levels')) { $LeadershipData['Levels'] } else { @{} }
+
+    # Determine level labels
+    $levelLabels = if ($OrgTree.ContainsKey('LevelLabels')) { $OrgTree.LevelLabels } else {
+        @{ 0 = 'Individual Contributors'; 1 = 'Managers'; 2 = 'Directors';
+           3 = 'Vice Presidents'; 4 = 'Senior Vice Presidents'; 5 = 'Executive Leadership' }
+    }
+
+    $thisLevelLabel = if ($levelLabels.ContainsKey($Level)) { $levelLabels[$Level] } else { "Level $Level Leaders" }
+    $lowerLevelLabel = if ($levelLabels.ContainsKey($Level - 1)) { $levelLabels[$Level - 1] } else { "Level $($Level - 1)" }
+
+    # Get leaders at this level
+    if (-not $levels.ContainsKey($Level)) {
+        return @()
+    }
+    $thisLevelData = $levels[$Level]
+    $leaders = $thisLevelData.Leaders
+    if ($null -eq $leaders -or $leaders.Count -eq 0) {
+        return @()
+    }
+
+    # Get lower-level leaders for subordinate detail
+    $lowerLeaders = $null
+    if ($levels.ContainsKey($Level - 1)) {
+        $lowerLeaders = $levels[$Level - 1].Leaders
+    }
+
+    # Style constants
+    $fontFamily = "-apple-system,'Segoe UI',system-ui,sans-serif"
+    $thStyle    = "style=""background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:$fontFamily; font-size:13px;"""
+    $tdStyle    = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px;"""
+    $safeCampaignName = ConvertTo-SafeHtml $CampaignName
+    $safeDateRange    = ConvertTo-SafeHtml $DateRange
+
+    # File prefix from level label (lowercase, no spaces)
+    $filePrefix = ($thisLevelLabel -replace '\s+', '-').ToLower()
+    # Singular form for file naming (remove trailing 's' if present)
+    $filePrefixSingular = if ($filePrefix.EndsWith('s') -and -not $filePrefix.EndsWith('ss')) {
+        $filePrefix.Substring(0, $filePrefix.Length - 1)
+    } else { $filePrefix }
+
+    # Determine if this is the top generated level (executive summary)
+    $isTopLevel = ($Level -eq $StartLevel)
+    # Determine if this is the lowest generated level (include identity detail)
+    $isLowestLevel = ($Level -eq $LowestLevel)
+
+    # Build identity-to-manager lookup for detail tables (only at lowest level)
+    $nameToLeafId  = @{}
+    $leafToManager = @{}
+    $managerToParent = @{}
+    if ($isLowestLevel) {
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -eq 0) {
+                if ($null -ne $node.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($node.Identity.Name)) {
+                    $nameToLeafId[$node.Identity.Name] = $nodeId
+                }
+                $leafToManager[$nodeId] = $node.ManagerId
+            }
+        }
+
+        # Build chain from manager to this level's leaders
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -ge 1 -and $node.Level -lt $Level) {
+                $managerToParent[$nodeId] = $node.ManagerId
+            }
+        }
+    }
+
+    # --- Generate one HTML file per leader ---
+    $outputPaths = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($leaderId in $leaders.Keys) {
+        if ($leaderId -eq '__unmanaged__') { continue }
+
+        $leaderData = $leaders[$leaderId]
+        $leaderName = if ($null -ne $leaderData.Name) { $leaderData.Name } else { $leaderId }
+
+        # Sanitize name for filename
+        $safeName = ($leaderName -replace '[^a-zA-Z0-9_-]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = $leaderId -replace '[^a-zA-Z0-9_-]', '' }
+
+        $safeLeaderName = ConvertTo-SafeHtml $leaderName
+
+        # --- Leader-level metrics ---
+        $totalItems    = [int]$leaderData.TotalItems
+        $totalApproved = [int]$leaderData.Approved
+        $totalRevoked  = [int]$leaderData.Revoked
+        $totalPending  = [int]$leaderData.Pending
+        $completionPct = [double]$leaderData.CompletionPct
+
+        $approvalRate   = if ($totalItems -gt 0) { [Math]::Round($totalApproved / $totalItems * 100, 1) } else { 0.0 }
+        $revocationRate = if ($totalItems -gt 0) { [Math]::Round($totalRevoked  / $totalItems * 100, 1) } else { 0.0 }
+
+        $completionColor = if ($completionPct -ge 95) { '#339933' } elseif ($completionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+
+        $dateRangeHtml = if (-not [string]::IsNullOrWhiteSpace($DateRange)) {
+            "<p style=""font-family:$fontFamily; color:#777777; font-size:13px; margin:0 0 20px 0;"">$safeDateRange</p>"
+        } else { '' }
+
+        # --- Summary cards ---
+        $summaryCardsHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<tr>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#2c3e50;">$totalItems</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Total Items</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#339933;">$($approvalRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Approval Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#CC3333;">$($revocationRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Revocation Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:$completionColor;">$($completionPct)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Completion</div>
+    </td>
+</tr>
+</table>
+"@
+
+        # --- Subordinate table (next-level-down leaders under this leader) ---
+        $subordinateTableHtml = ''
+        $subordinateIds = @()
+        if ($null -ne $leaderData.Subordinates) {
+            $subordinateIds = @($leaderData.Subordinates)
+        }
+        elseif ($null -ne $leaderData.Managers) {
+            # Level 2 (Directors) have Managers directly
+            $subordinateIds = @($leaderData.Managers.Keys | Where-Object { $_ -ne '__unmanaged__' })
+        }
+
+        if ($subordinateIds.Count -gt 0 -and $null -ne $lowerLeaders) {
+            $subRows = @()
+            foreach ($subId in $subordinateIds) {
+                if ($null -eq $lowerLeaders -or -not $lowerLeaders.ContainsKey($subId)) { continue }
+                $sub = $lowerLeaders[$subId]
+                $subTotal    = [int]$sub.TotalItems
+                $subApproved = [int]$sub.Approved
+                $subRevoked  = [int]$sub.Revoked
+                $subPending  = [int]$sub.Pending
+                $subPct      = [double]$sub.CompletionPct
+
+                $subRows += @{
+                    Id            = $subId
+                    Name          = if ($null -ne $sub.Name) { $sub.Name } else { $subId }
+                    TotalItems    = $subTotal
+                    Approved      = $subApproved
+                    Revoked       = $subRevoked
+                    Pending       = $subPending
+                    CompletionPct = $subPct
+                }
+            }
+            $subRows = @($subRows | Sort-Object { $_.CompletionPct })
+
+            if ($subRows.Count -gt 0) {
+                $subTableBody = ''
+                $subIndex = 0
+
+                # Determine lower-level file prefix for links
+                $lowerFilePrefix = ($lowerLevelLabel -replace '\s+', '-').ToLower()
+                $lowerFilePrefixSingular = if ($lowerFilePrefix.EndsWith('s') -and -not $lowerFilePrefix.EndsWith('ss')) {
+                    $lowerFilePrefix.Substring(0, $lowerFilePrefix.Length - 1)
+                } else { $lowerFilePrefix }
+
+                foreach ($sr in $subRows) {
+                    $isAlt = ($subIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $subPctColor = if ($sr.CompletionPct -ge 95) { '#339933' } elseif ($sr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+                    $pctCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$subPctColor;"""
+
+                    $safeSubName = ConvertTo-SafeHtml $sr.Name
+
+                    # Generate link to subordinate report (only if not at lowest generated level)
+                    $subFileName = ($sr.Name -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($subFileName)) { $subFileName = $sr.Id -replace '[^a-zA-Z0-9_-]', '' }
+                    $subLink = "$lowerFilePrefixSingular-$subFileName.html"
+
+                    $nameCell = if (($Level - 1) -ge $LowestLevel) {
+                        "<a href=""$subLink"" style=""color:#336699; text-decoration:none;"">$safeSubName</a>"
+                    } else { $safeSubName }
+
+                    $subTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$nameCell</td>
+    <td $tdStyle>$($sr.TotalItems)</td>
+    <td $tdStyle>$($sr.Approved)</td>
+    <td $tdStyle>$($sr.Revoked)</td>
+    <td $tdStyle>$($sr.Pending)</td>
+    <td $pctCellStyle>$($sr.CompletionPct)%</td>
+</tr>
+"@
+                    $subIndex++
+                }
+
+                $subordinateTableHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel)) Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel -replace 's$', ''))</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+</tr>
+</thead>
+<tbody>
+$subTableBody
+</tbody>
+</table>
+"@
+            }
+        }
+        elseif ($null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
+            # This is a Level 2 leader (Directors level) with direct manager data
+            $mgrRows = @()
+            foreach ($mgrId in $leaderData.Managers.Keys) {
+                if ($mgrId -eq '__unmanaged__') { continue }
+                $mgr = $leaderData.Managers[$mgrId]
+                $mgrApproved = [int]$mgr.Approved
+                $mgrRevoked  = [int]$mgr.Revoked
+                $mgrPending  = [int]$mgr.Pending
+                $mgrTotal    = $mgrApproved + $mgrRevoked + $mgrPending
+                $mgrPct      = if ($mgrTotal -gt 0) { [Math]::Round(($mgrApproved + $mgrRevoked) / $mgrTotal * 100, 1) } else { 0.0 }
+
+                $mgrRows += @{
+                    Id            = $mgrId
+                    Name          = if ($null -ne $mgr.Name) { $mgr.Name } else { $mgrId }
+                    TotalItems    = $mgrTotal
+                    Approved      = $mgrApproved
+                    Revoked       = $mgrRevoked
+                    Pending       = $mgrPending
+                    CompletionPct = $mgrPct
+                    AvgHours      = $mgr.AvgHours
+                }
+            }
+            $mgrRows = @($mgrRows | Sort-Object { $_.CompletionPct })
+
+            if ($mgrRows.Count -gt 0) {
+                $mgrTableBody = ''
+                $mgrIndex = 0
+                foreach ($mr in $mgrRows) {
+                    $isAlt = ($mgrIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $mgrPctColor = if ($mr.CompletionPct -ge 95) { '#339933' } elseif ($mr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+                    $pctCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$mgrPctColor;"""
+                    $avgHoursDisplay = Format-HoursDisplay $mr.AvgHours
+                    $safeMgrName = ConvertTo-SafeHtml $mr.Name
+
+                    $mgrTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$safeMgrName</td>
+    <td $tdStyle>$($mr.TotalItems)</td>
+    <td $tdStyle>$($mr.Approved)</td>
+    <td $tdStyle>$($mr.Revoked)</td>
+    <td $tdStyle>$($mr.Pending)</td>
+    <td $pctCellStyle>$($mr.CompletionPct)%</td>
+    <td $tdStyle>$avgHoursDisplay</td>
+</tr>
+"@
+                    $mgrIndex++
+                }
+
+                $subordinateTableHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Manager Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>Manager</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+    <th $thStyle>Avg Response Time</th>
+</tr>
+</thead>
+<tbody>
+$mgrTableBody
+</tbody>
+</table>
+"@
+            }
+        }
+
+        # --- Per-identity decision detail (only at lowest generated level, not in Summary mode) ---
+        $detailSectionsHtml = ''
+        if ($DetailLevel -ne 'Summary' -and $isLowestLevel -and $null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
+            # Build decision items grouped by manager under this leader
+            $mgrItemsForLeader = @{}
+
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                $items = @()
+                if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+                    $items = @($Decisions[$category])
+                }
+
+                foreach ($item in $items) {
+                    $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+
+                    if ([string]::IsNullOrWhiteSpace($identityName) -or
+                        -not $nameToLeafId.ContainsKey($identityName)) { continue }
+
+                    $leafId = $nameToLeafId[$identityName]
+                    if (-not $leafToManager.ContainsKey($leafId)) { continue }
+                    $mgrId = $leafToManager[$leafId]
+                    if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) { continue }
+
+                    # Walk up from manager to find if this leader owns it
+                    $currentId = $mgrId
+                    $belongsToLeader = $false
+                    for ($walk = 0; $walk -lt 10; $walk++) {
+                        if (-not $nodes.ContainsKey($currentId)) { break }
+                        $currentNode = $nodes[$currentId]
+                        if ($currentNode.Level -eq $Level -and $currentId -eq $leaderId) {
+                            $belongsToLeader = $true
+                            break
+                        }
+                        if ($currentNode.Level -ge $Level) { break }
+                        $parentId = $currentNode.ManagerId
+                        if ([string]::IsNullOrWhiteSpace($parentId)) { break }
+                        $currentId = $parentId
+                    }
+
+                    if (-not $belongsToLeader) { continue }
+
+                    if (-not $mgrItemsForLeader.ContainsKey($mgrId)) {
+                        $mgrItemsForLeader[$mgrId] = [System.Collections.Generic.List[object]]::new()
+                    }
+
+                    # Carry forward RiskFlags from enriched decisions (if present)
+                    $itemRiskFlags = @()
+                    if ($null -ne $item.PSObject -and
+                        $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                        $null -ne $item.RiskFlags) {
+                        $itemRiskFlags = @($item.RiskFlags)
+                    }
+
+                    $mgrItemsForLeader[$mgrId].Add(@{
+                        IdentityName      = $identityName
+                        AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
+                        AccessName        = if ($null -ne $item.AccessName) { [string]$item.AccessName } else { '' }
+                        Decision          = $category
+                        ReviewerName      = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+                        DecisionDate      = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                        RiskFlags         = $itemRiskFlags
+                    })
+                }
+            }
+
+            # Render detail per manager
+            $managersMap = $leaderData.Managers
+            $mgrDetailRows = @()
+            foreach ($mgrId in $managersMap.Keys) {
+                if ($mgrId -eq '__unmanaged__') { continue }
+                $mgr = $managersMap[$mgrId]
+                $mgrDetailRows += @{
+                    Id   = $mgrId
+                    Name = if ($null -ne $mgr.Name) { $mgr.Name } else { $mgrId }
+                }
+            }
+
+            foreach ($mr in $mgrDetailRows) {
+                $mgrId   = $mr.Id
+                $mgrName = $mr.Name
+                $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
+
+                $itemList = @()
+                if ($mgrItemsForLeader.ContainsKey($mgrId)) {
+                    $itemList = @($mgrItemsForLeader[$mgrId])
+                }
+
+                # Sort items: Pending first, then Revoked, then Approved
+                $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
+                $itemList = @($itemList | Sort-Object {
+                    $so = $sortOrder[$_.Decision]
+                    if ($null -eq $so) { 3 } else { $so }
+                }, { $_.IdentityName })
+
+                if ($itemList.Count -eq 0) { continue }
+
+                $detailRows = ''
+                $detailIndex = 0
+                foreach ($di in $itemList) {
+                    $isAlt = ($detailIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $decisionColor = switch ($di.Decision) {
+                        'Approved' { '#339933' }
+                        'Revoked'  { '#CC3333' }
+                        'Pending'  { '#FF8800' }
+                        default    { '#333333' }
+                    }
+                    $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
+
+                    $diRiskBadges = ''
+                    $diRiskFlags = if ($di -is [hashtable] -and $di.ContainsKey('RiskFlags')) { @($di['RiskFlags']) }
+                                   elseif ($null -ne $di.PSObject -and $null -ne $di.PSObject.Properties['RiskFlags']) { @($di.RiskFlags) }
+                                   else { @() }
+                    if ($diRiskFlags.Count -gt 0) {
+                        $diRiskBadges = Format-RiskFlagBadges -Flags $diRiskFlags
+                    }
+
+                    $safeIdentity = (ConvertTo-SafeHtml $di.IdentityName) + $diRiskBadges
+                    $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
+                    $safeAccess   = ConvertTo-SafeHtml $di.AccessName
+                    $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
+                    $safeDate     = Format-HtmlDate $di.DecisionDate
+
+                    $detailRows += @"
+<tr$rowBg>
+    <td $tdStyle>$safeIdentity</td>
+    <td $tdStyle>$safeAccount</td>
+    <td $tdStyle>$safeAccess</td>
+    <td $decisionCellStyle>$($di.Decision)</td>
+    <td $tdStyle>$safeReviewer</td>
+    <td $tdStyle>$safeDate</td>
+</tr>
+"@
+                    $detailIndex++
+                }
+
+                $itemCountLabel = "$($itemList.Count) item"
+                if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
+
+                # Determine <details> open attribute: Detailed = collapsed (except revocations), Verbose = all open
+                $hasRevocations = @($itemList | Where-Object { $_.Decision -eq 'Revoked' }).Count -gt 0
+                $mgrOpenAttr = if ($DetailLevel -eq 'Verbose' -or $hasRevocations) { ' open' } else { '' }
+
+                $detailSectionsHtml += @"
+<details$mgrOpenAttr>
+<summary style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-top:24px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6; cursor:pointer;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></summary>
+<div style="page-break-inside:avoid;">
+<table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+<thead>
+<tr>
+    <th $thStyle>Identity</th>
+    <th $thStyle>Account (UPN)</th>
+    <th $thStyle>Access</th>
+    <th $thStyle>Decision</th>
+    <th $thStyle>Reviewer</th>
+    <th $thStyle>Date</th>
+</tr>
+</thead>
+<tbody>
+$detailRows
+</tbody>
+</table>
+</div>
+</details>
+"@
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($detailSectionsHtml)) {
+                $detailSectionsHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Identity Decision Detail</h3>
+$detailSectionsHtml
+"@
+            }
+        }
+
+        # --- Navigation links ---
+        $navHtml = ''
+        if (-not $isTopLevel) {
+            # Link up to parent report
+            $parentLevel = $Level + 1
+            if ($nodes.ContainsKey($leaderId)) {
+                $parentId = $nodes[$leaderId].ManagerId
+                if (-not [string]::IsNullOrWhiteSpace($parentId) -and $nodes.ContainsKey($parentId)) {
+                    $parentName = if ($null -ne $nodes[$parentId].Identity -and
+                        -not [string]::IsNullOrWhiteSpace($nodes[$parentId].Identity.Name)) {
+                        $nodes[$parentId].Identity.Name
+                    } else { $parentId }
+                    $parentSafeName = ($parentName -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($parentSafeName)) { $parentSafeName = $parentId -replace '[^a-zA-Z0-9_-]', '' }
+
+                    $parentLevelLabel = if ($levelLabels.ContainsKey($parentLevel)) { $levelLabels[$parentLevel] } else { "Level $parentLevel" }
+                    $parentFilePrefix = ($parentLevelLabel -replace '\s+', '-').ToLower()
+                    $parentFilePrefixSingular = if ($parentFilePrefix.EndsWith('s') -and -not $parentFilePrefix.EndsWith('ss')) {
+                        $parentFilePrefix.Substring(0, $parentFilePrefix.Length - 1)
+                    } else { $parentFilePrefix }
+
+                    # If parent is at StartLevel, link to executive-summary.html
+                    if ($parentLevel -eq $StartLevel) {
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
+                    } else {
+                        $parentFile = "$parentFilePrefixSingular-$parentSafeName.html"
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""$parentFile"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to $([System.Net.WebUtility]::HtmlEncode($parentName))</a></p>"
+                    }
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($navHtml)) {
+                $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
+            }
+        }
+
+        # --- Title ---
+        $reportTitle = if ($isTopLevel) {
+            "Executive Summary"
+        } else {
+            "$($thisLevelLabel -replace 's$', '') Report: $safeLeaderName"
+        }
+
+        # --- Footer ---
+        $footerHtml = @"
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; $([System.Net.WebUtility]::HtmlEncode($reportTitle)) &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+"@
+
+        # --- Assemble full HTML document ---
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$([System.Net.WebUtility]::HtmlEncode($reportTitle)) - $safeCampaignName</title>
+</head>
+<body style="font-family:$fontFamily; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+$navHtml
+
+<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">$([System.Net.WebUtility]::HtmlEncode($reportTitle))</h1>
+<p style="font-family:$fontFamily; color:#555; font-size:14px; margin:0 0 4px 0;">$safeCampaignName</p>
+$dateRangeHtml
+
+$summaryCardsHtml
+
+$subordinateTableHtml
+
+$detailSectionsHtml
+
+$footerHtml
+
+</div>
+</body>
+</html>
+"@
+
+        # Determine filename
+        $fileName = if ($isTopLevel) {
+            'executive-summary.html'
+        } else {
+            "$filePrefixSingular-$safeName.html"
+        }
+
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+        $html | Set-Content -Path $filePath -Encoding UTF8
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Level $Level report written: $filePath" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLeadershipLevelHtml' `
                 -CorrelationID $CorrelationID
         }
 
@@ -3543,6 +5116,8 @@ Export-ModuleMember -Function @(
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
+    'Measure-SPAuditRubberStampRisk',
+    'Get-SPAuditRiskFlags',
     'Group-SPAuditByLeadership',
     'Export-SPAuditHtml',
     'Export-SPAuditText',

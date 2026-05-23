@@ -1494,6 +1494,8 @@ function Invoke-GuiAuditRun {
     $chkCampReports  = Find-Control -Parent $TabContent -Name 'ChkCampaignReports'
     $chkIdentEvents  = Find-Control -Parent $TabContent -Name 'ChkIdentityEvents'
     $chkLeadership   = Find-Control -Parent $TabContent -Name 'ChkLeadershipRollup'
+    $cboStartLevel   = Find-Control -Parent $TabContent -Name 'CboLeadershipStartLevel'
+    $cboDetailLevel  = Find-Control -Parent $TabContent -Name 'CboDetailLevel'
 
     $selectedCampaigns = @($script:AuditCampaignDataSource | Where-Object { $_.IsSelected -eq $true })
 
@@ -1508,6 +1510,21 @@ function Invoke-GuiAuditRun {
     $includeCampaignReports = ($null -eq $chkCampReports -or $chkCampReports.IsChecked -ne $false)
     $includeIdentEvents    = ($null -eq $chkIdentEvents -or $chkIdentEvents.IsChecked -ne $false)
     $includeLeadership     = ($null -ne $chkLeadership -and $chkLeadership.IsChecked -eq $true)
+    $leadershipStartLevel  = -1
+    if ($null -ne $cboStartLevel -and $null -ne $cboStartLevel.SelectedItem) {
+        $startLevelText = $cboStartLevel.SelectedItem.Content
+        if ($startLevelText -ne 'Auto' -and $startLevelText -match '^\d+$') {
+            $leadershipStartLevel = [int]$startLevelText
+        }
+    }
+
+    $detailLevel = 'Verbose'
+    if ($null -ne $cboDetailLevel -and $null -ne $cboDetailLevel.SelectedItem) {
+        $detailLevelText = $cboDetailLevel.SelectedItem.Content
+        if ($detailLevelText -in @('Summary', 'Detailed', 'Verbose')) {
+            $detailLevel = $detailLevelText
+        }
+    }
 
     Set-StatusMessage -Message "Starting audit run. CorrelationID: $correlationID"
 
@@ -1542,6 +1559,8 @@ function Invoke-GuiAuditRun {
     $runspace.SessionStateProxy.SetVariable('IncludeCampaignReports', $includeCampaignReports)
     $runspace.SessionStateProxy.SetVariable('IncludeIdentEvents',   $includeIdentEvents)
     $runspace.SessionStateProxy.SetVariable('IncludeLeadership',    $includeLeadership)
+    $runspace.SessionStateProxy.SetVariable('LeadershipStartLevel', $leadershipStartLevel)
+    $runspace.SessionStateProxy.SetVariable('DetailLevel',          $detailLevel)
     $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
     $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPercent)
@@ -1576,7 +1595,9 @@ function Invoke-GuiAuditRun {
             -OutputPath             $OutputPath `
             -IncludeCampaignReports:$IncludeCampaignReports `
             -IncludeIdentityEvents:$IncludeIdentEvents `
-            -IncludeLeadershipRollup:$IncludeLeadership
+            -IncludeLeadershipRollup:$IncludeLeadership `
+            -LeadershipStartLevel   $LeadershipStartLevel `
+            -DetailLevel            $DetailLevel
 
         # Marshal result back to UI thread
         $dispatcher       = $MainWindow.Dispatcher
@@ -1759,6 +1780,7 @@ function Initialize-DeltaCertTab {
     $btnRun          = Find-Control -Parent $TabContent -Name 'BtnRunDeltaCert'
     $btnCleanup      = Find-Control -Parent $TabContent -Name 'BtnCleanupDeltaCert'
     $btnEscalate     = Find-Control -Parent $TabContent -Name 'BtnEscalateDeltaCert'
+    $btnDeltaReport  = Find-Control -Parent $TabContent -Name 'BtnGenerateDeltaReport'
     $btnOpenFolder   = Find-Control -Parent $TabContent -Name 'BtnOpenDeltaCertFolder'
     $btnRefresh      = Find-Control -Parent $TabContent -Name 'BtnRefreshDeltaCertHistory'
     $grid            = Find-Control -Parent $TabContent -Name 'DeltaCertResultGrid'
@@ -1815,6 +1837,16 @@ function Initialize-DeltaCertTab {
             & $module {
                 param($tc)
                 Invoke-GuiDeltaCertEscalation -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Generate Delta Report button
+    if ($btnDeltaReport) {
+        $btnDeltaReport.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiDeltaReport -TabContent $tc
             } $TabContent
         }.GetNewClosure())
     }
@@ -2451,6 +2483,158 @@ function Invoke-GuiDeltaCertEscalation {
 
                 try {
                     $ps.EndInvoke($async) | Out-Null
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsDeltaCertRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedBtn
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiDeltaReport {
+    <#
+    .SYNOPSIS
+        Generates a delta report in a background runspace from the GUI.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsDeltaCertRunning) {
+        Set-StatusMessage -Message 'A delta cert operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'DeltaCertStatusLabel'
+    $btnDeltaReport  = Find-Control -Parent $TabContent -Name 'BtnGenerateDeltaReport'
+
+    # Resolve source IDs from last-used params or config defaults
+    $params = $script:LastDeltaCertParams
+    if ($null -eq $params) {
+        $params = Get-DeltaCertDialogDefaults
+    }
+
+    $sourceIdText = if ($params['TxtSourceIds']) { $params['TxtSourceIds'].Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($sourceIdText)) {
+        Set-StatusMessage -Message 'No source IDs configured. Click Configure to set Source IDs first.' -IsError
+        return
+    }
+
+    $sourceIds = @($sourceIdText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+    $hoursBack = 24
+    if ($params['TxtHoursBack']) {
+        [int]::TryParse($params['TxtHoursBack'].Trim(), [ref]$hoursBack) | Out-Null
+    }
+
+    $outputPath = Resolve-DeltaCertOutputPath
+    $reportsPath = Join-Path $outputPath 'reports'
+
+    $script:IsDeltaCertRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Generating delta report. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Generating delta report...' }
+    if ($null -ne $btnDeltaReport) { $btnDeltaReport.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('SourceIds',     $sourceIds)
+    $runspace.SessionStateProxy.SetVariable('HoursBack',     $hoursBack)
+    $runspace.SessionStateProxy.SetVariable('OutputPath',    $reportsPath)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID', $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',   $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',    $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',   $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        $coreModule      = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule       = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $deltaCertModule = Join-Path $ToolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+        $guiModule       = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $deltaCertModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $reportResult = Invoke-SPGuiDeltaReport `
+            -SourceIds     $SourceIds `
+            -HoursBack     $HoursBack `
+            -OutputPath    $OutputPath `
+            -CorrelationID $CorrelationID
+
+        $dispatcher     = $MainWindow.Dispatcher
+        $capturedResult = $reportResult
+        $capturedLabel  = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = $capturedResult.Message
+                } else {
+                    $capturedLabel.Text = "Delta report failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $reportResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedBtn      = $btnDeltaReport
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $btn)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $finalResult = $null
+                try {
+                    $finalResult = $ps.EndInvoke($async)
+                } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Delta report failed: $errMsg" -IsError
+                } else {
+                    # Open the HTML report in the default browser
+                    if ($null -ne $finalResult -and $finalResult.Count -gt 0) {
+                        $result = $finalResult[0]
+                        if ($result.Success -and $null -ne $result.Data -and
+                            -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
+                            (Test-Path $result.Data.HtmlPath)) {
+                            Start-Process $result.Data.HtmlPath
+                        }
+                    }
+                    Set-StatusMessage -Message 'Delta report generated successfully.'
+                }
+
+                if ($null -ne $btn) { $btn.IsEnabled = $true }
+
+                try {
                     $ps.Dispose()
                     $rs.Close()
                 } catch { }

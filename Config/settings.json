@@ -1,16 +1,16 @@
 {
     "Global": {
-        "EnvironmentName": "CHANGE_ME",
+        "EnvironmentName": "MOCK-SERVER",
         "DebugMode": false,
         "ToolkitVersion": "1.0.0"
     },
     "Authentication": {
         "Mode": "ConfigFile",
         "ConfigFile": {
-            "TenantUrl": "https://CHANGE_ME.api.identitynow.com",
-            "OAuthTokenUrl": "https://CHANGE_ME.api.identitynow.com/oauth/token",
-            "ClientId": "CHANGE_ME",
-            "ClientSecret": "CHANGE_ME_DO_NOT_USE_IN_PRODUCTION"
+            "TenantUrl": "http://localhost:8080",
+            "OAuthTokenUrl": "http://localhost:8080/oauth/token",
+            "ClientId": "mock",
+            "ClientSecret": "mock"
         },
         "Vault": {
             "VaultPath": ".\\Data\\sp-vault.enc",
@@ -25,7 +25,7 @@
         "RetentionDays": 30
     },
     "Api": {
-        "BaseUrl": "https://CHANGE_ME.api.identitynow.com/v3",
+        "BaseUrl": "http://localhost:8080/v3",
         "TimeoutSeconds": 60,
         "RetryCount": 3,
         "RetryDelaySeconds": 5,
@@ -49,18 +49,26 @@
     },
     "Safety": {
         "MaxCampaignsPerRun": 10,
-        "RequireWhatIfOnProd": true,
+        "RequireWhatIfOnProd": false,
         "AllowCompleteCampaign": false
     },
     "Audit": {
         "OutputPath": ".\\Audit",
-        "DefaultDaysBack": 30,
+        "DefaultDaysBack": 365,
         "DefaultIdentityEventDays": 2,
-        "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+        "DefaultStatuses": [
+            "COMPLETED",
+            "ACTIVE"
+        ],
         "IncludeCampaignReports": true,
         "IncludeIdentityEvents": true,
         "IncludeLeadershipRollup": false,
         "LeadershipDepth": 3,
+        "RiskIndicators": {
+            "StaleAccessDays": 90,
+            "PrivilegedPatterns": ["Admin", "Root", "DBA", "Domain Admins"],
+            "ServiceAccountPatterns": ["^SVC-", "^svc-"]
+        },
         "Smtp": {
             "Enabled": false,
             "Server": "",
@@ -80,7 +88,12 @@
         "CleanupDaysStale": 3,
         "OutputPath": ".\\DeltaCert",
         "DefaultReviewerMode": "Manager",
-        "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+        "ExcludeLifecycleStates": [
+            "terminated",
+            "inactive",
+            "leaver",
+            "prehire"
+        ],
         "ExcludeDisplayNamePatterns": [],
         "ExcludeIdentityIds": [],
         "Escalation": {

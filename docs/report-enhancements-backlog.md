@@ -24,16 +24,16 @@ R-01 -> R-02 -> R-03 -> R-04 -> R-05 -> R-06 -> R-07 -> R-08 -> R-09 -> R-10
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| R-01 | Dynamic Org Levels | none | PENDING |
-| R-02 | Per-Level Report Generation | R-01 | PENDING |
-| R-03 | Expandable Detail Mode | R-02 | PENDING |
-| R-04 | Delta Report Generator | none | PENDING |
-| R-05 | Delta Report Mock Data | R-04 | PENDING |
-| R-06 | Delta Report CLI + GUI | R-05 | PENDING |
-| R-07 | Anti-Rubber-Stamping Analytics | R-03 | PENDING |
-| R-08 | Risk Indicators | R-03 | PENDING |
-| R-09 | Compliance Fields | R-03 | PENDING |
-| R-10 | Pester Tests | R-06, R-09 | PENDING |
+| R-01 | Dynamic Org Levels | none | DONE |
+| R-02 | Per-Level Report Generation | R-01 | DONE |
+| R-03 | Expandable Detail Mode | R-02 | DONE |
+| R-04 | Delta Report Generator | none | DONE |
+| R-05 | Delta Report Mock Data | R-04 | DONE |
+| R-06 | Delta Report CLI + GUI | R-05 | DONE |
+| R-07 | Anti-Rubber-Stamping Analytics | R-03 | DONE |
+| R-08 | Risk Indicators | R-03 | DONE |
+| R-09 | Compliance Fields | R-03 | DONE |
+| R-10 | Pester Tests | R-06, R-09 | DONE |
 
 ---
 
@@ -77,8 +77,8 @@ orphan accounts, SoD violations, terminated-with-access, manager-less identities
 
 ## R-01: Dynamic Org Levels
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 4e9867d
 - **Depends On:** none
 
 **Description:**
@@ -131,8 +131,8 @@ as "TopLeaders" with no distinction.
 
 ## R-02: Per-Level Report Generation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 7d0dc0f
 - **Depends On:** R-01
 
 **Description:**
@@ -182,8 +182,8 @@ their branch.
 
 ## R-03: Expandable Detail Mode
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 6d60d84
 - **Depends On:** R-02
 
 **Description:**
@@ -231,8 +231,8 @@ controlled by `-DetailLevel` parameter:
 
 ## R-04: Delta Report Generator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 4b2e08c
 - **Depends On:** none (independent from R-01/R-02/R-03)
 
 **Description:**
@@ -276,8 +276,8 @@ activity data to produce a lightweight actionable report.
 
 ## R-05: Delta Report Mock Data
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 0fe76b9
 - **Depends On:** R-04
 
 **Description:**
@@ -302,8 +302,8 @@ Add to API-MockServer seed-data.json:
 
 ## R-06: Delta Report CLI + GUI
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 0a3317e
 - **Depends On:** R-05
 
 **Description:**
@@ -346,8 +346,8 @@ Run/Cleanup/Escalation buttons).
 
 ## R-07: Anti-Rubber-Stamping Analytics
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 3b8d7bf
 - **Depends On:** R-03
 
 **Description:**
@@ -385,8 +385,8 @@ Based on compliance research (SOX/SOC2 auditor red flags).
 
 ## R-08: Risk Indicators
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** a12326e
 - **Depends On:** R-03
 
 **Description:**
@@ -433,8 +433,8 @@ Flags are displayed as colored tags next to each identity row.
 
 ## R-09: Compliance Fields
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 04987aa
 - **Depends On:** R-03
 
 **Description:**
@@ -472,8 +472,8 @@ Based on the 18 mandatory fields identified in compliance research.
 
 ## R-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** caa5934
 - **Depends On:** R-06, R-09
 
 **Description:**

@@ -147,6 +147,13 @@ param(
     [int]$LeadershipDepth = 3,
 
     [Parameter()]
+    [int]$LeadershipStartLevel = -1,
+
+    [Parameter()]
+    [ValidateSet('Summary', 'Detailed', 'Verbose')]
+    [string]$DetailLevel = 'Verbose',
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -315,6 +322,12 @@ if ($config.Audit -and $config.Audit.PSObject.Properties.Name -contains 'Leaders
     $effectiveLeadershipDepth = [int]$config.Audit.LeadershipDepth
 }
 
+$effectiveLeadershipStartLevel = $LeadershipStartLevel
+if ($LeadershipStartLevel -eq -1 -and $config.Audit -and
+    $config.Audit.PSObject.Properties.Name -contains 'LeadershipStartLevel') {
+    $effectiveLeadershipStartLevel = [int]$config.Audit.LeadershipStartLevel
+}
+
 #endregion
 
 #region Dispatch
@@ -338,7 +351,13 @@ if (($WhatIfPreference -eq $true)) {
     if ($IncludeLeadershipRollup) {
         Write-Host "    IncludeLeadershipRollup: Yes" -ForegroundColor Cyan
         Write-Host "    LeadershipDepth:     $LeadershipDepth"
+        if ($LeadershipStartLevel -ge 2) {
+            Write-Host "    LeadershipStartLevel: $LeadershipStartLevel"
+        } else {
+            Write-Host "    LeadershipStartLevel: (auto: highest level found)"
+        }
     }
+    Write-Host "    DetailLevel:         $DetailLevel"
     Write-Host ''
     Write-Host "  Would write output to: $OutputPath" -ForegroundColor Cyan
     Write-Host "  CorrelationID:         $correlationID" -ForegroundColor DarkGray
@@ -530,12 +549,31 @@ foreach ($campaign in $campaigns) {
         }
     }
 
+    # --- Build campaign metadata for compliance fields ---
+    $campaignMetadata = @{
+        StartDate      = if ($null -ne $campaign.created)  { [string]$campaign.created }  else { '' }
+        DueDate        = if ($null -ne $campaign.deadline) { [string]$campaign.deadline }
+                         elseif ($null -ne $campaign.due)   { [string]$campaign.due }      else { '' }
+        CompletionDate = if ($null -ne $campaign.completed) { [string]$campaign.completed } else { '' }
+    }
+
+    # --- Build cert ID -> reviewer email map for compliance non-repudiation ---
+    $certReviewerEmailMap = @{}
+    foreach ($cert in $certifications) {
+        if ($null -ne $cert.id -and $null -ne $cert.reviewer -and
+            $null -ne $cert.reviewer.email -and
+            -not [string]::IsNullOrWhiteSpace([string]$cert.reviewer.email)) {
+            $certReviewerEmailMap[[string]$cert.id] = [string]$cert.reviewer.email
+        }
+    }
+
     # --- Categorize decisions and actions ---
-    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray() -AccountMap $accountMap
+    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray() -AccountMap $accountMap -CampaignMetadata $campaignMetadata -CertReviewerEmailMap $certReviewerEmailMap
     $reviewerActions  = Group-SPReviewerActions        -Certifications $certifications
     $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
     $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
     $remediationProof = Group-SPAuditRemediationProof  -Items $wrappedAllItems.ToArray() -Certifications $certifications -AccountMap $accountMap
+    $rubberStampRisk  = Measure-SPAuditRubberStampRisk -Decisions $decisionGroups -Certifications $certifications
 
     # --- Build per-campaign audit data (hashtable, keys match Build-SingleCampaignHtml) ---
     $campaignAudit = @{
@@ -552,6 +590,7 @@ foreach ($campaign in $campaigns) {
         ReviewerMetrics          = $reviewerMetrics
         Events                   = $eventGroups
         RemediationProof         = $remediationProof
+        RubberStampRisk          = $rubberStampRisk
         CampaignReports          = $campaignReportRows
         CampaignReportsAvailable = ($null -ne $campaignReportRows)
     }
@@ -570,7 +609,8 @@ foreach ($campaign in $campaigns) {
     Export-SPAuditHtml `
         -CampaignAudits @($campaignAudit) `
         -OutputPath $campOutputDir `
-        -CorrelationID $correlationID
+        -CorrelationID $correlationID `
+        -DetailLevel $DetailLevel
 
     # Text summary
     Export-SPAuditText `
@@ -589,11 +629,33 @@ Export-SPAuditHtml `
     -CampaignAudits $allCampaignAudits.ToArray() `
     -OutputPath $OutputPath `
     -Combined `
-    -CorrelationID $correlationID
+    -CorrelationID $correlationID `
+    -DetailLevel $DetailLevel
 
 # --- JSONL audit trail ---
 $jsonlEvents = foreach ($audit in $allCampaignAudits) {
     $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+    $rs = if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) { $audit['RubberStampRisk'] } else { $null }
+
+    # Build rubber-stamp risk summary for JSONL
+    $rsData = $null
+    if ($null -ne $rs -and $null -ne $rs['ReviewerRisks']) {
+        $flaggedReviewers = @($rs['ReviewerRisks'] | Where-Object { $_.Severity -eq 'Medium' -or $_.Severity -eq 'High' })
+        $rsData = @{
+            HasMediumOrHighRisk = $rs['HasMediumOrHighRisk']
+            FlaggedReviewerCount = $flaggedReviewers.Count
+            FlaggedReviewers = @($flaggedReviewers | ForEach-Object {
+                @{
+                    Reviewer     = $_.ReviewerName
+                    Items        = $_.TotalItems
+                    ApprovalRate = $_.ApprovalRate
+                    Severity     = $_.Severity
+                    Flags        = $_.Flags
+                }
+            })
+        }
+    }
+
     @{
         Action           = 'CampaignAudited'
         CampaignId       = $audit['CampaignId']
@@ -601,6 +663,61 @@ $jsonlEvents = foreach ($audit in $allCampaignAudits) {
         DecisionsApproved = if ($null -ne $d -and $null -ne $d['Approved']) { @($d['Approved']).Count } else { 0 }
         DecisionsRevoked  = if ($null -ne $d -and $null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
         DecisionsPending  = if ($null -ne $d -and $null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
+        RubberStampRisk   = $rsData
+    }
+
+    # Per-decision compliance events (18 mandatory fields)
+    if ($null -ne $d) {
+        # Build reassignment chain lookup by certification ID
+        $reassignChainMap = @{}
+        $rp = if ($audit.ContainsKey('RemediationProof') -and $null -ne $audit['RemediationProof']) { $audit['RemediationProof'] } else { $null }
+        if ($null -ne $rp -and $null -ne $rp['ReassignmentChain']) {
+            foreach ($hop in @($rp['ReassignmentChain'])) {
+                $chainCertName = if ($null -ne $hop.CertificationName) { [string]$hop.CertificationName } else { '' }
+                $chainEntry = "$($hop.ReassignedFrom) -> $($hop.CurrentReviewer)"
+                if (-not [string]::IsNullOrWhiteSpace($chainCertName)) {
+                    if (-not $reassignChainMap.ContainsKey($chainCertName)) {
+                        $reassignChainMap[$chainCertName] = [System.Collections.Generic.List[string]]::new()
+                    }
+                    $reassignChainMap[$chainCertName].Add($chainEntry)
+                }
+            }
+        }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            if (-not $d.ContainsKey($category) -or $null -eq $d[$category]) { continue }
+            foreach ($item in @($d[$category])) {
+                # Resolve reassignment chain for this item's certification
+                $reassignChain = ''
+                $itemCertName = if ($null -ne $item.CertificationName) { [string]$item.CertificationName } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($itemCertName) -and $reassignChainMap.ContainsKey($itemCertName)) {
+                    $reassignChain = ($reassignChainMap[$itemCertName] -join '; ')
+                }
+
+                @{
+                    Action                 = 'DecisionRecorded'
+                    IdentityName           = $item.IdentityName
+                    IdentityId             = $item.IdentityId
+                    AccountId              = $item.AccountIdentifier
+                    ApplicationSource      = $item.SourceName
+                    EntitlementName        = $item.AccessName
+                    AccessType             = $item.AccessType
+                    ReviewerName           = $item.ReviewerName
+                    ReviewerEmail          = $item.ReviewerEmail
+                    Decision               = $item.Decision
+                    DecisionDateTime       = $item.DecisionDate
+                    Justification          = $item.Justification
+                    CampaignName           = $item.CampaignName
+                    CampaignStart          = $item.CampaignStartDate
+                    CampaignDueDate        = $item.CampaignDueDate
+                    CampaignCompletion     = $item.CampaignCompletionDate
+                    RemediationStatus      = $item.RemediationStatus
+                    RemediationDate        = $item.RemediationDate
+                    ReassignmentChain      = $reassignChain
+                    SystemTimestamp        = $item.SystemTimestamp
+                }
+            }
+        }
     }
 }
 Export-SPAuditJsonl `
@@ -734,8 +851,43 @@ if ($effectiveLeadershipRollup) {
                     $leadershipDateRange = "$startDate to $endDate"
                 }
 
-                # Generate executive summary
-                Write-Host '    Generating executive summary...' -ForegroundColor DarkGray
+                # Determine start and lowest levels for per-level generation
+                $topLevel = $leadershipData.TopLevel
+                $resolvedStartLevel = if ($effectiveLeadershipStartLevel -ge 2) {
+                    [Math]::Min($effectiveLeadershipStartLevel, $topLevel)
+                } else { $topLevel }
+                $resolvedLowestLevel = 2  # Managers (level 1) are subordinates, not report subjects
+
+                # Generate per-level reports using the unified function
+                $totalReportsGenerated = 0
+                for ($lvl = $resolvedStartLevel; $lvl -ge $resolvedLowestLevel; $lvl--) {
+                    if (-not $leadershipData.Levels.ContainsKey($lvl)) { continue }
+                    $lvlLabel = $leadershipData.Levels[$lvl].Label
+                    $lvlLeaderCount = @($leadershipData.Levels[$lvl].Leaders.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
+                    Write-Host "    Generating $lvlLeaderCount $lvlLabel report(s) (level $lvl)..." -ForegroundColor DarkGray
+
+                    $lvlPaths = Export-SPLeadershipLevelHtml `
+                        -LeadershipData $leadershipData `
+                        -Decisions $mergedDecisionsHt `
+                        -OrgTree $orgTree `
+                        -Level $lvl `
+                        -StartLevel $resolvedStartLevel `
+                        -LowestLevel $resolvedLowestLevel `
+                        -CampaignName $leadershipCampaignName `
+                        -DateRange $leadershipDateRange `
+                        -OutputPath $leadershipOutputPath `
+                        -CorrelationID $correlationID `
+                        -DetailLevel $DetailLevel
+
+                    foreach ($lp in @($lvlPaths)) {
+                        Write-Host "    $($lvlLabel): $lp" -ForegroundColor Green
+                    }
+                    $totalReportsGenerated += @($lvlPaths).Count
+                }
+
+                # Backward-compatible: also generate executive summary and director reports
+                # for callers that depend on the fixed filenames
+                Write-Host '    Generating executive summary (backward-compatible)...' -ForegroundColor DarkGray
                 $execPath = Export-SPLeadershipExecutiveHtml `
                     -LeadershipData $leadershipData `
                     -CampaignName $leadershipCampaignName `
@@ -744,10 +896,9 @@ if ($effectiveLeadershipRollup) {
                     -CorrelationID $correlationID
                 Write-Host "    Executive summary: $execPath" -ForegroundColor Green
 
-                # Generate per-director reports
                 $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
                 if ($directorCount -gt 0) {
-                    Write-Host "    Generating $directorCount director report(s)..." -ForegroundColor DarkGray
+                    Write-Host "    Generating $directorCount director report(s) (backward-compatible)..." -ForegroundColor DarkGray
                     $dirPaths = Export-SPLeadershipDirectorHtml `
                         -LeadershipData $leadershipData `
                         -Decisions $mergedDecisionsHt `
@@ -755,14 +906,15 @@ if ($effectiveLeadershipRollup) {
                         -CampaignName $leadershipCampaignName `
                         -DateRange $leadershipDateRange `
                         -OutputPath $leadershipOutputPath `
-                        -CorrelationID $correlationID
+                        -CorrelationID $correlationID `
+                        -DetailLevel $DetailLevel
                     foreach ($dp in @($dirPaths)) {
                         Write-Host "    Director report: $dp" -ForegroundColor Green
                     }
                 }
 
-                Write-Host "    Leadership rollup complete. Output: $leadershipOutputPath" -ForegroundColor Green
-                Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                Write-Host "    Leadership rollup complete ($totalReportsGenerated per-level + backward-compat reports). Output: $leadershipOutputPath" -ForegroundColor Green
+                Write-SPLog -Message "Leadership rollup generated: $totalReportsGenerated per-level reports + exec summary + $directorCount director report(s)" `
                     -Severity INFO -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
             }
         }

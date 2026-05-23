@@ -882,6 +882,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -903,16 +904,37 @@
                                   IsChecked="False" Margin="0,0,8,0" FontSize="12"
                                   ToolTip="Generate leadership rollup reports (executive summary + per-director HTML)"/>
 
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="3"/>
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    x:Name="PnlLeadershipStartLevel">
+                            <TextBlock Text="Start Level:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox x:Name="CboLeadershipStartLevel" Style="{StaticResource FieldCombo}"
+                                      Width="80" ToolTip="Org level to start report generation from (default: highest found)">
+                                <ComboBoxItem Content="Auto" IsSelected="True"/>
+                                <ComboBoxItem Content="2"/>
+                                <ComboBoxItem Content="3"/>
+                                <ComboBoxItem Content="4"/>
+                                <ComboBoxItem Content="5"/>
+                            </ComboBox>
+                        </StackPanel>
 
-                        <Button Grid.Column="4" x:Name="BtnRunAudit"
+                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    x:Name="PnlDetailLevel">
+                            <TextBlock Text="Detail:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox x:Name="CboDetailLevel" Style="{StaticResource FieldCombo}"
+                                      Width="90" ToolTip="Report detail level: Summary (counts only), Detailed (expandable sections), Verbose (all expanded)">
+                                <ComboBoxItem Content="Summary"/>
+                                <ComboBoxItem Content="Detailed"/>
+                                <ComboBoxItem Content="Verbose" IsSelected="True"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <Button Grid.Column="5" x:Name="BtnRunAudit"
                                 Content="Run Audit"
                                 Style="{StaticResource ToolkitButton}"
                                 IsEnabled="False"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="5" x:Name="BtnOpenAuditFolder"
+                        <Button Grid.Column="6" x:Name="BtnOpenAuditFolder"
                                 Content="Open Reports Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>
@@ -1073,6 +1095,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
@@ -1087,10 +1110,16 @@
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="2"/>
+                        <Button Grid.Column="2" x:Name="BtnGenerateDeltaReport"
+                                Content="Generate Delta Report"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"
+                                ToolTip="Generate a delta report showing changes in the last N hours"/>
 
-                        <Button Grid.Column="3" x:Name="BtnOpenDeltaCertFolder"
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="3"/>
+
+                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
                                 Content="Open Output Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>

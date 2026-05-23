@@ -43,6 +43,8 @@
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
+        'Measure-SPAuditRubberStampRisk'
+        'Get-SPAuditRiskFlags'
         'Group-SPAuditByLeadership'
 
         # SP.AuditReport - Export functions
@@ -51,6 +53,7 @@
         'Export-SPAuditJsonl'
         'Export-SPLeadershipExecutiveHtml'
         'Export-SPLeadershipDirectorHtml'
+        'Export-SPLeadershipLevelHtml'
         'Send-SPReport'
     )
 

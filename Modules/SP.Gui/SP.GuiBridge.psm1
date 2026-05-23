@@ -569,13 +569,20 @@ function Invoke-SPGuiAudit {
         [int]$LeadershipDepth = 3,
 
         [Parameter()]
+        [int]$LeadershipStartLevel = -1,
+
+        [Parameter()]
         [int]$IdentityEventDays = 2,
 
         [Parameter()]
         [string]$OutputPath,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -743,7 +750,7 @@ function Invoke-SPGuiAudit {
 
             # --- Per-campaign export ---
             $htmlFiles = Export-SPAuditHtml -CampaignAudits @($campaignAudit) `
-                -OutputPath $OutputPath -CorrelationID $CorrelationID
+                -OutputPath $OutputPath -CorrelationID $CorrelationID -DetailLevel $DetailLevel
             Export-SPAuditText -CampaignAudits @($campaignAudit) `
                 -OutputPath $OutputPath -CorrelationID $CorrelationID
 
@@ -765,7 +772,7 @@ function Invoke-SPGuiAudit {
         # --- Combined HTML if multiple campaigns ---
         if ($allCampaignAudits.Count -gt 1) {
             $combinedFiles = Export-SPAuditHtml -CampaignAudits $allCampaignAudits.ToArray() `
-                -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID
+                -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID -DetailLevel $DetailLevel
             foreach ($f in $combinedFiles) { $allWrittenFiles.Add($f) }
         }
 
@@ -882,7 +889,34 @@ function Invoke-SPGuiAudit {
                             $leadershipDateRange = "$startDate to $endDate"
                         }
 
-                        # Generate executive summary
+                        # Determine start and lowest levels for per-level generation
+                        $topLevel = $leadershipData.TopLevel
+                        $resolvedStartLevel = if ($LeadershipStartLevel -ge 2) {
+                            [Math]::Min($LeadershipStartLevel, $topLevel)
+                        } else { $topLevel }
+                        $resolvedLowestLevel = 2
+
+                        # Generate per-level reports
+                        for ($lvl = $resolvedStartLevel; $lvl -ge $resolvedLowestLevel; $lvl--) {
+                            if (-not $leadershipData.Levels.ContainsKey($lvl)) { continue }
+                            $lvlPaths = Export-SPLeadershipLevelHtml `
+                                -LeadershipData $leadershipData `
+                                -Decisions $mergedDecisionsHt `
+                                -OrgTree $orgTree `
+                                -Level $lvl `
+                                -StartLevel $resolvedStartLevel `
+                                -LowestLevel $resolvedLowestLevel `
+                                -CampaignName $leadershipCampaignName `
+                                -DateRange $leadershipDateRange `
+                                -OutputPath $leadershipOutputPath `
+                                -CorrelationID $CorrelationID `
+                                -DetailLevel $DetailLevel
+                            foreach ($lp in @($lvlPaths)) {
+                                $allWrittenFiles.Add($lp)
+                            }
+                        }
+
+                        # Backward-compatible: executive summary + director reports
                         $execPath = Export-SPLeadershipExecutiveHtml `
                             -LeadershipData $leadershipData `
                             -CampaignName $leadershipCampaignName `
@@ -891,7 +925,6 @@ function Invoke-SPGuiAudit {
                             -CorrelationID $CorrelationID
                         $allWrittenFiles.Add($execPath)
 
-                        # Generate per-director reports
                         $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
                         if ($directorCount -gt 0) {
                             $dirPaths = Export-SPLeadershipDirectorHtml `
@@ -901,13 +934,14 @@ function Invoke-SPGuiAudit {
                                 -CampaignName $leadershipCampaignName `
                                 -DateRange $leadershipDateRange `
                                 -OutputPath $leadershipOutputPath `
-                                -CorrelationID $CorrelationID
+                                -CorrelationID $CorrelationID `
+                                -DetailLevel $DetailLevel
                             foreach ($dp in @($dirPaths)) {
                                 $allWrittenFiles.Add($dp)
                             }
                         }
 
-                        Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                        Write-SPLog -Message "Leadership rollup generated: per-level + exec summary + $directorCount director report(s)" `
                             -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
                     }
                 }
@@ -1324,6 +1358,96 @@ function Get-SPGuiDeltaCertHistory {
     }
 }
 
+function Invoke-SPGuiDeltaReport {
+    <#
+    .SYNOPSIS
+        Generate a delta certification report from the GUI.
+    .DESCRIPTION
+        Bridge function that wraps Get-SPDeltaReportData and Export-SPDeltaReportHtml
+        for the WPF GUI. Gathers delta data for the configured time window and
+        source IDs, then generates HTML + JSONL output.
+    .PARAMETER SourceIds
+        Array of AD source IDs to include in the report.
+    .PARAMETER HoursBack
+        Number of hours to look back for changes. Default: 24.
+    .PARAMETER OutputPath
+        Directory for output files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{HtmlPath; JsonlPath; Summary}; Message=$string; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$HoursBack = 24,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        Write-SPLog -Message "Invoke-SPGuiDeltaReport started: SourceIds=$($SourceIds -join ','), HoursBack=$HoursBack" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaReport' -CorrelationID $CorrelationID
+
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            $tkRoot     = Resolve-SPToolkitRoot
+            $OutputPath = Join-Path $tkRoot 'DeltaCert\reports'
+        }
+
+        $dataResult = Get-SPDeltaReportData -SourceIds $SourceIds -HoursBack $HoursBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $dataResult.Success) {
+            return @{ Success = $false; Data = $null; Message = $null; Error = $dataResult.Error }
+        }
+
+        $reportData = $dataResult.Data
+
+        $exportResult = Export-SPDeltaReportHtml -ReportData $reportData -OutputPath $OutputPath `
+            -CorrelationID $CorrelationID
+
+        $grantCount   = @($reportData.NewGrants).Count
+        $revokeCount  = @($reportData.Revocations).Count
+        $pendingCount = @($reportData.PendingReviews).Count
+        $anomalyCount = @($reportData.Anomalies).Count
+
+        $message = "Delta report generated: $grantCount grants, $revokeCount revocations, $pendingCount pending, $anomalyCount anomalies"
+
+        return @{
+            Success = $true
+            Data    = @{
+                HtmlPath  = $exportResult.HtmlPath
+                JsonlPath = $exportResult.JsonlPath
+                Summary   = [PSCustomObject]@{
+                    NewGrants      = $grantCount
+                    Revocations    = $revokeCount
+                    PendingReviews = $pendingCount
+                    Anomalies      = $anomalyCount
+                }
+            }
+            Message = $message
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiDeltaReport failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaReport'
+        return @{ Success = $false; Data = $null; Message = $null; Error = "Invoke-SPGuiDeltaReport failed: $($_.Exception.Message)" }
+    }
+}
+
 #endregion
 
 #region Browser Token Functions
@@ -1463,5 +1587,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiDeltaCertRun',
     'Invoke-SPGuiDeltaCertCleanup',
     'Invoke-SPGuiDeltaCertEscalate',
+    'Invoke-SPGuiDeltaReport',
     'Get-SPGuiDeltaCertHistory'
 )

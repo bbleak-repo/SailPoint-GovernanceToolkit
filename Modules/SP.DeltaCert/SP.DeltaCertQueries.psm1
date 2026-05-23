@@ -1019,7 +1019,44 @@ function Build-SPOrgTree {
             }
         }
 
-        # Step 3: Build quick-lookup lists by level
+        # Step 3: Build level labels and per-level node groupings
+        $levelLabels = @{
+            0 = 'Individual Contributors'
+            1 = 'Managers'
+            2 = 'Directors'
+            3 = 'Vice Presidents'
+            4 = 'Senior Vice Presidents'
+            5 = 'Executive Leadership'
+        }
+
+        # Group nodes by actual level and determine highest level
+        $levelNodeLists = @{}
+        $topLevel       = 0
+
+        foreach ($nodeId in $nodes.Keys) {
+            $level = $nodes[$nodeId].Level
+            if ($level -eq 0) { continue }
+            if ($level -gt $topLevel) { $topLevel = $level }
+            if (-not $levelNodeLists.ContainsKey($level)) {
+                $levelNodeLists[$level] = [System.Collections.Generic.List[string]]::new()
+            }
+            $levelNodeLists[$level].Add($nodeId)
+        }
+
+        # Ensure labels exist for all discovered levels
+        foreach ($level in $levelNodeLists.Keys) {
+            if (-not $levelLabels.ContainsKey($level)) {
+                $levelLabels[$level] = 'Executive Leadership'
+            }
+        }
+
+        # Convert LevelNodes lists to arrays
+        $levelNodes = @{}
+        foreach ($level in $levelNodeLists.Keys) {
+            $levelNodes[[int]$level] = @($levelNodeLists[$level].ToArray())
+        }
+
+        # Backward-compatible quick-lookup lists
         $topLeaders = [System.Collections.Generic.List[string]]::new()
         $directors  = [System.Collections.Generic.List[string]]::new()
         $managers   = [System.Collections.Generic.List[string]]::new()
@@ -1028,11 +1065,8 @@ function Build-SPOrgTree {
             $node = $nodes[$nodeId]
             $level = $node.Level
 
-            # Top leaders: nodes at the highest level with no manager in the tree,
-            # OR nodes at MaxDepth
             $isTopOfChain = [string]::IsNullOrWhiteSpace($node.ManagerId) -or
                             (-not $nodes.ContainsKey($node.ManagerId) -and $level -gt 0)
-            $isAtMaxDepth = $level -ge $MaxDepth
 
             if ($level -ge 3 -or ($isTopOfChain -and $level -ge 2)) {
                 if (-not $topLeaders.Contains($nodeId)) {
@@ -1064,7 +1098,6 @@ function Build-SPOrgTree {
                                     (-not $nodes.ContainsKey($node.ManagerId))
                     if ($node.Level -eq $maxLevel -and $isTopOfChain) {
                         $topLeaders.Add($nodeId)
-                        # Remove from directors if it was there
                         [void]$directors.Remove($nodeId)
                     }
                 }
@@ -1076,11 +1109,14 @@ function Build-SPOrgTree {
             TopLeaders  = @($topLeaders.ToArray())
             Directors   = @($directors.ToArray())
             Managers    = @($managers.ToArray())
+            LevelLabels = $levelLabels
+            LevelNodes  = $levelNodes
+            TopLevel    = $topLevel
             LeafCount   = $leafIds.Count
             MaxDepthHit = $maxDepthHit
         }
 
-        Write-SPLog -Message "Build-SPOrgTree: Complete -- $($nodes.Count) nodes, $($topLeaders.Count) top leader(s), $($directors.Count) director(s), $($managers.Count) manager(s), $($leafIds.Count) leaves, MaxDepthHit=$maxDepthHit" `
+        Write-SPLog -Message "Build-SPOrgTree: Complete -- $($nodes.Count) nodes, TopLevel=$topLevel, $($topLeaders.Count) top leader(s), $($directors.Count) director(s), $($managers.Count) manager(s), $($leafIds.Count) leaves, MaxDepthHit=$maxDepthHit" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Build-SPOrgTree' `
             -CorrelationID $CorrelationID
 
