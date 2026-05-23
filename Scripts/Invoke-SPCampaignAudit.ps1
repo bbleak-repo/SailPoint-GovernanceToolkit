@@ -51,6 +51,16 @@
 .PARAMETER TokenExpiryMinutes
     Minutes until the browser token is considered expired. Default: 10.
     ISC browser tokens are typically valid for ~12 minutes (720 seconds).
+.PARAMETER IncludeLeadershipRollup
+    When specified, generates leadership rollup reports in addition to the standard
+    campaign audit reports. Walks the ISC org tree (identity -> manager -> director ->
+    VP) and produces per-leader HTML reports showing what their org accomplished.
+    Output is written to a 'leadership' subdirectory under the main output path.
+    Requires SP.DeltaCert module (for Build-SPOrgTree).
+.PARAMETER LeadershipDepth
+    Maximum number of levels to walk above the reviewed identities when building
+    the org tree. Default: 3 (identity -> manager -> director -> VP). Use 2 for
+    manager + director only (no VP-level executive summary).
 .PARAMETER Help
     Display full comment-based help and exit.
 .EXAMPLE
@@ -74,6 +84,12 @@
 .EXAMPLE
     .\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -OutputPath 'D:\AuditReports'
     # Write output to a custom directory.
+.EXAMPLE
+    .\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 30 -IncludeLeadershipRollup
+    # Generate audit reports plus leadership rollup (executive + director HTML).
+.EXAMPLE
+    .\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -IncludeLeadershipRollup -LeadershipDepth 2
+    # Leadership rollup with 2 levels (manager + director only, no VP summary).
 .NOTES
     Script:  Invoke-SPCampaignAudit.ps1
     Version: 1.0.0
@@ -125,6 +141,12 @@ param(
     [int]$TokenExpiryMinutes = 10,
 
     [Parameter()]
+    [switch]$IncludeLeadershipRollup,
+
+    [Parameter()]
+    [int]$LeadershipDepth = 3,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -146,14 +168,16 @@ if (-not $scriptRoot) {
 
 $toolkitRoot = Split-Path -Parent $scriptRoot
 
-$coreModulePath  = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1'
-$apiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1'
-$auditModulePath = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+$coreModulePath      = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+$apiModulePath       = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+$auditModulePath     = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+$deltaCertModulePath = Join-Path $toolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
 
 foreach ($moduleDef in @(
-    @{ Path = $coreModulePath;  Name = 'SP.Core';  Required = $true },
-    @{ Path = $apiModulePath;   Name = 'SP.Api';   Required = $true },
-    @{ Path = $auditModulePath; Name = 'SP.Audit'; Required = $true }
+    @{ Path = $coreModulePath;      Name = 'SP.Core';      Required = $true },
+    @{ Path = $apiModulePath;       Name = 'SP.Api';       Required = $true },
+    @{ Path = $auditModulePath;     Name = 'SP.Audit';     Required = $true },
+    @{ Path = $deltaCertModulePath; Name = 'SP.DeltaCert'; Required = $false }
 )) {
     if (Test-Path $moduleDef.Path) {
         Import-Module $moduleDef.Path -Force -ErrorAction Stop
@@ -277,6 +301,20 @@ if ($config.Audit -and $config.Audit.DefaultIdentityEventDays -and $IdentityEven
     $effectiveIdentityEventDays = [int]$config.Audit.DefaultIdentityEventDays
 }
 
+# Apply config default for leadership rollup when not explicitly provided via switch
+$effectiveLeadershipRollup = $IncludeLeadershipRollup
+if (-not $IncludeLeadershipRollup -and $config.Audit -and
+    $config.Audit.PSObject.Properties.Name -contains 'IncludeLeadershipRollup' -and
+    $config.Audit.IncludeLeadershipRollup -eq $true) {
+    $effectiveLeadershipRollup = $true
+}
+
+$effectiveLeadershipDepth = $LeadershipDepth
+if ($config.Audit -and $config.Audit.PSObject.Properties.Name -contains 'LeadershipDepth' -and
+    $LeadershipDepth -eq 3) {
+    $effectiveLeadershipDepth = [int]$config.Audit.LeadershipDepth
+}
+
 #endregion
 
 #region Dispatch
@@ -297,6 +335,10 @@ if (($WhatIfPreference -eq $true)) {
     if ($CampaignNameStartsWith) { Write-Host "    CampaignNameStartsWith: $CampaignNameStartsWith" }
     if ($CampaignNameContains)   { Write-Host "    CampaignNameContains: $CampaignNameContains" }
     if ($CampaignReportCsvPath)  { Write-Host "    CampaignReportCsvPath: $CampaignReportCsvPath (local, no API)" }
+    if ($IncludeLeadershipRollup) {
+        Write-Host "    IncludeLeadershipRollup: Yes" -ForegroundColor Cyan
+        Write-Host "    LeadershipDepth:     $LeadershipDepth"
+    }
     Write-Host ''
     Write-Host "  Would write output to: $OutputPath" -ForegroundColor Cyan
     Write-Host "  CorrelationID:         $correlationID" -ForegroundColor DarkGray
@@ -566,17 +608,179 @@ Export-SPAuditJsonl `
     -OutputPath $OutputPath `
     -CorrelationID $correlationID
 
+# --- Leadership rollup reports (supplementary) ---
+if ($effectiveLeadershipRollup) {
+    $leadershipOutputPath = Join-Path $OutputPath 'leadership'
+    if (-not (Test-Path $leadershipOutputPath)) {
+        $null = New-Item -ItemType Directory -Path $leadershipOutputPath -Force
+    }
+
+    # Verify Build-SPOrgTree is available (SP.DeltaCert module required)
+    if (-not (Get-Command -Name Build-SPOrgTree -ErrorAction SilentlyContinue)) {
+        Write-Host ''
+        Write-Host '  WARN: SP.DeltaCert module not loaded -- cannot generate leadership rollup.' -ForegroundColor Yellow
+        Write-Host '        Ensure SP.DeltaCert module is available in the Modules directory.' -ForegroundColor Yellow
+        Write-SPLog -Message "Leadership rollup skipped: Build-SPOrgTree not available (SP.DeltaCert not loaded)" `
+            -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
+    }
+    else {
+        Write-Host ''
+        Write-Host '  Generating leadership rollup reports...' -ForegroundColor Cyan
+
+        # Collect all unique identity IDs from all campaigns
+        $allIdentityIds = [System.Collections.Generic.List[string]]::new()
+        foreach ($audit in $allCampaignAudits) {
+            $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+            if ($null -eq $d) { continue }
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                if (-not $d.ContainsKey($category) -or $null -eq $d[$category]) { continue }
+                foreach ($item in @($d[$category])) {
+                    if ($null -ne $item.IdentityId -and -not [string]::IsNullOrWhiteSpace($item.IdentityId)) {
+                        if (-not $allIdentityIds.Contains($item.IdentityId)) {
+                            $allIdentityIds.Add($item.IdentityId)
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($allIdentityIds.Count -eq 0) {
+            Write-Host '    No identity IDs found in decisions -- skipping leadership rollup.' -ForegroundColor Yellow
+            Write-SPLog -Message "Leadership rollup skipped: no identity IDs in decisions" `
+                -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
+        }
+        else {
+            Write-Host "    Building org tree for $($allIdentityIds.Count) unique identit(ies) (depth=$effectiveLeadershipDepth)..." -ForegroundColor DarkGray
+            $orgTreeResult = Build-SPOrgTree -IdentityIds $allIdentityIds.ToArray() -MaxDepth $effectiveLeadershipDepth -CorrelationID $correlationID
+
+            if (-not $orgTreeResult.Success) {
+                Write-Host "    WARN: Org tree build failed: $($orgTreeResult.Error)" -ForegroundColor Yellow
+                Write-SPLog -Message "Leadership rollup: org tree build failed: $($orgTreeResult.Error)" `
+                    -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
+            }
+            else {
+                $orgTree = $orgTreeResult.Data
+                Write-Host "    Org tree: $($orgTree.LeafCount) leaves, $(@($orgTree.Managers).Count) managers, $(@($orgTree.Directors).Count) directors, $(@($orgTree.TopLeaders).Count) top leader(s)" -ForegroundColor DarkGray
+
+                # Merge decisions across all campaigns
+                $mergedDecisions = @{
+                    Approved = [System.Collections.Generic.List[object]]::new()
+                    Revoked  = [System.Collections.Generic.List[object]]::new()
+                    Pending  = [System.Collections.Generic.List[object]]::new()
+                }
+                foreach ($audit in $allCampaignAudits) {
+                    $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+                    if ($null -eq $d) { continue }
+                    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                        if ($d.ContainsKey($category) -and $null -ne $d[$category]) {
+                            foreach ($item in @($d[$category])) {
+                                $mergedDecisions[$category].Add($item)
+                            }
+                        }
+                    }
+                }
+                # Convert lists to arrays for Group-SPAuditByLeadership
+                $mergedDecisionsHt = @{
+                    Approved = $mergedDecisions['Approved'].ToArray()
+                    Revoked  = $mergedDecisions['Revoked'].ToArray()
+                    Pending  = $mergedDecisions['Pending'].ToArray()
+                }
+
+                # Merge reviewer metrics across all campaigns
+                $mergedReviewerMetrics = $null
+                if ($allCampaignAudits.Count -eq 1 -and $allCampaignAudits[0].ContainsKey('ReviewerMetrics')) {
+                    $mergedReviewerMetrics = $allCampaignAudits[0]['ReviewerMetrics']
+                }
+                elseif ($allCampaignAudits.Count -gt 1) {
+                    # For multi-campaign, combine ReviewerMetrics arrays
+                    $combinedMetrics = [System.Collections.Generic.List[object]]::new()
+                    foreach ($audit in $allCampaignAudits) {
+                        if ($audit.ContainsKey('ReviewerMetrics') -and $null -ne $audit['ReviewerMetrics'] -and
+                            $null -ne $audit['ReviewerMetrics']['ReviewerMetrics']) {
+                            foreach ($rm in @($audit['ReviewerMetrics']['ReviewerMetrics'])) {
+                                $combinedMetrics.Add($rm)
+                            }
+                        }
+                    }
+                    if ($combinedMetrics.Count -gt 0) {
+                        $mergedReviewerMetrics = @{ ReviewerMetrics = $combinedMetrics.ToArray() }
+                    }
+                }
+
+                Write-Host '    Grouping decisions by leadership level...' -ForegroundColor DarkGray
+                $groupParams = @{
+                    Decisions = $mergedDecisionsHt
+                    OrgTree   = $orgTree
+                }
+                if ($null -ne $mergedReviewerMetrics) {
+                    $groupParams['ReviewerMetrics'] = $mergedReviewerMetrics
+                }
+                $leadershipData = Group-SPAuditByLeadership @groupParams
+
+                # Build campaign name and date range for report headers
+                $leadershipCampaignName = if ($allCampaignAudits.Count -eq 1) {
+                    $allCampaignAudits[0]['CampaignName']
+                }
+                else {
+                    "$($allCampaignAudits.Count) Campaigns (Combined)"
+                }
+                $leadershipDateRange = ''
+                $allCreated = @($allCampaignAudits | ForEach-Object {
+                    if ($_['Created']) { $_['Created'] }
+                } | Where-Object { $_ } | Sort-Object)
+                if ($allCreated.Count -gt 0) {
+                    $startDate = ($allCreated[0] -split 'T')[0]
+                    $endDate   = ((Get-Date).ToString('yyyy-MM-dd'))
+                    $leadershipDateRange = "$startDate to $endDate"
+                }
+
+                # Generate executive summary
+                Write-Host '    Generating executive summary...' -ForegroundColor DarkGray
+                $execPath = Export-SPLeadershipExecutiveHtml `
+                    -LeadershipData $leadershipData `
+                    -CampaignName $leadershipCampaignName `
+                    -DateRange $leadershipDateRange `
+                    -OutputPath $leadershipOutputPath `
+                    -CorrelationID $correlationID
+                Write-Host "    Executive summary: $execPath" -ForegroundColor Green
+
+                # Generate per-director reports
+                $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
+                if ($directorCount -gt 0) {
+                    Write-Host "    Generating $directorCount director report(s)..." -ForegroundColor DarkGray
+                    $dirPaths = Export-SPLeadershipDirectorHtml `
+                        -LeadershipData $leadershipData `
+                        -Decisions $mergedDecisionsHt `
+                        -OrgTree $orgTree `
+                        -CampaignName $leadershipCampaignName `
+                        -DateRange $leadershipDateRange `
+                        -OutputPath $leadershipOutputPath `
+                        -CorrelationID $correlationID
+                    foreach ($dp in @($dirPaths)) {
+                        Write-Host "    Director report: $dp" -ForegroundColor Green
+                    }
+                }
+
+                Write-Host "    Leadership rollup complete. Output: $leadershipOutputPath" -ForegroundColor Green
+                Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                    -Severity INFO -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
+            }
+        }
+    }
+}
+
 $runEnd      = Get-Date
 $runDuration = ($runEnd - $runStart).TotalSeconds
 
 $summary = [PSCustomObject]@{
-    CorrelationID    = $correlationID
-    StartedAt        = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    CompletedAt      = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    DurationSeconds  = [math]::Round($runDuration, 2)
-    CampaignsAudited = $allCampaignAudits.Count
-    OutputPath       = $OutputPath
-    Environment      = $config.Global.EnvironmentName
+    CorrelationID         = $correlationID
+    StartedAt             = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    CompletedAt           = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    DurationSeconds       = [math]::Round($runDuration, 2)
+    CampaignsAudited      = $allCampaignAudits.Count
+    LeadershipRollup      = $effectiveLeadershipRollup
+    OutputPath            = $OutputPath
+    Environment           = $config.Global.EnvironmentName
 }
 
 #endregion

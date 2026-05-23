@@ -1493,6 +1493,7 @@ function Invoke-GuiAuditRun {
     $btnRunAudit     = Find-Control -Parent $TabContent -Name 'BtnRunAudit'
     $chkCampReports  = Find-Control -Parent $TabContent -Name 'ChkCampaignReports'
     $chkIdentEvents  = Find-Control -Parent $TabContent -Name 'ChkIdentityEvents'
+    $chkLeadership   = Find-Control -Parent $TabContent -Name 'ChkLeadershipRollup'
 
     $selectedCampaigns = @($script:AuditCampaignDataSource | Where-Object { $_.IsSelected -eq $true })
 
@@ -1506,6 +1507,7 @@ function Invoke-GuiAuditRun {
     $outputPath            = Resolve-AuditOutputPath
     $includeCampaignReports = ($null -eq $chkCampReports -or $chkCampReports.IsChecked -ne $false)
     $includeIdentEvents    = ($null -eq $chkIdentEvents -or $chkIdentEvents.IsChecked -ne $false)
+    $includeLeadership     = ($null -ne $chkLeadership -and $chkLeadership.IsChecked -eq $true)
 
     Set-StatusMessage -Message "Starting audit run. CorrelationID: $correlationID"
 
@@ -1539,6 +1541,7 @@ function Invoke-GuiAuditRun {
     $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
     $runspace.SessionStateProxy.SetVariable('IncludeCampaignReports', $includeCampaignReports)
     $runspace.SessionStateProxy.SetVariable('IncludeIdentEvents',   $includeIdentEvents)
+    $runspace.SessionStateProxy.SetVariable('IncludeLeadership',    $includeLeadership)
     $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
     $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPercent)
@@ -1555,7 +1558,15 @@ function Invoke-GuiAuditRun {
         $auditModule = Join-Path $ToolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
         $guiModule   = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
 
-        foreach ($mod in @($coreModule, $apiModule, $auditModule, $guiModule)) {
+        $modulesToLoad = @($coreModule, $apiModule, $auditModule, $guiModule)
+
+        # Load SP.DeltaCert when leadership rollup is requested (provides Build-SPOrgTree)
+        if ($IncludeLeadership) {
+            $deltaCertModule = Join-Path $ToolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+            $modulesToLoad = @($coreModule, $apiModule, $auditModule, $deltaCertModule, $guiModule)
+        }
+
+        foreach ($mod in $modulesToLoad) {
             if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
         }
 
@@ -1564,7 +1575,8 @@ function Invoke-GuiAuditRun {
             -CorrelationID          $CorrelationID `
             -OutputPath             $OutputPath `
             -IncludeCampaignReports:$IncludeCampaignReports `
-            -IncludeIdentityEvents:$IncludeIdentEvents
+            -IncludeIdentityEvents:$IncludeIdentEvents `
+            -IncludeLeadershipRollup:$IncludeLeadership
 
         # Marshal result back to UI thread
         $dispatcher       = $MainWindow.Dispatcher

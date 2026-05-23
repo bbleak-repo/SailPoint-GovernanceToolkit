@@ -523,6 +523,14 @@ function Invoke-SPGuiAudit {
     .PARAMETER IncludeIdentityEvents
         When present, calls Get-SPAuditIdentityEvents for each identity whose
         access was revoked during the campaign.
+    .PARAMETER IncludeLeadershipRollup
+        When present, generates leadership rollup reports (executive summary +
+        per-director HTML) after the standard audit pipeline completes. Walks the
+        ISC org tree via Build-SPOrgTree and groups decisions by leader.
+        Requires SP.DeltaCert module for Build-SPOrgTree.
+    .PARAMETER LeadershipDepth
+        Maximum number of levels to walk above reviewed identities when building
+        the org tree. Default: 3 (identity -> manager -> director -> VP).
     .PARAMETER IdentityEventDays
         Days back to search for identity events. Defaults to 2. Only used when
         -IncludeIdentityEvents is specified.
@@ -553,6 +561,12 @@ function Invoke-SPGuiAudit {
 
         [Parameter()]
         [switch]$IncludeIdentityEvents,
+
+        [Parameter()]
+        [switch]$IncludeLeadershipRollup,
+
+        [Parameter()]
+        [int]$LeadershipDepth = 3,
 
         [Parameter()]
         [int]$IdentityEventDays = 2,
@@ -753,6 +767,151 @@ function Invoke-SPGuiAudit {
             $combinedFiles = Export-SPAuditHtml -CampaignAudits $allCampaignAudits.ToArray() `
                 -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID
             foreach ($f in $combinedFiles) { $allWrittenFiles.Add($f) }
+        }
+
+        # --- Leadership rollup reports (supplementary) ---
+        if ($IncludeLeadershipRollup) {
+            $leadershipOutputPath = Join-Path $OutputPath 'leadership'
+            if (-not (Test-Path -Path $leadershipOutputPath -PathType Container)) {
+                New-Item -Path $leadershipOutputPath -ItemType Directory -Force | Out-Null
+            }
+
+            if (-not (Get-Command -Name Build-SPOrgTree -ErrorAction SilentlyContinue)) {
+                Write-SPLog -Message "Leadership rollup skipped: Build-SPOrgTree not available (SP.DeltaCert not loaded)" `
+                    -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+            }
+            else {
+                # Collect all unique identity IDs from all campaigns
+                $allIdentityIds = [System.Collections.Generic.List[string]]::new()
+                foreach ($audit in $allCampaignAudits) {
+                    $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+                    if ($null -eq $d) { continue }
+                    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                        if (-not $d.ContainsKey($category) -or $null -eq $d[$category]) { continue }
+                        foreach ($item in @($d[$category])) {
+                            if ($null -ne $item.IdentityId -and -not [string]::IsNullOrWhiteSpace($item.IdentityId)) {
+                                if (-not $allIdentityIds.Contains($item.IdentityId)) {
+                                    $allIdentityIds.Add($item.IdentityId)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if ($allIdentityIds.Count -eq 0) {
+                    Write-SPLog -Message "Leadership rollup skipped: no identity IDs in decisions" `
+                        -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                }
+                else {
+                    $orgTreeResult = Build-SPOrgTree -IdentityIds $allIdentityIds.ToArray() `
+                        -MaxDepth $LeadershipDepth -CorrelationID $CorrelationID
+
+                    if (-not $orgTreeResult.Success) {
+                        Write-SPLog -Message "Leadership rollup: org tree build failed: $($orgTreeResult.Error)" `
+                            -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                    }
+                    else {
+                        $orgTree = $orgTreeResult.Data
+
+                        # Merge decisions across all campaigns
+                        $mergedDecisions = @{
+                            Approved = [System.Collections.Generic.List[object]]::new()
+                            Revoked  = [System.Collections.Generic.List[object]]::new()
+                            Pending  = [System.Collections.Generic.List[object]]::new()
+                        }
+                        foreach ($audit in $allCampaignAudits) {
+                            $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+                            if ($null -eq $d) { continue }
+                            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                                if ($d.ContainsKey($category) -and $null -ne $d[$category]) {
+                                    foreach ($item in @($d[$category])) {
+                                        $mergedDecisions[$category].Add($item)
+                                    }
+                                }
+                            }
+                        }
+                        $mergedDecisionsHt = @{
+                            Approved = $mergedDecisions['Approved'].ToArray()
+                            Revoked  = $mergedDecisions['Revoked'].ToArray()
+                            Pending  = $mergedDecisions['Pending'].ToArray()
+                        }
+
+                        # Merge reviewer metrics across all campaigns
+                        $mergedReviewerMetrics = $null
+                        if ($allCampaignAudits.Count -eq 1 -and $allCampaignAudits[0].ContainsKey('ReviewerMetrics')) {
+                            $mergedReviewerMetrics = $allCampaignAudits[0]['ReviewerMetrics']
+                        }
+                        elseif ($allCampaignAudits.Count -gt 1) {
+                            $combinedMetrics = [System.Collections.Generic.List[object]]::new()
+                            foreach ($audit in $allCampaignAudits) {
+                                if ($audit.ContainsKey('ReviewerMetrics') -and $null -ne $audit['ReviewerMetrics'] -and
+                                    $null -ne $audit['ReviewerMetrics']['ReviewerMetrics']) {
+                                    foreach ($rm in @($audit['ReviewerMetrics']['ReviewerMetrics'])) {
+                                        $combinedMetrics.Add($rm)
+                                    }
+                                }
+                            }
+                            if ($combinedMetrics.Count -gt 0) {
+                                $mergedReviewerMetrics = @{ ReviewerMetrics = $combinedMetrics.ToArray() }
+                            }
+                        }
+
+                        $groupParams = @{
+                            Decisions = $mergedDecisionsHt
+                            OrgTree   = $orgTree
+                        }
+                        if ($null -ne $mergedReviewerMetrics) {
+                            $groupParams['ReviewerMetrics'] = $mergedReviewerMetrics
+                        }
+                        $leadershipData = Group-SPAuditByLeadership @groupParams
+
+                        # Build campaign name and date range for report headers
+                        $leadershipCampaignName = if ($allCampaignAudits.Count -eq 1) {
+                            $allCampaignAudits[0]['CampaignName']
+                        }
+                        else {
+                            "$($allCampaignAudits.Count) Campaigns (Combined)"
+                        }
+                        $leadershipDateRange = ''
+                        $allCreated = @($allCampaignAudits | ForEach-Object {
+                            if ($_['Created']) { $_['Created'] }
+                        } | Where-Object { $_ } | Sort-Object)
+                        if ($allCreated.Count -gt 0) {
+                            $startDate = ($allCreated[0] -split 'T')[0]
+                            $endDate   = ((Get-Date).ToString('yyyy-MM-dd'))
+                            $leadershipDateRange = "$startDate to $endDate"
+                        }
+
+                        # Generate executive summary
+                        $execPath = Export-SPLeadershipExecutiveHtml `
+                            -LeadershipData $leadershipData `
+                            -CampaignName $leadershipCampaignName `
+                            -DateRange $leadershipDateRange `
+                            -OutputPath $leadershipOutputPath `
+                            -CorrelationID $CorrelationID
+                        $allWrittenFiles.Add($execPath)
+
+                        # Generate per-director reports
+                        $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
+                        if ($directorCount -gt 0) {
+                            $dirPaths = Export-SPLeadershipDirectorHtml `
+                                -LeadershipData $leadershipData `
+                                -Decisions $mergedDecisionsHt `
+                                -OrgTree $orgTree `
+                                -CampaignName $leadershipCampaignName `
+                                -DateRange $leadershipDateRange `
+                                -OutputPath $leadershipOutputPath `
+                                -CorrelationID $CorrelationID
+                            foreach ($dp in @($dirPaths)) {
+                                $allWrittenFiles.Add($dp)
+                            }
+                        }
+
+                        Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                    }
+                }
+            }
         }
 
         # --- JSONL audit trail ---

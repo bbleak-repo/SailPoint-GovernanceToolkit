@@ -43,11 +43,15 @@
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
+        'Group-SPAuditByLeadership'
 
         # SP.AuditReport - Export functions
         'Export-SPAuditHtml'
         'Export-SPAuditText'
         'Export-SPAuditJsonl'
+        'Export-SPLeadershipExecutiveHtml'
+        'Export-SPLeadershipDirectorHtml'
+        'Send-SPReport'
     )
 
     # Do not export variables or aliases from nested modules

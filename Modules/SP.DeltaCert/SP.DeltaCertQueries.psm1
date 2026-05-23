@@ -864,6 +864,236 @@ function Get-SPDeltaCertStaleCertifications {
     }
 }
 
+function Build-SPOrgTree {
+    <#
+    .SYNOPSIS
+        Walks ISC identity manager chains to build an org tree structure.
+    .DESCRIPTION
+        Takes an array of identity IDs (leaf-level reviewed identities) and walks
+        each one up the manager chain using Get-SPDeltaIdentityDetail. Builds a
+        complete org tree with nodes at each level (leaf=0, manager=1, director=2,
+        VP=3, etc.).
+
+        Uses the module-scope IdentityCache via Get-SPDeltaIdentityDetail so each
+        unique identity is resolved via API only once per session.
+
+        Safety: cycle detection via visited-ID tracking per chain, plus max depth
+        enforcement to prevent runaway walks when ISC data has circular manager refs.
+    .PARAMETER IdentityIds
+        Array of SailPoint ISC identity IDs to use as tree leaves (level 0).
+    .PARAMETER MaxDepth
+        Maximum number of levels to walk above the leaf. Default 3 (leaf -> manager
+        -> director -> VP). Walking stops when manager is null, max depth is reached,
+        or a cycle is detected.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                Nodes       = @{ id = @{Identity; ManagerId; Level; Children} }
+                TopLeaders  = @(ids)
+                Directors   = @(ids)
+                Managers    = @(ids)
+                LeafCount   = [int]
+                MaxDepthHit = $bool
+            }
+            Error   = $null
+        }
+    .EXAMPLE
+        $tree = Build-SPOrgTree -IdentityIds @('id-alice','id-bob') -MaxDepth 3
+        $tree.Data.TopLeaders  # VPs at the top of the tree
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$IdentityIds,
+
+        [Parameter()]
+        [int]$MaxDepth = 3,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Build-SPOrgTree: Building org tree for $($IdentityIds.Count) leaf identit(ies), MaxDepth=$MaxDepth" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Build-SPOrgTree' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Nodes hashtable keyed by identity ID
+        $nodes       = @{}
+        $maxDepthHit = $false
+
+        # Step 1: Create leaf nodes (level 0) for each input identity
+        $leafIds = [System.Collections.Generic.List[string]]::new()
+        foreach ($leafId in $IdentityIds) {
+            if ([string]::IsNullOrWhiteSpace($leafId)) { continue }
+            if ($leafIds.Contains($leafId)) { continue }
+            $leafIds.Add($leafId)
+
+            $detail = Get-SPDeltaIdentityDetail -IdentityId $leafId -CorrelationID $CorrelationID
+
+            $nodes[$leafId] = @{
+                Identity  = @{
+                    Id          = $leafId
+                    Name        = $detail.DisplayName
+                    ManagerId   = $detail.ManagerId
+                    ManagerName = $detail.ManagerName
+                    Found       = $detail.Found
+                }
+                ManagerId = $detail.ManagerId
+                Level     = 0
+                Children  = @()
+            }
+        }
+
+        # Step 2: Walk each leaf up the manager chain
+        foreach ($leafId in $leafIds) {
+            $currentId = $leafId
+            $visited   = [System.Collections.Generic.HashSet[string]]::new()
+            [void]$visited.Add($currentId)
+            $depth = 0
+
+            while ($depth -lt $MaxDepth) {
+                $currentNode = $nodes[$currentId]
+                $managerId   = $currentNode.ManagerId
+
+                # Stop if no manager
+                if ([string]::IsNullOrWhiteSpace($managerId)) {
+                    break
+                }
+
+                # Cycle detection
+                if (-not $visited.Add($managerId)) {
+                    Write-SPLog -Message "Build-SPOrgTree: Cycle detected -- identity '$currentId' has manager '$managerId' which is already in the chain. Stopping walk." `
+                        -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Build-SPOrgTree' `
+                        -CorrelationID $CorrelationID
+                    break
+                }
+
+                $depth++
+
+                # Create manager node if it does not exist yet
+                if (-not $nodes.ContainsKey($managerId)) {
+                    $mgrDetail = Get-SPDeltaIdentityDetail -IdentityId $managerId -CorrelationID $CorrelationID
+
+                    $nodes[$managerId] = @{
+                        Identity  = @{
+                            Id          = $managerId
+                            Name        = $mgrDetail.DisplayName
+                            ManagerId   = $mgrDetail.ManagerId
+                            ManagerName = $mgrDetail.ManagerName
+                            Found       = $mgrDetail.Found
+                        }
+                        ManagerId = $mgrDetail.ManagerId
+                        Level     = $depth
+                        Children  = @()
+                    }
+                }
+                else {
+                    # Node exists -- update level to the higher value (farther from leaf)
+                    if ($depth -gt $nodes[$managerId].Level) {
+                        $nodes[$managerId].Level = $depth
+                    }
+                }
+
+                # Add current node as child of the manager (if not already listed)
+                $existingChildren = @($nodes[$managerId].Children)
+                if ($currentId -notin $existingChildren) {
+                    $nodes[$managerId].Children = $existingChildren + @($currentId)
+                }
+
+                # Check if we hit max depth on next iteration
+                if ($depth -ge $MaxDepth) {
+                    $maxDepthHit = $true
+                    break
+                }
+
+                $currentId = $managerId
+            }
+        }
+
+        # Step 3: Build quick-lookup lists by level
+        $topLeaders = [System.Collections.Generic.List[string]]::new()
+        $directors  = [System.Collections.Generic.List[string]]::new()
+        $managers   = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            $level = $node.Level
+
+            # Top leaders: nodes at the highest level with no manager in the tree,
+            # OR nodes at MaxDepth
+            $isTopOfChain = [string]::IsNullOrWhiteSpace($node.ManagerId) -or
+                            (-not $nodes.ContainsKey($node.ManagerId) -and $level -gt 0)
+            $isAtMaxDepth = $level -ge $MaxDepth
+
+            if ($level -ge 3 -or ($isTopOfChain -and $level -ge 2)) {
+                if (-not $topLeaders.Contains($nodeId)) {
+                    $topLeaders.Add($nodeId)
+                }
+            }
+            elseif ($level -eq 2) {
+                if (-not $directors.Contains($nodeId)) {
+                    $directors.Add($nodeId)
+                }
+            }
+            elseif ($level -eq 1) {
+                if (-not $managers.Contains($nodeId)) {
+                    $managers.Add($nodeId)
+                }
+            }
+        }
+
+        # If no nodes reached level 3+, promote the highest-level nodes to TopLeaders
+        if ($topLeaders.Count -eq 0 -and $nodes.Count -gt 0) {
+            $maxLevel = 0
+            foreach ($nodeId in $nodes.Keys) {
+                if ($nodes[$nodeId].Level -gt $maxLevel) { $maxLevel = $nodes[$nodeId].Level }
+            }
+            if ($maxLevel -gt 0) {
+                foreach ($nodeId in $nodes.Keys) {
+                    $node = $nodes[$nodeId]
+                    $isTopOfChain = [string]::IsNullOrWhiteSpace($node.ManagerId) -or
+                                    (-not $nodes.ContainsKey($node.ManagerId))
+                    if ($node.Level -eq $maxLevel -and $isTopOfChain) {
+                        $topLeaders.Add($nodeId)
+                        # Remove from directors if it was there
+                        [void]$directors.Remove($nodeId)
+                    }
+                }
+            }
+        }
+
+        $treeData = @{
+            Nodes       = $nodes
+            TopLeaders  = @($topLeaders.ToArray())
+            Directors   = @($directors.ToArray())
+            Managers    = @($managers.ToArray())
+            LeafCount   = $leafIds.Count
+            MaxDepthHit = $maxDepthHit
+        }
+
+        Write-SPLog -Message "Build-SPOrgTree: Complete -- $($nodes.Count) nodes, $($topLeaders.Count) top leader(s), $($directors.Count) director(s), $($managers.Count) manager(s), $($leafIds.Count) leaves, MaxDepthHit=$maxDepthHit" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Build-SPOrgTree' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $treeData; Error = $null }
+    }
+    catch {
+        $errMsg = "Build-SPOrgTree failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Build-SPOrgTree' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -871,5 +1101,6 @@ Export-ModuleMember -Function @(
     'Get-SPDeltaAffectedIdentities',
     'Group-SPDeltaByManager',
     'Get-SPDeltaCertStaleCertifications',
-    'Get-SPDeltaIdentityDetail'
+    'Get-SPDeltaIdentityDetail',
+    'Build-SPOrgTree'
 )

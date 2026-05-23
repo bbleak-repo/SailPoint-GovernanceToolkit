@@ -94,6 +94,16 @@ function Get-SPConfigDefaults {
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
+            IncludeLeadershipRollup  = $false
+            LeadershipDepth          = 3
+            Smtp = @{
+                Enabled       = $false
+                Server        = ''
+                Port          = 587
+                From          = ''
+                UseSsl        = $true
+                SubjectPrefix = '[SailPoint Audit]'
+            }
         }
         DeltaCert = @{
             SourceIds                  = @()
@@ -290,6 +300,16 @@ function Get-SPConfigTemplate {
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
+            IncludeLeadershipRollup  = $false
+            LeadershipDepth          = 3
+            Smtp = [ordered]@{
+                Enabled       = $false
+                Server        = ''
+                Port          = 587
+                From          = ''
+                UseSsl        = $true
+                SubjectPrefix = '[SailPoint Audit]'
+            }
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()

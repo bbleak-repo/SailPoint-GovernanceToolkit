@@ -58,7 +58,17 @@
         "DefaultIdentityEventDays": 2,
         "DefaultStatuses": ["COMPLETED", "ACTIVE"],
         "IncludeCampaignReports": true,
-        "IncludeIdentityEvents": true
+        "IncludeIdentityEvents": true,
+        "IncludeLeadershipRollup": false,
+        "LeadershipDepth": 3,
+        "Smtp": {
+            "Enabled": false,
+            "Server": "",
+            "Port": 587,
+            "From": "",
+            "UseSsl": true,
+            "SubjectPrefix": "[SailPoint Audit]"
+        }
     },
     "DeltaCert": {
         "SourceIds": [],
