@@ -71,16 +71,48 @@ Remove-Item Config\settings-real.json
 
 ---
 
+## FlaUI Interactive GUI Harness
+
+All `GUI:` phases (W-02 onward) must drive a real visible WPF window via the
+vendored FlaUI harness, not headless XAML parsing. Headless coverage was
+shipped first as a sanity layer; W-02b and W-03b backfill it with interactive
+tests, and W-04 builds on top of the same harness.
+
+- Helper module:  `Tests\Harness\SP.UiTest.psm1`
+- Vendored DLLs:  `Tests\Tools\FlaUI\` (FlaUI 4.0 net48, MIT)
+- Smoke proof:    `Tests\Harness\Test-FlaUiSmoke.ps1` (9/9 PASS as of harness build)
+
+Pattern each interactive harness must follow (run as `powershell.exe -STA -File ...`):
+
+```powershell
+Import-Module $PSScriptRoot\SP.UiTest.psm1 -Force
+$ui = Start-SPDashboardForTest -ConfigPath C:\...\Config\settings.json
+try {
+    $tab = Find-SPUiTab -Window $ui.Window -Header 'Settings'
+    $tab.Select()
+    $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSave'
+    $btn.Click()
+    Save-SPUiScreenshot -Element $ui.Window -Path docs\windows-test-rounds\WG-02b-after-save.png
+}
+finally { Stop-SPDashboardForTest -UiContext $ui }
+```
+
+The window *will* be visible while the test runs; this is intentional.
+
+---
+
 ## Phase Summary
 
 | ID | Phase | Tests | Depends On | Status |
 |----|-------|-------|------------|--------|
 | W-01 | Prerequisites + Pester | 3 | none | DONE |
-| W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
-| W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | DONE |
-| W-04 | GUI: Delta Cert tab (all 5 buttons + dialogs) | 14 | W-01 | PENDING |
+| W-02 | GUI (headless): Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
+| W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | PENDING |
+| W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
+| W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | PENDING |
+| W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | PENDING |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
-| W-06 | Playwright: Screenshot + visual validation | 10 | W-03, W-05 | PENDING |
+| W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | PENDING |
 | W-07 | Report content deep validation | 15 | W-06 | PENDING |
 
 ---
@@ -155,6 +187,38 @@ WG-02-08: All 5 tab headers visible and clickable
   Click each tab: Campaigns, Evidence, Settings, Audit, Delta Cert
   Expected: no crashes, content switches cleanly
 ```
+
+---
+
+## W-02b: GUI (interactive, FlaUI) -- backfill W-02
+
+- **Status:** `PENDING`
+- **Depends On:** W-02 (headless baseline) + FlaUI harness
+- **Goal:** Re-run every WG-02-* test against a real visible WPF window using
+  `Tests\Harness\SP.UiTest.psm1`. Each test that previously asserted a
+  control existed in the logical tree should now (a) launch the dashboard,
+  (b) drive the control with FlaUI (Click, Select, Type), (c) capture a
+  screenshot to `docs\windows-test-rounds\WG-02b-<id>.png`, and (d) verify
+  the post-condition through the live UI.
+
+- **Required artifact:** `Tests\Harness\Test-W02b-GuiInteractive.ps1` written
+  using the SP.UiTest.psm1 pattern (see FlaUI Interactive GUI Harness
+  section above). Run it as `powershell.exe -STA -File ...` from the
+  round's outer script and parse the JSONL output.
+
+---
+
+## W-03b: GUI (interactive, FlaUI) -- backfill W-03
+
+- **Status:** `PENDING`
+- **Depends On:** W-03 (headless baseline) + FlaUI harness
+- **Goal:** Same idea as W-02b but for the Audit tab. Every WG-03-* test
+  becomes a live interaction: open the AuditQueryDialog, fill the fields,
+  click Query Campaigns, verify rows appear in the DataGrid, check options,
+  click Run Audit, wait for progress to complete, verify the Audit\
+  directory output.
+
+- **Required artifact:** `Tests\Harness\Test-W03b-AuditTabInteractive.ps1`.
 
 ---
 
