@@ -52,7 +52,7 @@ Safe to modify:
 | P11-07 | Entitlement Inventory Report | none | DONE |
 | P11-08 | Cross-Campaign Reviewer Analysis | P11-06 | DONE |
 | P11-09 | Daily Orchestrator Script | P11-01, P11-05 | DONE |
-| P11-10 | Pester Tests | P11-09 | PENDING |
+| P11-10 | Pester Tests | P11-09 | DONE |
 
 ---
 
@@ -864,8 +864,8 @@ DurationSeconds, ExitCode.
 
 ## P11-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** P11-09
 
 **Description:**
