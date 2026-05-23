@@ -89,6 +89,10 @@
 
         # SP.AuditReport - Compliance Evidence Package (P12-01)
         'Export-SPCompliancePackage'
+
+        # SP.AuditReport - Identity Risk Scoring (P12-02)
+        'Measure-SPIdentityRisk'
+        'Export-SPIdentityRiskHtml'
     )
 
     # Do not export variables or aliases from nested modules

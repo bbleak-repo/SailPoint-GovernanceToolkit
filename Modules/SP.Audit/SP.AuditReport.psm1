@@ -8051,6 +8051,558 @@ function Export-SPCompliancePackage {
 
 #endregion
 
+#region Identity Risk Scoring (P12-02)
+
+function Measure-SPIdentityRisk {
+    <#
+    .SYNOPSIS
+        Aggregates risk signals per identity across all audited campaigns.
+    .DESCRIPTION
+        Consumes an array of campaign audit hashtables (same structure used by
+        Export-SPAuditCsv) and produces a composite risk score (0-100) per identity.
+        Answers: "Which identities should we prioritize for access review?"
+
+        Risk signals accumulated per identity across campaigns:
+        - StaleAccessCount: Items flagged STALE (>90 days unreviewed)
+        - PrivilegedAccessCount: Entitlements matching privileged patterns
+        - RubberStampApprovals: Items approved by reviewers flagged for rubber-stamping
+        - OrphanAccountFlag: Identity has orphan accounts
+        - OverdueRemediations: Revocations past SLA not provisioned
+        - ApprovalOnlyHistory: Never had access revoked across all campaigns
+        - CampaignsReviewed: How many campaigns included this identity
+        - LastReviewDate: Most recent campaign decision date
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions, RubberStampRisk, etc.
+    .PARAMETER HighRiskThreshold
+        Score at or above which an identity is classified High risk. Default 70.
+    .PARAMETER MediumRiskThreshold
+        Score at or above which an identity is classified Medium risk. Default 40.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); Summary = @{...} }
+    .EXAMPLE
+        $risk = Measure-SPIdentityRisk -CampaignAudits $audits
+        $risk.Identities | Where-Object { $_.RiskTier -eq 'High' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$HighRiskThreshold = 70,
+
+        [Parameter()]
+        [int]$MediumRiskThreshold = 40,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityRisk: starting with $($CampaignAudits.Count) campaign(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    # Return empty result for empty input
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Identities = @()
+            Summary    = @{
+                TotalIdentities = 0
+                High            = 0
+                Medium          = 0
+                Low             = 0
+                AvgRiskScore    = 0
+            }
+        }
+    }
+
+    # Per-identity accumulator: keyed by IdentityId
+    $identityMap = @{}
+
+    # Build rubber-stamp reviewer set per campaign
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        # Identify rubber-stamp reviewers (Medium or High severity)
+        $rubberStampReviewers = @{}
+        if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) {
+            $rsRisk = $audit['RubberStampRisk']
+            $reviewerRisks = if ($rsRisk.ContainsKey('ReviewerRisks') -and $null -ne $rsRisk['ReviewerRisks']) {
+                @($rsRisk['ReviewerRisks'])
+            } else { @() }
+            foreach ($rr in $reviewerRisks) {
+                if ($null -eq $rr) { continue }
+                $sev = ''
+                if ($rr -is [hashtable]) {
+                    $sev = if ($rr.ContainsKey('Severity')) { [string]$rr['Severity'] } else { '' }
+                } else {
+                    $sevProp = $rr.PSObject.Properties['Severity']
+                    $sev = if ($null -ne $sevProp) { [string]$sevProp.Value } else { '' }
+                }
+                if ($sev -eq 'Medium' -or $sev -eq 'High') {
+                    $name = ''
+                    if ($rr -is [hashtable]) {
+                        $name = if ($rr.ContainsKey('ReviewerName')) { [string]$rr['ReviewerName'] } else { '' }
+                    } else {
+                        $nameProp = $rr.PSObject.Properties['ReviewerName']
+                        $name = if ($null -ne $nameProp) { [string]$nameProp.Value } else { '' }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($name)) {
+                        $rubberStampReviewers[$name] = $true
+                    }
+                }
+            }
+        }
+
+        # Process all decision categories
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                # Extract identity info
+                $identityId = ''
+                $identityName = ''
+                $accessName = ''
+                $reviewerName = ''
+                $decisionDate = ''
+                $riskFlags = @()
+
+                if ($item -is [hashtable]) {
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $reviewerName = if ($item.ContainsKey('ReviewerName')) { [string]$item['ReviewerName'] } else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $nmProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $nmProp -and $null -ne $nmProp.Value) { [string]$nmProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $rnProp = $item.PSObject.Properties['ReviewerName']
+                    $reviewerName = if ($null -ne $rnProp -and $null -ne $rnProp.Value) { [string]$rnProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($identityId)) { continue }
+
+                # Initialize identity record if not seen
+                if (-not $identityMap.ContainsKey($identityId)) {
+                    $identityMap[$identityId] = @{
+                        IdentityId            = $identityId
+                        IdentityName          = $identityName
+                        StaleAccessCount      = 0
+                        PrivilegedAccessCount = 0
+                        RubberStampApprovals  = 0
+                        OrphanAccountFlag     = $false
+                        OverdueRemediations   = 0
+                        HasRevocation         = $false
+                        CampaignSet           = @{}
+                        LastReviewDate        = $null
+                    }
+                }
+
+                $idRec = $identityMap[$identityId]
+
+                # Update identity name if we have a better one
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    $idRec['IdentityName'] = $identityName
+                }
+
+                # Track campaign participation
+                $campaignName = ''
+                if ($audit.ContainsKey('CampaignName')) { $campaignName = [string]$audit['CampaignName'] }
+                if ($audit.ContainsKey('CampaignId'))   { $campaignName = [string]$audit['CampaignId'] }
+                if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                    $idRec['CampaignSet'][$campaignName] = $true
+                }
+
+                # Track last review date
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $idRec['LastReviewDate'] -or $dt -gt $idRec['LastReviewDate']) {
+                            $idRec['LastReviewDate'] = $dt
+                        }
+                    } catch { }
+                }
+
+                # Accumulate risk flags
+                foreach ($flag in $riskFlags) {
+                    switch ($flag) {
+                        'STALE'      { $idRec['StaleAccessCount']++ }
+                        'PRIVILEGED' { $idRec['PrivilegedAccessCount']++ }
+                        'ORPHAN'     { $idRec['OrphanAccountFlag'] = $true }
+                    }
+                }
+
+                # Track revocations
+                if ($category -eq 'Revoked') {
+                    $idRec['HasRevocation'] = $true
+                }
+
+                # Track rubber-stamp approvals
+                if ($category -eq 'Approved' -and
+                    -not [string]::IsNullOrWhiteSpace($reviewerName) -and
+                    $rubberStampReviewers.ContainsKey($reviewerName)) {
+                    $idRec['RubberStampApprovals']++
+                }
+
+                # Track overdue remediations (revoked items with overdue remediation)
+                if ($category -eq 'Revoked') {
+                    $remStatus = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('RemediationStatus')) {
+                        $remStatus = [string]$item['RemediationStatus']
+                    } elseif ($item -isnot [hashtable]) {
+                        $rsProp = $item.PSObject.Properties['RemediationStatus']
+                        if ($null -ne $rsProp -and $null -ne $rsProp.Value) {
+                            $remStatus = [string]$rsProp.Value
+                        }
+                    }
+                    if ($remStatus -eq 'Overdue' -or $remStatus -eq 'overdue') {
+                        $idRec['OverdueRemediations']++
+                    }
+                }
+            }
+        }
+    }
+
+    # Calculate risk scores
+    $now = Get-Date
+    $identityResults = [System.Collections.Generic.List[hashtable]]::new()
+    $highCount = 0
+    $mediumCount = 0
+    $lowCount = 0
+    $totalScore = 0.0
+
+    foreach ($idKey in $identityMap.Keys) {
+        $idRec = $identityMap[$idKey]
+
+        $score = 0
+
+        # Privileged access: +15 per privileged entitlement (max 30)
+        $privScore = [Math]::Min($idRec['PrivilegedAccessCount'] * 15, 30)
+        $score += $privScore
+
+        # Stale access: +10 per stale item (max 20)
+        $staleScore = [Math]::Min($idRec['StaleAccessCount'] * 10, 20)
+        $score += $staleScore
+
+        # Rubber-stamp approvals: +10 per rubber-stamp approval (max 20)
+        $rsScore = [Math]::Min($idRec['RubberStampApprovals'] * 10, 20)
+        $score += $rsScore
+
+        # Orphan account: +15 (flat)
+        if ($idRec['OrphanAccountFlag']) { $score += 15 }
+
+        # Overdue remediation: +15 per overdue item (max 15)
+        $overdueScore = [Math]::Min($idRec['OverdueRemediations'] * 15, 15)
+        $score += $overdueScore
+
+        # Approval-only history with 3+ campaigns: +10
+        $campaignsReviewed = $idRec['CampaignSet'].Count
+        $approvalOnly = (-not $idRec['HasRevocation']) -and ($campaignsReviewed -ge 3)
+        if ($approvalOnly) { $score += 10 }
+
+        # Not reviewed in 180+ days: +10
+        $daysSinceReview = $null
+        if ($null -ne $idRec['LastReviewDate']) {
+            $daysSinceReview = [int]($now - $idRec['LastReviewDate']).TotalDays
+            if ($daysSinceReview -ge 180) { $score += 10 }
+        }
+
+        # Clamp to 0-100
+        $score = [Math]::Max(0, [Math]::Min(100, $score))
+
+        # Determine risk tier
+        $tier = if ($score -ge $HighRiskThreshold) { 'High' }
+                elseif ($score -ge $MediumRiskThreshold) { 'Medium' }
+                else { 'Low' }
+
+        # Build top risk factors list
+        $topFactors = [System.Collections.Generic.List[string]]::new()
+        if ($idRec['PrivilegedAccessCount'] -gt 0) { $topFactors.Add('Privileged Access') }
+        if ($idRec['StaleAccessCount'] -gt 0)      { $topFactors.Add('Stale Access') }
+        if ($idRec['RubberStampApprovals'] -gt 0)   { $topFactors.Add('Rubber-Stamp Approvals') }
+        if ($idRec['OrphanAccountFlag'])            { $topFactors.Add('Orphan Account') }
+        if ($idRec['OverdueRemediations'] -gt 0)    { $topFactors.Add('Overdue Remediation') }
+        if ($approvalOnly)                          { $topFactors.Add('Approval-Only History') }
+        if ($null -ne $daysSinceReview -and $daysSinceReview -ge 180) { $topFactors.Add('Not Recently Reviewed') }
+
+        $lastReviewStr = if ($null -ne $idRec['LastReviewDate']) {
+            $idRec['LastReviewDate'].ToString('yyyy-MM-dd')
+        } else { $null }
+
+        $identityResults.Add(@{
+            IdentityId            = $idRec['IdentityId']
+            IdentityName          = $idRec['IdentityName']
+            RiskScore             = $score
+            RiskTier              = $tier
+            StaleAccessCount      = $idRec['StaleAccessCount']
+            PrivilegedAccessCount = $idRec['PrivilegedAccessCount']
+            RubberStampApprovals  = $idRec['RubberStampApprovals']
+            OrphanAccountFlag     = $idRec['OrphanAccountFlag']
+            OverdueRemediations   = $idRec['OverdueRemediations']
+            ApprovalOnlyHistory   = $approvalOnly
+            CampaignsReviewed     = $campaignsReviewed
+            LastReviewDate        = $lastReviewStr
+            TopRiskFactors        = @($topFactors)
+        })
+
+        $totalScore += $score
+        switch ($tier) {
+            'High'   { $highCount++ }
+            'Medium' { $mediumCount++ }
+            'Low'    { $lowCount++ }
+        }
+    }
+
+    # Sort by risk score descending
+    $sorted = @($identityResults | Sort-Object { $_['RiskScore'] } -Descending)
+
+    $totalIdentities = $sorted.Count
+    $avgScore = if ($totalIdentities -gt 0) {
+        [Math]::Round($totalScore / $totalIdentities, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Measure-SPIdentityRisk: scored $totalIdentities identities (High=$highCount, Medium=$mediumCount, Low=$lowCount)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Identities = $sorted
+        Summary    = @{
+            TotalIdentities = $totalIdentities
+            High            = $highCount
+            Medium          = $mediumCount
+            Low             = $lowCount
+            AvgRiskScore    = $avgScore
+        }
+    }
+}
+
+function Export-SPIdentityRiskHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML identity risk report from Measure-SPIdentityRisk output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with identities sorted by risk score.
+        Includes risk tier badges (red/orange/green), per-identity detail rows
+        showing contributing risk factors, and a summary card with tier distribution.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER RiskData
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $risk = Measure-SPIdentityRisk -CampaignAudits $audits
+        $path = Export-SPIdentityRiskHtml -RiskData $risk -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RiskData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "IdentityRisk-${timestamp}.html"
+
+    $summary    = $RiskData['Summary']
+    $identities = @($RiskData['Identities'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Total Identities<br/><span style="font-size:22px;">$($summary['TotalIdentities'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+High Risk<br/><span style="font-size:22px;">$($summary['High'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Medium Risk<br/><span style="font-size:22px;">$($summary['Medium'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Low Risk<br/><span style="font-size:22px;">$($summary['Low'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Score<br/><span style="font-size:22px;">$($summary['AvgRiskScore'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Identity table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Identity', 'Score', 'Tier', 'Privileged', 'Stale',
+        'Rubber-Stamp', 'Orphan', 'Overdue', 'Campaigns', 'Last Review', 'Top Risk Factors'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($id in $identities) {
+        $rowIdx++
+
+        $tierColor = switch ($id['RiskTier']) {
+            'High'   { 'color:#fff; background:#c0392b;' }
+            'Medium' { 'color:#fff; background:#e67e22;' }
+            'Low'    { 'color:#fff; background:#27ae60;' }
+            default  { 'color:#fff; background:#777777;' }
+        }
+        $tierBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $tierColor"">$($id['RiskTier'])</span>"
+
+        $orphanDisplay = if ($id['OrphanAccountFlag']) {
+            '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($id['LastReviewDate'])) {
+            ConvertTo-SafeHtml $id['LastReviewDate']
+        } else { 'Never' }
+
+        $factors = @($id['TopRiskFactors'])
+        $factorsDisplay = if ($factors.Count -gt 0) {
+            ($factors | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+        } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $id['IdentityName']),
+            [string]$id['RiskScore'],
+            $tierBadge,
+            [string]$id['PrivilegedAccessCount'],
+            [string]$id['StaleAccessCount'],
+            [string]$id['RubberStampApprovals'],
+            $orphanDisplay,
+            [string]$id['OverdueRemediations'],
+            [string]$id['CampaignsReviewed'],
+            $lastReview,
+            $factorsDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-tier sections ---
+    $tierSections = [System.Collections.Generic.List[string]]::new()
+    foreach ($tierName in @('High', 'Medium', 'Low')) {
+        $tierIds = @($identities | Where-Object { $_['RiskTier'] -eq $tierName })
+        if ($tierIds.Count -eq 0) { continue }
+
+        $tierHeaderColor = switch ($tierName) {
+            'High'   { '#c0392b' }
+            'Medium' { '#e67e22' }
+            'Low'    { '#27ae60' }
+        }
+
+        $detailHtml = "<h2 style=""font-size:16px; color:${tierHeaderColor}; margin-top:24px; margin-bottom:8px;"">${tierName} Risk Identities ($($tierIds.Count))</h2>"
+
+        foreach ($id in $tierIds) {
+            $nameHtml = ConvertTo-SafeHtml $id['IdentityName']
+            $detailHtml += @"
+<div style="margin-bottom:12px; padding:8px 12px; border-left:4px solid ${tierHeaderColor}; background:#fafafa;">
+<strong>${nameHtml}</strong> (Score: $($id['RiskScore']))<br/>
+<span style="font-size:12px; color:#666666;">
+Privileged: $($id['PrivilegedAccessCount']) | Stale: $($id['StaleAccessCount']) | Rubber-Stamp: $($id['RubberStampApprovals']) | Orphan: $($id['OrphanAccountFlag']) | Overdue: $($id['OverdueRemediations']) | Campaigns: $($id['CampaignsReviewed']) | Last Review: $(if ($id['LastReviewDate']) { $id['LastReviewDate'] } else { 'Never' })
+</span>
+</div>
+"@
+        }
+
+        $tierSections.Add($detailHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Risk Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Risk Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Identities by Risk Score</h2>
+${tableHtml}
+
+$($tierSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Identity risk HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityRiskHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -8077,5 +8629,7 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignTrendHtml',
     'Export-SPEntitlementInventoryHtml',
     'Measure-SPReviewerReputation',
-    'Export-SPCompliancePackage'
+    'Export-SPCompliancePackage',
+    'Measure-SPIdentityRisk',
+    'Export-SPIdentityRiskHtml'
 )

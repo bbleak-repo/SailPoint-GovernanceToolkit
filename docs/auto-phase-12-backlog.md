@@ -45,7 +45,7 @@ Safe to modify:
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | P12-01 | Compliance Evidence Package | none | DONE |
-| P12-02 | Identity Risk Scoring | none | PENDING |
+| P12-02 | Identity Risk Scoring | none | DONE |
 | P12-03 | Source Governance Scorecard | none | PENDING |
 | P12-04 | Stale Access Detector | P12-03 | PENDING |
 | P12-05 | Campaign Completion Summary | none | PENDING |
@@ -183,7 +183,7 @@ function Export-SPCompliancePackage {
 
 ## P12-02: Identity Risk Scoring
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**
