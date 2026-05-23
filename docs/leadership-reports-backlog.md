@@ -60,7 +60,7 @@ Audit/
 |----|---------|------------|--------|
 | L-01 | Org Tree Walker (Build-SPOrgTree) | none | DONE |
 | L-02 | Leadership Grouping (Group-SPAuditByLeadership) | L-01 | DONE |
-| L-03 | Executive Summary HTML | L-02 | PENDING |
+| L-03 | Executive Summary HTML | L-02 | DONE |
 | L-04 | Director-Level HTML Reports | L-03 | PENDING |
 | L-05 | CLI Integration | L-04 | PENDING |
 | L-06 | GUI Integration | L-05 | PENDING |
@@ -264,8 +264,8 @@ function Group-SPAuditByLeadership {
 
 ## L-03: Executive Summary HTML
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 3e90284
 - **Depends On:** L-02
 
 **Description:**

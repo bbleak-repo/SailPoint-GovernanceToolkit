@@ -2604,6 +2604,369 @@ function Export-SPAuditJsonl {
     return $filePath
 }
 
+function Export-SPLeadershipExecutiveHtml {
+    <#
+    .SYNOPSIS
+        Generates the leadership executive summary HTML report.
+    .DESCRIPTION
+        Produces a self-contained, Word-compatible HTML file that aggregates
+        campaign audit results by leadership level. The report includes:
+        - Campaign name and date range header
+        - Overall metrics: total items, approval/revocation rates, completion %
+        - SVG donut chart showing approve/revoke/pending distribution
+        - Per-director summary table sorted by completion % ascending (worst first)
+        - Color-coded completion column (green >= 95%, orange 80-95%, red < 80%)
+
+        All CSS is inline on elements for Word copy-paste compatibility.
+        No flexbox, no grid, no external resources.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership with Directors and Executive keys.
+    .PARAMETER CampaignName
+        Display name of the campaign (or combined campaign label).
+    .PARAMETER DateRange
+        Descriptive date range string for the report header (e.g. "2026-04-01 to 2026-04-30").
+    .PARAMETER OutputPath
+        Directory in which to write the HTML file. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in the report footer.
+    .OUTPUTS
+        [string] Path to the written executive-summary.html file.
+    .EXAMPLE
+        $path = Export-SPLeadershipExecutiveHtml -LeadershipData $leadership `
+                    -CampaignName 'Q1 Access Review' -DateRange '2026-01-01 to 2026-03-31' `
+                    -OutputPath 'C:\Reports\leadership'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter(Mandatory)]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $directors   = if ($LeadershipData.ContainsKey('Directors')) { $LeadershipData['Directors'] } else { @{} }
+    $executive   = if ($LeadershipData.ContainsKey('Executive')) { $LeadershipData['Executive'] } else { @{} }
+
+    # --- Aggregate overall totals across all directors ---
+    $totalItems    = 0
+    $totalApproved = 0
+    $totalRevoked  = 0
+    $totalPending  = 0
+
+    foreach ($dirId in $directors.Keys) {
+        $d = $directors[$dirId]
+        $totalApproved += [int]$d.Approved
+        $totalRevoked  += [int]$d.Revoked
+        $totalPending  += [int]$d.Pending
+    }
+    $totalItems = $totalApproved + $totalRevoked + $totalPending
+
+    $approvalRate   = if ($totalItems -gt 0) { [Math]::Round($totalApproved / $totalItems * 100, 1) } else { 0.0 }
+    $revocationRate = if ($totalItems -gt 0) { [Math]::Round($totalRevoked  / $totalItems * 100, 1) } else { 0.0 }
+    $completionPct  = if ($totalItems -gt 0) { [Math]::Round(($totalApproved + $totalRevoked) / $totalItems * 100, 1) } else { 0.0 }
+    $pendingPct     = if ($totalItems -gt 0) { [Math]::Round($totalPending / $totalItems * 100, 1) } else { 0.0 }
+
+    # Fix rounding drift so percentages sum to 100
+    $sumPct = $approvalRate + $revocationRate + $pendingPct
+    if ($sumPct -ne 100 -and $totalItems -gt 0) {
+        $approvalRate = [Math]::Round(100 - $revocationRate - $pendingPct, 1)
+    }
+
+    # --- SVG donut chart (same pattern as Build-ExecutiveSummaryHtml) ---
+    $seg1Offset = 25
+    $seg2Offset = -($approvalRate - 25)
+    $seg3Offset = -($approvalRate + $revocationRate - 25)
+
+    $seg1Remain = [Math]::Round(100 - $approvalRate,   1)
+    $seg2Remain = [Math]::Round(100 - $revocationRate, 1)
+    $seg3Remain = [Math]::Round(100 - $pendingPct,     1)
+
+    $donutSvg = @"
+    <svg width="160" height="160" viewBox="0 0 42 42" style="display:block; margin:0 auto;">
+        <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#e0e0e0" stroke-width="3.2"></circle>
+        <circle cx="21" cy="21" r="15.9" fill="transparent"
+                stroke="#339933" stroke-width="3.2"
+                stroke-dasharray="$approvalRate $seg1Remain"
+                stroke-dashoffset="$seg1Offset"
+                stroke-linecap="butt"></circle>
+        <circle cx="21" cy="21" r="15.9" fill="transparent"
+                stroke="#CC3333" stroke-width="3.2"
+                stroke-dasharray="$revocationRate $seg2Remain"
+                stroke-dashoffset="$seg2Offset"
+                stroke-linecap="butt"></circle>
+        <circle cx="21" cy="21" r="15.9" fill="transparent"
+                stroke="#FF8800" stroke-width="3.2"
+                stroke-dasharray="$pendingPct $seg3Remain"
+                stroke-dashoffset="$seg3Offset"
+                stroke-linecap="butt"></circle>
+        <text x="21" y="19.5" text-anchor="middle" style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:5px; font-weight:bold; fill:#2c3e50;">$totalItems</text>
+        <text x="21" y="24" text-anchor="middle" style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:2.8px; fill:#777;">items</text>
+    </svg>
+"@
+
+    # --- Summary cards HTML ---
+    $safeCampaignName = ConvertTo-SafeHtml $CampaignName
+    $safeDateRange    = ConvertTo-SafeHtml $DateRange
+    $dateRangeHtml    = if (-not [string]::IsNullOrWhiteSpace($DateRange)) {
+        "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:13px; margin:0 0 20px 0;"">$safeDateRange</p>"
+    } else { '' }
+
+    $completionColor = if ($completionPct -ge 95) { '#339933' } elseif ($completionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+
+    $summaryCardsHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<tr>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:32px; font-weight:bold; color:#2c3e50;">$totalItems</div>
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">Total Items</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:32px; font-weight:bold; color:#339933;">$($approvalRate)%</div>
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">Approval Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:32px; font-weight:bold; color:#CC3333;">$($revocationRate)%</div>
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">Revocation Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:32px; font-weight:bold; color:$completionColor;">$($completionPct)%</div>
+        <div style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">Completion</div>
+    </td>
+</tr>
+</table>
+"@
+
+    # --- Per-director table rows (sorted by completion % ascending = worst first) ---
+    $directorRows = @()
+    foreach ($dirId in $directors.Keys) {
+        $d = $directors[$dirId]
+        $directorRows += @{
+            Id            = $dirId
+            Name          = if ($null -ne $d.Name) { $d.Name } else { $dirId }
+            TotalItems    = [int]$d.TotalItems
+            Approved      = [int]$d.Approved
+            Revoked       = [int]$d.Revoked
+            Pending       = [int]$d.Pending
+            CompletionPct = [double]$d.CompletionPct
+            Managers      = $d.Managers
+        }
+    }
+    $directorRows = @($directorRows | Sort-Object { $_.CompletionPct })
+
+    $dirTableBody = ''
+    $rowIndex = 0
+    foreach ($dr in $directorRows) {
+        $isAlt = ($rowIndex % 2 -eq 1)
+        $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+        $tdStyle = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px;"'
+
+        # Color-code the completion cell
+        $pctColor = if ($dr.CompletionPct -ge 95) { '#339933' } elseif ($dr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+        $pctStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; font-weight:bold; color:$pctColor;"""
+
+        # Calculate average response time across this director's managers
+        $avgHoursDisplay = 'N/A'
+        if ($null -ne $dr.Managers -and $dr.Managers.Count -gt 0) {
+            $hoursValues = @()
+            foreach ($mgrId in $dr.Managers.Keys) {
+                $mgr = $dr.Managers[$mgrId]
+                if ($null -ne $mgr.AvgHours) {
+                    $hoursValues += [double]$mgr.AvgHours
+                }
+            }
+            if ($hoursValues.Count -gt 0) {
+                $avgHrs = ($hoursValues | Measure-Object -Average).Average
+                $avgHoursDisplay = Format-HoursDisplay $avgHrs
+            }
+        }
+
+        $safeName = ConvertTo-SafeHtml $dr.Name
+
+        $dirTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$safeName</td>
+    <td $tdStyle>$($dr.TotalItems)</td>
+    <td ${tdStyle}>$($dr.Approved)</td>
+    <td ${tdStyle}>$($dr.Revoked)</td>
+    <td ${tdStyle}>$($dr.Pending)</td>
+    <td $pctStyle>$($dr.CompletionPct)%</td>
+    <td $tdStyle>$avgHoursDisplay</td>
+</tr>
+"@
+        $rowIndex++
+    }
+
+    $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px;"'
+
+    $directorTableHtml = @"
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Director Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>Director</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+    <th $thStyle>Avg Response Time</th>
+</tr>
+</thead>
+<tbody>
+$dirTableBody
+</tbody>
+</table>
+"@
+
+    # --- Donut section with legend ---
+    $donutSectionHtml = @"
+<div style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; padding:24px 28px; margin:20px 0 28px 0; page-break-inside:avoid;">
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin:0 0 16px 0; font-size:16px; border-bottom:2px solid #336699; padding-bottom:6px;">Decision Distribution</h3>
+<table style="width:100%; border-collapse:collapse;">
+<tr>
+<td style="width:50%; text-align:center; vertical-align:middle; padding:12px;">
+    $donutSvg
+    <table style="margin:12px auto 0 auto; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; border-collapse:collapse;">
+    <tr>
+        <td style="padding:3px 6px;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td>
+        <td style="padding:3px 6px; color:#555;">Approved: $totalApproved ($($approvalRate)%)</td>
+    </tr>
+    <tr>
+        <td style="padding:3px 6px;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#CC3333"/></svg></td>
+        <td style="padding:3px 6px; color:#555;">Revoked: $totalRevoked ($($revocationRate)%)</td>
+    </tr>
+    <tr>
+        <td style="padding:3px 6px;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#FF8800"/></svg></td>
+        <td style="padding:3px 6px; color:#555;">Pending: $totalPending ($($pendingPct)%)</td>
+    </tr>
+    </table>
+</td>
+<td style="width:50%; vertical-align:middle; padding:12px;">
+    $summaryCardsHtml
+</td>
+</tr>
+</table>
+</div>
+"@
+
+    # --- Executive rollup (top leaders) ---
+    $execSectionHtml = ''
+    if ($executive.Count -gt 0) {
+        $execRows = ''
+        $execIndex = 0
+        foreach ($vpId in $executive.Keys) {
+            $vp = $executive[$vpId]
+            $isAlt    = ($execIndex % 2 -eq 1)
+            $rowBg    = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+            $vpName   = ConvertTo-SafeHtml $vp.Name
+            $vpPct    = [double]$vp.CompletionPct
+            $vpColor  = if ($vpPct -ge 95) { '#339933' } elseif ($vpPct -ge 80) { '#FF8800' } else { '#CC3333' }
+            $vpPctStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; font-weight:bold; color:$vpColor;"""
+            $dirCount = if ($null -ne $vp.Directors) { @($vp.Directors).Count } else { 0 }
+
+            $execRows += @"
+<tr$rowBg>
+    <td $tdStyle>$vpName</td>
+    <td $tdStyle>$dirCount</td>
+    <td $tdStyle>$([int]$vp.TotalItems)</td>
+    <td $tdStyle>$([int]$vp.Approved)</td>
+    <td $tdStyle>$([int]$vp.Revoked)</td>
+    <td $tdStyle>$([int]$vp.Pending)</td>
+    <td $vpPctStyle>$($vpPct)%</td>
+</tr>
+"@
+            $execIndex++
+        }
+
+        $execSectionHtml = @"
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Executive Rollup</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>Leader</th>
+    <th $thStyle>Directors</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+</tr>
+</thead>
+<tbody>
+$execRows
+</tbody>
+</table>
+"@
+    }
+
+    # --- Footer ---
+    $footerHtml = @"
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Leadership Executive Summary &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+"@
+
+    # --- Assemble full HTML document ---
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leadership Executive Summary - $safeCampaignName</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+<h1 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; font-size:24px; margin-bottom:4px;">Leadership Executive Summary</h1>
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#555; font-size:14px; margin:0 0 4px 0;">$safeCampaignName</p>
+$dateRangeHtml
+
+$donutSectionHtml
+
+$execSectionHtml
+
+$directorTableHtml
+
+$footerHtml
+
+</div>
+</body>
+</html>
+"@
+
+    $filePath = Join-Path -Path $OutputPath -ChildPath 'executive-summary.html'
+    $html | Set-Content -Path $filePath -Encoding UTF8
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "Leadership executive summary written: $filePath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLeadershipExecutiveHtml' `
+            -CorrelationID $CorrelationID
+    }
+
+    return $filePath
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2615,5 +2978,6 @@ Export-ModuleMember -Function @(
     'Group-SPAuditByLeadership',
     'Export-SPAuditHtml',
     'Export-SPAuditText',
-    'Export-SPAuditJsonl'
+    'Export-SPAuditJsonl',
+    'Export-SPLeadershipExecutiveHtml'
 )
