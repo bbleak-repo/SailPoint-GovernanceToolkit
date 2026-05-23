@@ -959,6 +959,271 @@ function Measure-SPAuditRubberStampRisk {
     }
 }
 
+function Get-SPAuditRiskFlags {
+    <#
+    .SYNOPSIS
+        Evaluates per-identity risk flags for access review decision items.
+    .DESCRIPTION
+        Analyzes each decision item and assigns zero or more risk flags based
+        on identity attributes, entitlement patterns, and lifecycle state.
+
+        Risk flags:
+        - STALE (orange): Identity last login >N days ago (default 90).
+        - PRIVILEGED (red): Entitlement name matches admin/elevated patterns.
+        - ORPHAN (red): Identity has no manager.
+        - TERMINATED (red): Identity lifecycle state is terminated but still has access.
+        - SVC-ACCOUNT (gray): Identity matches service account naming patterns.
+
+        Patterns are configurable via the RiskIndicators parameter (sourced
+        from settings.json Audit.RiskIndicators).
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER Identities
+        Optional hashtable mapping identity ID to identity attribute objects.
+        Each value should have properties: lifecycleState, manager (or managerRef),
+        lastLogin (or attributes.lastLogin). When absent, only entitlement-based
+        flags (PRIVILEGED, SVC-ACCOUNT) are evaluated.
+    .PARAMETER RiskIndicators
+        Hashtable with configurable thresholds and patterns:
+            StaleAccessDays       - int, days since last login to flag as stale (default 90)
+            PrivilegedPatterns    - string[], entitlement name patterns (default @('Admin','Root','DBA','Domain Admins'))
+            ServiceAccountPatterns - string[], identity name regex patterns (default @('^SVC-','^svc-'))
+    .OUTPUTS
+        [hashtable] @{
+            Decisions = @{ Approved = @(...); Revoked = @(...); Pending = @(...) }
+            Summary   = @{ Total = int; Flagged = int; ByFlag = @{...} }
+        }
+        Each decision item in the returned Decisions gets a RiskFlags string[] property added.
+    .EXAMPLE
+        $flagged = Get-SPAuditRiskFlags -Decisions $decisions -RiskIndicators $config.Audit.RiskIndicators
+        $flagged.Summary.Flagged  # count of items with at least one flag
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter()]
+        [hashtable]$Identities = $null,
+
+        [Parameter()]
+        [hashtable]$RiskIndicators = $null
+    )
+
+    # --- Parse configuration with defaults ---
+    $staleAccessDays = 90
+    $privilegedPatterns = @('Admin', 'Root', 'DBA', 'Domain Admins')
+    $serviceAccountPatterns = @('^SVC-', '^svc-')
+
+    if ($null -ne $RiskIndicators) {
+        if ($RiskIndicators.ContainsKey('StaleAccessDays') -and $null -ne $RiskIndicators['StaleAccessDays']) {
+            $staleAccessDays = [int]$RiskIndicators['StaleAccessDays']
+        }
+        if ($RiskIndicators.ContainsKey('PrivilegedPatterns') -and $null -ne $RiskIndicators['PrivilegedPatterns']) {
+            $privilegedPatterns = @($RiskIndicators['PrivilegedPatterns'])
+        }
+        if ($RiskIndicators.ContainsKey('ServiceAccountPatterns') -and $null -ne $RiskIndicators['ServiceAccountPatterns']) {
+            $serviceAccountPatterns = @($RiskIndicators['ServiceAccountPatterns'])
+        }
+    }
+
+    # If all patterns are empty, return decisions unmodified (backwards compatible)
+    $hasPrivileged = ($privilegedPatterns.Count -gt 0)
+    $hasSvcPatterns = ($serviceAccountPatterns.Count -gt 0)
+    $hasIdentities = ($null -ne $Identities -and $Identities.Count -gt 0)
+
+    # Tracking counters
+    $totalItems = 0
+    $flaggedCount = 0
+    $flagCounts = @{
+        STALE         = 0
+        PRIVILEGED    = 0
+        ORPHAN        = 0
+        TERMINATED    = 0
+        'SVC-ACCOUNT' = 0
+    }
+
+    $now = Get-Date
+    $staleCutoff = $now.AddDays(-$staleAccessDays)
+
+    # --- Process each decision category ---
+    $resultDecisions = @{}
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        $items = @()
+        if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+            $items = @($Decisions[$category])
+        }
+
+        $outputItems = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($item in $items) {
+            $totalItems++
+            $flags = [System.Collections.Generic.List[string]]::new()
+
+            $identityName = ''
+            $identityId   = ''
+            $accessName   = ''
+
+            if ($null -ne $item) {
+                $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+                $identityId   = if ($null -ne $item.IdentityId)   { [string]$item.IdentityId }   else { '' }
+                $accessName   = if ($null -ne $item.AccessName)   { [string]$item.AccessName }   else { '' }
+            }
+
+            # --- Flag: PRIVILEGED (entitlement name pattern match) ---
+            if ($hasPrivileged -and -not [string]::IsNullOrWhiteSpace($accessName)) {
+                foreach ($pattern in $privilegedPatterns) {
+                    if ($accessName -match [regex]::Escape($pattern)) {
+                        $flags.Add('PRIVILEGED')
+                        break
+                    }
+                }
+            }
+
+            # --- Flag: SVC-ACCOUNT (identity name regex match) ---
+            if ($hasSvcPatterns -and -not [string]::IsNullOrWhiteSpace($identityName)) {
+                foreach ($pattern in $serviceAccountPatterns) {
+                    if ($identityName -match $pattern) {
+                        $flags.Add('SVC-ACCOUNT')
+                        break
+                    }
+                }
+            }
+
+            # --- Identity-dependent flags (require Identities map) ---
+            if ($hasIdentities -and -not [string]::IsNullOrWhiteSpace($identityId) -and $Identities.ContainsKey($identityId)) {
+                $identity = $Identities[$identityId]
+
+                # --- Flag: TERMINATED ---
+                $lifecycleState = ''
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        if ($identity.ContainsKey('lifecycleState')) { $lifecycleState = [string]$identity['lifecycleState'] }
+                    }
+                    elseif ($null -ne $identity.PSObject) {
+                        $lsProp = $identity.PSObject.Properties['lifecycleState']
+                        if ($null -ne $lsProp -and $null -ne $lsProp.Value) { $lifecycleState = [string]$lsProp.Value }
+                    }
+                }
+                if ($lifecycleState -eq 'terminated') {
+                    $flags.Add('TERMINATED')
+                }
+
+                # --- Flag: ORPHAN (no manager) ---
+                $hasManager = $false
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        $hasManager = ($identity.ContainsKey('manager') -and
+                            $null -ne $identity['manager'] -and
+                            -not [string]::IsNullOrWhiteSpace([string]$identity['manager']))
+                        if (-not $hasManager) {
+                            $hasManager = ($identity.ContainsKey('managerRef') -and $null -ne $identity['managerRef'])
+                        }
+                    }
+                    else {
+                        $mgrProp = $identity.PSObject.Properties['manager']
+                        $hasManager = ($null -ne $mgrProp -and $null -ne $mgrProp.Value -and
+                            -not [string]::IsNullOrWhiteSpace([string]$mgrProp.Value))
+                        if (-not $hasManager) {
+                            $mgrRefProp = $identity.PSObject.Properties['managerRef']
+                            $hasManager = ($null -ne $mgrRefProp -and $null -ne $mgrRefProp.Value)
+                        }
+                    }
+                }
+                if (-not $hasManager) {
+                    $flags.Add('ORPHAN')
+                }
+
+                # --- Flag: STALE (last login > N days ago) ---
+                $lastLoginStr = ''
+                if ($null -ne $identity) {
+                    if ($identity -is [hashtable]) {
+                        if ($identity.ContainsKey('lastLogin')) {
+                            $lastLoginStr = [string]$identity['lastLogin']
+                        }
+                        elseif ($identity.ContainsKey('attributes') -and $null -ne $identity['attributes']) {
+                            $attrs = $identity['attributes']
+                            if ($attrs -is [hashtable] -and $attrs.ContainsKey('lastLogin')) {
+                                $lastLoginStr = [string]$attrs['lastLogin']
+                            }
+                            elseif ($null -ne $attrs.PSObject) {
+                                $llProp = $attrs.PSObject.Properties['lastLogin']
+                                if ($null -ne $llProp -and $null -ne $llProp.Value) {
+                                    $lastLoginStr = [string]$llProp.Value
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        $llProp = $identity.PSObject.Properties['lastLogin']
+                        if ($null -ne $llProp -and $null -ne $llProp.Value) {
+                            $lastLoginStr = [string]$llProp.Value
+                        }
+                        elseif ($null -ne $identity.PSObject.Properties['attributes']) {
+                            $attrs = $identity.attributes
+                            if ($null -ne $attrs) {
+                                $llAttr = $attrs.PSObject.Properties['lastLogin']
+                                if ($null -ne $llAttr -and $null -ne $llAttr.Value) {
+                                    $lastLoginStr = [string]$llAttr.Value
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($lastLoginStr)) {
+                    try {
+                        $lastLoginDt = [datetime]::Parse($lastLoginStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($lastLoginDt -lt $staleCutoff) {
+                            $flags.Add('STALE')
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            # --- Attach flags to item ---
+            $flagsArray = @($flags)
+
+            # Create new object with RiskFlags property added
+            $props = [ordered]@{}
+            if ($null -ne $item -and $null -ne $item.PSObject) {
+                foreach ($p in $item.PSObject.Properties) {
+                    $props[$p.Name] = $p.Value
+                }
+            }
+            $props['RiskFlags'] = $flagsArray
+            $enrichedItem = [PSCustomObject]$props
+
+            if ($flagsArray.Count -gt 0) {
+                $flaggedCount++
+                foreach ($f in $flagsArray) {
+                    if ($flagCounts.ContainsKey($f)) {
+                        $flagCounts[$f]++
+                    }
+                }
+            }
+
+            $outputItems.Add($enrichedItem)
+        }
+
+        $resultDecisions[$category] = $outputItems.ToArray()
+    }
+
+    return @{
+        Decisions = $resultDecisions
+        Summary   = @{
+            Total   = $totalItems
+            Flagged = $flaggedCount
+            ByFlag  = $flagCounts
+        }
+    }
+}
+
 function Group-SPAuditByLeadership {
     <#
     .SYNOPSIS
@@ -1481,6 +1746,46 @@ function Format-HoursDisplay {
         $rem   = [int][Math]::Round($h % 24)
         return "$days days, $rem hours"
     }
+}
+
+function Format-RiskFlagBadges {
+    <#
+    .SYNOPSIS
+        Renders risk flag badges as inline-styled HTML span elements.
+    .DESCRIPTION
+        Takes an array of risk flag strings and returns an HTML fragment with
+        colored badge spans. Returns empty string if no flags.
+        Colors: STALE=orange, PRIVILEGED=red, ORPHAN=red, TERMINATED=red, SVC-ACCOUNT=gray.
+    .PARAMETER Flags
+        Array of risk flag strings (e.g., 'TERMINATED', 'PRIVILEGED').
+    .OUTPUTS
+        [string] HTML badge markup or empty string.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$Flags
+    )
+
+    if ($null -eq $Flags -or $Flags.Count -eq 0) { return '' }
+
+    $badgeStyle = "display:inline-block; padding:2px 6px; margin:0 3px 2px 0; border-radius:3px; font-size:10px; font-weight:bold; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; line-height:14px; vertical-align:middle;"
+
+    $badges = foreach ($flag in $Flags) {
+        $color = switch ($flag) {
+            'STALE'       { 'color:#fff; background:#FF8800;' }
+            'PRIVILEGED'  { 'color:#fff; background:#CC3333;' }
+            'ORPHAN'      { 'color:#fff; background:#CC3333;' }
+            'TERMINATED'  { 'color:#fff; background:#CC3333;' }
+            'SVC-ACCOUNT' { 'color:#fff; background:#999999;' }
+            default       { 'color:#fff; background:#777777;' }
+        }
+        "<span style=""$badgeStyle $color"">$([System.Net.WebUtility]::HtmlEncode($flag))</span>"
+    }
+
+    return ' ' + ($badges -join '')
 }
 
 function Build-ExecutiveSummaryHtml {
@@ -2265,8 +2570,14 @@ function Build-SingleCampaignHtml {
             else {
                 $rowIdx = 0
                 foreach ($item in $catItems) {
+                    $riskBadges = ''
+                    if ($null -ne $item.PSObject -and
+                        $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                        $null -ne $item.RiskFlags -and @($item.RiskFlags).Count -gt 0) {
+                        $riskBadges = Format-RiskFlagBadges -Flags @($item.RiskFlags)
+                    }
                     $cells = @(
-                        (ConvertTo-SafeHtml $item.IdentityName),
+                        ((ConvertTo-SafeHtml $item.IdentityName) + $riskBadges),
                         (ConvertTo-SafeHtml $item.AccountIdentifier),
                         (ConvertTo-SafeHtml $item.AccessName),
                         (ConvertTo-SafeHtml $item.AccessType),
@@ -3566,6 +3877,14 @@ function Export-SPLeadershipDirectorHtml {
                 $dirMgrItems[$directorId][$managerId] = [System.Collections.Generic.List[object]]::new()
             }
 
+            # Carry forward RiskFlags from enriched decisions (if present)
+            $dirItemRiskFlags = @()
+            if ($null -ne $item.PSObject -and
+                $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                $null -ne $item.RiskFlags) {
+                $dirItemRiskFlags = @($item.RiskFlags)
+            }
+
             $dirMgrItems[$directorId][$managerId].Add(@{
                 IdentityName = $identityName
                 AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
@@ -3573,6 +3892,7 @@ function Export-SPLeadershipDirectorHtml {
                 Decision     = $category
                 ReviewerName = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
                 DecisionDate = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                RiskFlags    = $dirItemRiskFlags
             })
         }
     }
@@ -3743,7 +4063,15 @@ $mgrTableBody
                     }
                     $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
 
-                    $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
+                    $diRiskBadges = ''
+                    $diRiskFlags = if ($di -is [hashtable] -and $di.ContainsKey('RiskFlags')) { @($di['RiskFlags']) }
+                                   elseif ($null -ne $di.PSObject -and $null -ne $di.PSObject.Properties['RiskFlags']) { @($di.RiskFlags) }
+                                   else { @() }
+                    if ($diRiskFlags.Count -gt 0) {
+                        $diRiskBadges = Format-RiskFlagBadges -Flags $diRiskFlags
+                    }
+
+                    $safeIdentity = (ConvertTo-SafeHtml $di.IdentityName) + $diRiskBadges
                     $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
                     $safeAccess   = ConvertTo-SafeHtml $di.AccessName
                     $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
@@ -4286,6 +4614,14 @@ $mgrTableBody
                         $mgrItemsForLeader[$mgrId] = [System.Collections.Generic.List[object]]::new()
                     }
 
+                    # Carry forward RiskFlags from enriched decisions (if present)
+                    $itemRiskFlags = @()
+                    if ($null -ne $item.PSObject -and
+                        $null -ne $item.PSObject.Properties['RiskFlags'] -and
+                        $null -ne $item.RiskFlags) {
+                        $itemRiskFlags = @($item.RiskFlags)
+                    }
+
                     $mgrItemsForLeader[$mgrId].Add(@{
                         IdentityName      = $identityName
                         AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
@@ -4293,6 +4629,7 @@ $mgrTableBody
                         Decision          = $category
                         ReviewerName      = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
                         DecisionDate      = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                        RiskFlags         = $itemRiskFlags
                     })
                 }
             }
@@ -4342,7 +4679,15 @@ $mgrTableBody
                     }
                     $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
 
-                    $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
+                    $diRiskBadges = ''
+                    $diRiskFlags = if ($di -is [hashtable] -and $di.ContainsKey('RiskFlags')) { @($di['RiskFlags']) }
+                                   elseif ($null -ne $di.PSObject -and $null -ne $di.PSObject.Properties['RiskFlags']) { @($di.RiskFlags) }
+                                   else { @() }
+                    if ($diRiskFlags.Count -gt 0) {
+                        $diRiskBadges = Format-RiskFlagBadges -Flags $diRiskFlags
+                    }
+
+                    $safeIdentity = (ConvertTo-SafeHtml $di.IdentityName) + $diRiskBadges
                     $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
                     $safeAccess   = ConvertTo-SafeHtml $di.AccessName
                     $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
@@ -4653,6 +4998,8 @@ Export-ModuleMember -Function @(
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
+    'Measure-SPAuditRubberStampRisk',
+    'Get-SPAuditRiskFlags',
     'Group-SPAuditByLeadership',
     'Export-SPAuditHtml',
     'Export-SPAuditText',

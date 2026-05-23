@@ -31,7 +31,7 @@ R-01 -> R-02 -> R-03 -> R-04 -> R-05 -> R-06 -> R-07 -> R-08 -> R-09 -> R-10
 | R-05 | Delta Report Mock Data | R-04 | DONE |
 | R-06 | Delta Report CLI + GUI | R-05 | DONE |
 | R-07 | Anti-Rubber-Stamping Analytics | R-03 | DONE |
-| R-08 | Risk Indicators | R-03 | PENDING |
+| R-08 | Risk Indicators | R-03 | DONE |
 | R-09 | Compliance Fields | R-03 | PENDING |
 | R-10 | Pester Tests | R-06, R-09 | PENDING |
 
@@ -385,8 +385,8 @@ Based on compliance research (SOX/SOC2 auditor red flags).
 
 ## R-08: Risk Indicators
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** a12326e
 - **Depends On:** R-03
 
 **Description:**

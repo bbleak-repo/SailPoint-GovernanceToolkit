@@ -44,6 +44,7 @@
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
         'Measure-SPAuditRubberStampRisk'
+        'Get-SPAuditRiskFlags'
         'Group-SPAuditByLeadership'
 
         # SP.AuditReport - Export functions

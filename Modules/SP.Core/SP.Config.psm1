@@ -96,6 +96,11 @@ function Get-SPConfigDefaults {
             IncludeIdentityEvents    = $true
             IncludeLeadershipRollup  = $false
             LeadershipDepth          = 3
+            RiskIndicators = @{
+                StaleAccessDays        = 90
+                PrivilegedPatterns     = @('Admin', 'Root', 'DBA', 'Domain Admins')
+                ServiceAccountPatterns = @('^SVC-', '^svc-')
+            }
             Smtp = @{
                 Enabled       = $false
                 Server        = ''
@@ -302,6 +307,11 @@ function Get-SPConfigTemplate {
             IncludeIdentityEvents    = $true
             IncludeLeadershipRollup  = $false
             LeadershipDepth          = 3
+            RiskIndicators = [ordered]@{
+                StaleAccessDays        = 90
+                PrivilegedPatterns     = @('Admin', 'Root', 'DBA', 'Domain Admins')
+                ServiceAccountPatterns = @('^SVC-', '^svc-')
+            }
             Smtp = [ordered]@{
                 Enabled       = $false
                 Server        = ''
