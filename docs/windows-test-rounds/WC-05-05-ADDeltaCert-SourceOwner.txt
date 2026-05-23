@@ -1,0 +1,26 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPADDeltaCert.ps1" -SourceId src-ad-001 -ReviewerMode SourceOwner -CampaignNamePrefix WinCLI-02
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  AD Delta Certification
+  CorrelationID: e2ad988a-4fab-4b02-b57c-d09791e8721a
+
+  Querying AD grant events (last 24 hours)...
+
+  Delta Certification Complete
+  ============================================================
+  Campaigns created: 0
+  Identities:        0
+  Manager groups:    0
+  Duration:        0.72 seconds
+  Environment:     MOCK-SERVER
+  CorrelationID:   e2ad988a-4fab-4b02-b57c-d09791e8721a
+
+
+=== STDERR ===
+

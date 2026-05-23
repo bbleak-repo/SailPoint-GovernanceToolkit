@@ -111,7 +111,7 @@ The window *will* be visible while the test runs; this is intentional.
 | W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
 | W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | DONE |
 | W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | DONE |
-| W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
+| W-05 | CLI: All scripts against remote mock | 8 | W-01 | DONE |
 | W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | PENDING |
 | W-07 | Report content deep validation | 15 | W-06 | PENDING |
 
@@ -328,9 +328,12 @@ WG-04-14: Click [Refresh] on history
 
 ## W-05: CLI -- All Scripts Against Remote Mock
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 8/8 -- harness `Tests\Harness\Test-W05-CliScripts.ps1` ran each CLI entry point as a child `powershell.exe -NoProfile -ExecutionPolicy Bypass -File` process and validated exit codes + key stdout markers. `Test-SPConnectivity.ps1` exit 0; `Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 365 -IncludeLeadershipRollup -LeadershipDepth 4 -DetailLevel Detailed` produced `Audit\leadership\executive-summary.html` + 3 per-leader HTMLs; `-Status ACTIVE -DaysBack 365` found 8 campaigns; `Invoke-SPADDeltaCert.ps1` Manager + SourceOwner variants both exit 0 (mock returned DuplicatesExist on the second run because mock state carries between requests); `Invoke-SPDeltaReport.ps1 -SourceId src-ad-001 -HoursBack 48` wrote `DeltaCert\reports\delta-2026-05-23.html`; `-WhatIf` variants on Escalate and CampaignAudit both emit the expected `[WhatIf] Dry-run mode` marker and exit 0. Per-script stdout transcripts are saved under `docs\windows-test-rounds\WC-05-*.txt`. See `docs\windows-test-rounds\round-08.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W05-CliScripts.ps1`.
 
 **Tests:**
 

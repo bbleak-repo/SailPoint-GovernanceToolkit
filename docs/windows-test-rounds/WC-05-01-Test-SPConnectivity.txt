@@ -1,0 +1,22 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Test-SPConnectivity.ps1" 
+
+=== STDOUT ===
+
+  SailPoint ISC Governance Toolkit - Connectivity Test
+  ========================================================
+  CorrelationID: d12ec659-ed03-454b-9943-2a4a4ee60d2d
+
+  [PASS] Step 1: Load and validate settings.json (153ms)
+         Environment: MOCK-SERVER | Mode: ConfigFile
+  [PASS] Step 2: Acquire OAuth 2.0 bearer token (457ms)
+         Mode: ConfigFile | Expires: 05/23/2026 17:10:11
+  [PASS] Step 3: GET /v3/campaigns?limit=1 (live API call) (62ms)
+         API responded successfully. Items returned: 1
+
+  ========================================================
+  RESULT: All connectivity checks passed.
+
+
+=== STDERR ===
+
