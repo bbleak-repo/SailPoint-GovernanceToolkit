@@ -37,6 +37,7 @@
         'Get-SPCampaign'
         'Get-SPCampaignStatus'
         'Search-SPCampaigns'
+        'Get-SPCampaignDeadlineStatus'
         'Complete-SPCampaign'
 
         # SP.Certifications

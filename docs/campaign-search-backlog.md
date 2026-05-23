@@ -54,7 +54,7 @@ Safe to modify:
 |----|---------|------------|--------|
 | S-01 | Campaign Type Filter | none | DONE |
 | S-02 | Date Range Search | none | DONE |
-| S-03 | Deadline Analysis | S-02 | PENDING |
+| S-03 | Deadline Analysis | S-02 | DONE |
 | S-04 | Reviewer Workload Search | none | PENDING |
 | S-05 | Identity Decision History | none | PENDING |
 | S-06 | Campaign Metrics Aggregation | none | PENDING |
@@ -132,8 +132,8 @@ if ($CreatedAfter -or $CreatedBefore) {
 
 ## S-03: Deadline Analysis
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-02
 
 **Description:**

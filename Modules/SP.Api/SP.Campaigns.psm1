@@ -619,6 +619,291 @@ function Search-SPCampaigns {
     }
 }
 
+function Get-SPCampaignDeadlineStatus {
+    <#
+    .SYNOPSIS
+        Classifies campaigns by deadline urgency.
+    .DESCRIPTION
+        Retrieves campaigns matching the Status filter, then classifies each
+        campaign into one of six deadline urgency buckets:
+
+          Overdue    - deadline is in the past AND status is ACTIVE
+          Critical   - deadline is within 24 hours AND status is ACTIVE
+          Warning    - deadline is within 72 hours AND status is ACTIVE
+          OnTrack    - deadline is more than 72 hours away AND status is ACTIVE
+          Completed  - status is COMPLETED (regardless of deadline)
+          NoDeadline - deadline is null
+
+        All DateTime comparisons use .ToUniversalTime() to avoid Kind mismatch
+        between PS7 auto-converted UTC datetimes and local cutoff values.
+
+        Client-side creation date filtering is applied via DaysBack to limit
+        the campaign set (ISC API does not support date in filters).
+    .PARAMETER Status
+        Campaign status filter. Default: @('ACTIVE').
+        Valid values: STAGED, ACTIVATING, ACTIVE, COMPLETING, COMPLETED, ERROR.
+    .PARAMETER DaysBack
+        Number of calendar days to look back for campaigns by creation date.
+        Default: 365. Set to 0 to disable date filtering.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Overdue    = @([campaign objects with DeadlineStatus='Overdue'])
+                Critical   = @([campaign objects with DeadlineStatus='Critical'])
+                Warning    = @([campaign objects with DeadlineStatus='Warning'])
+                OnTrack    = @([campaign objects with DeadlineStatus='OnTrack'])
+                Completed  = @([campaign objects with DeadlineStatus='Completed'])
+                NoDeadline = @([campaign objects with DeadlineStatus='NoDeadline'])
+                Summary    = @{ Overdue=N; Critical=N; Warning=N; OnTrack=N; Completed=N; NoDeadline=N }
+            }
+            Error = $null
+        }
+    .EXAMPLE
+        $result = Get-SPCampaignDeadlineStatus
+        $result.Data.Summary
+    .EXAMPLE
+        $result = Get-SPCampaignDeadlineStatus -Status 'ACTIVE','COMPLETED' -DaysBack 90
+        $result.Data.Overdue | ForEach-Object { $_.name }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [ValidateSet('STAGED', 'ACTIVATING', 'ACTIVE', 'COMPLETING', 'COMPLETED', 'ERROR')]
+        [string[]]$Status = @('ACTIVE'),
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting campaign deadline status: Status='$($Status -join ',')', DaysBack=$DaysBack" `
+        -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignDeadlineStatus' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Build server-side filter for status
+        $filterParts = [System.Collections.Generic.List[string]]::new()
+
+        if ($null -ne $Status -and $Status.Count -gt 0) {
+            $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
+            $filterParts.Add("status in ($quotedStatuses)")
+        }
+
+        $queryParams = @{
+            'detail' = 'FULL'
+            'limit'  = '250'
+            'offset' = '0'
+        }
+
+        if ($filterParts.Count -gt 0) {
+            $queryParams['filters'] = ($filterParts -join ' and ')
+        }
+
+        # Auto-paginate
+        $allCampaigns = [System.Collections.Generic.List[object]]::new()
+        $pageSize     = 250
+        $offset       = 0
+        $pageNum      = 0
+
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages already fetched (accumulated $($allCampaigns.Count) campaigns). Raise Api.MaxPaginationPages in settings.json if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+                    -Action 'Get-SPCampaignDeadlineStatus' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams['offset'] = $offset.ToString()
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                return @{ Success = $false; Data = $null; Error = $result.Error }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($item in $page) { $allCampaigns.Add($item) }
+            }
+
+            $offset += $pageSize
+        } while ($page.Count -ge $pageSize)
+
+        # Client-side creation date filter
+        $filteredCampaigns = [System.Collections.Generic.List[object]]::new()
+        if ($DaysBack -gt 0) {
+            $cutoffUtc = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+            foreach ($campaign in $allCampaigns) {
+                $createdRaw = $campaign.created
+                if ($null -eq $createdRaw) {
+                    $filteredCampaigns.Add($campaign)
+                    continue
+                }
+
+                $createdDate = $null
+                if ($createdRaw -is [datetime]) {
+                    $createdDate = ([datetime]$createdRaw).ToUniversalTime()
+                } else {
+                    $parsedDate = [datetime]::MinValue
+                    if ([datetime]::TryParse($createdRaw.ToString(), [ref]$parsedDate)) {
+                        $createdDate = $parsedDate.ToUniversalTime()
+                    }
+                }
+
+                if ($null -eq $createdDate -or $createdDate -ge $cutoffUtc) {
+                    $filteredCampaigns.Add($campaign)
+                }
+            }
+        } else {
+            foreach ($campaign in $allCampaigns) { $filteredCampaigns.Add($campaign) }
+        }
+
+        Write-SPLog -Message "Classifying $($filteredCampaigns.Count) campaigns by deadline urgency" `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignDeadlineStatus' `
+            -CorrelationID $CorrelationID
+
+        # Classify each campaign
+        $overdue    = [System.Collections.Generic.List[object]]::new()
+        $critical   = [System.Collections.Generic.List[object]]::new()
+        $warning    = [System.Collections.Generic.List[object]]::new()
+        $onTrack    = [System.Collections.Generic.List[object]]::new()
+        $completed  = [System.Collections.Generic.List[object]]::new()
+        $noDeadline = [System.Collections.Generic.List[object]]::new()
+
+        $nowUtc = (Get-Date).ToUniversalTime()
+
+        foreach ($campaign in $filteredCampaigns) {
+            $campStatus = $campaign.status
+
+            # Completed campaigns always go to Completed bucket
+            if ($campStatus -eq 'COMPLETED') {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'Completed' -Force
+                $completed.Add($campaign)
+                continue
+            }
+
+            # Parse deadline
+            $deadlineRaw = $campaign.deadline
+            if ($null -eq $deadlineRaw -or ([string]$deadlineRaw).Trim() -eq '') {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'NoDeadline' -Force
+                $noDeadline.Add($campaign)
+                continue
+            }
+
+            $deadlineUtc = $null
+            if ($deadlineRaw -is [datetime]) {
+                $deadlineUtc = ([datetime]$deadlineRaw).ToUniversalTime()
+            } else {
+                $parsedDeadline = [datetime]::MinValue
+                if ([datetime]::TryParse($deadlineRaw.ToString(), [ref]$parsedDeadline)) {
+                    $deadlineUtc = $parsedDeadline.ToUniversalTime()
+                }
+            }
+
+            if ($null -eq $deadlineUtc) {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'NoDeadline' -Force
+                $noDeadline.Add($campaign)
+                continue
+            }
+
+            # Add parsed deadline as a property for downstream use
+            $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineUtc' `
+                -Value $deadlineUtc -Force
+
+            $hoursRemaining = ($deadlineUtc - $nowUtc).TotalHours
+            $campaign | Add-Member -MemberType NoteProperty -Name 'HoursRemaining' `
+                -Value ([math]::Round($hoursRemaining, 1)) -Force
+
+            if ($hoursRemaining -lt 0) {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'Overdue' -Force
+                $overdue.Add($campaign)
+            }
+            elseif ($hoursRemaining -le 24) {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'Critical' -Force
+                $critical.Add($campaign)
+            }
+            elseif ($hoursRemaining -le 72) {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'Warning' -Force
+                $warning.Add($campaign)
+            }
+            else {
+                $campaign | Add-Member -MemberType NoteProperty -Name 'DeadlineStatus' `
+                    -Value 'OnTrack' -Force
+                $onTrack.Add($campaign)
+            }
+        }
+
+        $summary = @{
+            Overdue    = $overdue.Count
+            Critical   = $critical.Count
+            Warning    = $warning.Count
+            OnTrack    = $onTrack.Count
+            Completed  = $completed.Count
+            NoDeadline = $noDeadline.Count
+        }
+
+        Write-SPLog -Message ("Deadline classification complete: " +
+            "Overdue=$($overdue.Count), Critical=$($critical.Count), " +
+            "Warning=$($warning.Count), OnTrack=$($onTrack.Count), " +
+            "Completed=$($completed.Count), NoDeadline=$($noDeadline.Count)") `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignDeadlineStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Overdue    = $overdue.ToArray()
+                Critical   = $critical.ToArray()
+                Warning    = $warning.ToArray()
+                OnTrack    = $onTrack.ToArray()
+                Completed  = $completed.ToArray()
+                NoDeadline = $noDeadline.ToArray()
+                Summary    = $summary
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPCampaignDeadlineStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+            -Action 'Get-SPCampaignDeadlineStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 function Complete-SPCampaign {
     <#
     .SYNOPSIS
@@ -710,5 +995,6 @@ Export-ModuleMember -Function @(
     'Get-SPCampaign',
     'Get-SPCampaignStatus',
     'Search-SPCampaigns',
+    'Get-SPCampaignDeadlineStatus',
     'Complete-SPCampaign'
 )
