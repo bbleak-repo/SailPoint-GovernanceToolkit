@@ -118,6 +118,7 @@ function Group-SPAuditDecisions {
 
         # Build normalized output object
         $out = [PSCustomObject]@{
+            IdentityId        = $identityId
             IdentityName      = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
             AccountName       = $accountName
             AccountIdentifier = $accountIdentifier
