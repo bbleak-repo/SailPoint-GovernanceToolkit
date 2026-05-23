@@ -858,6 +858,14 @@ function Invoke-SPDeltaCertEscalate {
                 continue
             }
 
+            if ([string]::IsNullOrWhiteSpace($reviewerId)) {
+                Write-SPLog -Message "Cert '$certId' has no ReviewerIdentityId (campaign='$campaignName') -- cannot escalate, skipping" `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
             # Resolve current reviewer's manager
             $reviewerDetail = Get-SPDeltaIdentityDetail -IdentityId $reviewerId -CorrelationID $CorrelationID
 

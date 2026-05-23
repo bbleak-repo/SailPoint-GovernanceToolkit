@@ -110,7 +110,7 @@ The window *will* be visible while the test runs; this is intentional.
 | W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | DONE |
 | W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
 | W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | DONE |
-| W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | PENDING |
+| W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | DONE |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
 | W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | PENDING |
 | W-07 | Report content deep validation | 15 | W-06 | PENDING |
@@ -267,9 +267,12 @@ WG-03-12: [Open Reports Folder] button
 
 ## W-04: GUI -- Delta Cert Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 14/14 -- interactive harness `Tests\Harness\Test-W04-DeltaCertInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified Delta Cert tab Row 0 (`DeltaCertSummaryLabel` + Configure + Run Delta Cert), `Delta Cert Run Parameters` modal with 4 fields, dialog pre-population from `Config\settings.json` defaults (src-ad-001 / 24h / 2d / Manager), end-to-end Run (`src-ad-001 / 48h / 2d / Manager` -> `Delta cert complete. Campaigns: 0, Reason: DuplicatesExist`, DataGrid populated), session persistence (re-open shows LAST USED), summary label update, Cleanup (`0 completed, 1 still active`), `Escalation Parameters` modal + Run Escalation (`1 stale, 0 escalated, 1 skipped`), `BtnOpenDeltaCertFolder` spawning Explorer, `Generate Delta Report` writing `DeltaCert\reports\delta-*.html` (8 grants / 2 revocations), `DeltaCertHistoryList` populated from `deltacert-audit.jsonl`, and Refresh. **Two bugs shipped this round:** (1) `Invoke-SPGuiDeltaReport` was missing from `SP.Gui.psd1`'s `FunctionsToExport` so the background runspace couldn't find it (now exported); (2) `Invoke-SPDeltaCertEscalate` crashed on stale certs with no `EffectiveReviewer` because it forwarded an empty string to `Get-SPDeltaIdentityDetail`'s `[ValidateNotNullOrEmpty()]` parameter (now guarded with an `IsNullOrWhiteSpace` skip, matching the existing ManagerId-empty pattern). See `docs\windows-test-rounds\round-07.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W04-DeltaCertInteractive.ps1`.
 
 **Tests:**
 

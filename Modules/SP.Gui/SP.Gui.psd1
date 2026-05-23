@@ -63,6 +63,7 @@
         'Invoke-SPGuiDeltaCertRun',
         'Invoke-SPGuiDeltaCertCleanup',
         'Invoke-SPGuiDeltaCertEscalate',
+        'Invoke-SPGuiDeltaReport',
         'Get-SPGuiDeltaCertHistory'
     )
 
