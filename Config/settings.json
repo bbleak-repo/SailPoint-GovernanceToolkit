@@ -58,7 +58,9 @@
         "DefaultIdentityEventDays": 2,
         "DefaultStatuses": ["COMPLETED", "ACTIVE"],
         "IncludeCampaignReports": true,
-        "IncludeIdentityEvents": true
+        "IncludeIdentityEvents": true,
+        "IncludeLeadershipRollup": false,
+        "LeadershipDepth": 3
     },
     "DeltaCert": {
         "SourceIds": [],

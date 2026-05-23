@@ -94,6 +94,8 @@ function Get-SPConfigDefaults {
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
+            IncludeLeadershipRollup  = $false
+            LeadershipDepth          = 3
         }
         DeltaCert = @{
             SourceIds                  = @()
@@ -290,6 +292,8 @@ function Get-SPConfigTemplate {
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
             IncludeCampaignReports   = $true
             IncludeIdentityEvents    = $true
+            IncludeLeadershipRollup  = $false
+            LeadershipDepth          = 3
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()
