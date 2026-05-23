@@ -4640,7 +4640,7 @@ function Export-SPLeadershipLevelHtml {
 <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
 <thead>
 <tr>
-    <th $thStyle>$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel -replace 's$', ''))</th>
+    <th $thStyle>$([System.Net.WebUtility]::HtmlEncode([string]($lowerLevelLabel -replace 's$', '')))</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
