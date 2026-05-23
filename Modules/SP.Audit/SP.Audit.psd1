@@ -37,6 +37,7 @@
         'Get-SPAuditIdentityEvents'
         'Resolve-SPAuditIdentityAccounts'
         'Get-SPReviewerWorkload'
+        'Get-SPIdentityDecisionHistory'
 
         # SP.AuditReport - Categorization functions
         'Group-SPAuditDecisions'

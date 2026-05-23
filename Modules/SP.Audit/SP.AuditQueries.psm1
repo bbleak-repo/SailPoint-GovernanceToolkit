@@ -1621,6 +1621,254 @@ function Get-SPReviewerWorkload {
     }
 }
 
+function Get-SPIdentityDecisionHistory {
+    <#
+    .SYNOPSIS
+        Finds all access review decisions made about a specific identity across campaigns.
+    .DESCRIPTION
+        Answers: "What has been decided about this identity's access in every campaign?"
+        Retrieves campaigns matching status and date filters, then for each campaign
+        fetches certifications and access review items, filtering to items where
+        identitySummary.id matches the supplied IdentityId.
+
+        Returns a chronological list (newest first) of decisions grouped by campaign,
+        including the access name, decision, reviewer name, and decision date.
+
+        Uses Get-SPAuditCampaigns, Get-SPAuditCertifications, and
+        Get-SPAuditCertificationItems internally.
+    .PARAMETER IdentityId
+        The SailPoint ISC identity ID to search decisions for. Mandatory.
+    .PARAMETER Status
+        Campaign status filter. Default: @('COMPLETED','ACTIVE').
+    .PARAMETER DaysBack
+        Number of calendar days to look back. Default: 365.
+        Set to 0 to disable date filtering.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@{IdentityId; IdentityName; TotalDecisions;
+        Campaigns=@(@{CampaignName; CampaignDate; Decisions=@(...)})}; Error=$string}
+    .EXAMPLE
+        $result = Get-SPIdentityDecisionHistory -IdentityId 'id-001' -DaysBack 365
+        $result.Data.Campaigns | ForEach-Object { $_.CampaignName; $_.Decisions.Count }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$IdentityId,
+
+        [Parameter()]
+        [string[]]$Status = @('COMPLETED', 'ACTIVE'),
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting identity decision history for '$IdentityId' (Status=$($Status -join ','), DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Get campaigns matching status + date filters
+        $campaignResult = Get-SPAuditCampaigns -Status $Status -DaysBack $DaysBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $campaignResult.Success) {
+            $errMsg = "Get-SPIdentityDecisionHistory failed to retrieve campaigns: $($campaignResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPIdentityDecisionHistory' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $campaigns = @($campaignResult.Data)
+        Write-SPLog -Message "Found $($campaigns.Count) campaigns to scan for identity '$IdentityId'" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+            -CorrelationID $CorrelationID
+
+        $identityName       = ''
+        $totalDecisions     = 0
+        $campaignResults    = [System.Collections.Generic.List[object]]::new()
+
+        # Step 2-4: For each campaign, get certs -> items -> filter by identity
+        foreach ($campaign in $campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId   = $campaign.id
+            $campName = $campaign.name
+
+            # Extract campaign date (use 'created' field)
+            $campDate = ''
+            if ($null -ne $campaign.created) {
+                if ($campaign.created -is [datetime]) {
+                    $campDate = ([datetime]$campaign.created).ToUniversalTime().ToString('yyyy-MM-dd')
+                }
+                else {
+                    $parsedDate = [datetime]::MinValue
+                    if ([datetime]::TryParse($campaign.created.ToString(), [ref]$parsedDate)) {
+                        $campDate = $parsedDate.ToUniversalTime().ToString('yyyy-MM-dd')
+                    }
+                    else {
+                        $campDate = $campaign.created.ToString()
+                    }
+                }
+            }
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+            $campDecisions = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                $certId = $cert.id
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                    -CorrelationID $CorrelationID
+
+                if (-not $itemResult.Success) {
+                    Write-SPLog -Message "Skipping cert '$certId' in campaign '$campName': $($itemResult.Error)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+
+                $items = @($itemResult.Data)
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+
+                    # Check if this item is for our target identity
+                    $itemIdentityId = $null
+                    if ($null -ne $item.PSObject.Properties['identitySummary'] -and
+                        $null -ne $item.identitySummary -and
+                        $null -ne $item.identitySummary.PSObject.Properties['id']) {
+                        $itemIdentityId = $item.identitySummary.id
+                    }
+
+                    if ($itemIdentityId -ne $IdentityId) { continue }
+
+                    # Capture identity name from first match
+                    if ([string]::IsNullOrWhiteSpace($identityName) -and
+                        $null -ne $item.identitySummary.PSObject.Properties['name'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.identitySummary.name)) {
+                        $identityName = $item.identitySummary.name
+                    }
+
+                    # Extract decision details
+                    $accessName   = ''
+                    $decision     = ''
+                    $reviewerName = ''
+                    $decisionDate = ''
+
+                    # Access name: try access.name, then entitlementName, then displayName
+                    if ($null -ne $item.PSObject.Properties['access'] -and
+                        $null -ne $item.access -and
+                        $null -ne $item.access.PSObject.Properties['name']) {
+                        $accessName = $item.access.name
+                    }
+                    elseif ($null -ne $item.PSObject.Properties['entitlementName'] -and
+                            -not [string]::IsNullOrWhiteSpace($item.entitlementName)) {
+                        $accessName = $item.entitlementName
+                    }
+                    elseif ($null -ne $item.PSObject.Properties['displayName'] -and
+                            -not [string]::IsNullOrWhiteSpace($item.displayName)) {
+                        $accessName = $item.displayName
+                    }
+
+                    # Decision
+                    if ($null -ne $item.PSObject.Properties['decision'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.decision)) {
+                        $decision = $item.decision
+                    }
+
+                    # Reviewer name
+                    if ($null -ne $item.PSObject.Properties['reviewer'] -and
+                        $null -ne $item.reviewer -and
+                        $null -ne $item.reviewer.PSObject.Properties['name']) {
+                        $reviewerName = $item.reviewer.name
+                    }
+                    # Fallback to cert-level effective reviewer
+                    if ([string]::IsNullOrWhiteSpace($reviewerName) -and
+                        $null -ne $cert.EffectiveReviewer -and
+                        $null -ne $cert.EffectiveReviewer.PSObject.Properties['displayName']) {
+                        $reviewerName = $cert.EffectiveReviewer.displayName
+                    }
+
+                    # Decision date
+                    if ($null -ne $item.PSObject.Properties['completed'] -and
+                        $null -ne $item.completed) {
+                        if ($item.completed -is [datetime]) {
+                            $decisionDate = ([datetime]$item.completed).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                        else {
+                            $decisionDate = $item.completed.ToString()
+                        }
+                    }
+
+                    $campDecisions.Add([PSCustomObject]@{
+                        AccessName   = $accessName
+                        Decision     = $decision
+                        ReviewerName = $reviewerName
+                        DecisionDate = $decisionDate
+                    })
+                }
+            }
+
+            # Only include campaigns where this identity had review items
+            if ($campDecisions.Count -gt 0) {
+                $totalDecisions += $campDecisions.Count
+
+                $campaignResults.Add([PSCustomObject]@{
+                    CampaignId   = $campId
+                    CampaignName = $campName
+                    CampaignDate = $campDate
+                    Decisions    = $campDecisions.ToArray()
+                })
+            }
+        }
+
+        # Sort campaigns newest first by CampaignDate
+        $sortedCampaigns = @($campaignResults | Sort-Object -Property CampaignDate -Descending)
+
+        Write-SPLog -Message "Identity '$IdentityId' decision history: $totalDecisions decisions across $($sortedCampaigns.Count) campaigns" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                IdentityId     = $IdentityId
+                IdentityName   = $identityName
+                TotalDecisions = $totalDecisions
+                Campaigns      = $sortedCampaigns
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPIdentityDecisionHistory failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPIdentityDecisionHistory' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1631,5 +1879,6 @@ Export-ModuleMember -Function @(
     'Import-SPAuditCampaignReport',
     'Get-SPAuditIdentityEvents',
     'Resolve-SPAuditIdentityAccounts',
-    'Get-SPReviewerWorkload'
+    'Get-SPReviewerWorkload',
+    'Get-SPIdentityDecisionHistory'
 )

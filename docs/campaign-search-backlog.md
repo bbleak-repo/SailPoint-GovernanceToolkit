@@ -56,7 +56,7 @@ Safe to modify:
 | S-02 | Date Range Search | none | DONE |
 | S-03 | Deadline Analysis | S-02 | DONE |
 | S-04 | Reviewer Workload Search | none | DONE |
-| S-05 | Identity Decision History | none | PENDING |
+| S-05 | Identity Decision History | none | DONE |
 | S-06 | Campaign Metrics Aggregation | none | PENDING |
 | S-07 | Source Coverage Analysis | none | PENDING |
 | S-08 | Campaign Comparison | S-06 | PENDING |
@@ -242,8 +242,8 @@ function Get-SPReviewerWorkload {
 
 ## S-05: Identity Decision History
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
