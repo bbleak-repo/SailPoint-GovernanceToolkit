@@ -96,6 +96,14 @@ function Get-SPConfigDefaults {
             IncludeIdentityEvents    = $true
             IncludeLeadershipRollup  = $false
             LeadershipDepth          = 3
+            Smtp = @{
+                Enabled       = $false
+                Server        = ''
+                Port          = 587
+                From          = ''
+                UseSsl        = $true
+                SubjectPrefix = '[SailPoint Audit]'
+            }
         }
         DeltaCert = @{
             SourceIds                  = @()
@@ -294,6 +302,14 @@ function Get-SPConfigTemplate {
             IncludeIdentityEvents    = $true
             IncludeLeadershipRollup  = $false
             LeadershipDepth          = 3
+            Smtp = [ordered]@{
+                Enabled       = $false
+                Server        = ''
+                Port          = 587
+                From          = ''
+                UseSsl        = $true
+                SubjectPrefix = '[SailPoint Audit]'
+            }
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()

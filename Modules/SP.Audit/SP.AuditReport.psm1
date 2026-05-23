@@ -3391,6 +3391,149 @@ $footerHtml
     return @($outputPaths.ToArray())
 }
 
+function Send-SPReport {
+    <#
+    .SYNOPSIS
+        Logs the intent to send a leadership report to a recipient via email.
+    .DESCRIPTION
+        Stub function for future SMTP email distribution. Resolves the recipient
+        email, checks the SMTP configuration, and logs the intended send action.
+        Does NOT make any SMTP calls -- logs only.
+
+        When Audit.Smtp.Enabled is false, logs at DEBUG level.
+        When Audit.Smtp.Enabled is true, logs at INFO level (future: actual send).
+    .PARAMETER ReportPath
+        Full path to the HTML report file to send.
+    .PARAMETER RecipientEmail
+        Email address of the recipient.
+    .PARAMETER RecipientName
+        Display name of the recipient (for log messages and future Subject line).
+    .PARAMETER Subject
+        Optional email subject. Defaults to "{SubjectPrefix} Report for {RecipientName}".
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Action; Recipient; File; Subject}; Error}
+    .EXAMPLE
+        Send-SPReport -ReportPath 'C:\Audit\leadership\executive-summary.html' `
+            -RecipientEmail 'vp@corp.com' -RecipientName 'VP Smith'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ReportPath,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$RecipientEmail,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$RecipientName,
+
+        [Parameter()]
+        [string]$Subject,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Load SMTP config
+    $smtpConfig = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Audit' -and
+            $config.Audit.PSObject.Properties.Name -contains 'Smtp') {
+            $smtpConfig = $config.Audit.Smtp
+        }
+    }
+    catch {
+        # Config unavailable -- treat as disabled
+    }
+
+    $smtpEnabled = $false
+    if ($null -ne $smtpConfig -and
+        $smtpConfig.PSObject.Properties.Name -contains 'Enabled') {
+        $smtpEnabled = $smtpConfig.Enabled -eq $true
+    }
+
+    # Build subject line
+    $subjectPrefix = '[SailPoint Audit]'
+    if ($null -ne $smtpConfig -and
+        $smtpConfig.PSObject.Properties.Name -contains 'SubjectPrefix' -and
+        -not [string]::IsNullOrWhiteSpace($smtpConfig.SubjectPrefix)) {
+        $subjectPrefix = $smtpConfig.SubjectPrefix
+    }
+    if ([string]::IsNullOrWhiteSpace($Subject)) {
+        $Subject = "$subjectPrefix Report for $RecipientName"
+    }
+
+    $fileName = Split-Path -Path $ReportPath -Leaf
+
+    if (-not $smtpEnabled) {
+        # SMTP disabled -- log at DEBUG and return
+        $logMsg = "SMTP disabled -- would send '$fileName' to $RecipientEmail ($RecipientName)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $logMsg `
+                -Severity DEBUG -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient = $RecipientEmail
+                    File      = $ReportPath
+                    Subject   = $Subject
+                    SmtpState = 'Disabled'
+                }
+        }
+        Write-Verbose $logMsg
+
+        return @{
+            Success = $true
+            Data    = @{
+                Action    = 'Logged'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $null
+        }
+    }
+
+    # SMTP enabled but this is a stub -- log at INFO, no actual send
+    $logMsg = "SMTP stub -- would send '$fileName' to $RecipientEmail ($RecipientName) with subject '$Subject'"
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message $logMsg `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+            -CorrelationID $CorrelationID `
+            -AdditionalFields @{
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+                SmtpState = 'Stub'
+                Server    = if ($null -ne $smtpConfig -and $smtpConfig.PSObject.Properties.Name -contains 'Server') { $smtpConfig.Server } else { '' }
+                Port      = if ($null -ne $smtpConfig -and $smtpConfig.PSObject.Properties.Name -contains 'Port') { $smtpConfig.Port } else { 587 }
+            }
+    }
+    Write-Verbose $logMsg
+
+    return @{
+        Success = $true
+        Data    = @{
+            Action    = 'Logged'
+            Recipient = $RecipientEmail
+            File      = $ReportPath
+            Subject   = $Subject
+        }
+        Error   = $null
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -3404,5 +3547,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditText',
     'Export-SPAuditJsonl',
     'Export-SPLeadershipExecutiveHtml',
-    'Export-SPLeadershipDirectorHtml'
+    'Export-SPLeadershipDirectorHtml',
+    'Send-SPReport'
 )

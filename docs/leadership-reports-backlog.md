@@ -64,7 +64,7 @@ Audit/
 | L-04 | Director-Level HTML Reports | L-03 | DONE |
 | L-05 | CLI Integration | L-04 | DONE |
 | L-06 | GUI Integration | L-05 | DONE |
-| L-07 | SMTP Config + Logging Stub | L-05 | PENDING |
+| L-07 | SMTP Config + Logging Stub | L-05 | DONE |
 | L-08 | Pester Tests | L-04 | PENDING |
 
 ---
@@ -405,8 +405,8 @@ pipeline.
 
 ## L-07: SMTP Config + Logging Stub
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 718e989
 - **Depends On:** L-05
 
 **Description:**
