@@ -107,7 +107,7 @@ The window *will* be visible while the test runs; this is intentional.
 |----|-------|-------|------------|--------|
 | W-01 | Prerequisites + Pester | 3 | none | DONE |
 | W-02 | GUI (headless): Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
-| W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | PENDING |
+| W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | DONE |
 | W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
 | W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | PENDING |
 | W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | PENDING |
@@ -192,19 +192,10 @@ WG-02-08: All 5 tab headers visible and clickable
 
 ## W-02b: GUI (interactive, FlaUI) -- backfill W-02
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-02 (headless baseline) + FlaUI harness
-- **Goal:** Re-run every WG-02-* test against a real visible WPF window using
-  `Tests\Harness\SP.UiTest.psm1`. Each test that previously asserted a
-  control existed in the logical tree should now (a) launch the dashboard,
-  (b) drive the control with FlaUI (Click, Select, Type), (c) capture a
-  screenshot to `docs\windows-test-rounds\WG-02b-<id>.png`, and (d) verify
-  the post-condition through the live UI.
-
-- **Required artifact:** `Tests\Harness\Test-W02b-GuiInteractive.ps1` written
-  using the SP.UiTest.psm1 pattern (see FlaUI Interactive GUI Harness
-  section above). Run it as `powershell.exe -STA -File ...` from the
-  round's outer script and parse the JSONL output.
+- **Results:** PASS 8/8 -- interactive harness `Tests\Harness\Test-W02b-GuiInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified main window + 5 tabs, all 6 Settings section headers (Environment, Authentication, API Configuration, Testing, Safety Controls, Delta Cert), 6 Delta Cert AutomationIds, Quick Connect masked PasswordBox + Apply/Clear, end-to-end Save round trip on TxtDcHoursBack (24->48->24 with disk verification, "Saved" MessageBox dismissed via desktop-wide UIA sweep, StatusBarText='Settings saved successfully.'), Campaigns toolbar + CampaignGrid + progress area (SuiteProgressBar is Visibility=Collapsed pre-run by design), Evidence tree + detail grid + Refresh/Open/Export buttons, and all 5 tabs Select() in spec order Campaigns->Evidence->Settings->Audit->Delta Cert with per-tab screenshots. Mock at 10.0.0.143:8080 reachable this round; `Config\settings.local.json` had to be overlaid with the same mock config as `settings.json` because path-less Get-SPConfig calls in background runspaces prefer the .local file (see round-05.md bugs section). See docs\windows-test-rounds\round-05.md.
 
 ---
 
