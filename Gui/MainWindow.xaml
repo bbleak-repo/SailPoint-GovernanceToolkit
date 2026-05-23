@@ -1095,6 +1095,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
@@ -1109,10 +1110,16 @@
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="2"/>
+                        <Button Grid.Column="2" x:Name="BtnGenerateDeltaReport"
+                                Content="Generate Delta Report"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"
+                                ToolTip="Generate a delta report showing changes in the last N hours"/>
 
-                        <Button Grid.Column="3" x:Name="BtnOpenDeltaCertFolder"
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="3"/>
+
+                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
                                 Content="Open Output Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>

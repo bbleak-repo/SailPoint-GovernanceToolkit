@@ -1358,6 +1358,96 @@ function Get-SPGuiDeltaCertHistory {
     }
 }
 
+function Invoke-SPGuiDeltaReport {
+    <#
+    .SYNOPSIS
+        Generate a delta certification report from the GUI.
+    .DESCRIPTION
+        Bridge function that wraps Get-SPDeltaReportData and Export-SPDeltaReportHtml
+        for the WPF GUI. Gathers delta data for the configured time window and
+        source IDs, then generates HTML + JSONL output.
+    .PARAMETER SourceIds
+        Array of AD source IDs to include in the report.
+    .PARAMETER HoursBack
+        Number of hours to look back for changes. Default: 24.
+    .PARAMETER OutputPath
+        Directory for output files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{HtmlPath; JsonlPath; Summary}; Message=$string; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$HoursBack = 24,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        Write-SPLog -Message "Invoke-SPGuiDeltaReport started: SourceIds=$($SourceIds -join ','), HoursBack=$HoursBack" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaReport' -CorrelationID $CorrelationID
+
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            $tkRoot     = Resolve-SPToolkitRoot
+            $OutputPath = Join-Path $tkRoot 'DeltaCert\reports'
+        }
+
+        $dataResult = Get-SPDeltaReportData -SourceIds $SourceIds -HoursBack $HoursBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $dataResult.Success) {
+            return @{ Success = $false; Data = $null; Message = $null; Error = $dataResult.Error }
+        }
+
+        $reportData = $dataResult.Data
+
+        $exportResult = Export-SPDeltaReportHtml -ReportData $reportData -OutputPath $OutputPath `
+            -CorrelationID $CorrelationID
+
+        $grantCount   = @($reportData.NewGrants).Count
+        $revokeCount  = @($reportData.Revocations).Count
+        $pendingCount = @($reportData.PendingReviews).Count
+        $anomalyCount = @($reportData.Anomalies).Count
+
+        $message = "Delta report generated: $grantCount grants, $revokeCount revocations, $pendingCount pending, $anomalyCount anomalies"
+
+        return @{
+            Success = $true
+            Data    = @{
+                HtmlPath  = $exportResult.HtmlPath
+                JsonlPath = $exportResult.JsonlPath
+                Summary   = [PSCustomObject]@{
+                    NewGrants      = $grantCount
+                    Revocations    = $revokeCount
+                    PendingReviews = $pendingCount
+                    Anomalies      = $anomalyCount
+                }
+            }
+            Message = $message
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiDeltaReport failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDeltaReport'
+        return @{ Success = $false; Data = $null; Message = $null; Error = "Invoke-SPGuiDeltaReport failed: $($_.Exception.Message)" }
+    }
+}
+
 #endregion
 
 #region Browser Token Functions
@@ -1497,5 +1587,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiDeltaCertRun',
     'Invoke-SPGuiDeltaCertCleanup',
     'Invoke-SPGuiDeltaCertEscalate',
+    'Invoke-SPGuiDeltaReport',
     'Get-SPGuiDeltaCertHistory'
 )
