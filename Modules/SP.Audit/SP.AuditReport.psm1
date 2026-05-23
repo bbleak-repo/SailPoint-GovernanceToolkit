@@ -1704,11 +1704,29 @@ function Group-SPAuditByLeadership {
         }
     }
 
+    # Determine the label for the "Directors" bucket (which may be VPs or Directors
+    # depending on org depth). Level 2 nodes are used when the tree has 3 levels;
+    # the highest non-executive level is used when there are 4+ levels.
+    $directorLabel = 'Director'
+    $directorLevelNum = 2
+    if ($discoveredTopLevel -ge 3) {
+        $directorLevelNum = $discoveredTopLevel - 1
+    }
+    if ($levelLabels.ContainsKey($directorLevelNum)) {
+        $directorLabel = $levelLabels[$directorLevelNum]
+        # Strip trailing 's' for singular form used in column headers
+        if ($directorLabel.EndsWith('s') -and $directorLabel.Length -gt 2) {
+            $directorLabel = $directorLabel.Substring(0, $directorLabel.Length - 1)
+        }
+    }
+
     return @{
-        Directors = $directors
-        Executive = $executive
-        Levels    = $levels
-        TopLevel  = $discoveredTopLevel
+        Directors      = $directors
+        DirectorLabel  = $directorLabel
+        Executive      = $executive
+        Levels         = $levels
+        TopLevel       = $discoveredTopLevel
+        LevelLabels    = $levelLabels
     }
 }
 
@@ -3548,6 +3566,9 @@ function Export-SPLeadershipExecutiveHtml {
     $directors   = if ($LeadershipData.ContainsKey('Directors')) { $LeadershipData['Directors'] } else { @{} }
     $executive   = if ($LeadershipData.ContainsKey('Executive')) { $LeadershipData['Executive'] } else { @{} }
 
+    # Use the dynamic label from the leadership data (e.g., "Vice President" instead of "Director")
+    $directorLevelLabel = if ($LeadershipData.ContainsKey('DirectorLabel')) { $LeadershipData['DirectorLabel'] } else { 'Director' }
+
     # --- Aggregate overall totals across all directors ---
     $totalItems    = 0
     $totalApproved = 0
@@ -3700,11 +3721,11 @@ function Export-SPLeadershipExecutiveHtml {
     $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px;"'
 
     $directorTableHtml = @"
-<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Director Summary</h3>
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$directorLevelLabel Summary</h3>
 <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
 <thead>
 <tr>
-    <th $thStyle>Director</th>
+    <th $thStyle>$directorLevelLabel</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -3785,7 +3806,7 @@ $dirTableBody
 <thead>
 <tr>
     <th $thStyle>Leader</th>
-    <th $thStyle>Directors</th>
+    <th $thStyle>${directorLevelLabel}s</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -5124,5 +5145,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditJsonl',
     'Export-SPLeadershipExecutiveHtml',
     'Export-SPLeadershipDirectorHtml',
+    'Export-SPLeadershipLevelHtml',
     'Send-SPReport'
 )

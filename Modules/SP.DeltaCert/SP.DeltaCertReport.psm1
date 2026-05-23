@@ -172,8 +172,14 @@ function Get-SPDeltaRevokeEvents {
                         }
                     }
                 }
-                elseif ($null -ne $rf.PSObject.Properties['displayName']) {
-                    $identityName = [string]$rf.displayName
+                else {
+                    foreach ($prop in @('displayName', 'name')) {
+                        if ($null -ne $rf.PSObject.Properties[$prop] -and
+                            -not [string]::IsNullOrWhiteSpace($rf.$prop)) {
+                            $identityName = [string]$rf.$prop
+                            break
+                        }
+                    }
                 }
             }
 
