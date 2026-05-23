@@ -59,7 +59,7 @@ Safe to modify:
 | S-05 | Identity Decision History | none | DONE |
 | S-06 | Campaign Metrics Aggregation | none | DONE |
 | S-07 | Source Coverage Analysis | none | DONE |
-| S-08 | Campaign Comparison | S-06 | PENDING |
+| S-08 | Campaign Comparison | S-06 | DONE |
 | S-09 | Campaign Search CLI | S-01 to S-08 | PENDING |
 | S-10 | Pester Tests | S-09 | PENDING |
 
@@ -376,8 +376,8 @@ which sources/applications have been covered by campaigns and which haven't.
 
 ## S-08: Campaign Comparison
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-06
 
 **Description:**

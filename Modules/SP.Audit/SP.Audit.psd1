@@ -59,6 +59,10 @@
         'Export-SPLeadershipDirectorHtml'
         'Export-SPLeadershipLevelHtml'
         'Send-SPReport'
+
+        # SP.AuditReport - Comparison functions
+        'Compare-SPCampaigns'
+        'Export-SPCampaignComparisonHtml'
     )
 
     # Do not export variables or aliases from nested modules
