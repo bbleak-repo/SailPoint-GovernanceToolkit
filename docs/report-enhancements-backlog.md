@@ -24,7 +24,7 @@ R-01 -> R-02 -> R-03 -> R-04 -> R-05 -> R-06 -> R-07 -> R-08 -> R-09 -> R-10
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| R-01 | Dynamic Org Levels | none | PENDING |
+| R-01 | Dynamic Org Levels | none | DONE |
 | R-02 | Per-Level Report Generation | R-01 | PENDING |
 | R-03 | Expandable Detail Mode | R-02 | PENDING |
 | R-04 | Delta Report Generator | none | PENDING |
@@ -77,8 +77,8 @@ orphan accounts, SoD violations, terminated-with-access, manager-less identities
 
 ## R-01: Dynamic Org Levels
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 4e9867d
 - **Depends On:** none
 
 **Description:**

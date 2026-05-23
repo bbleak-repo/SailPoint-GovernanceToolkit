@@ -968,66 +968,171 @@ function Group-SPAuditByLeadership {
         }
     }
 
-    # --- Build Executive rollup ---
-    # Each TopLeader aggregates across directors whose ManagerId points to it.
-    # A TopLeader at level 2 (no VP above) serves as its own director and executive.
+    # --- Build per-level Levels structure ---
+    $levelLabels = if ($OrgTree.ContainsKey('LevelLabels')) { $OrgTree.LevelLabels } else {
+        @{ 0 = 'Individual Contributors'; 1 = 'Managers'; 2 = 'Directors';
+           3 = 'Vice Presidents'; 4 = 'Senior Vice Presidents'; 5 = 'Executive Leadership' }
+    }
+
+    $discoveredTopLevel = 0
+    foreach ($nodeId in $nodes.Keys) {
+        $lvl = $nodes[$nodeId].Level
+        if ($lvl -gt $discoveredTopLevel) { $discoveredTopLevel = $lvl }
+    }
+
+    $levels = @{}
+
+    # Level 2 = Directors (from existing $directors computation above)
+    if ($directors.Count -gt 0) {
+        $label2 = if ($levelLabels.ContainsKey(2)) { $levelLabels[2] } else { 'Directors' }
+        $levels[2] = @{ Label = $label2; Leaders = $directors }
+    }
+
+    # Level 3+: each leader at level N aggregates subordinates from level N-1
+    for ($lvl = 3; $lvl -le $discoveredTopLevel; $lvl++) {
+        $lowerLevel = $lvl - 1
+        if (-not $levels.ContainsKey($lowerLevel)) { continue }
+        $lowerLeaders = $levels[$lowerLevel].Leaders
+        if ($null -eq $lowerLeaders -or $lowerLeaders.Count -eq 0) { continue }
+
+        $thisLevelLeaders = @{}
+
+        foreach ($subId in @($lowerLeaders.Keys)) {
+            if ($subId -eq $unmanagedKey) { continue }
+
+            # Find parent at this level
+            $parentId = $unmanagedKey
+            if ($nodes.ContainsKey($subId)) {
+                $subParent = $nodes[$subId].ManagerId
+                if (-not [string]::IsNullOrWhiteSpace($subParent) -and
+                    $nodes.ContainsKey($subParent) -and
+                    $nodes[$subParent].Level -eq $lvl) {
+                    $parentId = $subParent
+                }
+            }
+
+            if (-not $thisLevelLeaders.ContainsKey($parentId)) {
+                $parentName = 'Unmanaged'
+                if ($parentId -ne $unmanagedKey -and $nodes.ContainsKey($parentId)) {
+                    $pNode = $nodes[$parentId]
+                    $parentName = if ($null -ne $pNode.Identity -and
+                        -not [string]::IsNullOrWhiteSpace($pNode.Identity.Name)) {
+                        $pNode.Identity.Name
+                    } else { $parentId }
+                }
+                $thisLevelLeaders[$parentId] = @{
+                    Name          = $parentName
+                    TotalItems    = 0
+                    Approved      = 0
+                    Revoked       = 0
+                    Pending       = 0
+                    CompletionPct = 0.0
+                    Subordinates  = [System.Collections.Generic.List[string]]::new()
+                }
+            }
+
+            $thisLevelLeaders[$parentId].Subordinates.Add($subId)
+            $subData = $lowerLeaders[$subId]
+            $thisLevelLeaders[$parentId].TotalItems += $subData.TotalItems
+            $thisLevelLeaders[$parentId].Approved   += $subData.Approved
+            $thisLevelLeaders[$parentId].Revoked    += $subData.Revoked
+            $thisLevelLeaders[$parentId].Pending    += $subData.Pending
+        }
+
+        # Calculate completion pct and convert subordinate lists to arrays
+        foreach ($leaderId in @($thisLevelLeaders.Keys)) {
+            $leader = $thisLevelLeaders[$leaderId]
+            $leader.CompletionPct = if ($leader.TotalItems -gt 0) {
+                [Math]::Round(($leader.Approved + $leader.Revoked) / $leader.TotalItems * 100, 1)
+            } else { 0.0 }
+            if ($leader.Subordinates -is [System.Collections.Generic.List[string]]) {
+                $leader.Subordinates = @($leader.Subordinates.ToArray())
+            }
+        }
+
+        if ($thisLevelLeaders.Count -gt 0) {
+            $label = if ($levelLabels.ContainsKey($lvl)) { $levelLabels[$lvl] } else { 'Executive Leadership' }
+            $levels[$lvl] = @{ Label = $label; Leaders = $thisLevelLeaders }
+        }
+    }
+
+    # --- Backward-compatible Executive rollup ---
     $executive  = @{}
     $topLeaders = @($OrgTree.TopLeaders)
 
-    foreach ($vpId in $topLeaders) {
-        if (-not $nodes.ContainsKey($vpId)) { continue }
-        $vpNode = $nodes[$vpId]
-        $vpName = if ($null -ne $vpNode.Identity -and
-            -not [string]::IsNullOrWhiteSpace($vpNode.Identity.Name)) {
-            $vpNode.Identity.Name
-        } else { $vpId }
-
-        # Find directors under this VP (directors whose ManagerId == this VP)
-        $vpDirectorIds = [System.Collections.Generic.List[string]]::new()
-
-        foreach ($dirId in $directors.Keys) {
-            if ($dirId -eq $unmanagedKey) { continue }
-            if ($nodes.ContainsKey($dirId) -and $nodes[$dirId].ManagerId -eq $vpId) {
-                $vpDirectorIds.Add($dirId)
+    if ($discoveredTopLevel -ge 3) {
+        # Build Executive from the highest level in Levels
+        $execLevel = $discoveredTopLevel
+        while ($execLevel -ge 3 -and -not $levels.ContainsKey($execLevel)) {
+            $execLevel--
+        }
+        if ($levels.ContainsKey($execLevel)) {
+            foreach ($leaderId in $levels[$execLevel].Leaders.Keys) {
+                $leaderData = $levels[$execLevel].Leaders[$leaderId]
+                $executive[$leaderId] = @{
+                    Name          = $leaderData.Name
+                    TotalItems    = $leaderData.TotalItems
+                    Approved      = $leaderData.Approved
+                    Revoked       = $leaderData.Revoked
+                    Pending       = $leaderData.Pending
+                    CompletionPct = $leaderData.CompletionPct
+                    Directors     = if ($null -ne $leaderData.Subordinates) { $leaderData.Subordinates } else { @() }
+                }
             }
         }
+    }
+    else {
+        # Fallback: existing TopLeaders-based logic for 2-level orgs
+        foreach ($vpId in $topLeaders) {
+            if (-not $nodes.ContainsKey($vpId)) { continue }
+            $vpNode = $nodes[$vpId]
+            $vpName = if ($null -ne $vpNode.Identity -and
+                -not [string]::IsNullOrWhiteSpace($vpNode.Identity.Name)) {
+                $vpNode.Identity.Name
+            } else { $vpId }
 
-        # If this VP is itself a director-level node (level 2 TopLeader with
-        # managers directly below it), include itself
-        if ($vpDirectorIds.Count -eq 0 -and $directors.ContainsKey($vpId)) {
-            $vpDirectorIds.Add($vpId)
-        }
-
-        $vpTotal = 0; $vpApproved = 0; $vpRevoked = 0; $vpPending = 0
-
-        foreach ($dirId in $vpDirectorIds) {
-            if ($directors.ContainsKey($dirId)) {
-                $d = $directors[$dirId]
-                $vpTotal    += $d.TotalItems
-                $vpApproved += $d.Approved
-                $vpRevoked  += $d.Revoked
-                $vpPending  += $d.Pending
+            $vpDirectorIds = [System.Collections.Generic.List[string]]::new()
+            foreach ($dirId in $directors.Keys) {
+                if ($dirId -eq $unmanagedKey) { continue }
+                if ($nodes.ContainsKey($dirId) -and $nodes[$dirId].ManagerId -eq $vpId) {
+                    $vpDirectorIds.Add($dirId)
+                }
             }
-        }
+            if ($vpDirectorIds.Count -eq 0 -and $directors.ContainsKey($vpId)) {
+                $vpDirectorIds.Add($vpId)
+            }
 
-        $vpCompletionPct = if ($vpTotal -gt 0) {
-            [Math]::Round(($vpApproved + $vpRevoked) / $vpTotal * 100, 1)
-        } else { 0.0 }
+            $vpTotal = 0; $vpApproved = 0; $vpRevoked = 0; $vpPending = 0
+            foreach ($dirId in $vpDirectorIds) {
+                if ($directors.ContainsKey($dirId)) {
+                    $d = $directors[$dirId]
+                    $vpTotal    += $d.TotalItems
+                    $vpApproved += $d.Approved
+                    $vpRevoked  += $d.Revoked
+                    $vpPending  += $d.Pending
+                }
+            }
+            $vpCompletionPct = if ($vpTotal -gt 0) {
+                [Math]::Round(($vpApproved + $vpRevoked) / $vpTotal * 100, 1)
+            } else { 0.0 }
 
-        $executive[$vpId] = @{
-            Name          = $vpName
-            TotalItems    = $vpTotal
-            Approved      = $vpApproved
-            Revoked       = $vpRevoked
-            Pending       = $vpPending
-            CompletionPct = $vpCompletionPct
-            Directors     = @($vpDirectorIds.ToArray())
+            $executive[$vpId] = @{
+                Name          = $vpName
+                TotalItems    = $vpTotal
+                Approved      = $vpApproved
+                Revoked       = $vpRevoked
+                Pending       = $vpPending
+                CompletionPct = $vpCompletionPct
+                Directors     = @($vpDirectorIds.ToArray())
+            }
         }
     }
 
     return @{
         Directors = $directors
         Executive = $executive
+        Levels    = $levels
+        TopLevel  = $discoveredTopLevel
     }
 }
 
