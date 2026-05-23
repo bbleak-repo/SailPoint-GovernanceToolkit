@@ -569,6 +569,9 @@ function Invoke-SPGuiAudit {
         [int]$LeadershipDepth = 3,
 
         [Parameter()]
+        [int]$LeadershipStartLevel = -1,
+
+        [Parameter()]
         [int]$IdentityEventDays = 2,
 
         [Parameter()]
@@ -882,7 +885,33 @@ function Invoke-SPGuiAudit {
                             $leadershipDateRange = "$startDate to $endDate"
                         }
 
-                        # Generate executive summary
+                        # Determine start and lowest levels for per-level generation
+                        $topLevel = $leadershipData.TopLevel
+                        $resolvedStartLevel = if ($LeadershipStartLevel -ge 2) {
+                            [Math]::Min($LeadershipStartLevel, $topLevel)
+                        } else { $topLevel }
+                        $resolvedLowestLevel = 2
+
+                        # Generate per-level reports
+                        for ($lvl = $resolvedStartLevel; $lvl -ge $resolvedLowestLevel; $lvl--) {
+                            if (-not $leadershipData.Levels.ContainsKey($lvl)) { continue }
+                            $lvlPaths = Export-SPLeadershipLevelHtml `
+                                -LeadershipData $leadershipData `
+                                -Decisions $mergedDecisionsHt `
+                                -OrgTree $orgTree `
+                                -Level $lvl `
+                                -StartLevel $resolvedStartLevel `
+                                -LowestLevel $resolvedLowestLevel `
+                                -CampaignName $leadershipCampaignName `
+                                -DateRange $leadershipDateRange `
+                                -OutputPath $leadershipOutputPath `
+                                -CorrelationID $CorrelationID
+                            foreach ($lp in @($lvlPaths)) {
+                                $allWrittenFiles.Add($lp)
+                            }
+                        }
+
+                        # Backward-compatible: executive summary + director reports
                         $execPath = Export-SPLeadershipExecutiveHtml `
                             -LeadershipData $leadershipData `
                             -CampaignName $leadershipCampaignName `
@@ -891,7 +920,6 @@ function Invoke-SPGuiAudit {
                             -CorrelationID $CorrelationID
                         $allWrittenFiles.Add($execPath)
 
-                        # Generate per-director reports
                         $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
                         if ($directorCount -gt 0) {
                             $dirPaths = Export-SPLeadershipDirectorHtml `
@@ -907,7 +935,7 @@ function Invoke-SPGuiAudit {
                             }
                         }
 
-                        Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                        Write-SPLog -Message "Leadership rollup generated: per-level + exec summary + $directorCount director report(s)" `
                             -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
                     }
                 }

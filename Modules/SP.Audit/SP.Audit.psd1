@@ -51,6 +51,7 @@
         'Export-SPAuditJsonl'
         'Export-SPLeadershipExecutiveHtml'
         'Export-SPLeadershipDirectorHtml'
+        'Export-SPLeadershipLevelHtml'
         'Send-SPReport'
     )
 

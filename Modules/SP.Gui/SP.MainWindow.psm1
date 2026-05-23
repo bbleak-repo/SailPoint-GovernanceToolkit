@@ -1494,6 +1494,7 @@ function Invoke-GuiAuditRun {
     $chkCampReports  = Find-Control -Parent $TabContent -Name 'ChkCampaignReports'
     $chkIdentEvents  = Find-Control -Parent $TabContent -Name 'ChkIdentityEvents'
     $chkLeadership   = Find-Control -Parent $TabContent -Name 'ChkLeadershipRollup'
+    $cboStartLevel   = Find-Control -Parent $TabContent -Name 'CboLeadershipStartLevel'
 
     $selectedCampaigns = @($script:AuditCampaignDataSource | Where-Object { $_.IsSelected -eq $true })
 
@@ -1508,6 +1509,13 @@ function Invoke-GuiAuditRun {
     $includeCampaignReports = ($null -eq $chkCampReports -or $chkCampReports.IsChecked -ne $false)
     $includeIdentEvents    = ($null -eq $chkIdentEvents -or $chkIdentEvents.IsChecked -ne $false)
     $includeLeadership     = ($null -ne $chkLeadership -and $chkLeadership.IsChecked -eq $true)
+    $leadershipStartLevel  = -1
+    if ($null -ne $cboStartLevel -and $null -ne $cboStartLevel.SelectedItem) {
+        $startLevelText = $cboStartLevel.SelectedItem.Content
+        if ($startLevelText -ne 'Auto' -and $startLevelText -match '^\d+$') {
+            $leadershipStartLevel = [int]$startLevelText
+        }
+    }
 
     Set-StatusMessage -Message "Starting audit run. CorrelationID: $correlationID"
 
@@ -1542,6 +1550,7 @@ function Invoke-GuiAuditRun {
     $runspace.SessionStateProxy.SetVariable('IncludeCampaignReports', $includeCampaignReports)
     $runspace.SessionStateProxy.SetVariable('IncludeIdentEvents',   $includeIdentEvents)
     $runspace.SessionStateProxy.SetVariable('IncludeLeadership',    $includeLeadership)
+    $runspace.SessionStateProxy.SetVariable('LeadershipStartLevel', $leadershipStartLevel)
     $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
     $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPercent)
@@ -1576,7 +1585,8 @@ function Invoke-GuiAuditRun {
             -OutputPath             $OutputPath `
             -IncludeCampaignReports:$IncludeCampaignReports `
             -IncludeIdentityEvents:$IncludeIdentEvents `
-            -IncludeLeadershipRollup:$IncludeLeadership
+            -IncludeLeadershipRollup:$IncludeLeadership `
+            -LeadershipStartLevel   $LeadershipStartLevel
 
         # Marshal result back to UI thread
         $dispatcher       = $MainWindow.Dispatcher

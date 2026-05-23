@@ -3497,6 +3497,642 @@ $footerHtml
     return @($outputPaths.ToArray())
 }
 
+function Export-SPLeadershipLevelHtml {
+    <#
+    .SYNOPSIS
+        Generates per-level leadership HTML reports dynamically for any org level.
+    .DESCRIPTION
+        Unified report generator that replaces the fixed executive/director approach.
+        Produces one HTML file per leader at a given org level. Each report includes:
+        - Level-appropriate header (e.g., "VP Report: Alice Johnson")
+        - Summary cards: total items, approval rate, revocation rate, completion %
+        - Subordinate table: next-level-down leaders with aggregate metrics
+        - Navigation links: up to parent report, down to child reports
+        - Identity decision detail at the lowest generated level
+
+        All CSS is inline on elements for Word copy-paste compatibility.
+        No flexbox, no grid, no external resources.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership with Levels and TopLevel keys.
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER OrgTree
+        Hashtable from Build-SPOrgTree .Data containing Nodes, LevelLabels, etc.
+    .PARAMETER Level
+        The org level to generate reports for. Each leader at this level gets a report.
+    .PARAMETER StartLevel
+        The highest level being generated (controls executive summary logic).
+    .PARAMETER LowestLevel
+        The lowest level being generated (controls per-identity detail inclusion).
+    .PARAMETER CampaignName
+        Display name of the campaign (or combined campaign label).
+    .PARAMETER DateRange
+        Descriptive date range string for the report header.
+    .PARAMETER OutputPath
+        Directory in which to write the HTML files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in each report footer.
+    .OUTPUTS
+        [string[]] Array of file paths written.
+    .EXAMPLE
+        $paths = Export-SPLeadershipLevelHtml -LeadershipData $leadership `
+                    -Decisions $grouped -OrgTree $tree.Data -Level 3 `
+                    -StartLevel 4 -LowestLevel 2 `
+                    -CampaignName 'Q1 Review' -OutputPath 'C:\Reports\leadership'
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [int]$Level,
+
+        [Parameter(Mandatory)]
+        [int]$StartLevel,
+
+        [Parameter(Mandatory)]
+        [int]$LowestLevel,
+
+        [Parameter(Mandatory)]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $nodes       = $OrgTree.Nodes
+    $levels      = if ($LeadershipData.ContainsKey('Levels')) { $LeadershipData['Levels'] } else { @{} }
+
+    # Determine level labels
+    $levelLabels = if ($OrgTree.ContainsKey('LevelLabels')) { $OrgTree.LevelLabels } else {
+        @{ 0 = 'Individual Contributors'; 1 = 'Managers'; 2 = 'Directors';
+           3 = 'Vice Presidents'; 4 = 'Senior Vice Presidents'; 5 = 'Executive Leadership' }
+    }
+
+    $thisLevelLabel = if ($levelLabels.ContainsKey($Level)) { $levelLabels[$Level] } else { "Level $Level Leaders" }
+    $lowerLevelLabel = if ($levelLabels.ContainsKey($Level - 1)) { $levelLabels[$Level - 1] } else { "Level $($Level - 1)" }
+
+    # Get leaders at this level
+    if (-not $levels.ContainsKey($Level)) {
+        return @()
+    }
+    $thisLevelData = $levels[$Level]
+    $leaders = $thisLevelData.Leaders
+    if ($null -eq $leaders -or $leaders.Count -eq 0) {
+        return @()
+    }
+
+    # Get lower-level leaders for subordinate detail
+    $lowerLeaders = $null
+    if ($levels.ContainsKey($Level - 1)) {
+        $lowerLeaders = $levels[$Level - 1].Leaders
+    }
+
+    # Style constants
+    $fontFamily = "-apple-system,'Segoe UI',system-ui,sans-serif"
+    $thStyle    = "style=""background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:$fontFamily; font-size:13px;"""
+    $tdStyle    = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px;"""
+    $safeCampaignName = ConvertTo-SafeHtml $CampaignName
+    $safeDateRange    = ConvertTo-SafeHtml $DateRange
+
+    # File prefix from level label (lowercase, no spaces)
+    $filePrefix = ($thisLevelLabel -replace '\s+', '-').ToLower()
+    # Singular form for file naming (remove trailing 's' if present)
+    $filePrefixSingular = if ($filePrefix.EndsWith('s') -and -not $filePrefix.EndsWith('ss')) {
+        $filePrefix.Substring(0, $filePrefix.Length - 1)
+    } else { $filePrefix }
+
+    # Determine if this is the top generated level (executive summary)
+    $isTopLevel = ($Level -eq $StartLevel)
+    # Determine if this is the lowest generated level (include identity detail)
+    $isLowestLevel = ($Level -eq $LowestLevel)
+
+    # Build identity-to-manager lookup for detail tables (only at lowest level)
+    $nameToLeafId  = @{}
+    $leafToManager = @{}
+    $managerToParent = @{}
+    if ($isLowestLevel) {
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -eq 0) {
+                if ($null -ne $node.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($node.Identity.Name)) {
+                    $nameToLeafId[$node.Identity.Name] = $nodeId
+                }
+                $leafToManager[$nodeId] = $node.ManagerId
+            }
+        }
+
+        # Build chain from manager to this level's leaders
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -ge 1 -and $node.Level -lt $Level) {
+                $managerToParent[$nodeId] = $node.ManagerId
+            }
+        }
+    }
+
+    # --- Generate one HTML file per leader ---
+    $outputPaths = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($leaderId in $leaders.Keys) {
+        if ($leaderId -eq '__unmanaged__') { continue }
+
+        $leaderData = $leaders[$leaderId]
+        $leaderName = if ($null -ne $leaderData.Name) { $leaderData.Name } else { $leaderId }
+
+        # Sanitize name for filename
+        $safeName = ($leaderName -replace '[^a-zA-Z0-9_-]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = $leaderId -replace '[^a-zA-Z0-9_-]', '' }
+
+        $safeLeaderName = ConvertTo-SafeHtml $leaderName
+
+        # --- Leader-level metrics ---
+        $totalItems    = [int]$leaderData.TotalItems
+        $totalApproved = [int]$leaderData.Approved
+        $totalRevoked  = [int]$leaderData.Revoked
+        $totalPending  = [int]$leaderData.Pending
+        $completionPct = [double]$leaderData.CompletionPct
+
+        $approvalRate   = if ($totalItems -gt 0) { [Math]::Round($totalApproved / $totalItems * 100, 1) } else { 0.0 }
+        $revocationRate = if ($totalItems -gt 0) { [Math]::Round($totalRevoked  / $totalItems * 100, 1) } else { 0.0 }
+
+        $completionColor = if ($completionPct -ge 95) { '#339933' } elseif ($completionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+
+        $dateRangeHtml = if (-not [string]::IsNullOrWhiteSpace($DateRange)) {
+            "<p style=""font-family:$fontFamily; color:#777777; font-size:13px; margin:0 0 20px 0;"">$safeDateRange</p>"
+        } else { '' }
+
+        # --- Summary cards ---
+        $summaryCardsHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<tr>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#2c3e50;">$totalItems</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Total Items</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#339933;">$($approvalRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Approval Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#CC3333;">$($revocationRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Revocation Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:$completionColor;">$($completionPct)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Completion</div>
+    </td>
+</tr>
+</table>
+"@
+
+        # --- Subordinate table (next-level-down leaders under this leader) ---
+        $subordinateTableHtml = ''
+        $subordinateIds = @()
+        if ($null -ne $leaderData.Subordinates) {
+            $subordinateIds = @($leaderData.Subordinates)
+        }
+        elseif ($null -ne $leaderData.Managers) {
+            # Level 2 (Directors) have Managers directly
+            $subordinateIds = @($leaderData.Managers.Keys | Where-Object { $_ -ne '__unmanaged__' })
+        }
+
+        if ($subordinateIds.Count -gt 0 -and $null -ne $lowerLeaders) {
+            $subRows = @()
+            foreach ($subId in $subordinateIds) {
+                if ($null -eq $lowerLeaders -or -not $lowerLeaders.ContainsKey($subId)) { continue }
+                $sub = $lowerLeaders[$subId]
+                $subTotal    = [int]$sub.TotalItems
+                $subApproved = [int]$sub.Approved
+                $subRevoked  = [int]$sub.Revoked
+                $subPending  = [int]$sub.Pending
+                $subPct      = [double]$sub.CompletionPct
+
+                $subRows += @{
+                    Id            = $subId
+                    Name          = if ($null -ne $sub.Name) { $sub.Name } else { $subId }
+                    TotalItems    = $subTotal
+                    Approved      = $subApproved
+                    Revoked       = $subRevoked
+                    Pending       = $subPending
+                    CompletionPct = $subPct
+                }
+            }
+            $subRows = @($subRows | Sort-Object { $_.CompletionPct })
+
+            if ($subRows.Count -gt 0) {
+                $subTableBody = ''
+                $subIndex = 0
+
+                # Determine lower-level file prefix for links
+                $lowerFilePrefix = ($lowerLevelLabel -replace '\s+', '-').ToLower()
+                $lowerFilePrefixSingular = if ($lowerFilePrefix.EndsWith('s') -and -not $lowerFilePrefix.EndsWith('ss')) {
+                    $lowerFilePrefix.Substring(0, $lowerFilePrefix.Length - 1)
+                } else { $lowerFilePrefix }
+
+                foreach ($sr in $subRows) {
+                    $isAlt = ($subIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $subPctColor = if ($sr.CompletionPct -ge 95) { '#339933' } elseif ($sr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+                    $pctCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$subPctColor;"""
+
+                    $safeSubName = ConvertTo-SafeHtml $sr.Name
+
+                    # Generate link to subordinate report (only if not at lowest generated level)
+                    $subFileName = ($sr.Name -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($subFileName)) { $subFileName = $sr.Id -replace '[^a-zA-Z0-9_-]', '' }
+                    $subLink = "$lowerFilePrefixSingular-$subFileName.html"
+
+                    $nameCell = if (($Level - 1) -ge $LowestLevel) {
+                        "<a href=""$subLink"" style=""color:#336699; text-decoration:none;"">$safeSubName</a>"
+                    } else { $safeSubName }
+
+                    $subTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$nameCell</td>
+    <td $tdStyle>$($sr.TotalItems)</td>
+    <td $tdStyle>$($sr.Approved)</td>
+    <td $tdStyle>$($sr.Revoked)</td>
+    <td $tdStyle>$($sr.Pending)</td>
+    <td $pctCellStyle>$($sr.CompletionPct)%</td>
+</tr>
+"@
+                    $subIndex++
+                }
+
+                $subordinateTableHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel)) Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel -replace 's$', ''))</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+</tr>
+</thead>
+<tbody>
+$subTableBody
+</tbody>
+</table>
+"@
+            }
+        }
+        elseif ($null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
+            # This is a Level 2 leader (Directors level) with direct manager data
+            $mgrRows = @()
+            foreach ($mgrId in $leaderData.Managers.Keys) {
+                if ($mgrId -eq '__unmanaged__') { continue }
+                $mgr = $leaderData.Managers[$mgrId]
+                $mgrApproved = [int]$mgr.Approved
+                $mgrRevoked  = [int]$mgr.Revoked
+                $mgrPending  = [int]$mgr.Pending
+                $mgrTotal    = $mgrApproved + $mgrRevoked + $mgrPending
+                $mgrPct      = if ($mgrTotal -gt 0) { [Math]::Round(($mgrApproved + $mgrRevoked) / $mgrTotal * 100, 1) } else { 0.0 }
+
+                $mgrRows += @{
+                    Id            = $mgrId
+                    Name          = if ($null -ne $mgr.Name) { $mgr.Name } else { $mgrId }
+                    TotalItems    = $mgrTotal
+                    Approved      = $mgrApproved
+                    Revoked       = $mgrRevoked
+                    Pending       = $mgrPending
+                    CompletionPct = $mgrPct
+                    AvgHours      = $mgr.AvgHours
+                }
+            }
+            $mgrRows = @($mgrRows | Sort-Object { $_.CompletionPct })
+
+            if ($mgrRows.Count -gt 0) {
+                $mgrTableBody = ''
+                $mgrIndex = 0
+                foreach ($mr in $mgrRows) {
+                    $isAlt = ($mgrIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $mgrPctColor = if ($mr.CompletionPct -ge 95) { '#339933' } elseif ($mr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+                    $pctCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$mgrPctColor;"""
+                    $avgHoursDisplay = Format-HoursDisplay $mr.AvgHours
+                    $safeMgrName = ConvertTo-SafeHtml $mr.Name
+
+                    $mgrTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$safeMgrName</td>
+    <td $tdStyle>$($mr.TotalItems)</td>
+    <td $tdStyle>$($mr.Approved)</td>
+    <td $tdStyle>$($mr.Revoked)</td>
+    <td $tdStyle>$($mr.Pending)</td>
+    <td $pctCellStyle>$($mr.CompletionPct)%</td>
+    <td $tdStyle>$avgHoursDisplay</td>
+</tr>
+"@
+                    $mgrIndex++
+                }
+
+                $subordinateTableHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Manager Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>Manager</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+    <th $thStyle>Avg Response Time</th>
+</tr>
+</thead>
+<tbody>
+$mgrTableBody
+</tbody>
+</table>
+"@
+            }
+        }
+
+        # --- Per-identity decision detail (only at lowest generated level) ---
+        $detailSectionsHtml = ''
+        if ($isLowestLevel -and $null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
+            # Build decision items grouped by manager under this leader
+            $mgrItemsForLeader = @{}
+
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                $items = @()
+                if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+                    $items = @($Decisions[$category])
+                }
+
+                foreach ($item in $items) {
+                    $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+
+                    if ([string]::IsNullOrWhiteSpace($identityName) -or
+                        -not $nameToLeafId.ContainsKey($identityName)) { continue }
+
+                    $leafId = $nameToLeafId[$identityName]
+                    if (-not $leafToManager.ContainsKey($leafId)) { continue }
+                    $mgrId = $leafToManager[$leafId]
+                    if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) { continue }
+
+                    # Walk up from manager to find if this leader owns it
+                    $currentId = $mgrId
+                    $belongsToLeader = $false
+                    for ($walk = 0; $walk -lt 10; $walk++) {
+                        if (-not $nodes.ContainsKey($currentId)) { break }
+                        $currentNode = $nodes[$currentId]
+                        if ($currentNode.Level -eq $Level -and $currentId -eq $leaderId) {
+                            $belongsToLeader = $true
+                            break
+                        }
+                        if ($currentNode.Level -ge $Level) { break }
+                        $parentId = $currentNode.ManagerId
+                        if ([string]::IsNullOrWhiteSpace($parentId)) { break }
+                        $currentId = $parentId
+                    }
+
+                    if (-not $belongsToLeader) { continue }
+
+                    if (-not $mgrItemsForLeader.ContainsKey($mgrId)) {
+                        $mgrItemsForLeader[$mgrId] = [System.Collections.Generic.List[object]]::new()
+                    }
+
+                    $mgrItemsForLeader[$mgrId].Add(@{
+                        IdentityName      = $identityName
+                        AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
+                        AccessName        = if ($null -ne $item.AccessName) { [string]$item.AccessName } else { '' }
+                        Decision          = $category
+                        ReviewerName      = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+                        DecisionDate      = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                    })
+                }
+            }
+
+            # Render detail per manager
+            $managersMap = $leaderData.Managers
+            $mgrDetailRows = @()
+            foreach ($mgrId in $managersMap.Keys) {
+                if ($mgrId -eq '__unmanaged__') { continue }
+                $mgr = $managersMap[$mgrId]
+                $mgrDetailRows += @{
+                    Id   = $mgrId
+                    Name = if ($null -ne $mgr.Name) { $mgr.Name } else { $mgrId }
+                }
+            }
+
+            foreach ($mr in $mgrDetailRows) {
+                $mgrId   = $mr.Id
+                $mgrName = $mr.Name
+                $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
+
+                $itemList = @()
+                if ($mgrItemsForLeader.ContainsKey($mgrId)) {
+                    $itemList = @($mgrItemsForLeader[$mgrId])
+                }
+
+                # Sort items: Pending first, then Revoked, then Approved
+                $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
+                $itemList = @($itemList | Sort-Object {
+                    $so = $sortOrder[$_.Decision]
+                    if ($null -eq $so) { 3 } else { $so }
+                }, { $_.IdentityName })
+
+                if ($itemList.Count -eq 0) { continue }
+
+                $detailRows = ''
+                $detailIndex = 0
+                foreach ($di in $itemList) {
+                    $isAlt = ($detailIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $decisionColor = switch ($di.Decision) {
+                        'Approved' { '#339933' }
+                        'Revoked'  { '#CC3333' }
+                        'Pending'  { '#FF8800' }
+                        default    { '#333333' }
+                    }
+                    $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
+
+                    $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
+                    $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
+                    $safeAccess   = ConvertTo-SafeHtml $di.AccessName
+                    $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
+                    $safeDate     = Format-HtmlDate $di.DecisionDate
+
+                    $detailRows += @"
+<tr$rowBg>
+    <td $tdStyle>$safeIdentity</td>
+    <td $tdStyle>$safeAccount</td>
+    <td $tdStyle>$safeAccess</td>
+    <td $decisionCellStyle>$($di.Decision)</td>
+    <td $tdStyle>$safeReviewer</td>
+    <td $tdStyle>$safeDate</td>
+</tr>
+"@
+                    $detailIndex++
+                }
+
+                $itemCountLabel = "$($itemList.Count) item"
+                if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
+
+                $detailSectionsHtml += @"
+<div style="margin-top:24px; page-break-inside:avoid;">
+<h4 style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></h4>
+<table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+<thead>
+<tr>
+    <th $thStyle>Identity</th>
+    <th $thStyle>Account (UPN)</th>
+    <th $thStyle>Access</th>
+    <th $thStyle>Decision</th>
+    <th $thStyle>Reviewer</th>
+    <th $thStyle>Date</th>
+</tr>
+</thead>
+<tbody>
+$detailRows
+</tbody>
+</table>
+</div>
+"@
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($detailSectionsHtml)) {
+                $detailSectionsHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Identity Decision Detail</h3>
+$detailSectionsHtml
+"@
+            }
+        }
+
+        # --- Navigation links ---
+        $navHtml = ''
+        if (-not $isTopLevel) {
+            # Link up to parent report
+            $parentLevel = $Level + 1
+            if ($nodes.ContainsKey($leaderId)) {
+                $parentId = $nodes[$leaderId].ManagerId
+                if (-not [string]::IsNullOrWhiteSpace($parentId) -and $nodes.ContainsKey($parentId)) {
+                    $parentName = if ($null -ne $nodes[$parentId].Identity -and
+                        -not [string]::IsNullOrWhiteSpace($nodes[$parentId].Identity.Name)) {
+                        $nodes[$parentId].Identity.Name
+                    } else { $parentId }
+                    $parentSafeName = ($parentName -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($parentSafeName)) { $parentSafeName = $parentId -replace '[^a-zA-Z0-9_-]', '' }
+
+                    $parentLevelLabel = if ($levelLabels.ContainsKey($parentLevel)) { $levelLabels[$parentLevel] } else { "Level $parentLevel" }
+                    $parentFilePrefix = ($parentLevelLabel -replace '\s+', '-').ToLower()
+                    $parentFilePrefixSingular = if ($parentFilePrefix.EndsWith('s') -and -not $parentFilePrefix.EndsWith('ss')) {
+                        $parentFilePrefix.Substring(0, $parentFilePrefix.Length - 1)
+                    } else { $parentFilePrefix }
+
+                    # If parent is at StartLevel, link to executive-summary.html
+                    if ($parentLevel -eq $StartLevel) {
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
+                    } else {
+                        $parentFile = "$parentFilePrefixSingular-$parentSafeName.html"
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""$parentFile"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to $([System.Net.WebUtility]::HtmlEncode($parentName))</a></p>"
+                    }
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($navHtml)) {
+                $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
+            }
+        }
+
+        # --- Title ---
+        $reportTitle = if ($isTopLevel) {
+            "Executive Summary"
+        } else {
+            "$($thisLevelLabel -replace 's$', '') Report: $safeLeaderName"
+        }
+
+        # --- Footer ---
+        $footerHtml = @"
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; $([System.Net.WebUtility]::HtmlEncode($reportTitle)) &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+"@
+
+        # --- Assemble full HTML document ---
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$([System.Net.WebUtility]::HtmlEncode($reportTitle)) - $safeCampaignName</title>
+</head>
+<body style="font-family:$fontFamily; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+$navHtml
+
+<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">$([System.Net.WebUtility]::HtmlEncode($reportTitle))</h1>
+<p style="font-family:$fontFamily; color:#555; font-size:14px; margin:0 0 4px 0;">$safeCampaignName</p>
+$dateRangeHtml
+
+$summaryCardsHtml
+
+$subordinateTableHtml
+
+$detailSectionsHtml
+
+$footerHtml
+
+</div>
+</body>
+</html>
+"@
+
+        # Determine filename
+        $fileName = if ($isTopLevel) {
+            'executive-summary.html'
+        } else {
+            "$filePrefixSingular-$safeName.html"
+        }
+
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+        $html | Set-Content -Path $filePath -Encoding UTF8
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Level $Level report written: $filePath" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLeadershipLevelHtml' `
+                -CorrelationID $CorrelationID
+        }
+
+        $outputPaths.Add($filePath)
+    }
+
+    return @($outputPaths.ToArray())
+}
+
 function Send-SPReport {
     <#
     .SYNOPSIS

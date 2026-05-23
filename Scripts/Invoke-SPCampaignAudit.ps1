@@ -147,6 +147,9 @@ param(
     [int]$LeadershipDepth = 3,
 
     [Parameter()]
+    [int]$LeadershipStartLevel = -1,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -315,6 +318,12 @@ if ($config.Audit -and $config.Audit.PSObject.Properties.Name -contains 'Leaders
     $effectiveLeadershipDepth = [int]$config.Audit.LeadershipDepth
 }
 
+$effectiveLeadershipStartLevel = $LeadershipStartLevel
+if ($LeadershipStartLevel -eq -1 -and $config.Audit -and
+    $config.Audit.PSObject.Properties.Name -contains 'LeadershipStartLevel') {
+    $effectiveLeadershipStartLevel = [int]$config.Audit.LeadershipStartLevel
+}
+
 #endregion
 
 #region Dispatch
@@ -338,6 +347,11 @@ if (($WhatIfPreference -eq $true)) {
     if ($IncludeLeadershipRollup) {
         Write-Host "    IncludeLeadershipRollup: Yes" -ForegroundColor Cyan
         Write-Host "    LeadershipDepth:     $LeadershipDepth"
+        if ($LeadershipStartLevel -ge 2) {
+            Write-Host "    LeadershipStartLevel: $LeadershipStartLevel"
+        } else {
+            Write-Host "    LeadershipStartLevel: (auto: highest level found)"
+        }
     }
     Write-Host ''
     Write-Host "  Would write output to: $OutputPath" -ForegroundColor Cyan
@@ -734,8 +748,42 @@ if ($effectiveLeadershipRollup) {
                     $leadershipDateRange = "$startDate to $endDate"
                 }
 
-                # Generate executive summary
-                Write-Host '    Generating executive summary...' -ForegroundColor DarkGray
+                # Determine start and lowest levels for per-level generation
+                $topLevel = $leadershipData.TopLevel
+                $resolvedStartLevel = if ($effectiveLeadershipStartLevel -ge 2) {
+                    [Math]::Min($effectiveLeadershipStartLevel, $topLevel)
+                } else { $topLevel }
+                $resolvedLowestLevel = 2  # Managers (level 1) are subordinates, not report subjects
+
+                # Generate per-level reports using the unified function
+                $totalReportsGenerated = 0
+                for ($lvl = $resolvedStartLevel; $lvl -ge $resolvedLowestLevel; $lvl--) {
+                    if (-not $leadershipData.Levels.ContainsKey($lvl)) { continue }
+                    $lvlLabel = $leadershipData.Levels[$lvl].Label
+                    $lvlLeaderCount = @($leadershipData.Levels[$lvl].Leaders.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
+                    Write-Host "    Generating $lvlLeaderCount $lvlLabel report(s) (level $lvl)..." -ForegroundColor DarkGray
+
+                    $lvlPaths = Export-SPLeadershipLevelHtml `
+                        -LeadershipData $leadershipData `
+                        -Decisions $mergedDecisionsHt `
+                        -OrgTree $orgTree `
+                        -Level $lvl `
+                        -StartLevel $resolvedStartLevel `
+                        -LowestLevel $resolvedLowestLevel `
+                        -CampaignName $leadershipCampaignName `
+                        -DateRange $leadershipDateRange `
+                        -OutputPath $leadershipOutputPath `
+                        -CorrelationID $correlationID
+
+                    foreach ($lp in @($lvlPaths)) {
+                        Write-Host "    $($lvlLabel): $lp" -ForegroundColor Green
+                    }
+                    $totalReportsGenerated += @($lvlPaths).Count
+                }
+
+                # Backward-compatible: also generate executive summary and director reports
+                # for callers that depend on the fixed filenames
+                Write-Host '    Generating executive summary (backward-compatible)...' -ForegroundColor DarkGray
                 $execPath = Export-SPLeadershipExecutiveHtml `
                     -LeadershipData $leadershipData `
                     -CampaignName $leadershipCampaignName `
@@ -744,10 +792,9 @@ if ($effectiveLeadershipRollup) {
                     -CorrelationID $correlationID
                 Write-Host "    Executive summary: $execPath" -ForegroundColor Green
 
-                # Generate per-director reports
                 $directorCount = @($leadershipData.Directors.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
                 if ($directorCount -gt 0) {
-                    Write-Host "    Generating $directorCount director report(s)..." -ForegroundColor DarkGray
+                    Write-Host "    Generating $directorCount director report(s) (backward-compatible)..." -ForegroundColor DarkGray
                     $dirPaths = Export-SPLeadershipDirectorHtml `
                         -LeadershipData $leadershipData `
                         -Decisions $mergedDecisionsHt `
@@ -761,8 +808,8 @@ if ($effectiveLeadershipRollup) {
                     }
                 }
 
-                Write-Host "    Leadership rollup complete. Output: $leadershipOutputPath" -ForegroundColor Green
-                Write-SPLog -Message "Leadership rollup generated: exec summary + $directorCount director report(s)" `
+                Write-Host "    Leadership rollup complete ($totalReportsGenerated per-level + backward-compat reports). Output: $leadershipOutputPath" -ForegroundColor Green
+                Write-SPLog -Message "Leadership rollup generated: $totalReportsGenerated per-level reports + exec summary + $directorCount director report(s)" `
                     -Severity INFO -Component 'Invoke-SPCampaignAudit' -Action 'LeadershipRollup' -CorrelationID $correlationID
             }
         }
