@@ -38,6 +38,7 @@
         'Resolve-SPAuditIdentityAccounts'
         'Get-SPReviewerWorkload'
         'Get-SPIdentityDecisionHistory'
+        'Get-SPSourceCampaignCoverage'
 
         # SP.AuditReport - Categorization functions
         'Group-SPAuditDecisions'

@@ -58,7 +58,7 @@ Safe to modify:
 | S-04 | Reviewer Workload Search | none | DONE |
 | S-05 | Identity Decision History | none | DONE |
 | S-06 | Campaign Metrics Aggregation | none | DONE |
-| S-07 | Source Coverage Analysis | none | PENDING |
+| S-07 | Source Coverage Analysis | none | DONE |
 | S-08 | Campaign Comparison | S-06 | PENDING |
 | S-09 | Campaign Search CLI | S-01 to S-08 | PENDING |
 | S-10 | Pester Tests | S-09 | PENDING |
@@ -339,8 +339,8 @@ comprehensive KPIs for one or more campaigns.
 
 ## S-07: Source Coverage Analysis
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
