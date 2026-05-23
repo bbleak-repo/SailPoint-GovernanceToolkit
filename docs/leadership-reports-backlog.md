@@ -58,7 +58,7 @@ Audit/
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| L-01 | Org Tree Walker (Build-SPOrgTree) | none | PENDING |
+| L-01 | Org Tree Walker (Build-SPOrgTree) | none | DONE |
 | L-02 | Leadership Grouping (Group-SPAuditByLeadership) | L-01 | PENDING |
 | L-03 | Executive Summary HTML | L-02 | PENDING |
 | L-04 | Director-Level HTML Reports | L-03 | PENDING |
@@ -104,8 +104,8 @@ cases (data quality issues).
 
 ## L-01: Org Tree Walker (Build-SPOrgTree)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** ecae282
 - **Depends On:** none
 
 **Description:**

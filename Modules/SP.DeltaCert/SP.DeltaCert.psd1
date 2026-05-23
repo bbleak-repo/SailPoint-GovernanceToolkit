@@ -35,6 +35,7 @@
         'Group-SPDeltaByManager'
         'Get-SPDeltaCertStaleCertifications'
         'Get-SPDeltaIdentityDetail'
+        'Build-SPOrgTree'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'
