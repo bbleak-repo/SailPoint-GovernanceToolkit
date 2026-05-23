@@ -63,6 +63,10 @@
         # SP.AuditReport - Comparison functions
         'Compare-SPCampaigns'
         'Export-SPCampaignComparisonHtml'
+
+        # SP.AuditReport - Audit Trail Consolidator (P11-02)
+        'Get-SPAuditTrail'
+        'Export-SPAuditTrailHtml'
     )
 
     # Do not export variables or aliases from nested modules

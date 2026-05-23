@@ -44,7 +44,7 @@ Safe to modify:
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | P11-01 | Configuration Validator | none | DONE |
-| P11-02 | Audit Trail Consolidator | none | PENDING |
+| P11-02 | Audit Trail Consolidator | none | DONE |
 | P11-03 | CSV Export for Audit Data | none | PENDING |
 | P11-04 | Remediation Verification | none | PENDING |
 | P11-05 | Campaign Health Monitor | none | PENDING |
@@ -164,8 +164,8 @@ function Test-SPConfiguration {
 
 ## P11-02: Audit Trail Consolidator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

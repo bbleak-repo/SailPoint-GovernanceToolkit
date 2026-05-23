@@ -5841,6 +5841,355 @@ function Format-ComparisonCellValue {
 
 #endregion
 
+#region Audit Trail Consolidator (P11-02)
+
+function Get-SPAuditTrail {
+    <#
+    .SYNOPSIS
+        Reads all JSONL audit files and produces a unified, chronologically sorted timeline.
+    .DESCRIPTION
+        Consolidates events from three JSONL sources:
+          - {Audit.OutputPath}/audit-*.jsonl   (campaign audit events)
+          - {DeltaCert.OutputPath}/deltacert-audit.jsonl  (delta cert run events)
+          - {DeltaCert.OutputPath}/deltacert-escalation.jsonl  (escalation events)
+
+        Each event is normalised to a common schema: Timestamp, EventType, Action,
+        CorrelationID, SourceIds, Summary, Details, FilePath.
+
+        Supports filtering by date range, correlation ID, event type, and source ID.
+        Returns newest-first, capped at MaxEvents.
+    .PARAMETER After
+        Only include events after this datetime.
+    .PARAMETER Before
+        Only include events before this datetime.
+    .PARAMETER CorrelationID
+        Filter to events matching this correlation ID.
+    .PARAMETER EventType
+        Filter to specific event types: 'CampaignAudit', 'DeltaCertRun', 'Escalation'.
+    .PARAMETER SourceId
+        Filter to events involving this source ID.
+    .PARAMETER AuditOutputPath
+        Directory containing campaign audit JSONL files. Resolved from config if omitted.
+    .PARAMETER DeltaCertOutputPath
+        Directory containing delta cert JSONL files. Resolved from config if omitted.
+    .PARAMETER MaxEvents
+        Maximum number of events to return. Default: 500.
+    .OUTPUTS
+        [PSCustomObject[]] Array of normalised audit trail events.
+    .EXAMPLE
+        $trail = Get-SPAuditTrail -After (Get-Date).AddDays(-7) -EventType 'Escalation'
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter()][DateTime]$After,
+        [Parameter()][DateTime]$Before,
+        [Parameter()][string]$CorrelationID,
+        [Parameter()][string[]]$EventType,
+        [Parameter()][string]$SourceId,
+        [Parameter()][string]$AuditOutputPath,
+        [Parameter()][string]$DeltaCertOutputPath,
+        [Parameter()][int]$MaxEvents = 500
+    )
+
+    $logCorrelation = if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        [guid]::NewGuid().ToString()
+    } else { $CorrelationID }
+
+    Write-SPLog -Message "Get-SPAuditTrail: starting consolidation" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+        -CorrelationID $logCorrelation
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                $AuditOutputPath = $config.Audit.OutputPath
+            }
+            if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                -CorrelationID $logCorrelation
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+
+    $allEvents = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Collect JSONL files and their event type mappings
+    $fileMappings = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Campaign audit files: audit-*.jsonl
+    if (Test-Path -Path $AuditOutputPath -PathType Container) {
+        $auditFiles = Get-ChildItem -Path $AuditOutputPath -Filter 'audit-*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $auditFiles) {
+            $fileMappings.Add(@{ Path = $f.FullName; DefaultEventType = 'CampaignAudit' })
+        }
+    }
+
+    # Delta cert audit file
+    if (Test-Path -Path $DeltaCertOutputPath -PathType Container) {
+        $dcAuditPath = Join-Path $DeltaCertOutputPath 'deltacert-audit.jsonl'
+        if (Test-Path -Path $dcAuditPath -PathType Leaf) {
+            $fileMappings.Add(@{ Path = $dcAuditPath; DefaultEventType = 'DeltaCertRun' })
+        }
+
+        $dcEscPath = Join-Path $DeltaCertOutputPath 'deltacert-escalation.jsonl'
+        if (Test-Path -Path $dcEscPath -PathType Leaf) {
+            $fileMappings.Add(@{ Path = $dcEscPath; DefaultEventType = 'Escalation' })
+        }
+    }
+
+    # Read and normalise each file
+    foreach ($mapping in $fileMappings) {
+        $filePath      = $mapping.Path
+        $defaultEvType = $mapping.DefaultEventType
+
+        try {
+            $lines = [System.IO.File]::ReadAllLines($filePath)
+        }
+        catch {
+            Write-SPLog -Message "Failed to read JSONL file '$filePath': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                -CorrelationID $logCorrelation
+            continue
+        }
+
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+            try {
+                $parsed = $line | ConvertFrom-Json
+            }
+            catch {
+                Write-SPLog -Message "Malformed JSONL line in '$filePath': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                    -CorrelationID $logCorrelation
+                continue
+            }
+
+            # Extract timestamp
+            $tsString = $null
+            if ($null -ne $parsed.Timestamp) { $tsString = [string]$parsed.Timestamp }
+            $ts = $null
+            if (-not [string]::IsNullOrWhiteSpace($tsString)) {
+                try { $ts = [datetime]::Parse($tsString).ToUniversalTime() } catch { $ts = $null }
+            }
+
+            # Extract correlation ID from event
+            $eventCorrId = ''
+            if ($null -ne $parsed.CorrelationID) { $eventCorrId = [string]$parsed.CorrelationID }
+
+            # Extract action
+            $action = ''
+            if ($null -ne $parsed.Action) { $action = [string]$parsed.Action }
+
+            # Extract source IDs
+            $sourceIds = @()
+            if ($null -ne $parsed.SourceIds) {
+                $sourceIds = @($parsed.SourceIds)
+            }
+            elseif ($null -ne $parsed.Data -and $null -ne $parsed.Data.SourceIds) {
+                $sourceIds = @($parsed.Data.SourceIds)
+            }
+
+            # Build summary based on event type
+            $summary = ''
+            switch ($defaultEvType) {
+                'CampaignAudit' {
+                    $summary = $action
+                }
+                'DeltaCertRun' {
+                    $campCount = 0
+                    $idCount   = 0
+                    if ($null -ne $parsed.CampaignsCreated) { $campCount = [int]$parsed.CampaignsCreated }
+                    if ($null -ne $parsed.IdentitiesProcessed) { $idCount = [int]$parsed.IdentitiesProcessed }
+                    $summary = "Created $campCount campaigns for $idCount identities"
+                }
+                'Escalation' {
+                    $escCount = 0
+                    if ($null -ne $parsed.Escalated) { $escCount = [int]$parsed.Escalated }
+                    $summary = "Escalated $escCount certifications"
+                }
+            }
+
+            $normalized = [PSCustomObject]@{
+                Timestamp     = $ts
+                EventType     = $defaultEvType
+                Action        = $action
+                CorrelationID = $eventCorrId
+                SourceIds     = $sourceIds
+                Summary       = $summary
+                Details       = $parsed
+                FilePath      = $filePath
+            }
+
+            # Apply filters
+            if ($PSBoundParameters.ContainsKey('After') -and $null -ne $ts -and $ts -lt $After.ToUniversalTime()) { continue }
+            if ($PSBoundParameters.ContainsKey('Before') -and $null -ne $ts -and $ts -gt $Before.ToUniversalTime()) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($CorrelationID) -and $eventCorrId -ne $CorrelationID) { continue }
+            if ($null -ne $EventType -and $EventType.Count -gt 0 -and $defaultEvType -notin $EventType) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($SourceId) -and $SourceId -notin $sourceIds) { continue }
+
+            $allEvents.Add($normalized)
+        }
+    }
+
+    # Sort by Timestamp descending (newest first), nulls last
+    $sorted = $allEvents | Sort-Object -Property {
+        if ($null -ne $_.Timestamp) { $_.Timestamp } else { [datetime]::MinValue }
+    } -Descending
+
+    # Cap at MaxEvents
+    $result = @($sorted | Select-Object -First $MaxEvents)
+
+    Write-SPLog -Message "Get-SPAuditTrail: returning $($result.Count) events from $($fileMappings.Count) files" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+        -CorrelationID $logCorrelation
+
+    return $result
+}
+
+function Export-SPAuditTrailHtml {
+    <#
+    .SYNOPSIS
+        Generates a timeline HTML report from consolidated audit trail events.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with chronologically sorted events,
+        color-coded event type badges, and CSS class filtering support.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER Events
+        Array of normalised audit trail events from Get-SPAuditTrail.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $trail = Get-SPAuditTrail -After (Get-Date).AddDays(-7)
+        $path  = Export-SPAuditTrailHtml -Events $trail -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [PSCustomObject[]]$Events,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "AuditTrail-${timestamp}.html"
+
+    # Badge colors per event type
+    $badgeColors = @{
+        'CampaignAudit' = @{ Bg = '#336699'; Text = '#ffffff' }
+        'DeltaCertRun'  = @{ Bg = '#339966'; Text = '#ffffff' }
+        'Escalation'    = @{ Bg = '#CC6633'; Text = '#ffffff' }
+    }
+
+    # Build table rows
+    $headers = @('Timestamp', 'Event Type', 'Action', 'Summary', 'Correlation ID', 'Source')
+    $theadHtml = Build-HtmlTableHeader -Headers $headers
+
+    $tbodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+    foreach ($evt in $Events) {
+        $tsDisplay = ''
+        if ($null -ne $evt.Timestamp) {
+            $tsDisplay = $evt.Timestamp.ToString('yyyy-MM-dd HH:mm:ss')
+        }
+
+        $evType  = ConvertTo-SafeHtml $evt.EventType
+        $colors  = $badgeColors[$evt.EventType]
+        if ($null -eq $colors) { $colors = @{ Bg = '#777777'; Text = '#ffffff' } }
+        $badge   = "<span class=""evtype-$($evt.EventType)"" style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; background:$($colors.Bg); color:$($colors.Text);"">$evType</span>"
+
+        $action  = ConvertTo-SafeHtml $evt.Action
+        $summary = ConvertTo-SafeHtml $evt.Summary
+        $corrId  = ConvertTo-SafeHtml $evt.CorrelationID
+
+        $sourceDisplay = ''
+        if ($null -ne $evt.SourceIds -and $evt.SourceIds.Count -gt 0) {
+            $sourceDisplay = ConvertTo-SafeHtml (($evt.SourceIds | ForEach-Object { [string]$_ }) -join ', ')
+        }
+
+        $cells = @($tsDisplay, $badge, $action, $summary, $corrId, $sourceDisplay)
+        $isAlt = (($rowIdx % 2) -eq 1)
+        $tbodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate $isAlt))
+        $rowIdx++
+    }
+
+    $tbodyHtml = $tbodyRows -join "`n"
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Audit Trail Timeline</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Audit Trail Timeline</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:20px;">$($Events.Count) events consolidated from campaign audits, delta cert runs, and escalations</p>
+
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+$theadHtml
+<tbody>
+$tbodyHtml
+</tbody>
+</table>
+
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Audit Trail Timeline &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+
+</body>
+</html>
+"@
+
+    [System.IO.File]::WriteAllText($htmlFile, $html, [System.Text.Encoding]::UTF8)
+
+    Write-SPLog -Message "Audit trail HTML written ($($Events.Count) events): $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditTrailHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -5859,5 +6208,7 @@ Export-ModuleMember -Function @(
     'Export-SPLeadershipLevelHtml',
     'Send-SPReport',
     'Compare-SPCampaigns',
-    'Export-SPCampaignComparisonHtml'
+    'Export-SPCampaignComparisonHtml',
+    'Get-SPAuditTrail',
+    'Export-SPAuditTrailHtml'
 )
