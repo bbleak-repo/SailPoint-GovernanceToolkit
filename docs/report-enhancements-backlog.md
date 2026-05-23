@@ -28,7 +28,7 @@ R-01 -> R-02 -> R-03 -> R-04 -> R-05 -> R-06 -> R-07 -> R-08 -> R-09 -> R-10
 | R-02 | Per-Level Report Generation | R-01 | DONE |
 | R-03 | Expandable Detail Mode | R-02 | DONE |
 | R-04 | Delta Report Generator | none | DONE |
-| R-05 | Delta Report Mock Data | R-04 | PENDING |
+| R-05 | Delta Report Mock Data | R-04 | DONE |
 | R-06 | Delta Report CLI + GUI | R-05 | PENDING |
 | R-07 | Anti-Rubber-Stamping Analytics | R-03 | PENDING |
 | R-08 | Risk Indicators | R-03 | PENDING |
@@ -276,8 +276,8 @@ activity data to produce a lightweight actionable report.
 
 ## R-05: Delta Report Mock Data
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 0fe76b9
 - **Depends On:** R-04
 
 **Description:**
