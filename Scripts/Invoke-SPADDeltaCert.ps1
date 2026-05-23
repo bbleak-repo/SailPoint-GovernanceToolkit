@@ -359,6 +359,9 @@ $runParams = @{
 if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
     $runParams['FallbackManagerId'] = $effectiveFallback
 }
+if ($WhatIfPreference -eq $true) {
+    $runParams['WhatIf'] = $true
+}
 
 $runResult = Invoke-SPDeltaCertRun @runParams
 

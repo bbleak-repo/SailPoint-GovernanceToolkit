@@ -82,7 +82,7 @@ Stop-Process -Name pwsh -ErrorAction SilentlyContinue  # kills mock
 |----|-------------|-------|------------|--------|
 | T-01 | Test-SPConnectivity.ps1 | 1 | none | DONE |
 | T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | DONE |
-| T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | PENDING |
+| T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | DONE |
 | T-04 | Invoke-SPDeltaReport.ps1 | 3 | T-01 | PENDING |
 | T-05 | Invoke-SPDeltaCertEscalate.ps1 | 2 | T-01 | PENDING |
 | T-06 | Integration Test (full workflow) | 5 | T-02 to T-05 | PENDING |
@@ -160,8 +160,8 @@ TC-02-07: -Status COMPLETED -DaysBack 365 -IncludeLeadershipRollup -LeadershipDe
 
 ## T-03: Invoke-SPADDeltaCert.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 8cab65b
 - **Depends On:** T-01
 
 **IMPORTANT:** Restart mock server between tests that create campaigns (to reset state

@@ -84,3 +84,6 @@ None.
   sections in `<details open>` for expandable display.
 - Leadership depth=2 stops at the VP/executive level (the identities' managers are directors,
   so 2 levels up reaches VPs). The org tree labels them "Executive Leadership" at level 2.
+
+**Completed:** 2026-05-23 15:41:43
+**Status:** SUCCESS - more tests remain
