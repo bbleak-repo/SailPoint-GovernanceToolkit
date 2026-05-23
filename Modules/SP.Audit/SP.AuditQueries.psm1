@@ -2245,6 +2245,745 @@ function Get-SPSourceCampaignCoverage {
     }
 }
 
+function Get-SPRemediationStatus {
+    <#
+    .SYNOPSIS
+        Verifies whether revocation decisions were actually provisioned by ISC.
+    .DESCRIPTION
+        Takes revocation decisions from a campaign audit and checks ISC
+        account-activity events to verify that the revocations were actually
+        carried out. Each revocation is classified as Provisioned, Pending,
+        Overdue, or Failed based on matching REVOKE_ACCESS events.
+
+        Uses Get-SPAuditIdentityEvents (which calls GET /v3/account-activities)
+        to retrieve provisioning events per identity, then cross-references
+        each revocation decision by source name and entitlement name.
+    .PARAMETER RevocationDecisions
+        Array of revocation decision objects. Each must have: IdentityId,
+        IdentityName, SourceName, EntitlementName, DecisionDate.
+    .PARAMETER SlaHours
+        Hours within which a revocation is expected to be provisioned.
+        Revocations past this window with no matching event are Overdue.
+        Default: 48.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Items = @(@{IdentityName; EntitlementName; DecisionDate; Status;
+                            ProvisioningDate; DaysToRemediate})
+                Summary = @{Total; Provisioned; Pending; Overdue; Failed;
+                            AvgDaysToRemediate}
+            }
+        }
+    .EXAMPLE
+        $revocations = @(
+            @{ IdentityId='id-001'; IdentityName='Alice'; SourceName='AD';
+               EntitlementName='SG-Finance'; DecisionDate='2026-05-20T14:30:00Z' }
+        )
+        $result = Get-SPRemediationStatus -RevocationDecisions $revocations -SlaHours 48
+        $result.Data.Summary
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject[]]$RevocationDecisions,
+
+        [Parameter()]
+        [int]$SlaHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Verifying remediation status for $($RevocationDecisions.Count) revocation(s), SLA=${SlaHours}h" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRemediationStatus' `
+        -CorrelationID $CorrelationID
+
+    # Handle zero revocations gracefully
+    if ($RevocationDecisions.Count -eq 0) {
+        Write-SPLog -Message 'No revocation decisions to verify' `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRemediationStatus' `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                Items   = @()
+                Summary = @{
+                    Total              = 0
+                    Provisioned        = 0
+                    Pending            = 0
+                    Overdue            = 0
+                    Failed             = 0
+                    AvgDaysToRemediate = 0
+                }
+            }
+        }
+    }
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Collect unique identity IDs and fetch events per identity
+        # -----------------------------------------------------------
+        $identityIds = @($RevocationDecisions | ForEach-Object {
+            if ($null -ne $_.IdentityId) { $_.IdentityId }
+            elseif ($_ -is [hashtable] -and $_.ContainsKey('IdentityId')) { $_.IdentityId }
+        } | Sort-Object -Unique)
+
+        Write-SPLog -Message "Fetching account activities for $($identityIds.Count) unique identity/identities" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRemediationStatus' `
+            -CorrelationID $CorrelationID
+
+        # Cache: identityId -> array of account-activity events
+        $eventsByIdentity = @{}
+
+        # Determine the earliest decision date to scope the DaysBack query
+        $earliestDecision = $null
+        foreach ($rev in $RevocationDecisions) {
+            $decDateRaw = if ($rev -is [hashtable]) { $rev.DecisionDate } else { $rev.DecisionDate }
+            if ($null -eq $decDateRaw) { continue }
+            $parsedDec = [datetime]::MinValue
+            if ($decDateRaw -is [datetime]) {
+                $parsedDec = ([datetime]$decDateRaw).ToUniversalTime()
+            } elseif ([datetime]::TryParse($decDateRaw.ToString(), [ref]$parsedDec)) {
+                $parsedDec = $parsedDec.ToUniversalTime()
+            } else {
+                continue
+            }
+            if ($null -eq $earliestDecision -or $parsedDec -lt $earliestDecision) {
+                $earliestDecision = $parsedDec
+            }
+        }
+
+        $daysBack = 30
+        if ($null -ne $earliestDecision) {
+            $daysSince = [math]::Ceiling(((Get-Date).ToUniversalTime() - $earliestDecision).TotalDays)
+            if ($daysSince -gt $daysBack) { $daysBack = $daysSince + 7 }
+        }
+
+        foreach ($identityId in $identityIds) {
+            $evtResult = Get-SPAuditIdentityEvents -IdentityId $identityId `
+                -DaysBack $daysBack -CorrelationID $CorrelationID
+
+            if ($evtResult.Success -and $null -ne $evtResult.Data) {
+                $eventsByIdentity[$identityId] = @($evtResult.Data)
+            } else {
+                Write-SPLog -Message "Could not retrieve events for identity '$identityId': $($evtResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPRemediationStatus' `
+                    -CorrelationID $CorrelationID
+                $eventsByIdentity[$identityId] = @()
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 2: Match each revocation to a provisioning event
+        # -----------------------------------------------------------
+        $now = (Get-Date).ToUniversalTime()
+        $items = [System.Collections.Generic.List[hashtable]]::new()
+        $provisionedCount = 0
+        $pendingCount     = 0
+        $overdueCount     = 0
+        $failedCount      = 0
+        $totalRemDays     = 0.0
+        $remDaysCount     = 0
+
+        foreach ($rev in $RevocationDecisions) {
+            # Extract fields (support both PSCustomObject and hashtable)
+            $identityId     = if ($rev -is [hashtable]) { $rev.IdentityId }     else { $rev.IdentityId }
+            $identityName   = if ($rev -is [hashtable]) { $rev.IdentityName }   else { $rev.IdentityName }
+            $sourceName     = if ($rev -is [hashtable]) { $rev.SourceName }     else { $rev.SourceName }
+            $entitlementName = if ($rev -is [hashtable]) { $rev.EntitlementName } else { $rev.EntitlementName }
+            $decDateRaw     = if ($rev -is [hashtable]) { $rev.DecisionDate }   else { $rev.DecisionDate }
+
+            # Parse decision date
+            $decisionDate = $null
+            if ($null -ne $decDateRaw) {
+                if ($decDateRaw -is [datetime]) {
+                    $decisionDate = ([datetime]$decDateRaw).ToUniversalTime()
+                } else {
+                    $parsed = [datetime]::MinValue
+                    if ([datetime]::TryParse($decDateRaw.ToString(), [ref]$parsed)) {
+                        $decisionDate = $parsed.ToUniversalTime()
+                    }
+                }
+            }
+
+            # Get events for this identity
+            $events = @()
+            if ($null -ne $identityId -and $eventsByIdentity.ContainsKey($identityId)) {
+                $events = $eventsByIdentity[$identityId]
+            }
+
+            # Search for a matching REVOKE_ACCESS event
+            $matchedEvent  = $null
+            $matchedStatus = $null
+
+            foreach ($evt in $events) {
+                if ($null -eq $evt) { continue }
+
+                # Check action type (account-activity action field)
+                $action = $null
+                if ($null -ne $evt.PSObject -and $null -ne $evt.PSObject.Properties['action']) {
+                    $action = $evt.action
+                } elseif ($evt -is [hashtable] -and $evt.ContainsKey('action')) {
+                    $action = $evt.action
+                }
+
+                # Accept REVOKE_ACCESS or any action containing 'REVOKE'
+                if ($null -eq $action -or $action -notmatch 'REVOKE') { continue }
+
+                # Check event timestamp is after decision date
+                $evtDateRaw = $null
+                if ($null -ne $evt.PSObject -and $null -ne $evt.PSObject.Properties['created']) {
+                    $evtDateRaw = $evt.created
+                } elseif ($evt -is [hashtable] -and $evt.ContainsKey('created')) {
+                    $evtDateRaw = $evt.created
+                }
+
+                $evtDate = $null
+                if ($null -ne $evtDateRaw) {
+                    if ($evtDateRaw -is [datetime]) {
+                        $evtDate = ([datetime]$evtDateRaw).ToUniversalTime()
+                    } else {
+                        $parsedEvt = [datetime]::MinValue
+                        if ([datetime]::TryParse($evtDateRaw.ToString(), [ref]$parsedEvt)) {
+                            $evtDate = $parsedEvt.ToUniversalTime()
+                        }
+                    }
+                }
+
+                if ($null -ne $decisionDate -and $null -ne $evtDate -and $evtDate -lt $decisionDate) {
+                    continue
+                }
+
+                # Match source name via ResolvedSourceNames or items
+                $sourceMatched = $false
+                if ($null -ne $evt.PSObject -and $null -ne $evt.PSObject.Properties['ResolvedSourceNames'] -and
+                    $null -ne $evt.ResolvedSourceNames) {
+                    foreach ($resolvedName in $evt.ResolvedSourceNames.Values) {
+                        if ($resolvedName -eq $sourceName) {
+                            $sourceMatched = $true
+                            break
+                        }
+                    }
+                }
+
+                # Also check items for source/entitlement match
+                $entitlementMatched = $false
+                $activityItems = $null
+                if ($null -ne $evt.PSObject -and $null -ne $evt.PSObject.Properties['items'] -and $null -ne $evt.items) {
+                    $activityItems = @($evt.items)
+                }
+
+                if ($null -ne $activityItems) {
+                    foreach ($actItem in $activityItems) {
+                        if ($null -eq $actItem) { continue }
+
+                        # Check source name on item
+                        $itemSourceName = $null
+                        if ($null -ne $actItem.PSObject.Properties['sourceName']) {
+                            $itemSourceName = $actItem.sourceName
+                        } elseif ($null -ne $actItem.PSObject.Properties['source'] -and
+                                  $null -ne $actItem.source -and
+                                  $null -ne $actItem.source.PSObject.Properties['name']) {
+                            $itemSourceName = $actItem.source.name
+                        }
+
+                        if ($null -ne $itemSourceName -and $itemSourceName -eq $sourceName) {
+                            $sourceMatched = $true
+                        }
+
+                        # Check entitlement name on item
+                        $itemEntName = $null
+                        if ($null -ne $actItem.PSObject.Properties['name']) {
+                            $itemEntName = $actItem.name
+                        } elseif ($null -ne $actItem.PSObject.Properties['entitlementName']) {
+                            $itemEntName = $actItem.entitlementName
+                        }
+
+                        if ($null -ne $itemEntName -and $itemEntName -eq $entitlementName) {
+                            $entitlementMatched = $true
+                        }
+
+                        if ($sourceMatched -and $entitlementMatched) { break }
+                    }
+                }
+
+                # If no items to check, accept source-only match (best effort)
+                if (-not $sourceMatched -and -not $entitlementMatched) { continue }
+
+                # Determine event completion status
+                $evtStatus = $null
+                if ($null -ne $evt.PSObject -and $null -ne $evt.PSObject.Properties['status']) {
+                    $evtStatus = $evt.status
+                } elseif ($evt -is [hashtable] -and $evt.ContainsKey('status')) {
+                    $evtStatus = $evt.status
+                }
+
+                $matchedEvent  = $evt
+                $matchedStatus = $evtStatus
+                break
+            }
+
+            # -----------------------------------------------------------
+            # Step 3: Classify the revocation
+            # -----------------------------------------------------------
+            $status           = 'Pending'
+            $provisioningDate = $null
+            $daysToRemediate  = $null
+
+            if ($null -ne $matchedEvent) {
+                # Check if event had an error status
+                if ($null -ne $matchedStatus -and $matchedStatus -match 'ERROR|FAILED') {
+                    $status = 'Failed'
+                    $failedCount++
+                } else {
+                    $status = 'Provisioned'
+                    $provisionedCount++
+
+                    # Calculate days to remediate
+                    $evtDateRaw2 = $matchedEvent.created
+                    if ($null -ne $evtDateRaw2) {
+                        $evtDate2 = $null
+                        if ($evtDateRaw2 -is [datetime]) {
+                            $evtDate2 = ([datetime]$evtDateRaw2).ToUniversalTime()
+                        } else {
+                            $parsedEvt2 = [datetime]::MinValue
+                            if ([datetime]::TryParse($evtDateRaw2.ToString(), [ref]$parsedEvt2)) {
+                                $evtDate2 = $parsedEvt2.ToUniversalTime()
+                            }
+                        }
+
+                        if ($null -ne $evtDate2) {
+                            $provisioningDate = $evtDate2.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                            if ($null -ne $decisionDate) {
+                                $daysToRemediate = [math]::Round(($evtDate2 - $decisionDate).TotalDays, 3)
+                                if ($daysToRemediate -lt 0) { $daysToRemediate = 0 }
+                                $totalRemDays += $daysToRemediate
+                                $remDaysCount++
+                            }
+                        }
+                    }
+                }
+            } else {
+                # No matching event found -- check SLA
+                if ($null -ne $decisionDate) {
+                    $hoursElapsed = ($now - $decisionDate).TotalHours
+                    if ($hoursElapsed -gt $SlaHours) {
+                        $status = 'Overdue'
+                        $overdueCount++
+                    } else {
+                        $status = 'Pending'
+                        $pendingCount++
+                    }
+                } else {
+                    # No decision date, cannot determine SLA -- mark Pending
+                    $status = 'Pending'
+                    $pendingCount++
+                }
+            }
+
+            $decDateStr = ''
+            if ($null -ne $decisionDate) {
+                $decDateStr = $decisionDate.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            } elseif ($null -ne $decDateRaw) {
+                $decDateStr = $decDateRaw.ToString()
+            }
+
+            $items.Add(@{
+                IdentityName     = if ($null -ne $identityName) { $identityName } else { '' }
+                EntitlementName  = if ($null -ne $entitlementName) { $entitlementName } else { '' }
+                SourceName       = if ($null -ne $sourceName) { $sourceName } else { '' }
+                DecisionDate     = $decDateStr
+                Status           = $status
+                ProvisioningDate = if ($null -ne $provisioningDate) { $provisioningDate } else { '' }
+                DaysToRemediate  = $daysToRemediate
+            })
+        }
+
+        # -----------------------------------------------------------
+        # Step 4: Build summary
+        # -----------------------------------------------------------
+        $total = $items.Count
+        $avgDays = 0
+        if ($remDaysCount -gt 0) {
+            $avgDays = [math]::Round($totalRemDays / $remDaysCount, 3)
+        }
+
+        $summary = @{
+            Total              = $total
+            Provisioned        = $provisionedCount
+            Pending            = $pendingCount
+            Overdue            = $overdueCount
+            Failed             = $failedCount
+            AvgDaysToRemediate = $avgDays
+        }
+
+        Write-SPLog -Message "Remediation status: $total total, $provisionedCount provisioned, $pendingCount pending, $overdueCount overdue, $failedCount failed (avg $avgDays days)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRemediationStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Items   = $items.ToArray()
+                Summary = $summary
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPRemediationStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPRemediationStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
+#region Entitlement Inventory (P11-07)
+
+function Get-SPEntitlementInventory {
+    <#
+    .SYNOPSIS
+        Queries ISC /v3/entitlements to build a per-source entitlement catalog.
+    .DESCRIPTION
+        Retrieves all entitlements for the specified sources (or all sources) via
+        paginated GET /v3/entitlements calls. Optionally cross-references entitlement
+        names against access review items from recent campaigns to identify
+        entitlements that have never been reviewed.
+
+        Uses the same pagination pattern as Get-SPAuditCampaigns and
+        Get-SPSourceCampaignCoverage.
+    .PARAMETER SourceIds
+        Optional array of source IDs to query. If omitted, queries all entitlements.
+    .PARAMETER IncludeReviewHistory
+        When set, cross-references entitlements against recent campaign access review
+        items to mark each as reviewed or unreviewed.
+    .PARAMETER DaysBack
+        Number of days to look back for review history. Default: 365.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Sources = @{ 'source-id' = @{ SourceName; TotalEntitlements; Privileged; Reviewed; Unreviewed; Entitlements } }
+                Summary = @{ TotalSources; TotalEntitlements; TotalPrivileged; ReviewCoverage }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $result = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $result.Data.Summary
+    .EXAMPLE
+        $result = Get-SPEntitlementInventory -DaysBack 180
+        $result.Data.Sources.Keys | ForEach-Object { $result.Data.Sources[$_].SourceName }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$IncludeReviewHistory,
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sourceLabel = if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) { $SourceIds -join ',' } else { 'ALL' }
+    Write-SPLog -Message "Getting entitlement inventory: Sources='$sourceLabel', IncludeReviewHistory=$IncludeReviewHistory, DaysBack=$DaysBack" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Pagination ceiling from config
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # -----------------------------------------------------------
+        # Step 1: Retrieve entitlements (paginated, per source or all)
+        # -----------------------------------------------------------
+        $sourceEntitlements = @{}  # sourceId -> list of entitlement objects
+
+        # Build list of queries: one per source ID, or one for all
+        $queries = [System.Collections.Generic.List[hashtable]]::new()
+        if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) {
+            foreach ($sid in $SourceIds) {
+                $queries.Add(@{ SourceId = $sid; Filter = "source.id eq `"$sid`"" })
+            }
+        } else {
+            $queries.Add(@{ SourceId = $null; Filter = $null })
+        }
+
+        foreach ($query in $queries) {
+            $allEntitlements = [System.Collections.Generic.List[object]]::new()
+            $pageSize = 250
+            $offset   = 0
+            $pageNum  = 0
+
+            do {
+                $pageNum++
+                if ($pageNum -gt $maxPages) {
+                    $errMsg = "Pagination ceiling reached fetching entitlements: $maxPages pages ($($allEntitlements.Count) entitlements). Raise Api.MaxPaginationPages if needed."
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                        -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+
+                $queryParams = @{
+                    'limit'  = $pageSize.ToString()
+                    'offset' = $offset.ToString()
+                }
+                if (-not [string]::IsNullOrWhiteSpace($query.Filter)) {
+                    $queryParams['filters'] = $query.Filter
+                }
+
+                $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/entitlements' `
+                    -QueryParams $queryParams -CorrelationID $CorrelationID
+
+                if (-not $result.Success) {
+                    $errMsg = "Failed to retrieve entitlements at page $pageNum (offset $offset): $($result.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                        -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+
+                $page = $result.Data
+                if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                    $page = $result.Data.items
+                }
+                $page = @($page)
+
+                if ($page.Count -gt 0) {
+                    foreach ($ent in $page) { $allEntitlements.Add($ent) }
+                }
+
+                Write-SPLog -Message "Entitlements page ${pageNum}: $($page.Count) items (running total: $($allEntitlements.Count))" `
+                    -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                    -CorrelationID $CorrelationID
+
+                $offset += $pageSize
+            } while ($page.Count -ge $pageSize)
+
+            # Group entitlements by source
+            foreach ($ent in $allEntitlements) {
+                $srcId = $null
+                if ($null -ne $ent.source) {
+                    if ($ent.source -is [string]) {
+                        $srcId = $ent.source
+                    } elseif ($null -ne $ent.source.id) {
+                        $srcId = $ent.source.id
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($srcId)) {
+                    $srcId = 'unknown'
+                }
+
+                if (-not $sourceEntitlements.ContainsKey($srcId)) {
+                    $sourceEntitlements[$srcId] = [System.Collections.Generic.List[object]]::new()
+                }
+                $sourceEntitlements[$srcId].Add($ent)
+            }
+        }
+
+        Write-SPLog -Message "Retrieved entitlements across $($sourceEntitlements.Count) source(s)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+            -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------
+        # Step 2: Build review history lookup (if requested)
+        # -----------------------------------------------------------
+        $reviewedEntitlements = @{}  # key = "sourceId|entitlementName" -> last review date
+
+        if ($IncludeReviewHistory) {
+            Write-SPLog -Message "Building review history from campaigns (DaysBack=$DaysBack)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                -CorrelationID $CorrelationID
+
+            $campResult = Get-SPAuditCampaigns -Status 'COMPLETED','ACTIVE' -DaysBack $DaysBack `
+                -CorrelationID $CorrelationID
+            if ($campResult.Success -and $null -ne $campResult.Data) {
+                foreach ($campaign in $campResult.Data) {
+                    $campId = $campaign.id
+                    if ([string]::IsNullOrWhiteSpace($campId)) { continue }
+
+                    $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                        -CorrelationID $CorrelationID
+                    if (-not $certResult.Success -or $null -eq $certResult.Data) { continue }
+
+                    foreach ($cert in $certResult.Data) {
+                        $certId = $cert.id
+                        if ([string]::IsNullOrWhiteSpace($certId)) { continue }
+
+                        $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                            -CorrelationID $CorrelationID
+                        if (-not $itemResult.Success -or $null -eq $itemResult.Data) { continue }
+
+                        foreach ($item in $itemResult.Data) {
+                            $itemSourceId = $null
+                            $entName = $null
+                            $reviewDate = $null
+
+                            # Extract source ID from access review item
+                            if ($null -ne $item.access -and $null -ne $item.access.source) {
+                                $itemSourceId = $item.access.source.id
+                            }
+                            if ($null -ne $item.access) {
+                                $entName = $item.access.name
+                            }
+                            if ($null -ne $item.completed) {
+                                $reviewDate = $item.completed
+                            } elseif ($null -ne $item.decision) {
+                                $reviewDate = $campaign.created
+                            }
+
+                            if (-not [string]::IsNullOrWhiteSpace($itemSourceId) -and
+                                -not [string]::IsNullOrWhiteSpace($entName)) {
+                                $lookupKey = "$itemSourceId|$entName"
+                                if (-not $reviewedEntitlements.ContainsKey($lookupKey) -or
+                                    (-not [string]::IsNullOrWhiteSpace($reviewDate) -and
+                                     $reviewDate -gt $reviewedEntitlements[$lookupKey])) {
+                                    $reviewedEntitlements[$lookupKey] = $reviewDate
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Write-SPLog -Message "Review history lookup built: $($reviewedEntitlements.Count) reviewed entitlement(s)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+                -CorrelationID $CorrelationID
+        }
+
+        # -----------------------------------------------------------
+        # Step 3: Build per-source inventory with review status
+        # -----------------------------------------------------------
+        $sources = @{}
+        $totalEntitlements = 0
+        $totalPrivileged   = 0
+        $totalReviewed     = 0
+
+        foreach ($srcId in $sourceEntitlements.Keys) {
+            $entList = $sourceEntitlements[$srcId]
+            $sourceName = Get-SPAuditSourceName -SourceId $srcId -CorrelationID $CorrelationID
+
+            $entitlementRecords = [System.Collections.Generic.List[hashtable]]::new()
+            $privilegedCount = 0
+            $reviewedCount   = 0
+            $unreviewedCount = 0
+
+            foreach ($ent in $entList) {
+                $entName = if ($null -ne $ent.name) { $ent.name } else { '' }
+                $entDisplayName = if ($null -ne $ent.displayName) { $ent.displayName } else { $entName }
+                $entType = if ($null -ne $ent.type) { $ent.type } else { '' }
+                $entAttribute = if ($null -ne $ent.attribute) { $ent.attribute } else { '' }
+                $isPrivileged = $false
+                if ($null -ne $ent.privileged) {
+                    $isPrivileged = [bool]$ent.privileged
+                }
+                $ownerName = ''
+                if ($null -ne $ent.owner -and $null -ne $ent.owner.name) {
+                    $ownerName = $ent.owner.name
+                }
+
+                if ($isPrivileged) { $privilegedCount++ }
+
+                $reviewed = $null
+                $lastReviewDate = $null
+                if ($IncludeReviewHistory) {
+                    $lookupKey = "$srcId|$entName"
+                    if ($reviewedEntitlements.ContainsKey($lookupKey)) {
+                        $reviewed = $true
+                        $lastReviewDate = $reviewedEntitlements[$lookupKey]
+                        $reviewedCount++
+                    } else {
+                        $reviewed = $false
+                        $unreviewedCount++
+                    }
+                }
+
+                $entitlementRecords.Add(@{
+                    Name           = $entName
+                    DisplayName    = $entDisplayName
+                    Type           = $entType
+                    Attribute      = $entAttribute
+                    Privileged     = $isPrivileged
+                    OwnerName      = $ownerName
+                    Reviewed       = $reviewed
+                    LastReviewDate = $lastReviewDate
+                })
+            }
+
+            $sourceData = @{
+                SourceName        = $sourceName
+                TotalEntitlements = $entList.Count
+                Privileged        = $privilegedCount
+                Reviewed          = if ($IncludeReviewHistory) { $reviewedCount } else { $null }
+                Unreviewed        = if ($IncludeReviewHistory) { $unreviewedCount } else { $null }
+                Entitlements      = $entitlementRecords.ToArray()
+            }
+
+            $sources[$srcId] = $sourceData
+            $totalEntitlements += $entList.Count
+            $totalPrivileged   += $privilegedCount
+            $totalReviewed     += $reviewedCount
+        }
+
+        $reviewCoverage = if ($IncludeReviewHistory -and $totalEntitlements -gt 0) {
+            [Math]::Round(($totalReviewed / $totalEntitlements) * 100, 1)
+        } else { $null }
+
+        $summary = @{
+            TotalSources      = $sources.Count
+            TotalEntitlements = $totalEntitlements
+            TotalPrivileged   = $totalPrivileged
+            ReviewCoverage    = $reviewCoverage
+        }
+
+        Write-SPLog -Message "Entitlement inventory: $totalEntitlements entitlements across $($sources.Count) sources, $totalPrivileged privileged" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementInventory' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Sources = $sources
+                Summary = $summary
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPEntitlementInventory failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPEntitlementInventory' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2257,5 +2996,7 @@ Export-ModuleMember -Function @(
     'Resolve-SPAuditIdentityAccounts',
     'Get-SPReviewerWorkload',
     'Get-SPIdentityDecisionHistory',
-    'Get-SPSourceCampaignCoverage'
+    'Get-SPSourceCampaignCoverage',
+    'Get-SPRemediationStatus',
+    'Get-SPEntitlementInventory'
 )

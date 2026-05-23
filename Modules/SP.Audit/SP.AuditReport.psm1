@@ -5841,6 +5841,1899 @@ function Format-ComparisonCellValue {
 
 #endregion
 
+#region Audit Trail Consolidator (P11-02)
+
+function Get-SPAuditTrail {
+    <#
+    .SYNOPSIS
+        Reads all JSONL audit files and produces a unified, chronologically sorted timeline.
+    .DESCRIPTION
+        Consolidates events from three JSONL sources:
+          - {Audit.OutputPath}/audit-*.jsonl   (campaign audit events)
+          - {DeltaCert.OutputPath}/deltacert-audit.jsonl  (delta cert run events)
+          - {DeltaCert.OutputPath}/deltacert-escalation.jsonl  (escalation events)
+
+        Each event is normalised to a common schema: Timestamp, EventType, Action,
+        CorrelationID, SourceIds, Summary, Details, FilePath.
+
+        Supports filtering by date range, correlation ID, event type, and source ID.
+        Returns newest-first, capped at MaxEvents.
+    .PARAMETER After
+        Only include events after this datetime.
+    .PARAMETER Before
+        Only include events before this datetime.
+    .PARAMETER CorrelationID
+        Filter to events matching this correlation ID.
+    .PARAMETER EventType
+        Filter to specific event types: 'CampaignAudit', 'DeltaCertRun', 'Escalation'.
+    .PARAMETER SourceId
+        Filter to events involving this source ID.
+    .PARAMETER AuditOutputPath
+        Directory containing campaign audit JSONL files. Resolved from config if omitted.
+    .PARAMETER DeltaCertOutputPath
+        Directory containing delta cert JSONL files. Resolved from config if omitted.
+    .PARAMETER MaxEvents
+        Maximum number of events to return. Default: 500.
+    .OUTPUTS
+        [PSCustomObject[]] Array of normalised audit trail events.
+    .EXAMPLE
+        $trail = Get-SPAuditTrail -After (Get-Date).AddDays(-7) -EventType 'Escalation'
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    param(
+        [Parameter()][DateTime]$After,
+        [Parameter()][DateTime]$Before,
+        [Parameter()][string]$CorrelationID,
+        [Parameter()][string[]]$EventType,
+        [Parameter()][string]$SourceId,
+        [Parameter()][string]$AuditOutputPath,
+        [Parameter()][string]$DeltaCertOutputPath,
+        [Parameter()][int]$MaxEvents = 500
+    )
+
+    $logCorrelation = if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        [guid]::NewGuid().ToString()
+    } else { $CorrelationID }
+
+    Write-SPLog -Message "Get-SPAuditTrail: starting consolidation" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+        -CorrelationID $logCorrelation
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                $AuditOutputPath = $config.Audit.OutputPath
+            }
+            if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                -CorrelationID $logCorrelation
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+
+    $allEvents = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # Collect JSONL files and their event type mappings
+    $fileMappings = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Campaign audit files: audit-*.jsonl
+    if (Test-Path -Path $AuditOutputPath -PathType Container) {
+        $auditFiles = Get-ChildItem -Path $AuditOutputPath -Filter 'audit-*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $auditFiles) {
+            $fileMappings.Add(@{ Path = $f.FullName; DefaultEventType = 'CampaignAudit' })
+        }
+    }
+
+    # Delta cert audit file
+    if (Test-Path -Path $DeltaCertOutputPath -PathType Container) {
+        $dcAuditPath = Join-Path $DeltaCertOutputPath 'deltacert-audit.jsonl'
+        if (Test-Path -Path $dcAuditPath -PathType Leaf) {
+            $fileMappings.Add(@{ Path = $dcAuditPath; DefaultEventType = 'DeltaCertRun' })
+        }
+
+        $dcEscPath = Join-Path $DeltaCertOutputPath 'deltacert-escalation.jsonl'
+        if (Test-Path -Path $dcEscPath -PathType Leaf) {
+            $fileMappings.Add(@{ Path = $dcEscPath; DefaultEventType = 'Escalation' })
+        }
+    }
+
+    # Read and normalise each file
+    foreach ($mapping in $fileMappings) {
+        $filePath      = $mapping.Path
+        $defaultEvType = $mapping.DefaultEventType
+
+        try {
+            $lines = [System.IO.File]::ReadAllLines($filePath)
+        }
+        catch {
+            Write-SPLog -Message "Failed to read JSONL file '$filePath': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                -CorrelationID $logCorrelation
+            continue
+        }
+
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+            try {
+                $parsed = $line | ConvertFrom-Json
+            }
+            catch {
+                Write-SPLog -Message "Malformed JSONL line in '$filePath': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+                    -CorrelationID $logCorrelation
+                continue
+            }
+
+            # Extract timestamp
+            $tsString = $null
+            if ($null -ne $parsed.Timestamp) { $tsString = [string]$parsed.Timestamp }
+            $ts = $null
+            if (-not [string]::IsNullOrWhiteSpace($tsString)) {
+                try { $ts = [datetime]::Parse($tsString).ToUniversalTime() } catch { $ts = $null }
+            }
+
+            # Extract correlation ID from event
+            $eventCorrId = ''
+            if ($null -ne $parsed.CorrelationID) { $eventCorrId = [string]$parsed.CorrelationID }
+
+            # Extract action
+            $action = ''
+            if ($null -ne $parsed.Action) { $action = [string]$parsed.Action }
+
+            # Extract source IDs
+            $sourceIds = @()
+            if ($null -ne $parsed.SourceIds) {
+                $sourceIds = @($parsed.SourceIds)
+            }
+            elseif ($null -ne $parsed.Data -and $null -ne $parsed.Data.SourceIds) {
+                $sourceIds = @($parsed.Data.SourceIds)
+            }
+
+            # Build summary based on event type
+            $summary = ''
+            switch ($defaultEvType) {
+                'CampaignAudit' {
+                    $summary = $action
+                }
+                'DeltaCertRun' {
+                    $campCount = 0
+                    $idCount   = 0
+                    if ($null -ne $parsed.CampaignsCreated) { $campCount = [int]$parsed.CampaignsCreated }
+                    if ($null -ne $parsed.IdentitiesProcessed) { $idCount = [int]$parsed.IdentitiesProcessed }
+                    $summary = "Created $campCount campaigns for $idCount identities"
+                }
+                'Escalation' {
+                    $escCount = 0
+                    if ($null -ne $parsed.Escalated) { $escCount = [int]$parsed.Escalated }
+                    $summary = "Escalated $escCount certifications"
+                }
+            }
+
+            $normalized = [PSCustomObject]@{
+                Timestamp     = $ts
+                EventType     = $defaultEvType
+                Action        = $action
+                CorrelationID = $eventCorrId
+                SourceIds     = $sourceIds
+                Summary       = $summary
+                Details       = $parsed
+                FilePath      = $filePath
+            }
+
+            # Apply filters
+            if ($PSBoundParameters.ContainsKey('After') -and $null -ne $ts -and $ts -lt $After.ToUniversalTime()) { continue }
+            if ($PSBoundParameters.ContainsKey('Before') -and $null -ne $ts -and $ts -gt $Before.ToUniversalTime()) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($CorrelationID) -and $eventCorrId -ne $CorrelationID) { continue }
+            if ($null -ne $EventType -and $EventType.Count -gt 0 -and $defaultEvType -notin $EventType) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($SourceId) -and $SourceId -notin $sourceIds) { continue }
+
+            $allEvents.Add($normalized)
+        }
+    }
+
+    # Sort by Timestamp descending (newest first), nulls last
+    $sorted = $allEvents | Sort-Object -Property {
+        if ($null -ne $_.Timestamp) { $_.Timestamp } else { [datetime]::MinValue }
+    } -Descending
+
+    # Cap at MaxEvents
+    $result = @($sorted | Select-Object -First $MaxEvents)
+
+    Write-SPLog -Message "Get-SPAuditTrail: returning $($result.Count) events from $($fileMappings.Count) files" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPAuditTrail' `
+        -CorrelationID $logCorrelation
+
+    return $result
+}
+
+function Export-SPAuditTrailHtml {
+    <#
+    .SYNOPSIS
+        Generates a timeline HTML report from consolidated audit trail events.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with chronologically sorted events,
+        color-coded event type badges, and CSS class filtering support.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER Events
+        Array of normalised audit trail events from Get-SPAuditTrail.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $trail = Get-SPAuditTrail -After (Get-Date).AddDays(-7)
+        $path  = Export-SPAuditTrailHtml -Events $trail -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [PSCustomObject[]]$Events,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "AuditTrail-${timestamp}.html"
+
+    # Badge colors per event type
+    $badgeColors = @{
+        'CampaignAudit' = @{ Bg = '#336699'; Text = '#ffffff' }
+        'DeltaCertRun'  = @{ Bg = '#339966'; Text = '#ffffff' }
+        'Escalation'    = @{ Bg = '#CC6633'; Text = '#ffffff' }
+    }
+
+    # Build table rows
+    $headers = @('Timestamp', 'Event Type', 'Action', 'Summary', 'Correlation ID', 'Source')
+    $theadHtml = Build-HtmlTableHeader -Headers $headers
+
+    $tbodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+    foreach ($evt in $Events) {
+        $tsDisplay = ''
+        if ($null -ne $evt.Timestamp) {
+            $tsDisplay = $evt.Timestamp.ToString('yyyy-MM-dd HH:mm:ss')
+        }
+
+        $evType  = ConvertTo-SafeHtml $evt.EventType
+        $colors  = $badgeColors[$evt.EventType]
+        if ($null -eq $colors) { $colors = @{ Bg = '#777777'; Text = '#ffffff' } }
+        $badge   = "<span class=""evtype-$($evt.EventType)"" style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; background:$($colors.Bg); color:$($colors.Text);"">$evType</span>"
+
+        $action  = ConvertTo-SafeHtml $evt.Action
+        $summary = ConvertTo-SafeHtml $evt.Summary
+        $corrId  = ConvertTo-SafeHtml $evt.CorrelationID
+
+        $sourceDisplay = ''
+        if ($null -ne $evt.SourceIds -and $evt.SourceIds.Count -gt 0) {
+            $sourceDisplay = ConvertTo-SafeHtml (($evt.SourceIds | ForEach-Object { [string]$_ }) -join ', ')
+        }
+
+        $cells = @($tsDisplay, $badge, $action, $summary, $corrId, $sourceDisplay)
+        $isAlt = (($rowIdx % 2) -eq 1)
+        $tbodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate $isAlt))
+        $rowIdx++
+    }
+
+    $tbodyHtml = $tbodyRows -join "`n"
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Audit Trail Timeline</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Audit Trail Timeline</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:20px;">$($Events.Count) events consolidated from campaign audits, delta cert runs, and escalations</p>
+
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+$theadHtml
+<tbody>
+$tbodyHtml
+</tbody>
+</table>
+
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Audit Trail Timeline &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+
+</body>
+</html>
+"@
+
+    [System.IO.File]::WriteAllText($htmlFile, $html, [System.Text.Encoding]::UTF8)
+
+    Write-SPLog -Message "Audit trail HTML written ($($Events.Count) events): $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditTrailHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region CSV Export (P11-03)
+
+function Export-SPAuditCsv {
+    <#
+    .SYNOPSIS
+        Exports campaign audit data to CSV files for GRC/SIEM integration.
+    .DESCRIPTION
+        Produces one or more CSV files from campaign audit data, suitable for
+        import into GRC tools (ServiceNow GRC, RSA Archer), SIEM platforms
+        (Splunk, Sentinel), or SharePoint/Excel.
+
+        Output files (one CSV per data type):
+        - decisions-{correlationId}.csv  -- one row per access review decision
+        - reviewers-{correlationId}.csv  -- one row per reviewer per campaign
+        - campaigns-{correlationId}.csv  -- one row per campaign
+        - remediation-{correlationId}.csv -- one row per revoked item
+
+        Uses Export-Csv -NoTypeInformation for PS 5.1 compatibility.
+        Date columns are ISO 8601 format. Risk flags are semicolon-delimited.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables as produced by the campaign audit
+        pipeline (Invoke-SPCampaignAudit). Each must contain: CampaignName,
+        Decisions, ReviewerMetrics, RubberStampRisk, and campaign metadata.
+    .PARAMETER OutputPath
+        Directory in which to write CSV files. Created if absent.
+    .PARAMETER Sheets
+        Which CSV sheets to generate. Defaults to all four.
+        Valid values: 'Decisions', 'Reviewers', 'Campaigns', 'Remediation'
+    .PARAMETER CorrelationID
+        Unique ID for tracing and file naming. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Files = @{ Decisions = 'path'; ... }; RowCounts = @{ ... } }
+    .EXAMPLE
+        Export-SPAuditCsv -CampaignAudits $audits -OutputPath 'C:\Reports'
+    .EXAMPLE
+        Export-SPAuditCsv -CampaignAudits $audits -OutputPath 'C:\Reports' -Sheets 'Decisions'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [ValidateSet('Decisions', 'Reviewers', 'Campaigns', 'Remediation')]
+        [string[]]$Sheets = @('Decisions', 'Reviewers', 'Campaigns', 'Remediation'),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting audit CSV for $($CampaignAudits.Count) campaign(s), sheets: $($Sheets -join ', ')" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $files     = @{}
+    $rowCounts = @{}
+
+    # --- Helper: safe string extraction from hashtable or PSCustomObject ---
+    function _Val ($obj, [string]$key, [string]$default = '') {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return [string]$obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return [string]$v }
+        }
+        return $default
+    }
+
+    # ================================================================
+    # DECISIONS CSV
+    # ================================================================
+    if ($Sheets -contains 'Decisions') {
+        $decisionRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName   = _Val $audit 'CampaignName'
+            $campStatus = _Val $audit 'Status'
+            $campStart  = _Val $audit 'Created'
+            $campDue    = _Val $audit 'Deadline'
+
+            # Determine campaign type from the audit data
+            $campType = _Val $audit 'CampaignType'
+
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            } elseif ($null -ne $audit.PSObject -and $null -ne $audit.PSObject.Properties['Decisions']) {
+                $decisions = $audit.Decisions
+            }
+            if ($null -eq $decisions) { continue }
+
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                $items = @()
+                if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                    $items = @($decisions[$category])
+                } elseif ($null -ne $decisions.PSObject -and $null -ne $decisions.PSObject.Properties[$category]) {
+                    $items = @($decisions.$category)
+                }
+
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+
+                    # Risk flags: join as semicolons for CSV compatibility
+                    $riskFlags = ''
+                    $rf = $null
+                    if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['RiskFlags']) {
+                        $rf = $item.RiskFlags
+                    }
+                    if ($null -ne $rf -and $rf -is [array] -and $rf.Count -gt 0) {
+                        $riskFlags = ($rf | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+                    } elseif ($null -ne $rf -and $rf -is [string] -and -not [string]::IsNullOrWhiteSpace($rf)) {
+                        $riskFlags = $rf
+                    }
+
+                    $decisionRows.Add([PSCustomObject]@{
+                        CampaignName      = $campName
+                        CampaignType      = $campType
+                        CampaignStatus    = $campStatus
+                        IdentityName      = if ($null -ne $item.IdentityName)      { [string]$item.IdentityName }      else { '' }
+                        IdentityId        = if ($null -ne $item.IdentityId)        { [string]$item.IdentityId }        else { '' }
+                        AccountName       = if ($null -ne $item.AccountName)       { [string]$item.AccountName }       else { '' }
+                        SourceName        = if ($null -ne $item.SourceName)        { [string]$item.SourceName }        else { '' }
+                        EntitlementName   = if ($null -ne $item.AccessName)        { [string]$item.AccessName }        else { '' }
+                        AccessType        = if ($null -ne $item.AccessType)        { [string]$item.AccessType }        else { '' }
+                        Decision          = if ($null -ne $item.Decision)          { [string]$item.Decision }          else { $category }
+                        DecisionDate      = if ($null -ne $item.DecisionDate)      { [string]$item.DecisionDate }      else { '' }
+                        ReviewerName      = if ($null -ne $item.ReviewerName)      { [string]$item.ReviewerName }      else { '' }
+                        ReviewerEmail     = if ($null -ne $item.ReviewerEmail)     { [string]$item.ReviewerEmail }     else { '' }
+                        Justification     = if ($null -ne $item.Justification)     { [string]$item.Justification }     else { '' }
+                        RemediationStatus = if ($null -ne $item.RemediationStatus) { [string]$item.RemediationStatus } else { '' }
+                        RemediationDate   = if ($null -ne $item.RemediationDate)   { [string]$item.RemediationDate }   else { '' }
+                        RiskFlags         = $riskFlags
+                        CampaignStartDate = if ($null -ne $item.CampaignStartDate) { [string]$item.CampaignStartDate } else { $campStart }
+                        CampaignDueDate   = if ($null -ne $item.CampaignDueDate)   { [string]$item.CampaignDueDate }   else { $campDue }
+                        SystemTimestamp    = if ($null -ne $item.SystemTimestamp)   { [string]$item.SystemTimestamp }   else { '' }
+                    })
+                }
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "decisions-${CorrelationID}.csv"
+        if ($decisionRows.Count -gt 0) {
+            $decisionRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            # Write header-only CSV
+            [PSCustomObject]@{
+                CampaignName='';CampaignType='';CampaignStatus='';IdentityName='';IdentityId='';
+                AccountName='';SourceName='';EntitlementName='';AccessType='';Decision='';
+                DecisionDate='';ReviewerName='';ReviewerEmail='';Justification='';
+                RemediationStatus='';RemediationDate='';RiskFlags='';CampaignStartDate='';
+                CampaignDueDate='';SystemTimestamp=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            # Remove the empty data row, keep only headers
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Decisions']     = $csvPath
+        $rowCounts['Decisions'] = $decisionRows.Count
+
+        Write-SPLog -Message "Decisions CSV written ($($decisionRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # REVIEWERS CSV
+    # ================================================================
+    if ($Sheets -contains 'Reviewers') {
+        $reviewerRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName = _Val $audit 'CampaignName'
+
+            # Get reviewer metrics
+            $reviewerMetrics = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('ReviewerMetrics')) {
+                $reviewerMetrics = $audit['ReviewerMetrics']
+            }
+
+            # Get rubber stamp risk data
+            $rubberStampRisk = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('RubberStampRisk')) {
+                $rubberStampRisk = $audit['RubberStampRisk']
+            }
+
+            # Build rubber stamp risk lookup by reviewer name
+            $riskLookup = @{}
+            if ($null -ne $rubberStampRisk -and $rubberStampRisk -is [hashtable] -and
+                $rubberStampRisk.ContainsKey('ReviewerRisks') -and $null -ne $rubberStampRisk['ReviewerRisks']) {
+                foreach ($rr in @($rubberStampRisk['ReviewerRisks'])) {
+                    $rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($rrName)) {
+                        $riskLookup[$rrName] = if ($null -ne $rr.Severity) { [string]$rr.Severity } else { 'None' }
+                    }
+                }
+            }
+
+            # Get decisions for per-reviewer item counts
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+
+            # Build per-reviewer decision counts from decision items
+            $reviewerApproved = @{}
+            $reviewerRevoked  = @{}
+            $reviewerPending  = @{}
+
+            if ($null -ne $decisions -and $decisions -is [hashtable]) {
+                foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
+                    if (-not $decisions.ContainsKey($cat) -or $null -eq $decisions[$cat]) { continue }
+                    foreach ($item in @($decisions[$cat])) {
+                        $rn = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { 'Unknown' }
+                        switch ($cat) {
+                            'Approved' {
+                                if ($reviewerApproved.ContainsKey($rn)) { $reviewerApproved[$rn]++ } else { $reviewerApproved[$rn] = 1 }
+                            }
+                            'Revoked'  {
+                                if ($reviewerRevoked.ContainsKey($rn))  { $reviewerRevoked[$rn]++ }  else { $reviewerRevoked[$rn] = 1 }
+                            }
+                            'Pending'  {
+                                if ($reviewerPending.ContainsKey($rn))  { $reviewerPending[$rn]++ }  else { $reviewerPending[$rn] = 1 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable] -and
+                $reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+                foreach ($rm in @($reviewerMetrics['ReviewerMetrics'])) {
+                    $name  = if ($null -ne $rm.Name)  { [string]$rm.Name }  else { '' }
+                    $email = if ($null -ne $rm.Email) { [string]$rm.Email } else { '' }
+
+                    $approved = if ($reviewerApproved.ContainsKey($name)) { $reviewerApproved[$name] } else { 0 }
+                    $revoked  = if ($reviewerRevoked.ContainsKey($name))  { $reviewerRevoked[$name] }  else { 0 }
+                    $pending  = if ($reviewerPending.ContainsKey($name))  { $reviewerPending[$name] }  else { 0 }
+                    $assigned = $approved + $revoked + $pending
+                    $decided  = $approved + $revoked
+
+                    $approvalRate  = if ($decided -gt 0) { [Math]::Round(($approved / $decided) * 100, 1) } else { 0.0 }
+                    $revocationRate = if ($decided -gt 0) { [Math]::Round(($revoked / $decided) * 100, 1) } else { 0.0 }
+
+                    $rubberStampSeverity = if ($riskLookup.ContainsKey($name)) { $riskLookup[$name] } else { 'None' }
+
+                    $reviewerRows.Add([PSCustomObject]@{
+                        CampaignName        = $campName
+                        ReviewerName        = $name
+                        ReviewerIdentityId  = ''
+                        ItemsAssigned       = $assigned
+                        ItemsDecided        = $decided
+                        ItemsPending        = $pending
+                        ApprovalRate        = $approvalRate
+                        RevocationRate      = $revocationRate
+                        AvgResponseHours    = if ($null -ne $rm.AvgHours)  { $rm.AvgHours }  else { '' }
+                        FastestResponseHours = if ($null -ne $rm.MinHours) { $rm.MinHours } else { '' }
+                        SlowestResponseHours = if ($null -ne $rm.MaxHours) { $rm.MaxHours } else { '' }
+                        RubberStampRisk     = $rubberStampSeverity
+                    })
+                }
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "reviewers-${CorrelationID}.csv"
+        if ($reviewerRows.Count -gt 0) {
+            $reviewerRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignName='';ReviewerName='';ReviewerIdentityId='';ItemsAssigned='';
+                ItemsDecided='';ItemsPending='';ApprovalRate='';RevocationRate='';
+                AvgResponseHours='';FastestResponseHours='';SlowestResponseHours='';
+                RubberStampRisk=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Reviewers']     = $csvPath
+        $rowCounts['Reviewers'] = $reviewerRows.Count
+
+        Write-SPLog -Message "Reviewers CSV written ($($reviewerRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # CAMPAIGNS CSV
+    # ================================================================
+    if ($Sheets -contains 'Campaigns') {
+        $campaignRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName   = _Val $audit 'CampaignName'
+            $campId     = _Val $audit 'CampaignId'
+            $campType   = _Val $audit 'CampaignType'
+            $campStatus = _Val $audit 'Status'
+            $created    = _Val $audit 'Created'
+            $deadline   = _Val $audit 'Deadline'
+            $completed  = _Val $audit 'Completed'
+
+            # Count items from decisions
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+
+            $totalItems = 0; $approvedCt = 0; $revokedCt = 0; $pendingCt = 0
+            if ($null -ne $decisions -and $decisions -is [hashtable]) {
+                if ($decisions.ContainsKey('Approved') -and $null -ne $decisions['Approved']) {
+                    $approvedCt = @($decisions['Approved']).Count
+                }
+                if ($decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                    $revokedCt = @($decisions['Revoked']).Count
+                }
+                if ($decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                    $pendingCt = @($decisions['Pending']).Count
+                }
+            }
+            $totalItems = $approvedCt + $revokedCt + $pendingCt
+            $completionPct = if ($totalItems -gt 0) { [Math]::Round((($approvedCt + $revokedCt) / $totalItems) * 100, 1) } else { 0.0 }
+
+            # Reviewer count and response time from ReviewerMetrics
+            $reviewerCount = 0
+            $avgRespHours  = ''
+            $medianRespHours = ''
+            $reviewerMetrics = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('ReviewerMetrics')) {
+                $reviewerMetrics = $audit['ReviewerMetrics']
+            }
+            if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable]) {
+                if ($reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+                    $reviewerCount = @($reviewerMetrics['ReviewerMetrics']).Count
+                }
+                if ($reviewerMetrics.ContainsKey('CampaignAvgHours') -and $null -ne $reviewerMetrics['CampaignAvgHours']) {
+                    $avgRespHours = $reviewerMetrics['CampaignAvgHours']
+                }
+                if ($reviewerMetrics.ContainsKey('CampaignMedianHours') -and $null -ne $reviewerMetrics['CampaignMedianHours']) {
+                    $medianRespHours = $reviewerMetrics['CampaignMedianHours']
+                }
+            }
+
+            $campaignRows.Add([PSCustomObject]@{
+                CampaignId         = $campId
+                CampaignName       = $campName
+                CampaignType       = $campType
+                Status             = $campStatus
+                Created            = $created
+                Deadline           = $deadline
+                Completed          = $completed
+                TotalItems         = $totalItems
+                Approved           = $approvedCt
+                Revoked            = $revokedCt
+                Pending            = $pendingCt
+                CompletionPct      = $completionPct
+                ReviewerCount      = $reviewerCount
+                AvgResponseHours   = $avgRespHours
+                MedianResponseHours = $medianRespHours
+            })
+        }
+
+        $csvPath = Join-Path $OutputPath "campaigns-${CorrelationID}.csv"
+        if ($campaignRows.Count -gt 0) {
+            $campaignRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignId='';CampaignName='';CampaignType='';Status='';Created='';
+                Deadline='';Completed='';TotalItems='';Approved='';Revoked='';Pending='';
+                CompletionPct='';ReviewerCount='';AvgResponseHours='';MedianResponseHours=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Campaigns']     = $csvPath
+        $rowCounts['Campaigns'] = $campaignRows.Count
+
+        Write-SPLog -Message "Campaigns CSV written ($($campaignRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # REMEDIATION CSV
+    # ================================================================
+    if ($Sheets -contains 'Remediation') {
+        $remediationRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName = _Val $audit 'CampaignName'
+
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+            if ($null -eq $decisions) { continue }
+
+            $revokedItems = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                $revokedItems = @($decisions['Revoked'])
+            }
+
+            foreach ($item in $revokedItems) {
+                if ($null -eq $item) { continue }
+
+                # Calculate days to remediate
+                $daysToRemediate = ''
+                $decDateStr = if ($null -ne $item.DecisionDate)    { [string]$item.DecisionDate }    else { '' }
+                $remDateStr = if ($null -ne $item.RemediationDate) { [string]$item.RemediationDate } else { '' }
+
+                if (-not [string]::IsNullOrWhiteSpace($decDateStr) -and -not [string]::IsNullOrWhiteSpace($remDateStr)) {
+                    try {
+                        $dtDec = [datetime]::Parse($decDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $dtRem = [datetime]::Parse($remDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $daysToRemediate = [Math]::Round(($dtRem - $dtDec).TotalDays, 3)
+                    } catch { }
+                }
+
+                $remediationRows.Add([PSCustomObject]@{
+                    CampaignName        = $campName
+                    IdentityName        = if ($null -ne $item.IdentityName)      { [string]$item.IdentityName }      else { '' }
+                    AccountName         = if ($null -ne $item.AccountName)       { [string]$item.AccountName }       else { '' }
+                    EntitlementRevoked  = if ($null -ne $item.AccessName)        { [string]$item.AccessName }        else { '' }
+                    DecisionDate        = $decDateStr
+                    RemediationStatus   = if ($null -ne $item.RemediationStatus) { [string]$item.RemediationStatus } else { '' }
+                    RemediationDate     = $remDateStr
+                    ProvisioningEventId = ''
+                    DaysToRemediate     = $daysToRemediate
+                })
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "remediation-${CorrelationID}.csv"
+        if ($remediationRows.Count -gt 0) {
+            $remediationRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignName='';IdentityName='';AccountName='';EntitlementRevoked='';
+                DecisionDate='';RemediationStatus='';RemediationDate='';
+                ProvisioningEventId='';DaysToRemediate=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Remediation']     = $csvPath
+        $rowCounts['Remediation'] = $remediationRows.Count
+
+        Write-SPLog -Message "Remediation CSV written ($($remediationRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    Write-SPLog -Message "CSV export complete: $($files.Count) file(s), total rows: $(($rowCounts.Values | Measure-Object -Sum).Sum)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Files     = $files
+        RowCounts = $rowCounts
+    }
+}
+
+#endregion
+
+#region ===== P11-06: Campaign Trend Analytics =====
+
+function Measure-SPCampaignTrends {
+    <#
+    .SYNOPSIS
+        Compares metrics across multiple campaign cycles to identify governance trends.
+    .DESCRIPTION
+        Groups campaign metrics by time period (Week, Month, Quarter, Year), aggregates
+        KPIs per period, calculates deltas between consecutive periods, and classifies
+        multi-period trends as Improving, Degrading, or Stable.
+
+        Answers: "Are approval rates going up? Are reviewers getting faster?"
+
+        Input is the Data array from Measure-SPCampaignMetrics (array of PSCustomObject
+        with CampaignCreated, ApprovalRate, RevocationRate, CompletionRate,
+        AvgResponseTimeHours, ReviewerCount, TotalItems, etc.).
+    .PARAMETER CampaignMetrics
+        Array of campaign metric objects from Measure-SPCampaignMetrics.Data.
+    .PARAMETER GroupBy
+        Time period for grouping: Week, Month, Quarter, Year. Default: Month.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Periods = @(...)   # per-period aggregates with deltas
+            Trends  = @{...}   # multi-period trend classification
+            Summary = @{...}   # overall summary
+        }
+    .EXAMPLE
+        $camps = (Get-SPAuditCampaigns -Status 'COMPLETED' -DaysBack 365).Data
+        $metrics = (Measure-SPCampaignMetrics -Campaigns $camps).Data
+        $trends = Measure-SPCampaignTrends -CampaignMetrics $metrics -GroupBy 'Quarter'
+        $trends.Trends
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$CampaignMetrics,
+
+        [Parameter()]
+        [ValidateSet('Week','Month','Quarter','Year')]
+        [string]$GroupBy = 'Month',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measuring campaign trends for $($CampaignMetrics.Count) metric(s), grouped by $GroupBy" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+        -CorrelationID $CorrelationID
+
+    # --- Helper: parse a date string to DateTime (UTC) ---
+    function _ParseDateUtc([string]$dateStr) {
+        if ([string]::IsNullOrWhiteSpace($dateStr)) { return $null }
+        $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($dateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$dt)) {
+            return $dt.ToUniversalTime()
+        }
+        return $null
+    }
+
+    # --- Helper: assign a period label based on a DateTime ---
+    function _PeriodLabel([datetime]$dt, [string]$group) {
+        switch ($group) {
+            'Week' {
+                # ISO week: year-Www
+                $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
+                $weekNum = $cal.GetWeekOfYear($dt,
+                    [System.Globalization.CalendarWeekRule]::FirstFourDayWeek,
+                    [System.DayOfWeek]::Monday)
+                return '{0}-W{1:D2}' -f $dt.Year, $weekNum
+            }
+            'Month'   { return '{0}-{1:D2}' -f $dt.Year, $dt.Month }
+            'Quarter' {
+                $q = [Math]::Ceiling($dt.Month / 3)
+                return '{0}-Q{1}' -f $dt.Year, $q
+            }
+            'Year'    { return [string]$dt.Year }
+        }
+    }
+
+    # --- Helper: sort key for period labels ---
+    function _PeriodSortKey([string]$label) {
+        # All label formats sort lexicographically except Quarter vs Month;
+        # they all start with YYYY so standard string sort works.
+        return $label
+    }
+
+    # --- Parse dates and group by period ---
+    $periodBuckets = @{}
+    $earliestDate  = $null
+    $latestDate    = $null
+
+    foreach ($m in $CampaignMetrics) {
+        if ($null -eq $m) { continue }
+
+        $created = $null
+        if ($null -ne $m.PSObject.Properties['CampaignCreated'] -and
+            -not [string]::IsNullOrWhiteSpace($m.CampaignCreated)) {
+            $created = _ParseDateUtc $m.CampaignCreated
+        }
+        if ($null -eq $created) {
+            Write-SPLog -Message "Skipping campaign '$($m.CampaignName)' -- no CampaignCreated date" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        if ($null -eq $earliestDate -or $created -lt $earliestDate) { $earliestDate = $created }
+        if ($null -eq $latestDate   -or $created -gt $latestDate)   { $latestDate   = $created }
+
+        $label = _PeriodLabel $created $GroupBy
+        if (-not $periodBuckets.ContainsKey($label)) {
+            $periodBuckets[$label] = [System.Collections.Generic.List[object]]::new()
+        }
+        $periodBuckets[$label].Add($m)
+    }
+
+    # --- Sort period labels chronologically ---
+    $sortedLabels = @($periodBuckets.Keys | Sort-Object)
+
+    # --- Aggregate metrics per period ---
+    $periods = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($label in $sortedLabels) {
+        $bucket = $periodBuckets[$label]
+
+        $totalItems    = 0
+        $totalApproved = 0
+        $totalRevoked  = 0
+        $totalDecided  = 0
+        $totalTotal    = 0
+        $responseHrSum = 0.0
+        $responseHrCt  = 0
+        $reviewerTotal = 0
+
+        foreach ($m in $bucket) {
+            $ti = if ($null -ne $m.TotalItems) { [int]$m.TotalItems } else { 0 }
+            $totalTotal += $ti
+
+            $app = if ($null -ne $m.ApprovedCount) { [int]$m.ApprovedCount } else { 0 }
+            $rev = if ($null -ne $m.RevokedCount)  { [int]$m.RevokedCount }  else { 0 }
+            $totalApproved += $app
+            $totalRevoked  += $rev
+            $totalDecided  += ($app + $rev)
+
+            if ($null -ne $m.AvgResponseTimeHours -and $m.AvgResponseTimeHours -gt 0) {
+                $responseHrSum += [double]$m.AvgResponseTimeHours
+                $responseHrCt++
+            }
+
+            $rc = if ($null -ne $m.ReviewerCount) { [int]$m.ReviewerCount } else { 0 }
+            $reviewerTotal += $rc
+        }
+
+        $approvalRate   = if ($totalTotal -gt 0) { [Math]::Round(($totalApproved / $totalTotal) * 100, 1) } else { 0.0 }
+        $revocationRate = if ($totalTotal -gt 0) { [Math]::Round(($totalRevoked  / $totalTotal) * 100, 1) } else { 0.0 }
+        $completionRate = if ($totalTotal -gt 0) { [Math]::Round(($totalDecided  / $totalTotal) * 100, 1) } else { 0.0 }
+        $avgRespHrs     = if ($responseHrCt -gt 0) { [Math]::Round($responseHrSum / $responseHrCt, 1) } else { 0.0 }
+
+        $periods.Add(@{
+            Label          = $label
+            CampaignCount  = $bucket.Count
+            TotalItems     = $totalTotal
+            ApprovalRate   = $approvalRate
+            RevocationRate = $revocationRate
+            CompletionRate = $completionRate
+            AvgResponseHrs = $avgRespHrs
+            ReviewerCount  = $reviewerTotal
+            Deltas         = @{}
+        })
+    }
+
+    # --- Calculate deltas between consecutive periods ---
+    for ($i = 1; $i -lt $periods.Count; $i++) {
+        $prev = $periods[$i - 1]
+        $curr = $periods[$i]
+        $curr['Deltas'] = @{
+            ApprovalRate   = [Math]::Round($curr['ApprovalRate']   - $prev['ApprovalRate'],   1)
+            RevocationRate = [Math]::Round($curr['RevocationRate'] - $prev['RevocationRate'], 1)
+            CompletionRate = [Math]::Round($curr['CompletionRate'] - $prev['CompletionRate'], 1)
+            AvgResponseHrs = [Math]::Round($curr['AvgResponseHrs'] - $prev['AvgResponseHrs'], 1)
+        }
+    }
+
+    # --- Classify trends (need 3+ periods) ---
+    $trendMetrics = @('ApprovalRate', 'RevocationRate', 'CompletionRate', 'AvgResponseHrs')
+    $trends = @{}
+
+    if ($periods.Count -lt 3) {
+        foreach ($metric in $trendMetrics) {
+            $trends[$metric] = 'Insufficient Data'
+        }
+    }
+    else {
+        foreach ($metric in $trendMetrics) {
+            # Collect deltas from period index 1 onward
+            $deltas = @()
+            for ($i = 1; $i -lt $periods.Count; $i++) {
+                $d = $periods[$i]['Deltas'][$metric]
+                if ($null -ne $d) { $deltas += $d }
+            }
+
+            # For AvgResponseHrs, "improving" means decreasing (faster)
+            $improvingCount = 0
+            $degradingCount = 0
+            $stableCount    = 0
+            $threshold      = 2.0
+
+            foreach ($d in $deltas) {
+                if ($metric -eq 'AvgResponseHrs') {
+                    # Negative delta = faster = improving
+                    if ($d -lt (-$threshold))     { $improvingCount++ }
+                    elseif ($d -gt $threshold)    { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+                elseif ($metric -eq 'RevocationRate') {
+                    # For revocation rate, direction is context-dependent;
+                    # treat decreasing as improving (fewer access removals needed)
+                    if ($d -lt (-$threshold))     { $improvingCount++ }
+                    elseif ($d -gt $threshold)    { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+                else {
+                    # ApprovalRate, CompletionRate: higher = better
+                    if ($d -gt $threshold)        { $improvingCount++ }
+                    elseif ($d -lt (-$threshold)) { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+            }
+
+            # Majority-based classification
+            if ($improvingCount -gt $degradingCount -and $improvingCount -gt $stableCount) {
+                $trends[$metric] = 'Improving'
+            }
+            elseif ($degradingCount -gt $improvingCount -and $degradingCount -gt $stableCount) {
+                $trends[$metric] = 'Degrading'
+            }
+            else {
+                $trends[$metric] = 'Stable'
+            }
+        }
+    }
+
+    # --- Overall direction: majority of trends ---
+    $improvingTrends = @($trends.Values | Where-Object { $_ -eq 'Improving' }).Count
+    $degradingTrends = @($trends.Values | Where-Object { $_ -eq 'Degrading' }).Count
+    if ($periods.Count -lt 3) {
+        $overallDirection = 'Insufficient Data'
+    }
+    elseif ($improvingTrends -gt $degradingTrends) {
+        $overallDirection = 'Improving'
+    }
+    elseif ($degradingTrends -gt $improvingTrends) {
+        $overallDirection = 'Degrading'
+    }
+    else {
+        $overallDirection = 'Stable'
+    }
+
+    $earliestStr = if ($null -ne $earliestDate) { $earliestDate.ToString('yyyy-MM-dd') } else { '' }
+    $latestStr   = if ($null -ne $latestDate)   { $latestDate.ToString('yyyy-MM-dd') }   else { '' }
+
+    $result = @{
+        Periods = $periods.ToArray()
+        Trends  = $trends
+        Summary = @{
+            EarliestCampaign = $earliestStr
+            LatestCampaign   = $latestStr
+            TotalCampaigns   = ($CampaignMetrics | Where-Object { $null -ne $_ }).Count
+            OverallDirection = $overallDirection
+        }
+    }
+
+    Write-SPLog -Message "Campaign trends: $($periods.Count) period(s), overall=$overallDirection" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+function Export-SPCampaignTrendHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML trend report from campaign trend analysis data.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with period-over-period comparison table,
+        color-coded deltas (green for improvement, red for degradation, gray for stable),
+        and a summary section with overall governance posture assessment.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER TrendData
+        Hashtable output from Measure-SPCampaignTrends.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $trends = Measure-SPCampaignTrends -CampaignMetrics $metrics
+        $path   = Export-SPCampaignTrendHtml -TrendData $trends -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$TrendData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignTrends-${timestamp}.html"
+
+    # --- Delta formatting helper ---
+    function _FormatDelta([double]$value, [bool]$invertColor) {
+        # invertColor: true for metrics where negative = good (AvgResponseHrs)
+        if ($value -eq 0) {
+            return '<span style="color:#888888;">--</span>'
+        }
+        $sign = if ($value -gt 0) { '+' } else { '' }
+        $isGood = if ($invertColor) { $value -lt 0 } else { $value -gt 0 }
+        $color  = if ($isGood) { '#27ae60' } else { '#e74c3c' }
+        $arrow  = if ($value -gt 0) { '&#9650;' } else { '&#9660;' }
+        return "<span style=""color:${color}; font-weight:bold;"">${arrow} ${sign}$([Math]::Round($value, 1))</span>"
+    }
+
+    # --- Build period table rows ---
+    $headerRow = @"
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:8px 12px; text-align:left; border:1px solid #dddddd;">Period</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Campaigns</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Items</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Approval %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Revocation %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Completion %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Avg Response (hrs)</th>
+</tr>
+"@
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+    foreach ($period in $TrendData.Periods) {
+        $bgColor = if (($rowIdx % 2) -eq 0) { '#ffffff' } else { '#f8f9fa' }
+
+        # Format deltas (empty for first period)
+        $approvalDelta   = ''
+        $revocationDelta = ''
+        $completionDelta = ''
+        $responseDelta   = ''
+
+        if ($period['Deltas'].Count -gt 0) {
+            if ($period['Deltas'].ContainsKey('ApprovalRate')) {
+                $approvalDelta = ' ' + (_FormatDelta $period['Deltas']['ApprovalRate'] $false)
+            }
+            if ($period['Deltas'].ContainsKey('RevocationRate')) {
+                $revocationDelta = ' ' + (_FormatDelta $period['Deltas']['RevocationRate'] $true)
+            }
+            if ($period['Deltas'].ContainsKey('CompletionRate')) {
+                $completionDelta = ' ' + (_FormatDelta $period['Deltas']['CompletionRate'] $false)
+            }
+            if ($period['Deltas'].ContainsKey('AvgResponseHrs')) {
+                $responseDelta = ' ' + (_FormatDelta $period['Deltas']['AvgResponseHrs'] $true)
+            }
+        }
+
+        $row = @"
+<tr style="background:${bgColor};">
+<td style="padding:8px 12px; border:1px solid #dddddd; font-weight:bold;">$(ConvertTo-SafeHtml $period['Label'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['CampaignCount'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['TotalItems'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['ApprovalRate'])%${approvalDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['RevocationRate'])%${revocationDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['CompletionRate'])%${completionDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['AvgResponseHrs'])h${responseDelta}</td>
+</tr>
+"@
+        $bodyRows.Add($row)
+        $rowIdx++
+    }
+
+    # --- Build trend summary section ---
+    $trendRows = [System.Collections.Generic.List[string]]::new()
+    $trendLabels = @{
+        'ApprovalRate'   = 'Approval Rate'
+        'RevocationRate' = 'Revocation Rate'
+        'CompletionRate' = 'Completion Rate'
+        'AvgResponseHrs' = 'Avg Response Time'
+    }
+
+    foreach ($key in @('ApprovalRate', 'RevocationRate', 'CompletionRate', 'AvgResponseHrs')) {
+        $trendValue = $TrendData.Trends[$key]
+        $trendColor = switch ($trendValue) {
+            'Improving'         { '#27ae60' }
+            'Degrading'         { '#e74c3c' }
+            'Stable'            { '#888888' }
+            'Insufficient Data' { '#cccccc' }
+            default             { '#888888' }
+        }
+
+        $trendRows.Add(@"
+<tr>
+<td style="padding:6px 12px; border:1px solid #dddddd;">$($trendLabels[$key])</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;"><span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:${trendColor}; color:#ffffff;">$(ConvertTo-SafeHtml $trendValue)</span></td>
+</tr>
+"@)
+    }
+
+    # Overall direction badge
+    $overallDir   = $TrendData.Summary.OverallDirection
+    $overallColor = switch ($overallDir) {
+        'Improving'         { '#27ae60' }
+        'Degrading'         { '#e74c3c' }
+        'Stable'            { '#888888' }
+        'Insufficient Data' { '#cccccc' }
+        default             { '#888888' }
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Campaign Trend Analysis</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Campaign Trend Analysis</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:20px;">$($TrendData.Summary.TotalCampaigns) campaigns from $($TrendData.Summary.EarliestCampaign) to $($TrendData.Summary.LatestCampaign)</p>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Overall Governance Posture</h2>
+<p style="font-size:14px;"><span style="display:inline-block; padding:4px 16px; border-radius:4px; font-size:14px; font-weight:bold; background:${overallColor}; color:#ffffff;">$(ConvertTo-SafeHtml $overallDir)</span></p>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Trend Indicators</h2>
+<table style="border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:6px 12px; text-align:left; border:1px solid #dddddd;">Metric</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Trend</th>
+</tr>
+$($trendRows -join "`n")
+</table>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Period-over-Period Comparison</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+$($bodyRows -join "`n")
+</table>
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign trend HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignTrendHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region Cross-Campaign Reviewer Analysis (P11-08)
+
+function Measure-SPReviewerReputation {
+    <#
+    .SYNOPSIS
+        Aggregates reviewer performance across multiple campaigns to build reputation profiles.
+    .DESCRIPTION
+        Takes an array of campaign audit data (same structure produced by Invoke-SPCampaignAudit)
+        and builds a per-reviewer reputation profile spanning all campaigns. Identifies systemic
+        issues (consistently slow reviewers, chronic rubber-stampers) vs one-time anomalies.
+
+        Each reviewer receives a ReputationScore (0-100) based on weighted factors:
+          - Response time (30%): Faster = higher score
+          - Completion rate (25%): Higher = better
+          - Decision diversity (20%): Mix of approve/revoke = higher (100% approve = lower)
+          - Consistency (15%): Low variance across campaigns = higher
+          - Escalation history (10%): Fewer escalations = higher
+
+        Reviewers with fewer campaigns than MinCampaigns are excluded (insufficient data).
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables, each containing: CampaignName, Created, Decisions
+        (from Group-SPAuditDecisions), ReviewerMetrics (from Measure-SPAuditReviewerMetrics),
+        RubberStampRisk (from Measure-SPAuditRubberStampRisk).
+    .PARAMETER MinCampaigns
+        Minimum number of campaigns a reviewer must have participated in to be included.
+        Default: 2.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Reviewers = @( ... )   # sorted by ReputationScore ascending (worst first)
+            Summary   = @{ TotalReviewers; Excellent; Good; NeedsAttention; AtRisk }
+        }
+    .EXAMPLE
+        $rep = Measure-SPReviewerReputation -CampaignAudits $allCampaignAudits -MinCampaigns 2
+        $rep.Reviewers | Where-Object { $_.ReputationTier -eq 'At Risk' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$MinCampaigns = 2,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measuring reviewer reputation across $($CampaignAudits.Count) campaign(s), MinCampaigns=$MinCampaigns" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPReviewerReputation' `
+        -CorrelationID $CorrelationID
+
+    # --- Accumulator per reviewer keyed by name ---
+    # Each entry tracks cross-campaign totals and per-campaign snapshots
+    $reviewerMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { $audit['CampaignName'] } else { '' }
+
+        # Parse campaign creation date for chronological ordering
+        $campaignCreated = $null
+        $createdStr = if ($audit.ContainsKey('Created')) { $audit['Created'] } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+            try {
+                $campaignCreated = [datetime]::Parse($createdStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind)
+            }
+            catch { $campaignCreated = $null }
+        }
+
+        # --- Extract reviewer metrics from this campaign ---
+        $metricsData = $null
+        if ($audit.ContainsKey('ReviewerMetrics') -and $null -ne $audit['ReviewerMetrics']) {
+            $rm = $audit['ReviewerMetrics']
+            if ($rm -is [hashtable] -and $rm.ContainsKey('ReviewerMetrics')) {
+                $metricsData = @($rm['ReviewerMetrics'])
+            }
+        }
+
+        # --- Extract rubber-stamp risk from this campaign ---
+        $riskData = $null
+        if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) {
+            $rs = $audit['RubberStampRisk']
+            if ($rs -is [hashtable] -and $rs.ContainsKey('ReviewerRisks')) {
+                $riskData = @($rs['ReviewerRisks'])
+            }
+        }
+
+        # --- Extract per-reviewer decision counts from Decisions ---
+        $decisionsByReviewer = @{}
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                if (-not $decisions.ContainsKey($category) -or $null -eq $decisions[$category]) { continue }
+                foreach ($item in @($decisions[$category])) {
+                    $rName = ''
+                    if ($null -ne $item.ReviewerName -and -not [string]::IsNullOrWhiteSpace($item.ReviewerName)) {
+                        $rName = $item.ReviewerName
+                    }
+                    if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+
+                    if (-not $decisionsByReviewer.ContainsKey($rName)) {
+                        $decisionsByReviewer[$rName] = @{ Approved = 0; Revoked = 0; Pending = 0 }
+                    }
+                    $decisionsByReviewer[$rName][$category]++
+                }
+            }
+        }
+
+        # --- Build per-reviewer lookup for metrics and risk ---
+        $metricsLookup = @{}
+        if ($null -ne $metricsData) {
+            foreach ($m in $metricsData) {
+                $mName = if ($null -ne $m.Name) { $m.Name } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($mName)) {
+                    $metricsLookup[$mName] = $m
+                }
+            }
+        }
+
+        $riskLookup = @{}
+        if ($null -ne $riskData) {
+            foreach ($r in $riskData) {
+                $rName = if ($null -ne $r.ReviewerName) { $r.ReviewerName } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                    $riskLookup[$rName] = $r
+                }
+            }
+        }
+
+        # --- Collect all reviewer names seen in this campaign ---
+        $allReviewerNames = @{}
+        foreach ($k in $decisionsByReviewer.Keys) { $allReviewerNames[$k] = $true }
+        foreach ($k in $metricsLookup.Keys)       { $allReviewerNames[$k] = $true }
+
+        # --- Accumulate per reviewer ---
+        foreach ($reviewerName in $allReviewerNames.Keys) {
+            if (-not $reviewerMap.ContainsKey($reviewerName)) {
+                $reviewerMap[$reviewerName] = @{
+                    Name               = $reviewerName
+                    IdentityId         = ''
+                    CampaignsParticipated = 0
+                    TotalApproved      = 0
+                    TotalRevoked       = 0
+                    TotalPending       = 0
+                    AvgHoursPerCampaign = [System.Collections.Generic.List[double]]::new()
+                    RubberStampCount   = 0
+                    EscalationCount    = 0
+                    CampaignSnapshots  = [System.Collections.Generic.List[object]]::new()
+                    CompletionRates    = [System.Collections.Generic.List[double]]::new()
+                }
+            }
+
+            $entry = $reviewerMap[$reviewerName]
+            $entry['CampaignsParticipated']++
+
+            # Decisions
+            if ($decisionsByReviewer.ContainsKey($reviewerName)) {
+                $d = $decisionsByReviewer[$reviewerName]
+                $entry['TotalApproved'] += $d['Approved']
+                $entry['TotalRevoked']  += $d['Revoked']
+                $entry['TotalPending']  += $d['Pending']
+
+                $campTotal = $d['Approved'] + $d['Revoked'] + $d['Pending']
+                $campDecided = $d['Approved'] + $d['Revoked']
+                if ($campTotal -gt 0) {
+                    $entry['CompletionRates'].Add([Math]::Round(($campDecided / $campTotal) * 100, 1))
+                }
+            }
+
+            # Response time
+            if ($metricsLookup.ContainsKey($reviewerName)) {
+                $met = $metricsLookup[$reviewerName]
+                if ($null -ne $met.AvgHours) {
+                    $entry['AvgHoursPerCampaign'].Add([double]$met.AvgHours)
+                }
+            }
+
+            # Rubber-stamp risk
+            if ($riskLookup.ContainsKey($reviewerName)) {
+                $rsk = $riskLookup[$reviewerName]
+                $sev = if ($null -ne $rsk.Severity) { $rsk.Severity } else { 'None' }
+                if ($sev -eq 'Medium' -or $sev -eq 'High') {
+                    $entry['RubberStampCount']++
+                }
+            }
+
+            # Campaign snapshot for trend analysis
+            $campApprovalRate = 0
+            if ($decisionsByReviewer.ContainsKey($reviewerName)) {
+                $d = $decisionsByReviewer[$reviewerName]
+                $decided = $d['Approved'] + $d['Revoked']
+                if ($decided -gt 0) {
+                    $campApprovalRate = [Math]::Round(($d['Approved'] / $decided) * 100, 1)
+                }
+            }
+
+            $campAvgHours = $null
+            if ($metricsLookup.ContainsKey($reviewerName) -and $null -ne $metricsLookup[$reviewerName].AvgHours) {
+                $campAvgHours = [double]$metricsLookup[$reviewerName].AvgHours
+            }
+
+            $entry['CampaignSnapshots'].Add(@{
+                CampaignName  = $campaignName
+                Created       = $campaignCreated
+                ApprovalRate  = $campApprovalRate
+                AvgHours      = $campAvgHours
+            })
+        }
+    }
+
+    # --- Score and filter reviewers ---
+    $reviewerResults = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($reviewerName in $reviewerMap.Keys) {
+        $entry = $reviewerMap[$reviewerName]
+
+        # Skip reviewers with insufficient campaigns
+        if ($entry['CampaignsParticipated'] -lt $MinCampaigns) {
+            continue
+        }
+
+        $totalItems   = $entry['TotalApproved'] + $entry['TotalRevoked'] + $entry['TotalPending']
+        $totalDecided = $entry['TotalApproved'] + $entry['TotalRevoked']
+
+        # --- Lifetime approval rate ---
+        $lifetimeApprovalRate = 0
+        if ($totalDecided -gt 0) {
+            $lifetimeApprovalRate = [Math]::Round(($entry['TotalApproved'] / $totalDecided) * 100, 1)
+        }
+
+        # --- Average response hours (weighted across campaigns) ---
+        $avgResponseHours = 0
+        $hoursList = @($entry['AvgHoursPerCampaign'])
+        if ($hoursList.Count -gt 0) {
+            $avgResponseHours = [Math]::Round(($hoursList | Measure-Object -Average).Average, 1)
+        }
+
+        # --- Response trend (improving = getting faster) ---
+        $responseTrend = 'Stable'
+        $snapshots = @($entry['CampaignSnapshots'] | Where-Object { $null -ne $_['Created'] } | Sort-Object { $_['Created'] })
+        $hoursOverTime = @($snapshots | Where-Object { $null -ne $_['AvgHours'] } | ForEach-Object { $_['AvgHours'] })
+        if ($hoursOverTime.Count -ge 3) {
+            $improving = 0
+            $degrading = 0
+            for ($i = 1; $i -lt $hoursOverTime.Count; $i++) {
+                $delta = $hoursOverTime[$i] - $hoursOverTime[$i - 1]
+                if ($delta -lt -0.5) { $improving++ }
+                elseif ($delta -gt 0.5) { $degrading++ }
+            }
+            if ($improving -gt $degrading -and $improving -ge 2) { $responseTrend = 'Improving' }
+            elseif ($degrading -gt $improving -and $degrading -ge 2) { $responseTrend = 'Degrading' }
+        }
+
+        # ===== REPUTATION SCORE (0-100) =====
+
+        # Component 1: Response time score (30%) -- faster is better
+        # Baseline: 24h = 50 points, 0h = 100 points, 72h+ = 0 points
+        $responseScore = 0
+        if ($hoursList.Count -gt 0) {
+            $clampedHours = [Math]::Min([Math]::Max($avgResponseHours, 0), 72)
+            $responseScore = [Math]::Round((1 - ($clampedHours / 72)) * 100, 1)
+        }
+        else {
+            $responseScore = 50  # no data -> neutral
+        }
+
+        # Component 2: Completion rate score (25%) -- higher is better
+        $completionScore = 0
+        $completionRates = @($entry['CompletionRates'])
+        if ($completionRates.Count -gt 0) {
+            $completionScore = [Math]::Round(($completionRates | Measure-Object -Average).Average, 1)
+        }
+        else {
+            $completionScore = 50  # no data -> neutral
+        }
+
+        # Component 3: Decision diversity score (20%) -- mix of approve/revoke is healthier
+        # 100% approval = low diversity = score 20; 50/50 = max diversity = score 100
+        $diversityScore = 50
+        if ($totalDecided -gt 0) {
+            $revocationRate = $entry['TotalRevoked'] / $totalDecided
+            # Optimal revocation rate is around 10-30%. Score peaks at 20% and drops toward 0% and 100%.
+            # Use a simple bell-curve approximation centered at 0.2
+            $deviation = [Math]::Abs($revocationRate - 0.2)
+            # max deviation from 0.2 is 0.8 (at 100% revocation); scale to 0-100
+            $diversityScore = [Math]::Round((1 - [Math]::Min($deviation / 0.8, 1)) * 100, 1)
+        }
+
+        # Component 4: Consistency score (15%) -- low variance in approval rate across campaigns
+        $consistencyScore = 50
+        $campApprovalRates = @($snapshots | ForEach-Object { $_['ApprovalRate'] })
+        if ($campApprovalRates.Count -ge 2) {
+            $mean = ($campApprovalRates | Measure-Object -Average).Average
+            $sumSqDiff = 0
+            foreach ($rate in $campApprovalRates) {
+                $sumSqDiff += ($rate - $mean) * ($rate - $mean)
+            }
+            $stdDev = [Math]::Sqrt($sumSqDiff / $campApprovalRates.Count)
+            # stdDev of 0 = perfect consistency (100), stdDev of 50 = terrible (0)
+            $consistencyScore = [Math]::Round([Math]::Max(0, (1 - ($stdDev / 50)) * 100), 1)
+        }
+
+        # Component 5: Escalation history score (10%) -- fewer escalations is better
+        $escalationScore = 100
+        $escCount = $entry['EscalationCount']
+        $campCount = $entry['CampaignsParticipated']
+        if ($campCount -gt 0 -and $escCount -gt 0) {
+            $escRatio = $escCount / $campCount
+            $escalationScore = [Math]::Round([Math]::Max(0, (1 - $escRatio) * 100), 1)
+        }
+
+        # Weighted composite
+        $reputationScore = [Math]::Round(
+            ($responseScore    * 0.30) +
+            ($completionScore  * 0.25) +
+            ($diversityScore   * 0.20) +
+            ($consistencyScore * 0.15) +
+            ($escalationScore  * 0.10),
+            0
+        )
+        # Clamp to 0-100
+        $reputationScore = [Math]::Min(100, [Math]::Max(0, $reputationScore))
+
+        # Tier classification
+        $reputationTier = if ($reputationScore -ge 80) { 'Excellent' }
+                          elseif ($reputationScore -ge 60) { 'Good' }
+                          elseif ($reputationScore -ge 40) { 'Needs Attention' }
+                          else { 'At Risk' }
+
+        $reviewerResults.Add([PSCustomObject]@{
+            ReviewerName          = $reviewerName
+            ReviewerIdentityId    = $entry['IdentityId']
+            CampaignsParticipated = $entry['CampaignsParticipated']
+            TotalItemsReviewed    = $totalItems
+            AvgResponseHours      = $avgResponseHours
+            ResponseTrend         = $responseTrend
+            LifetimeApprovalRate  = $lifetimeApprovalRate
+            RubberStampCount      = $entry['RubberStampCount']
+            EscalationCount       = $entry['EscalationCount']
+            ReputationScore       = $reputationScore
+            ReputationTier        = $reputationTier
+        })
+    }
+
+    # Sort by ReputationScore ascending (worst first for actionability)
+    $sorted = @($reviewerResults | Sort-Object ReputationScore)
+
+    # Build summary
+    $excellent      = @($sorted | Where-Object { $_.ReputationTier -eq 'Excellent' }).Count
+    $good           = @($sorted | Where-Object { $_.ReputationTier -eq 'Good' }).Count
+    $needsAttention = @($sorted | Where-Object { $_.ReputationTier -eq 'Needs Attention' }).Count
+    $atRisk         = @($sorted | Where-Object { $_.ReputationTier -eq 'At Risk' }).Count
+
+    Write-SPLog -Message "Reviewer reputation: $($sorted.Count) reviewers scored -- Excellent=$excellent, Good=$good, NeedsAttention=$needsAttention, AtRisk=$atRisk" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPReviewerReputation' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Reviewers = $sorted
+        Summary   = @{
+            TotalReviewers = $sorted.Count
+            Excellent      = $excellent
+            Good           = $good
+            NeedsAttention = $needsAttention
+            AtRisk         = $atRisk
+        }
+    }
+}
+
+#endregion
+
+#region Entitlement Inventory HTML (P11-07)
+
+function Export-SPEntitlementInventoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML entitlement inventory report grouped by source.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source entitlement tables.
+        Privileged entitlements are highlighted in red, unreviewed entitlements
+        in orange. Includes a summary card with total counts and coverage percentage.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER InventoryData
+        Hashtable output from Get-SPEntitlementInventory (the .Data property).
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $inv = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $path = Export-SPEntitlementInventoryHtml -InventoryData $inv.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$InventoryData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "EntitlementInventory-${timestamp}.html"
+
+    $summary = $InventoryData.Summary
+    $sources = $InventoryData.Sources
+
+    $hasReviewData = ($null -ne $summary.ReviewCoverage)
+    $coverageDisplay = if ($hasReviewData) { "$($summary.ReviewCoverage)%" } else { 'N/A' }
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary.TotalSources)</span>
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Total Entitlements<br/><span style="font-size:22px;">$($summary.TotalEntitlements)</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Privileged<br/><span style="font-size:22px;">$($summary.TotalPrivileged)</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Review Coverage<br/><span style="font-size:22px;">$coverageDisplay</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source sections ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($srcId in ($sources.Keys | Sort-Object)) {
+        $srcData = $sources[$srcId]
+        $srcName = ConvertTo-SafeHtml $srcData.SourceName
+
+        $sectionHeader = @"
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:4px;">$srcName</h2>
+<p style="font-size:12px; color:#666666; margin-top:0; margin-bottom:8px;">Source ID: $(ConvertTo-SafeHtml $srcId) | Entitlements: $($srcData.TotalEntitlements) | Privileged: $($srcData.Privileged)</p>
+"@
+
+        if ($srcData.TotalEntitlements -eq 0) {
+            $sourceSections.Add("${sectionHeader}<p style=""font-style:italic; color:#999999;"">No entitlements found for this source.</p>")
+            continue
+        }
+
+        # Build table headers
+        $headers = @('Name', 'Display Name', 'Type', 'Privileged', 'Owner')
+        if ($hasReviewData) {
+            $headers += @('Reviewed', 'Last Review')
+        }
+
+        $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; border:1px solid #dddddd;"'
+        $headerRow = "<thead><tr>" + (($headers | ForEach-Object { "<th $thStyle>$_</th>" }) -join '') + "</tr></thead>"
+
+        $bodyRows = [System.Collections.Generic.List[string]]::new()
+        $rowIdx = 0
+
+        foreach ($ent in $srcData.Entitlements) {
+            $rowIdx++
+            $bgColor = if (($rowIdx % 2) -eq 0) { '#f8f9fa' } else { '#ffffff' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-size:13px;"
+
+            # Highlight privileged in red, unreviewed in orange
+            $rowBg = $bgColor
+            if ($ent.Privileged) {
+                $rowBg = '#fce4e4'
+            } elseif ($hasReviewData -and $ent.Reviewed -eq $false) {
+                $rowBg = '#fff3e0'
+            }
+
+            $privDisplay = if ($ent.Privileged) { '<span style="color:#c0392b; font-weight:bold;">Yes</span>' } else { 'No' }
+
+            $cells = @(
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.Name)</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.DisplayName)</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.Type)</td>"
+                "<td style=""$tdStyle"">$privDisplay</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ent.OwnerName)</td>"
+            )
+
+            if ($hasReviewData) {
+                $reviewDisplay = if ($ent.Reviewed) {
+                    '<span style="color:#27ae60;">Yes</span>'
+                } else {
+                    '<span style="color:#e67e22; font-weight:bold;">No</span>'
+                }
+                $lastReview = if (-not [string]::IsNullOrWhiteSpace($ent.LastReviewDate)) {
+                    ConvertTo-SafeHtml (Format-HtmlDate $ent.LastReviewDate)
+                } else { '' }
+                $cells += @(
+                    "<td style=""$tdStyle"">$reviewDisplay</td>"
+                    "<td style=""$tdStyle"">$lastReview</td>"
+                )
+            }
+
+            $bodyRows.Add("<tr style=""background:$rowBg;"">$($cells -join '')</tr>")
+        }
+
+        $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+        $sourceSections.Add("${sectionHeader}${tableHtml}")
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Entitlement Inventory Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Entitlement Inventory Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+$($sourceSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Entitlement inventory HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPEntitlementInventoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -5859,5 +7752,12 @@ Export-ModuleMember -Function @(
     'Export-SPLeadershipLevelHtml',
     'Send-SPReport',
     'Compare-SPCampaigns',
-    'Export-SPCampaignComparisonHtml'
+    'Export-SPCampaignComparisonHtml',
+    'Get-SPAuditTrail',
+    'Export-SPAuditTrailHtml',
+    'Export-SPAuditCsv',
+    'Measure-SPCampaignTrends',
+    'Export-SPCampaignTrendHtml',
+    'Export-SPEntitlementInventoryHtml',
+    'Measure-SPReviewerReputation'
 )

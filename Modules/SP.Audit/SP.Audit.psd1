@@ -63,6 +63,29 @@
         # SP.AuditReport - Comparison functions
         'Compare-SPCampaigns'
         'Export-SPCampaignComparisonHtml'
+
+        # SP.AuditReport - Audit Trail Consolidator (P11-02)
+        'Get-SPAuditTrail'
+        'Export-SPAuditTrailHtml'
+
+        # SP.AuditReport - CSV Export (P11-03)
+        'Export-SPAuditCsv'
+
+        # SP.AuditQueries - Remediation Verification (P11-04)
+        'Get-SPRemediationStatus'
+
+        # SP.AuditReport - Campaign Trend Analytics (P11-06)
+        'Measure-SPCampaignTrends'
+        'Export-SPCampaignTrendHtml'
+
+        # SP.AuditQueries - Entitlement Inventory (P11-07)
+        'Get-SPEntitlementInventory'
+
+        # SP.AuditReport - Entitlement Inventory HTML (P11-07)
+        'Export-SPEntitlementInventoryHtml'
+
+        # SP.AuditReport - Cross-Campaign Reviewer Analysis (P11-08)
+        'Measure-SPReviewerReputation'
     )
 
     # Do not export variables or aliases from nested modules
