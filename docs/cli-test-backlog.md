@@ -81,7 +81,7 @@ Stop-Process -Name pwsh -ErrorAction SilentlyContinue  # kills mock
 | ID | Test Battery | Tests | Depends On | Status |
 |----|-------------|-------|------------|--------|
 | T-01 | Test-SPConnectivity.ps1 | 1 | none | DONE |
-| T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | PENDING |
+| T-02 | Invoke-SPCampaignAudit.ps1 | 7 | T-01 | DONE |
 | T-03 | Invoke-SPADDeltaCert.ps1 | 5 | T-01 | PENDING |
 | T-04 | Invoke-SPDeltaReport.ps1 | 3 | T-01 | PENDING |
 | T-05 | Invoke-SPDeltaCertEscalate.ps1 | 2 | T-01 | PENDING |
@@ -111,8 +111,8 @@ TC-01-01: .\Scripts\Test-SPConnectivity.ps1
 
 ## T-02: Invoke-SPCampaignAudit.ps1
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 3a31506
 - **Depends On:** T-01
 
 **Tests (7 parameter combos):**
