@@ -22,3 +22,4 @@ Config/settings.local.json
 !Evidence/.gitkeep
 !Reports/.gitkeep
 !Data/.gitkeep
+.local-backups/
