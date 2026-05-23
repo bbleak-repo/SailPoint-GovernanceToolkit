@@ -73,6 +73,10 @@
 
         # SP.AuditQueries - Remediation Verification (P11-04)
         'Get-SPRemediationStatus'
+
+        # SP.AuditReport - Campaign Trend Analytics (P11-06)
+        'Measure-SPCampaignTrends'
+        'Export-SPCampaignTrendHtml'
     )
 
     # Do not export variables or aliases from nested modules

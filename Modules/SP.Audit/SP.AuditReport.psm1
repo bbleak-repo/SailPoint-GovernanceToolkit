@@ -6676,6 +6676,493 @@ function Export-SPAuditCsv {
 
 #endregion
 
+#region ===== P11-06: Campaign Trend Analytics =====
+
+function Measure-SPCampaignTrends {
+    <#
+    .SYNOPSIS
+        Compares metrics across multiple campaign cycles to identify governance trends.
+    .DESCRIPTION
+        Groups campaign metrics by time period (Week, Month, Quarter, Year), aggregates
+        KPIs per period, calculates deltas between consecutive periods, and classifies
+        multi-period trends as Improving, Degrading, or Stable.
+
+        Answers: "Are approval rates going up? Are reviewers getting faster?"
+
+        Input is the Data array from Measure-SPCampaignMetrics (array of PSCustomObject
+        with CampaignCreated, ApprovalRate, RevocationRate, CompletionRate,
+        AvgResponseTimeHours, ReviewerCount, TotalItems, etc.).
+    .PARAMETER CampaignMetrics
+        Array of campaign metric objects from Measure-SPCampaignMetrics.Data.
+    .PARAMETER GroupBy
+        Time period for grouping: Week, Month, Quarter, Year. Default: Month.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Periods = @(...)   # per-period aggregates with deltas
+            Trends  = @{...}   # multi-period trend classification
+            Summary = @{...}   # overall summary
+        }
+    .EXAMPLE
+        $camps = (Get-SPAuditCampaigns -Status 'COMPLETED' -DaysBack 365).Data
+        $metrics = (Measure-SPCampaignMetrics -Campaigns $camps).Data
+        $trends = Measure-SPCampaignTrends -CampaignMetrics $metrics -GroupBy 'Quarter'
+        $trends.Trends
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$CampaignMetrics,
+
+        [Parameter()]
+        [ValidateSet('Week','Month','Quarter','Year')]
+        [string]$GroupBy = 'Month',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measuring campaign trends for $($CampaignMetrics.Count) metric(s), grouped by $GroupBy" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+        -CorrelationID $CorrelationID
+
+    # --- Helper: parse a date string to DateTime (UTC) ---
+    function _ParseDateUtc([string]$dateStr) {
+        if ([string]::IsNullOrWhiteSpace($dateStr)) { return $null }
+        $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($dateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$dt)) {
+            return $dt.ToUniversalTime()
+        }
+        return $null
+    }
+
+    # --- Helper: assign a period label based on a DateTime ---
+    function _PeriodLabel([datetime]$dt, [string]$group) {
+        switch ($group) {
+            'Week' {
+                # ISO week: year-Www
+                $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
+                $weekNum = $cal.GetWeekOfYear($dt,
+                    [System.Globalization.CalendarWeekRule]::FirstFourDayWeek,
+                    [System.DayOfWeek]::Monday)
+                return '{0}-W{1:D2}' -f $dt.Year, $weekNum
+            }
+            'Month'   { return '{0}-{1:D2}' -f $dt.Year, $dt.Month }
+            'Quarter' {
+                $q = [Math]::Ceiling($dt.Month / 3)
+                return '{0}-Q{1}' -f $dt.Year, $q
+            }
+            'Year'    { return [string]$dt.Year }
+        }
+    }
+
+    # --- Helper: sort key for period labels ---
+    function _PeriodSortKey([string]$label) {
+        # All label formats sort lexicographically except Quarter vs Month;
+        # they all start with YYYY so standard string sort works.
+        return $label
+    }
+
+    # --- Parse dates and group by period ---
+    $periodBuckets = @{}
+    $earliestDate  = $null
+    $latestDate    = $null
+
+    foreach ($m in $CampaignMetrics) {
+        if ($null -eq $m) { continue }
+
+        $created = $null
+        if ($null -ne $m.PSObject.Properties['CampaignCreated'] -and
+            -not [string]::IsNullOrWhiteSpace($m.CampaignCreated)) {
+            $created = _ParseDateUtc $m.CampaignCreated
+        }
+        if ($null -eq $created) {
+            Write-SPLog -Message "Skipping campaign '$($m.CampaignName)' -- no CampaignCreated date" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        if ($null -eq $earliestDate -or $created -lt $earliestDate) { $earliestDate = $created }
+        if ($null -eq $latestDate   -or $created -gt $latestDate)   { $latestDate   = $created }
+
+        $label = _PeriodLabel $created $GroupBy
+        if (-not $periodBuckets.ContainsKey($label)) {
+            $periodBuckets[$label] = [System.Collections.Generic.List[object]]::new()
+        }
+        $periodBuckets[$label].Add($m)
+    }
+
+    # --- Sort period labels chronologically ---
+    $sortedLabels = @($periodBuckets.Keys | Sort-Object)
+
+    # --- Aggregate metrics per period ---
+    $periods = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($label in $sortedLabels) {
+        $bucket = $periodBuckets[$label]
+
+        $totalItems    = 0
+        $totalApproved = 0
+        $totalRevoked  = 0
+        $totalDecided  = 0
+        $totalTotal    = 0
+        $responseHrSum = 0.0
+        $responseHrCt  = 0
+        $reviewerTotal = 0
+
+        foreach ($m in $bucket) {
+            $ti = if ($null -ne $m.TotalItems) { [int]$m.TotalItems } else { 0 }
+            $totalTotal += $ti
+
+            $app = if ($null -ne $m.ApprovedCount) { [int]$m.ApprovedCount } else { 0 }
+            $rev = if ($null -ne $m.RevokedCount)  { [int]$m.RevokedCount }  else { 0 }
+            $totalApproved += $app
+            $totalRevoked  += $rev
+            $totalDecided  += ($app + $rev)
+
+            if ($null -ne $m.AvgResponseTimeHours -and $m.AvgResponseTimeHours -gt 0) {
+                $responseHrSum += [double]$m.AvgResponseTimeHours
+                $responseHrCt++
+            }
+
+            $rc = if ($null -ne $m.ReviewerCount) { [int]$m.ReviewerCount } else { 0 }
+            $reviewerTotal += $rc
+        }
+
+        $approvalRate   = if ($totalTotal -gt 0) { [Math]::Round(($totalApproved / $totalTotal) * 100, 1) } else { 0.0 }
+        $revocationRate = if ($totalTotal -gt 0) { [Math]::Round(($totalRevoked  / $totalTotal) * 100, 1) } else { 0.0 }
+        $completionRate = if ($totalTotal -gt 0) { [Math]::Round(($totalDecided  / $totalTotal) * 100, 1) } else { 0.0 }
+        $avgRespHrs     = if ($responseHrCt -gt 0) { [Math]::Round($responseHrSum / $responseHrCt, 1) } else { 0.0 }
+
+        $periods.Add(@{
+            Label          = $label
+            CampaignCount  = $bucket.Count
+            TotalItems     = $totalTotal
+            ApprovalRate   = $approvalRate
+            RevocationRate = $revocationRate
+            CompletionRate = $completionRate
+            AvgResponseHrs = $avgRespHrs
+            ReviewerCount  = $reviewerTotal
+            Deltas         = @{}
+        })
+    }
+
+    # --- Calculate deltas between consecutive periods ---
+    for ($i = 1; $i -lt $periods.Count; $i++) {
+        $prev = $periods[$i - 1]
+        $curr = $periods[$i]
+        $curr['Deltas'] = @{
+            ApprovalRate   = [Math]::Round($curr['ApprovalRate']   - $prev['ApprovalRate'],   1)
+            RevocationRate = [Math]::Round($curr['RevocationRate'] - $prev['RevocationRate'], 1)
+            CompletionRate = [Math]::Round($curr['CompletionRate'] - $prev['CompletionRate'], 1)
+            AvgResponseHrs = [Math]::Round($curr['AvgResponseHrs'] - $prev['AvgResponseHrs'], 1)
+        }
+    }
+
+    # --- Classify trends (need 3+ periods) ---
+    $trendMetrics = @('ApprovalRate', 'RevocationRate', 'CompletionRate', 'AvgResponseHrs')
+    $trends = @{}
+
+    if ($periods.Count -lt 3) {
+        foreach ($metric in $trendMetrics) {
+            $trends[$metric] = 'Insufficient Data'
+        }
+    }
+    else {
+        foreach ($metric in $trendMetrics) {
+            # Collect deltas from period index 1 onward
+            $deltas = @()
+            for ($i = 1; $i -lt $periods.Count; $i++) {
+                $d = $periods[$i]['Deltas'][$metric]
+                if ($null -ne $d) { $deltas += $d }
+            }
+
+            # For AvgResponseHrs, "improving" means decreasing (faster)
+            $improvingCount = 0
+            $degradingCount = 0
+            $stableCount    = 0
+            $threshold      = 2.0
+
+            foreach ($d in $deltas) {
+                if ($metric -eq 'AvgResponseHrs') {
+                    # Negative delta = faster = improving
+                    if ($d -lt (-$threshold))     { $improvingCount++ }
+                    elseif ($d -gt $threshold)    { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+                elseif ($metric -eq 'RevocationRate') {
+                    # For revocation rate, direction is context-dependent;
+                    # treat decreasing as improving (fewer access removals needed)
+                    if ($d -lt (-$threshold))     { $improvingCount++ }
+                    elseif ($d -gt $threshold)    { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+                else {
+                    # ApprovalRate, CompletionRate: higher = better
+                    if ($d -gt $threshold)        { $improvingCount++ }
+                    elseif ($d -lt (-$threshold)) { $degradingCount++ }
+                    else                          { $stableCount++ }
+                }
+            }
+
+            # Majority-based classification
+            if ($improvingCount -gt $degradingCount -and $improvingCount -gt $stableCount) {
+                $trends[$metric] = 'Improving'
+            }
+            elseif ($degradingCount -gt $improvingCount -and $degradingCount -gt $stableCount) {
+                $trends[$metric] = 'Degrading'
+            }
+            else {
+                $trends[$metric] = 'Stable'
+            }
+        }
+    }
+
+    # --- Overall direction: majority of trends ---
+    $improvingTrends = @($trends.Values | Where-Object { $_ -eq 'Improving' }).Count
+    $degradingTrends = @($trends.Values | Where-Object { $_ -eq 'Degrading' }).Count
+    if ($periods.Count -lt 3) {
+        $overallDirection = 'Insufficient Data'
+    }
+    elseif ($improvingTrends -gt $degradingTrends) {
+        $overallDirection = 'Improving'
+    }
+    elseif ($degradingTrends -gt $improvingTrends) {
+        $overallDirection = 'Degrading'
+    }
+    else {
+        $overallDirection = 'Stable'
+    }
+
+    $earliestStr = if ($null -ne $earliestDate) { $earliestDate.ToString('yyyy-MM-dd') } else { '' }
+    $latestStr   = if ($null -ne $latestDate)   { $latestDate.ToString('yyyy-MM-dd') }   else { '' }
+
+    $result = @{
+        Periods = $periods.ToArray()
+        Trends  = $trends
+        Summary = @{
+            EarliestCampaign = $earliestStr
+            LatestCampaign   = $latestStr
+            TotalCampaigns   = ($CampaignMetrics | Where-Object { $null -ne $_ }).Count
+            OverallDirection = $overallDirection
+        }
+    }
+
+    Write-SPLog -Message "Campaign trends: $($periods.Count) period(s), overall=$overallDirection" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignTrends' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+function Export-SPCampaignTrendHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML trend report from campaign trend analysis data.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with period-over-period comparison table,
+        color-coded deltas (green for improvement, red for degradation, gray for stable),
+        and a summary section with overall governance posture assessment.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER TrendData
+        Hashtable output from Measure-SPCampaignTrends.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $trends = Measure-SPCampaignTrends -CampaignMetrics $metrics
+        $path   = Export-SPCampaignTrendHtml -TrendData $trends -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$TrendData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignTrends-${timestamp}.html"
+
+    # --- Delta formatting helper ---
+    function _FormatDelta([double]$value, [bool]$invertColor) {
+        # invertColor: true for metrics where negative = good (AvgResponseHrs)
+        if ($value -eq 0) {
+            return '<span style="color:#888888;">--</span>'
+        }
+        $sign = if ($value -gt 0) { '+' } else { '' }
+        $isGood = if ($invertColor) { $value -lt 0 } else { $value -gt 0 }
+        $color  = if ($isGood) { '#27ae60' } else { '#e74c3c' }
+        $arrow  = if ($value -gt 0) { '&#9650;' } else { '&#9660;' }
+        return "<span style=""color:${color}; font-weight:bold;"">${arrow} ${sign}$([Math]::Round($value, 1))</span>"
+    }
+
+    # --- Build period table rows ---
+    $headerRow = @"
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:8px 12px; text-align:left; border:1px solid #dddddd;">Period</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Campaigns</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Items</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Approval %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Revocation %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Completion %</th>
+<th style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">Avg Response (hrs)</th>
+</tr>
+"@
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+    foreach ($period in $TrendData.Periods) {
+        $bgColor = if (($rowIdx % 2) -eq 0) { '#ffffff' } else { '#f8f9fa' }
+
+        # Format deltas (empty for first period)
+        $approvalDelta   = ''
+        $revocationDelta = ''
+        $completionDelta = ''
+        $responseDelta   = ''
+
+        if ($period['Deltas'].Count -gt 0) {
+            if ($period['Deltas'].ContainsKey('ApprovalRate')) {
+                $approvalDelta = ' ' + (_FormatDelta $period['Deltas']['ApprovalRate'] $false)
+            }
+            if ($period['Deltas'].ContainsKey('RevocationRate')) {
+                $revocationDelta = ' ' + (_FormatDelta $period['Deltas']['RevocationRate'] $true)
+            }
+            if ($period['Deltas'].ContainsKey('CompletionRate')) {
+                $completionDelta = ' ' + (_FormatDelta $period['Deltas']['CompletionRate'] $false)
+            }
+            if ($period['Deltas'].ContainsKey('AvgResponseHrs')) {
+                $responseDelta = ' ' + (_FormatDelta $period['Deltas']['AvgResponseHrs'] $true)
+            }
+        }
+
+        $row = @"
+<tr style="background:${bgColor};">
+<td style="padding:8px 12px; border:1px solid #dddddd; font-weight:bold;">$(ConvertTo-SafeHtml $period['Label'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['CampaignCount'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['TotalItems'])</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['ApprovalRate'])%${approvalDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['RevocationRate'])%${revocationDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['CompletionRate'])%${completionDelta}</td>
+<td style="padding:8px 12px; text-align:center; border:1px solid #dddddd;">$($period['AvgResponseHrs'])h${responseDelta}</td>
+</tr>
+"@
+        $bodyRows.Add($row)
+        $rowIdx++
+    }
+
+    # --- Build trend summary section ---
+    $trendRows = [System.Collections.Generic.List[string]]::new()
+    $trendLabels = @{
+        'ApprovalRate'   = 'Approval Rate'
+        'RevocationRate' = 'Revocation Rate'
+        'CompletionRate' = 'Completion Rate'
+        'AvgResponseHrs' = 'Avg Response Time'
+    }
+
+    foreach ($key in @('ApprovalRate', 'RevocationRate', 'CompletionRate', 'AvgResponseHrs')) {
+        $trendValue = $TrendData.Trends[$key]
+        $trendColor = switch ($trendValue) {
+            'Improving'         { '#27ae60' }
+            'Degrading'         { '#e74c3c' }
+            'Stable'            { '#888888' }
+            'Insufficient Data' { '#cccccc' }
+            default             { '#888888' }
+        }
+
+        $trendRows.Add(@"
+<tr>
+<td style="padding:6px 12px; border:1px solid #dddddd;">$($trendLabels[$key])</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;"><span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:${trendColor}; color:#ffffff;">$(ConvertTo-SafeHtml $trendValue)</span></td>
+</tr>
+"@)
+    }
+
+    # Overall direction badge
+    $overallDir   = $TrendData.Summary.OverallDirection
+    $overallColor = switch ($overallDir) {
+        'Improving'         { '#27ae60' }
+        'Degrading'         { '#e74c3c' }
+        'Stable'            { '#888888' }
+        'Insufficient Data' { '#cccccc' }
+        default             { '#888888' }
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Campaign Trend Analysis</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Campaign Trend Analysis</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:20px;">$($TrendData.Summary.TotalCampaigns) campaigns from $($TrendData.Summary.EarliestCampaign) to $($TrendData.Summary.LatestCampaign)</p>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Overall Governance Posture</h2>
+<p style="font-size:14px;"><span style="display:inline-block; padding:4px 16px; border-radius:4px; font-size:14px; font-weight:bold; background:${overallColor}; color:#ffffff;">$(ConvertTo-SafeHtml $overallDir)</span></p>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Trend Indicators</h2>
+<table style="border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:6px 12px; text-align:left; border:1px solid #dddddd;">Metric</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Trend</th>
+</tr>
+$($trendRows -join "`n")
+</table>
+
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Period-over-Period Comparison</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+$($bodyRows -join "`n")
+</table>
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign trend HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignTrendHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -6697,5 +7184,7 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignComparisonHtml',
     'Get-SPAuditTrail',
     'Export-SPAuditTrailHtml',
-    'Export-SPAuditCsv'
+    'Export-SPAuditCsv',
+    'Measure-SPCampaignTrends',
+    'Export-SPCampaignTrendHtml'
 )

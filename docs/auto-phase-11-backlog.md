@@ -48,7 +48,7 @@ Safe to modify:
 | P11-03 | CSV Export for Audit Data | none | DONE |
 | P11-04 | Remediation Verification | none | DONE |
 | P11-05 | Campaign Health Monitor | none | DONE |
-| P11-06 | Campaign Trend Analytics | P11-03 | PENDING |
+| P11-06 | Campaign Trend Analytics | P11-03 | DONE |
 | P11-07 | Entitlement Inventory Report | none | PENDING |
 | P11-08 | Cross-Campaign Reviewer Analysis | P11-06 | PENDING |
 | P11-09 | Daily Orchestrator Script | P11-01, P11-05 | PENDING |
@@ -478,8 +478,8 @@ function Get-SPCampaignHealth {
 
 ## P11-06: Campaign Trend Analytics
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** P11-03
 
 **Description:**
