@@ -76,7 +76,7 @@ Remove-Item Config\settings-real.json
 | ID | Phase | Tests | Depends On | Status |
 |----|-------|-------|------------|--------|
 | W-01 | Prerequisites + Pester | 3 | none | DONE |
-| W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | PENDING |
+| W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
 | W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | PENDING |
 | W-04 | GUI: Delta Cert tab (all 5 buttons + dialogs) | 14 | W-01 | PENDING |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
@@ -119,9 +119,10 @@ WC-01-04: Pester test suite
 
 ## W-02: GUI -- Settings, Campaigns, Evidence Tabs
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 8/8 -- headless WPF harness `Tests\Harness\Test-W02-GuiStructure.ps1` (STA, no ShowDialog) verified XAML loads, 5 tabs in correct order, all 6 Settings section anchors, 6 Delta Cert fields, Quick Connect masked PasswordBox + buttons, Campaigns toolbar + DataGrid + ProgressBar, Evidence tree + detail grid, and a real settings.json round-trip (TxtDcHoursBack 24 -> 48 -> 24 verified via WriteAllText + re-read). See docs\windows-test-rounds\round-03.md.
 
 **Launch GUI:** `.\Scripts\Show-SPDashboard.ps1`
 
