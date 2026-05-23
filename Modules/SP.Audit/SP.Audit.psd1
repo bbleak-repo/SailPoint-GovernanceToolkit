@@ -70,6 +70,9 @@
 
         # SP.AuditReport - CSV Export (P11-03)
         'Export-SPAuditCsv'
+
+        # SP.AuditQueries - Remediation Verification (P11-04)
+        'Get-SPRemediationStatus'
     )
 
     # Do not export variables or aliases from nested modules
