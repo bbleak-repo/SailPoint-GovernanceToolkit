@@ -113,7 +113,7 @@ function Get-SPDeltaRevokeEvents {
         } while ($page.Count -ge $pageSize)
 
         # Client-side date and source filtering
-        $cutoff    = (Get-Date).AddHours(-$HoursBack)
+        $cutoff    = (Get-Date).ToUniversalTime().AddHours(-$HoursBack)
         $sourceSet = if ($SourceIds.Count -gt 0) {
             [System.Collections.Generic.HashSet[string]]::new($SourceIds)
         } else {
@@ -278,7 +278,7 @@ function Get-SPDeltaRecentCampaigns {
             return @{ Success = $true; Data = @(); Error = $null }
         }
 
-        $cutoff   = (Get-Date).AddHours(-$HoursBack)
+        $cutoff   = (Get-Date).ToUniversalTime().AddHours(-$HoursBack)
         $recent   = [System.Collections.Generic.List[object]]::new()
 
         foreach ($campaign in @($searchResult.Data)) {
