@@ -75,7 +75,7 @@ Remove-Item Config\settings-real.json
 
 | ID | Phase | Tests | Depends On | Status |
 |----|-------|-------|------------|--------|
-| W-01 | Prerequisites + Pester | 3 | none | PENDING |
+| W-01 | Prerequisites + Pester | 3 | none | DONE |
 | W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | PENDING |
 | W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | PENDING |
 | W-04 | GUI: Delta Cert tab (all 5 buttons + dialogs) | 14 | W-01 | PENDING |
@@ -87,9 +87,10 @@ Remove-Item Config\settings-real.json
 
 ## W-01: Prerequisites + Pester
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** none
+- **Results:** PASS -- mock connectivity OK, OAuth OK, Pester 402/411 pass (9 pre-existing test/mock failures documented in docs\windows-test-rounds\round-02.md, down from 55 on PS 7)
 
 **Tests:**
 
