@@ -61,7 +61,7 @@ Safe to modify:
 | S-07 | Source Coverage Analysis | none | DONE |
 | S-08 | Campaign Comparison | S-06 | DONE |
 | S-09 | Campaign Search CLI | S-01 to S-08 | DONE |
-| S-10 | Pester Tests | S-09 | PENDING |
+| S-10 | Pester Tests | S-09 | DONE |
 
 ---
 
@@ -473,8 +473,8 @@ Supports all filter types, output modes, and can chain with comparison/analysis.
 
 ## S-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-09
 
 **Description:**
