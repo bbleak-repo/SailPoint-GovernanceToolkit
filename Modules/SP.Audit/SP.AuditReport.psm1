@@ -7163,6 +7163,386 @@ $($bodyRows -join "`n")
 
 #endregion
 
+#region Cross-Campaign Reviewer Analysis (P11-08)
+
+function Measure-SPReviewerReputation {
+    <#
+    .SYNOPSIS
+        Aggregates reviewer performance across multiple campaigns to build reputation profiles.
+    .DESCRIPTION
+        Takes an array of campaign audit data (same structure produced by Invoke-SPCampaignAudit)
+        and builds a per-reviewer reputation profile spanning all campaigns. Identifies systemic
+        issues (consistently slow reviewers, chronic rubber-stampers) vs one-time anomalies.
+
+        Each reviewer receives a ReputationScore (0-100) based on weighted factors:
+          - Response time (30%): Faster = higher score
+          - Completion rate (25%): Higher = better
+          - Decision diversity (20%): Mix of approve/revoke = higher (100% approve = lower)
+          - Consistency (15%): Low variance across campaigns = higher
+          - Escalation history (10%): Fewer escalations = higher
+
+        Reviewers with fewer campaigns than MinCampaigns are excluded (insufficient data).
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables, each containing: CampaignName, Created, Decisions
+        (from Group-SPAuditDecisions), ReviewerMetrics (from Measure-SPAuditReviewerMetrics),
+        RubberStampRisk (from Measure-SPAuditRubberStampRisk).
+    .PARAMETER MinCampaigns
+        Minimum number of campaigns a reviewer must have participated in to be included.
+        Default: 2.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Reviewers = @( ... )   # sorted by ReputationScore ascending (worst first)
+            Summary   = @{ TotalReviewers; Excellent; Good; NeedsAttention; AtRisk }
+        }
+    .EXAMPLE
+        $rep = Measure-SPReviewerReputation -CampaignAudits $allCampaignAudits -MinCampaigns 2
+        $rep.Reviewers | Where-Object { $_.ReputationTier -eq 'At Risk' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$MinCampaigns = 2,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measuring reviewer reputation across $($CampaignAudits.Count) campaign(s), MinCampaigns=$MinCampaigns" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPReviewerReputation' `
+        -CorrelationID $CorrelationID
+
+    # --- Accumulator per reviewer keyed by name ---
+    # Each entry tracks cross-campaign totals and per-campaign snapshots
+    $reviewerMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { $audit['CampaignName'] } else { '' }
+
+        # Parse campaign creation date for chronological ordering
+        $campaignCreated = $null
+        $createdStr = if ($audit.ContainsKey('Created')) { $audit['Created'] } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+            try {
+                $campaignCreated = [datetime]::Parse($createdStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind)
+            }
+            catch { $campaignCreated = $null }
+        }
+
+        # --- Extract reviewer metrics from this campaign ---
+        $metricsData = $null
+        if ($audit.ContainsKey('ReviewerMetrics') -and $null -ne $audit['ReviewerMetrics']) {
+            $rm = $audit['ReviewerMetrics']
+            if ($rm -is [hashtable] -and $rm.ContainsKey('ReviewerMetrics')) {
+                $metricsData = @($rm['ReviewerMetrics'])
+            }
+        }
+
+        # --- Extract rubber-stamp risk from this campaign ---
+        $riskData = $null
+        if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) {
+            $rs = $audit['RubberStampRisk']
+            if ($rs -is [hashtable] -and $rs.ContainsKey('ReviewerRisks')) {
+                $riskData = @($rs['ReviewerRisks'])
+            }
+        }
+
+        # --- Extract per-reviewer decision counts from Decisions ---
+        $decisionsByReviewer = @{}
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                if (-not $decisions.ContainsKey($category) -or $null -eq $decisions[$category]) { continue }
+                foreach ($item in @($decisions[$category])) {
+                    $rName = ''
+                    if ($null -ne $item.ReviewerName -and -not [string]::IsNullOrWhiteSpace($item.ReviewerName)) {
+                        $rName = $item.ReviewerName
+                    }
+                    if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+
+                    if (-not $decisionsByReviewer.ContainsKey($rName)) {
+                        $decisionsByReviewer[$rName] = @{ Approved = 0; Revoked = 0; Pending = 0 }
+                    }
+                    $decisionsByReviewer[$rName][$category]++
+                }
+            }
+        }
+
+        # --- Build per-reviewer lookup for metrics and risk ---
+        $metricsLookup = @{}
+        if ($null -ne $metricsData) {
+            foreach ($m in $metricsData) {
+                $mName = if ($null -ne $m.Name) { $m.Name } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($mName)) {
+                    $metricsLookup[$mName] = $m
+                }
+            }
+        }
+
+        $riskLookup = @{}
+        if ($null -ne $riskData) {
+            foreach ($r in $riskData) {
+                $rName = if ($null -ne $r.ReviewerName) { $r.ReviewerName } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                    $riskLookup[$rName] = $r
+                }
+            }
+        }
+
+        # --- Collect all reviewer names seen in this campaign ---
+        $allReviewerNames = @{}
+        foreach ($k in $decisionsByReviewer.Keys) { $allReviewerNames[$k] = $true }
+        foreach ($k in $metricsLookup.Keys)       { $allReviewerNames[$k] = $true }
+
+        # --- Accumulate per reviewer ---
+        foreach ($reviewerName in $allReviewerNames.Keys) {
+            if (-not $reviewerMap.ContainsKey($reviewerName)) {
+                $reviewerMap[$reviewerName] = @{
+                    Name               = $reviewerName
+                    IdentityId         = ''
+                    CampaignsParticipated = 0
+                    TotalApproved      = 0
+                    TotalRevoked       = 0
+                    TotalPending       = 0
+                    AvgHoursPerCampaign = [System.Collections.Generic.List[double]]::new()
+                    RubberStampCount   = 0
+                    EscalationCount    = 0
+                    CampaignSnapshots  = [System.Collections.Generic.List[object]]::new()
+                    CompletionRates    = [System.Collections.Generic.List[double]]::new()
+                }
+            }
+
+            $entry = $reviewerMap[$reviewerName]
+            $entry['CampaignsParticipated']++
+
+            # Decisions
+            if ($decisionsByReviewer.ContainsKey($reviewerName)) {
+                $d = $decisionsByReviewer[$reviewerName]
+                $entry['TotalApproved'] += $d['Approved']
+                $entry['TotalRevoked']  += $d['Revoked']
+                $entry['TotalPending']  += $d['Pending']
+
+                $campTotal = $d['Approved'] + $d['Revoked'] + $d['Pending']
+                $campDecided = $d['Approved'] + $d['Revoked']
+                if ($campTotal -gt 0) {
+                    $entry['CompletionRates'].Add([Math]::Round(($campDecided / $campTotal) * 100, 1))
+                }
+            }
+
+            # Response time
+            if ($metricsLookup.ContainsKey($reviewerName)) {
+                $met = $metricsLookup[$reviewerName]
+                if ($null -ne $met.AvgHours) {
+                    $entry['AvgHoursPerCampaign'].Add([double]$met.AvgHours)
+                }
+            }
+
+            # Rubber-stamp risk
+            if ($riskLookup.ContainsKey($reviewerName)) {
+                $rsk = $riskLookup[$reviewerName]
+                $sev = if ($null -ne $rsk.Severity) { $rsk.Severity } else { 'None' }
+                if ($sev -eq 'Medium' -or $sev -eq 'High') {
+                    $entry['RubberStampCount']++
+                }
+            }
+
+            # Campaign snapshot for trend analysis
+            $campApprovalRate = 0
+            if ($decisionsByReviewer.ContainsKey($reviewerName)) {
+                $d = $decisionsByReviewer[$reviewerName]
+                $decided = $d['Approved'] + $d['Revoked']
+                if ($decided -gt 0) {
+                    $campApprovalRate = [Math]::Round(($d['Approved'] / $decided) * 100, 1)
+                }
+            }
+
+            $campAvgHours = $null
+            if ($metricsLookup.ContainsKey($reviewerName) -and $null -ne $metricsLookup[$reviewerName].AvgHours) {
+                $campAvgHours = [double]$metricsLookup[$reviewerName].AvgHours
+            }
+
+            $entry['CampaignSnapshots'].Add(@{
+                CampaignName  = $campaignName
+                Created       = $campaignCreated
+                ApprovalRate  = $campApprovalRate
+                AvgHours      = $campAvgHours
+            })
+        }
+    }
+
+    # --- Score and filter reviewers ---
+    $reviewerResults = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($reviewerName in $reviewerMap.Keys) {
+        $entry = $reviewerMap[$reviewerName]
+
+        # Skip reviewers with insufficient campaigns
+        if ($entry['CampaignsParticipated'] -lt $MinCampaigns) {
+            continue
+        }
+
+        $totalItems   = $entry['TotalApproved'] + $entry['TotalRevoked'] + $entry['TotalPending']
+        $totalDecided = $entry['TotalApproved'] + $entry['TotalRevoked']
+
+        # --- Lifetime approval rate ---
+        $lifetimeApprovalRate = 0
+        if ($totalDecided -gt 0) {
+            $lifetimeApprovalRate = [Math]::Round(($entry['TotalApproved'] / $totalDecided) * 100, 1)
+        }
+
+        # --- Average response hours (weighted across campaigns) ---
+        $avgResponseHours = 0
+        $hoursList = @($entry['AvgHoursPerCampaign'])
+        if ($hoursList.Count -gt 0) {
+            $avgResponseHours = [Math]::Round(($hoursList | Measure-Object -Average).Average, 1)
+        }
+
+        # --- Response trend (improving = getting faster) ---
+        $responseTrend = 'Stable'
+        $snapshots = @($entry['CampaignSnapshots'] | Where-Object { $null -ne $_['Created'] } | Sort-Object { $_['Created'] })
+        $hoursOverTime = @($snapshots | Where-Object { $null -ne $_['AvgHours'] } | ForEach-Object { $_['AvgHours'] })
+        if ($hoursOverTime.Count -ge 3) {
+            $improving = 0
+            $degrading = 0
+            for ($i = 1; $i -lt $hoursOverTime.Count; $i++) {
+                $delta = $hoursOverTime[$i] - $hoursOverTime[$i - 1]
+                if ($delta -lt -0.5) { $improving++ }
+                elseif ($delta -gt 0.5) { $degrading++ }
+            }
+            if ($improving -gt $degrading -and $improving -ge 2) { $responseTrend = 'Improving' }
+            elseif ($degrading -gt $improving -and $degrading -ge 2) { $responseTrend = 'Degrading' }
+        }
+
+        # ===== REPUTATION SCORE (0-100) =====
+
+        # Component 1: Response time score (30%) -- faster is better
+        # Baseline: 24h = 50 points, 0h = 100 points, 72h+ = 0 points
+        $responseScore = 0
+        if ($hoursList.Count -gt 0) {
+            $clampedHours = [Math]::Min([Math]::Max($avgResponseHours, 0), 72)
+            $responseScore = [Math]::Round((1 - ($clampedHours / 72)) * 100, 1)
+        }
+        else {
+            $responseScore = 50  # no data -> neutral
+        }
+
+        # Component 2: Completion rate score (25%) -- higher is better
+        $completionScore = 0
+        $completionRates = @($entry['CompletionRates'])
+        if ($completionRates.Count -gt 0) {
+            $completionScore = [Math]::Round(($completionRates | Measure-Object -Average).Average, 1)
+        }
+        else {
+            $completionScore = 50  # no data -> neutral
+        }
+
+        # Component 3: Decision diversity score (20%) -- mix of approve/revoke is healthier
+        # 100% approval = low diversity = score 20; 50/50 = max diversity = score 100
+        $diversityScore = 50
+        if ($totalDecided -gt 0) {
+            $revocationRate = $entry['TotalRevoked'] / $totalDecided
+            # Optimal revocation rate is around 10-30%. Score peaks at 20% and drops toward 0% and 100%.
+            # Use a simple bell-curve approximation centered at 0.2
+            $deviation = [Math]::Abs($revocationRate - 0.2)
+            # max deviation from 0.2 is 0.8 (at 100% revocation); scale to 0-100
+            $diversityScore = [Math]::Round((1 - [Math]::Min($deviation / 0.8, 1)) * 100, 1)
+        }
+
+        # Component 4: Consistency score (15%) -- low variance in approval rate across campaigns
+        $consistencyScore = 50
+        $campApprovalRates = @($snapshots | ForEach-Object { $_['ApprovalRate'] })
+        if ($campApprovalRates.Count -ge 2) {
+            $mean = ($campApprovalRates | Measure-Object -Average).Average
+            $sumSqDiff = 0
+            foreach ($rate in $campApprovalRates) {
+                $sumSqDiff += ($rate - $mean) * ($rate - $mean)
+            }
+            $stdDev = [Math]::Sqrt($sumSqDiff / $campApprovalRates.Count)
+            # stdDev of 0 = perfect consistency (100), stdDev of 50 = terrible (0)
+            $consistencyScore = [Math]::Round([Math]::Max(0, (1 - ($stdDev / 50)) * 100), 1)
+        }
+
+        # Component 5: Escalation history score (10%) -- fewer escalations is better
+        $escalationScore = 100
+        $escCount = $entry['EscalationCount']
+        $campCount = $entry['CampaignsParticipated']
+        if ($campCount -gt 0 -and $escCount -gt 0) {
+            $escRatio = $escCount / $campCount
+            $escalationScore = [Math]::Round([Math]::Max(0, (1 - $escRatio) * 100), 1)
+        }
+
+        # Weighted composite
+        $reputationScore = [Math]::Round(
+            ($responseScore    * 0.30) +
+            ($completionScore  * 0.25) +
+            ($diversityScore   * 0.20) +
+            ($consistencyScore * 0.15) +
+            ($escalationScore  * 0.10),
+            0
+        )
+        # Clamp to 0-100
+        $reputationScore = [Math]::Min(100, [Math]::Max(0, $reputationScore))
+
+        # Tier classification
+        $reputationTier = if ($reputationScore -ge 80) { 'Excellent' }
+                          elseif ($reputationScore -ge 60) { 'Good' }
+                          elseif ($reputationScore -ge 40) { 'Needs Attention' }
+                          else { 'At Risk' }
+
+        $reviewerResults.Add([PSCustomObject]@{
+            ReviewerName          = $reviewerName
+            ReviewerIdentityId    = $entry['IdentityId']
+            CampaignsParticipated = $entry['CampaignsParticipated']
+            TotalItemsReviewed    = $totalItems
+            AvgResponseHours      = $avgResponseHours
+            ResponseTrend         = $responseTrend
+            LifetimeApprovalRate  = $lifetimeApprovalRate
+            RubberStampCount      = $entry['RubberStampCount']
+            EscalationCount       = $entry['EscalationCount']
+            ReputationScore       = $reputationScore
+            ReputationTier        = $reputationTier
+        })
+    }
+
+    # Sort by ReputationScore ascending (worst first for actionability)
+    $sorted = @($reviewerResults | Sort-Object ReputationScore)
+
+    # Build summary
+    $excellent      = @($sorted | Where-Object { $_.ReputationTier -eq 'Excellent' }).Count
+    $good           = @($sorted | Where-Object { $_.ReputationTier -eq 'Good' }).Count
+    $needsAttention = @($sorted | Where-Object { $_.ReputationTier -eq 'Needs Attention' }).Count
+    $atRisk         = @($sorted | Where-Object { $_.ReputationTier -eq 'At Risk' }).Count
+
+    Write-SPLog -Message "Reviewer reputation: $($sorted.Count) reviewers scored -- Excellent=$excellent, Good=$good, NeedsAttention=$needsAttention, AtRisk=$atRisk" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPReviewerReputation' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Reviewers = $sorted
+        Summary   = @{
+            TotalReviewers = $sorted.Count
+            Excellent      = $excellent
+            Good           = $good
+            NeedsAttention = $needsAttention
+            AtRisk         = $atRisk
+        }
+    }
+}
+
+#endregion
+
 #region Entitlement Inventory HTML (P11-07)
 
 function Export-SPEntitlementInventoryHtml {
@@ -7378,5 +7758,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditCsv',
     'Measure-SPCampaignTrends',
     'Export-SPCampaignTrendHtml',
-    'Export-SPEntitlementInventoryHtml'
+    'Export-SPEntitlementInventoryHtml',
+    'Measure-SPReviewerReputation'
 )

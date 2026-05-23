@@ -83,6 +83,9 @@
 
         # SP.AuditReport - Entitlement Inventory HTML (P11-07)
         'Export-SPEntitlementInventoryHtml'
+
+        # SP.AuditReport - Cross-Campaign Reviewer Analysis (P11-08)
+        'Measure-SPReviewerReputation'
     )
 
     # Do not export variables or aliases from nested modules

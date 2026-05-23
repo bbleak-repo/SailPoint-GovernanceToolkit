@@ -50,7 +50,7 @@ Safe to modify:
 | P11-05 | Campaign Health Monitor | none | DONE |
 | P11-06 | Campaign Trend Analytics | P11-03 | DONE |
 | P11-07 | Entitlement Inventory Report | none | DONE |
-| P11-08 | Cross-Campaign Reviewer Analysis | P11-06 | PENDING |
+| P11-08 | Cross-Campaign Reviewer Analysis | P11-06 | DONE |
 | P11-09 | Daily Orchestrator Script | P11-01, P11-05 | PENDING |
 | P11-10 | Pester Tests | P11-09 | PENDING |
 
@@ -653,8 +653,8 @@ New function `Export-SPEntitlementInventoryHtml` generates an HTML inventory rep
 
 ## P11-08: Cross-Campaign Reviewer Analysis
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** P11-06
 
 **Description:**
