@@ -77,5 +77,6 @@ function Import-SPTestModules {
     if ($DeltaCert) {
         Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertQueries.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertRunner.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertReport.psm1')  -Force -DisableNameChecking
     }
 }
