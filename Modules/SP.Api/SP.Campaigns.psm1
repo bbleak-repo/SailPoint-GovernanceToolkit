@@ -987,6 +987,360 @@ function Complete-SPCampaign {
     }
 }
 
+function Get-SPCampaignHealth {
+    <#
+    .SYNOPSIS
+        Checks all active campaigns for operational health indicators.
+    .DESCRIPTION
+        Retrieves campaigns matching the Status filter, then for each campaign
+        assesses health across multiple dimensions: deadline urgency, completion
+        velocity, stale reviewers, and unresponsive reviewers. Designed for daily
+        monitoring and alerting -- answers "are any campaigns in trouble right now?"
+
+        Each campaign is classified as Red, Yellow, or Green:
+          Red    - Overdue deadline, OR >50% certs stale, OR 0 decisions after 48h
+          Yellow - Critical/Warning deadline, OR >25% certs stale, OR velocity too slow
+          Green  - OnTrack deadline, <25% stale, velocity on pace
+
+        Reuses the existing deadline classification logic from Get-SPCampaignDeadlineStatus
+        and fetches certifications via Get-SPAuditCertifications for reviewer analysis.
+    .PARAMETER Status
+        Campaign status filter. Default: @('ACTIVE').
+    .PARAMETER DaysBack
+        Number of calendar days to look back for campaigns by creation date. Default: 30.
+    .PARAMETER StaleReviewerHours
+        Hours with no reviewer action before a certification is considered stale. Default: 48.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Campaigns = @([hashtable] per-campaign health detail)
+                Summary   = @{ Red=$n; Yellow=$n; Green=$n; Total=$n }
+            }
+            Error = $null
+        }
+    .EXAMPLE
+        $result = Get-SPCampaignHealth
+        $result.Data.Summary
+    .EXAMPLE
+        $result = Get-SPCampaignHealth -StaleReviewerHours 24
+        $result.Data.Campaigns | Where-Object { $_.OverallHealth -eq 'Red' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [ValidateSet('STAGED', 'ACTIVATING', 'ACTIVE', 'COMPLETING', 'COMPLETED', 'ERROR')]
+        [string[]]$Status = @('ACTIVE'),
+
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [int]$StaleReviewerHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPCampaignHealth: Status='$($Status -join ',')', DaysBack=$DaysBack, StaleHours=$StaleReviewerHours" `
+        -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignHealth' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Get campaigns with deadline classification
+        $deadlineResult = Get-SPCampaignDeadlineStatus -Status $Status -DaysBack $DaysBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $deadlineResult.Success) {
+            return @{ Success = $false; Data = $null; Error = $deadlineResult.Error }
+        }
+
+        # Collect all non-completed campaigns for health analysis
+        $campaignsToCheck = [System.Collections.Generic.List[object]]::new()
+        foreach ($bucket in @('Overdue', 'Critical', 'Warning', 'OnTrack', 'NoDeadline')) {
+            foreach ($camp in $deadlineResult.Data[$bucket]) {
+                $campaignsToCheck.Add($camp)
+            }
+        }
+
+        if ($campaignsToCheck.Count -eq 0) {
+            Write-SPLog -Message "No active campaigns found for health check" `
+                -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignHealth' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    Campaigns = @()
+                    Summary   = @{ Red = 0; Yellow = 0; Green = 0; Total = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        Write-SPLog -Message "Analyzing health for $($campaignsToCheck.Count) campaign(s)" `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignHealth' `
+            -CorrelationID $CorrelationID
+
+        $nowUtc        = (Get-Date).ToUniversalTime()
+        $staleCutoff   = $nowUtc.AddHours(-$StaleReviewerHours)
+        $campaignHealthList = [System.Collections.Generic.List[object]]::new()
+        $redCount      = 0
+        $yellowCount   = 0
+        $greenCount    = 0
+
+        foreach ($campaign in $campaignsToCheck) {
+            $campaignId   = $campaign.id
+            $campaignName = $campaign.name
+            $deadlineStatus = 'NoDeadline'
+            if ($campaign.PSObject.Properties.Name -contains 'DeadlineStatus') {
+                $deadlineStatus = $campaign.DeadlineStatus
+            }
+
+            # Parse campaign created date for velocity calculation
+            $createdUtc = $null
+            $createdRaw = $campaign.created
+            if ($null -ne $createdRaw) {
+                if ($createdRaw -is [datetime]) {
+                    $createdUtc = ([datetime]$createdRaw).ToUniversalTime()
+                } else {
+                    $parsedDate = [datetime]::MinValue
+                    if ([datetime]::TryParse($createdRaw.ToString(), [ref]$parsedDate)) {
+                        $createdUtc = $parsedDate.ToUniversalTime()
+                    }
+                }
+            }
+
+            # Get campaign-level completion stats from the campaign object (detail=FULL)
+            $totalItems   = 0
+            $decidedItems = 0
+            if ($campaign.PSObject.Properties.Name -contains 'totalItems' -and $null -ne $campaign.totalItems) {
+                $totalItems = [int]$campaign.totalItems
+            }
+            if ($campaign.PSObject.Properties.Name -contains 'completedItems' -and $null -ne $campaign.completedItems) {
+                $decidedItems = [int]$campaign.completedItems
+            }
+            $pendingItems   = [math]::Max(0, $totalItems - $decidedItems)
+            $completionPct  = if ($totalItems -gt 0) { [math]::Round(($decidedItems / $totalItems) * 100, 1) } else { 0.0 }
+
+            # Calculate completion velocity (items per day)
+            $daysOpen = 0.0
+            if ($null -ne $createdUtc) {
+                $daysOpen = ($nowUtc - $createdUtc).TotalDays
+                if ($daysOpen -lt 0.01) { $daysOpen = 0.01 }
+            }
+            $velocity = if ($daysOpen -gt 0) { [math]::Round($decidedItems / $daysOpen, 1) } else { 0.0 }
+
+            # Parse deadline for days remaining and projected completion
+            $daysRemaining      = $null
+            $projectedCompletion = $null
+            $deadlineUtc        = $null
+            if ($campaign.PSObject.Properties.Name -contains 'DeadlineUtc' -and $null -ne $campaign.DeadlineUtc) {
+                $deadlineUtc   = $campaign.DeadlineUtc
+                $daysRemaining = [math]::Round(($deadlineUtc - $nowUtc).TotalDays, 1)
+            }
+
+            if ($velocity -gt 0 -and $pendingItems -gt 0) {
+                $daysToFinish        = $pendingItems / $velocity
+                $projectedCompletion = $nowUtc.AddDays($daysToFinish).ToString('yyyy-MM-dd')
+            } elseif ($pendingItems -eq 0) {
+                $projectedCompletion = $nowUtc.ToString('yyyy-MM-dd')
+            }
+
+            # Get certifications to check for stale/unresponsive reviewers
+            $staleReviewerNames  = [System.Collections.Generic.List[string]]::new()
+            $staleReviewerCount  = 0
+            $totalCerts          = 0
+            $staleCertCount      = 0
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campaignId `
+                -CorrelationID $CorrelationID
+
+            if ($certResult.Success -and $null -ne $certResult.Data) {
+                $certs = @($certResult.Data)
+                $totalCerts = $certs.Count
+
+                # Track unique stale reviewers
+                $staleReviewerIds = [System.Collections.Generic.HashSet[string]]::new()
+
+                foreach ($cert in $certs) {
+                    # Skip signed-off (completed) certifications
+                    $signedValue = $null
+                    if ($cert.PSObject.Properties.Name -contains 'signed') {
+                        $signedValue = $cert.signed
+                    }
+                    if ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue)) {
+                        continue
+                    }
+
+                    # Check cert created date for staleness
+                    $certCreatedStr = $null
+                    if ($cert.PSObject.Properties.Name -contains 'created') {
+                        $certCreatedStr = $cert.created
+                    }
+                    if ([string]::IsNullOrWhiteSpace($certCreatedStr)) {
+                        continue
+                    }
+
+                    $certCreated = $null
+                    try {
+                        if ($certCreatedStr -is [datetime]) {
+                            $certCreated = ([datetime]$certCreatedStr).ToUniversalTime()
+                        } else {
+                            $certCreated = [datetime]::Parse([string]$certCreatedStr).ToUniversalTime()
+                        }
+                    } catch {
+                        continue
+                    }
+
+                    if ($certCreated -lt $staleCutoff) {
+                        $staleCertCount++
+
+                        # Get reviewer name
+                        $reviewerName = 'Unknown'
+                        $reviewerId   = ''
+                        if ($cert.PSObject.Properties.Name -contains 'EffectiveReviewer' -and $null -ne $cert.EffectiveReviewer) {
+                            $reviewer = $cert.EffectiveReviewer
+                            if ($reviewer.PSObject.Properties.Name -contains 'displayName' -and
+                                -not [string]::IsNullOrWhiteSpace($reviewer.displayName)) {
+                                $reviewerName = $reviewer.displayName
+                            } elseif ($reviewer.PSObject.Properties.Name -contains 'name' -and
+                                      -not [string]::IsNullOrWhiteSpace($reviewer.name)) {
+                                $reviewerName = $reviewer.name
+                            }
+                            if ($reviewer.PSObject.Properties.Name -contains 'id') {
+                                $reviewerId = [string]$reviewer.id
+                            }
+                        } elseif ($cert.PSObject.Properties.Name -contains 'reviewer' -and $null -ne $cert.reviewer) {
+                            $reviewer = $cert.reviewer
+                            if ($reviewer.PSObject.Properties.Name -contains 'displayName' -and
+                                -not [string]::IsNullOrWhiteSpace($reviewer.displayName)) {
+                                $reviewerName = $reviewer.displayName
+                            } elseif ($reviewer.PSObject.Properties.Name -contains 'name' -and
+                                      -not [string]::IsNullOrWhiteSpace($reviewer.name)) {
+                                $reviewerName = $reviewer.name
+                            }
+                            if ($reviewer.PSObject.Properties.Name -contains 'id') {
+                                $reviewerId = [string]$reviewer.id
+                            }
+                        }
+
+                        if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
+                            if ($staleReviewerIds.Add($reviewerId)) {
+                                $staleReviewerNames.Add($reviewerName)
+                            }
+                        } else {
+                            $staleReviewerNames.Add($reviewerName)
+                        }
+                    }
+                }
+
+                $staleReviewerCount = $staleReviewerIds.Count
+                if ($staleReviewerCount -eq 0) {
+                    $staleReviewerCount = $staleReviewerNames.Count
+                }
+            } else {
+                Write-SPLog -Message "Could not retrieve certifications for campaign '$campaignName' ($campaignId) -- reviewer analysis skipped" `
+                    -Severity WARN -Component 'SP.Campaigns' -Action 'Get-SPCampaignHealth' `
+                    -CorrelationID $CorrelationID
+            }
+
+            $stalePct = if ($totalCerts -gt 0) { ($staleCertCount / $totalCerts) * 100 } else { 0.0 }
+
+            # Check if campaign is old enough (48h) with zero decisions
+            $hoursOpen = if ($null -ne $createdUtc) { ($nowUtc - $createdUtc).TotalHours } else { 0 }
+            $zeroDecisionsStale = ($decidedItems -eq 0 -and $hoursOpen -ge 48 -and $totalItems -gt 0)
+
+            # Determine if velocity is too slow to finish before deadline
+            $velocityTooSlow = $false
+            if ($null -ne $deadlineUtc -and $velocity -gt 0 -and $pendingItems -gt 0) {
+                $daysNeeded = $pendingItems / $velocity
+                $daysLeft   = ($deadlineUtc - $nowUtc).TotalDays
+                if ($daysNeeded -gt $daysLeft) {
+                    $velocityTooSlow = $true
+                }
+            }
+
+            # Health classification
+            $overallHealth = 'Green'
+
+            # Red conditions
+            if ($deadlineStatus -eq 'Overdue') {
+                $overallHealth = 'Red'
+            } elseif ($stalePct -gt 50) {
+                $overallHealth = 'Red'
+            } elseif ($zeroDecisionsStale) {
+                $overallHealth = 'Red'
+            }
+
+            # Yellow conditions (only if not already Red)
+            if ($overallHealth -eq 'Green') {
+                if ($deadlineStatus -eq 'Critical' -or $deadlineStatus -eq 'Warning') {
+                    $overallHealth = 'Yellow'
+                } elseif ($stalePct -gt 25) {
+                    $overallHealth = 'Yellow'
+                } elseif ($velocityTooSlow) {
+                    $overallHealth = 'Yellow'
+                }
+            }
+
+            $campaignHealth = @{
+                CampaignId          = $campaignId
+                CampaignName        = $campaignName
+                OverallHealth       = $overallHealth
+                DeadlineStatus      = $deadlineStatus
+                TotalItems          = $totalItems
+                DecidedItems        = $decidedItems
+                PendingItems        = $pendingItems
+                CompletionPct       = $completionPct
+                CompletionVelocity  = $velocity
+                ProjectedCompletion = $projectedCompletion
+                StaleReviewerCount  = $staleReviewerCount
+                StaleReviewers      = $staleReviewerNames.ToArray()
+                DaysRemaining       = $daysRemaining
+            }
+
+            $campaignHealthList.Add($campaignHealth)
+
+            switch ($overallHealth) {
+                'Red'    { $redCount++ }
+                'Yellow' { $yellowCount++ }
+                'Green'  { $greenCount++ }
+            }
+        }
+
+        Write-SPLog -Message ("Campaign health summary: Red=$redCount, Yellow=$yellowCount, Green=$greenCount, Total=$($campaignHealthList.Count)") `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPCampaignHealth' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Campaigns = $campaignHealthList.ToArray()
+                Summary   = @{
+                    Red    = $redCount
+                    Yellow = $yellowCount
+                    Green  = $greenCount
+                    Total  = $campaignHealthList.Count
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPCampaignHealth failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+            -Action 'Get-SPCampaignHealth' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -996,5 +1350,6 @@ Export-ModuleMember -Function @(
     'Get-SPCampaignStatus',
     'Search-SPCampaigns',
     'Get-SPCampaignDeadlineStatus',
-    'Complete-SPCampaign'
+    'Complete-SPCampaign',
+    'Get-SPCampaignHealth'
 )

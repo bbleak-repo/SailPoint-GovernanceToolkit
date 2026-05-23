@@ -47,7 +47,7 @@ Safe to modify:
 | P11-02 | Audit Trail Consolidator | none | DONE |
 | P11-03 | CSV Export for Audit Data | none | DONE |
 | P11-04 | Remediation Verification | none | DONE |
-| P11-05 | Campaign Health Monitor | none | PENDING |
+| P11-05 | Campaign Health Monitor | none | DONE |
 | P11-06 | Campaign Trend Analytics | P11-03 | PENDING |
 | P11-07 | Entitlement Inventory Report | none | PENDING |
 | P11-08 | Cross-Campaign Reviewer Analysis | P11-06 | PENDING |
@@ -391,8 +391,8 @@ EntitlementName, DecisionDate.
 
 ## P11-05: Campaign Health Monitor
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
