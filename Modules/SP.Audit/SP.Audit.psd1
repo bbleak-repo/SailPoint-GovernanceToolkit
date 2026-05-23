@@ -46,6 +46,7 @@
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
         'Measure-SPAuditRubberStampRisk'
+        'Measure-SPCampaignMetrics'
         'Get-SPAuditRiskFlags'
         'Group-SPAuditByLeadership'
 

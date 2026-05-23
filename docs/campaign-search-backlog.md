@@ -57,7 +57,7 @@ Safe to modify:
 | S-03 | Deadline Analysis | S-02 | DONE |
 | S-04 | Reviewer Workload Search | none | DONE |
 | S-05 | Identity Decision History | none | DONE |
-| S-06 | Campaign Metrics Aggregation | none | PENDING |
+| S-06 | Campaign Metrics Aggregation | none | DONE |
 | S-07 | Source Coverage Analysis | none | PENDING |
 | S-08 | Campaign Comparison | S-06 | PENDING |
 | S-09 | Campaign Search CLI | S-01 to S-08 | PENDING |
@@ -305,8 +305,8 @@ function Get-SPIdentityDecisionHistory {
 
 ## S-06: Campaign Metrics Aggregation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
