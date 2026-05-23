@@ -63,7 +63,7 @@ Audit/
 | L-03 | Executive Summary HTML | L-02 | DONE |
 | L-04 | Director-Level HTML Reports | L-03 | DONE |
 | L-05 | CLI Integration | L-04 | DONE |
-| L-06 | GUI Integration | L-05 | PENDING |
+| L-06 | GUI Integration | L-05 | DONE |
 | L-07 | SMTP Config + Logging Stub | L-05 | PENDING |
 | L-08 | Pester Tests | L-04 | PENDING |
 
@@ -378,8 +378,8 @@ Add SP.DeltaCert to the chain.
 
 ## L-06: GUI Integration
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** ac830aa
 - **Depends On:** L-05
 
 **Description:**

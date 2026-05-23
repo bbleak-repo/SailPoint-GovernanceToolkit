@@ -881,6 +881,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -894,18 +895,24 @@
                         <CheckBox Grid.Column="1" x:Name="ChkIdentityEvents"
                                   Content="Include Identity Events"
                                   Foreground="#E0E0E0" VerticalAlignment="Center"
-                                  IsChecked="True" Margin="0,0,8,0" FontSize="12"/>
+                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
+
+                        <CheckBox Grid.Column="2" x:Name="ChkLeadershipRollup"
+                                  Content="Include Leadership Rollup"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="False" Margin="0,0,8,0" FontSize="12"
+                                  ToolTip="Generate leadership rollup reports (executive summary + per-director HTML)"/>
 
                         <!-- Spacer -->
-                        <StackPanel Grid.Column="2"/>
+                        <StackPanel Grid.Column="3"/>
 
-                        <Button Grid.Column="3" x:Name="BtnRunAudit"
+                        <Button Grid.Column="4" x:Name="BtnRunAudit"
                                 Content="Run Audit"
                                 Style="{StaticResource ToolkitButton}"
                                 IsEnabled="False"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="4" x:Name="BtnOpenAuditFolder"
+                        <Button Grid.Column="5" x:Name="BtnOpenAuditFolder"
                                 Content="Open Reports Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>
