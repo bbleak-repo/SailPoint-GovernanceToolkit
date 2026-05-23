@@ -1313,13 +1313,20 @@ function Initialize-AuditTab {
         }.GetNewClosure())
     }
 
-    # Double-click on report list item opens file
+    # Double-click on report list item opens file.
+    # WPF event delegates drop module SessionState in PS 5.1; .GetNewClosure()
+    # alone is not enough -- the body needs to run inside the module via
+    # `& $module { param() ... } $args` so that $auditReportList resolves.
     if ($auditReportList) {
         $auditReportList.Add_MouseDoubleClick({
-            $selected = $auditReportList.SelectedItem
-            if ($null -ne $selected -and $null -ne $selected.Tag -and (Test-Path $selected.Tag)) {
-                Start-Process $selected.Tag
-            }
+            & $module {
+                param($lb)
+                $selected = $lb.SelectedItem
+                if ($null -ne $selected -and $null -ne $selected.Tag -and (Test-Path $selected.Tag)) {
+                    try { Write-SPLog -Message ("Opening audit report: {0}" -f $selected.Tag) -Severity INFO -Component 'SP.Gui' -Action 'OpenReport' } catch { }
+                    Start-Process $selected.Tag
+                }
+            } $auditReportList
         }.GetNewClosure())
     }
 

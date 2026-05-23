@@ -109,7 +109,7 @@ The window *will* be visible while the test runs; this is intentional.
 | W-02 | GUI (headless): Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
 | W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | DONE |
 | W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
-| W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | PENDING |
+| W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | DONE |
 | W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | PENDING |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
 | W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | PENDING |
@@ -201,13 +201,10 @@ WG-02-08: All 5 tab headers visible and clickable
 
 ## W-03b: GUI (interactive, FlaUI) -- backfill W-03
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-03 (headless baseline) + FlaUI harness
-- **Goal:** Same idea as W-02b but for the Audit tab. Every WG-03-* test
-  becomes a live interaction: open the AuditQueryDialog, fill the fields,
-  click Query Campaigns, verify rows appear in the DataGrid, check options,
-  click Run Audit, wait for progress to complete, verify the Audit\
-  directory output.
+- **Results:** PASS 12/12 -- interactive harness `Tests\Harness\Test-W03b-AuditTabInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified the Audit tab Row 0 (summary + Configure + Query Campaigns), the AuditQueryDialog modal opening with TxtCampaignName/CboStatus/CboTimespan, the live mock query for `COMPLETED + 365 days` populating AuditCampaignGrid with "2025 Annual Access Review", the summary-label refresh, selecting the row checkbox + checking all three audit options (Reports/Events/Leadership), the live Run Audit run (AuditProgressBar visible, BtnRunAudit disabled, dispatcher-timer driven), audit completion in <30s (`Audit complete. 1 campaign(s), 10 file(s) written.`), generation of Audit\*.html + Audit\leadership\executive-summary.html + 3 per-leader HTML reports, AuditReportList populating with 5 items + a double-click delivery (evidence chain), and BtnOpenAuditFolder spawning Explorer. **Bug fix shipped this round:** the AuditReportList MouseDoubleClick handler hit the WPF+PS5.1 module-scope gotcha (`.GetNewClosure()` drops module SessionState, so `$auditReportList` resolved to `$null` and `Start-Process` was never reached); fixed in `Modules\SP.Gui\SP.MainWindow.psm1` by wrapping the handler body in `& $module { param($lb) ... } $auditReportList` plus an INFO `Write-SPLog "Opening audit report:"` observability line. See `docs\windows-test-rounds\round-06.md`.
 
 - **Required artifact:** `Tests\Harness\Test-W03b-AuditTabInteractive.ps1`.
 
