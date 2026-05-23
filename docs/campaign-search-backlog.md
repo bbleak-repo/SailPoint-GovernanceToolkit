@@ -55,7 +55,7 @@ Safe to modify:
 | S-01 | Campaign Type Filter | none | DONE |
 | S-02 | Date Range Search | none | DONE |
 | S-03 | Deadline Analysis | S-02 | DONE |
-| S-04 | Reviewer Workload Search | none | PENDING |
+| S-04 | Reviewer Workload Search | none | DONE |
 | S-05 | Identity Decision History | none | PENDING |
 | S-06 | Campaign Metrics Aggregation | none | PENDING |
 | S-07 | Source Coverage Analysis | none | PENDING |
@@ -186,8 +186,8 @@ function Get-SPCampaignDeadlineStatus {
 
 ## S-04: Reviewer Workload Search
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

@@ -1439,6 +1439,188 @@ function Resolve-SPAuditIdentityAccounts {
     }
 }
 
+function Get-SPReviewerWorkload {
+    <#
+    .SYNOPSIS
+        Finds all active campaigns/certifications assigned to a specific reviewer.
+    .DESCRIPTION
+        Retrieves campaigns matching the status filter, then for each campaign
+        fetches certifications and filters to those where the effective reviewer
+        matches the supplied ReviewerIdentityId. Returns per-campaign workload
+        counts (total items, decided items, pending items) plus aggregate totals.
+
+        Uses Get-SPAuditCampaigns and Get-SPAuditCertifications internally.
+        Item counts are derived from certification-level statistics (decisionsTotal,
+        decisionsMade) to avoid additional per-item API calls.
+    .PARAMETER ReviewerIdentityId
+        The SailPoint ISC identity ID of the reviewer. Mandatory.
+    .PARAMETER Status
+        Campaign status filter. Default: @('ACTIVE').
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@{ReviewerId; ReviewerName; TotalCampaigns;
+        TotalItems; TotalPending; Campaigns=@(...)}; Error=$string}
+    .EXAMPLE
+        $result = Get-SPReviewerWorkload -ReviewerIdentityId 'id-mgr-001'
+        $result.Data.Campaigns | Format-Table CampaignName, ItemsAssigned, ItemsPending
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ReviewerIdentityId,
+
+        [Parameter()]
+        [string[]]$Status = @('ACTIVE'),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting reviewer workload for identity '$ReviewerIdentityId' (Status=$($Status -join ','))" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Get campaigns matching status filter (DaysBack=0 to disable date filter)
+        $campaignResult = Get-SPAuditCampaigns -Status $Status -DaysBack 0 `
+            -CorrelationID $CorrelationID
+
+        if (-not $campaignResult.Success) {
+            $errMsg = "Get-SPReviewerWorkload failed to retrieve campaigns: $($campaignResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPReviewerWorkload' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $campaigns = @($campaignResult.Data)
+        Write-SPLog -Message "Found $($campaigns.Count) campaigns to scan for reviewer '$ReviewerIdentityId'" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+            -CorrelationID $CorrelationID
+
+        $reviewerName     = ''
+        $campaignWorkload = [System.Collections.Generic.List[object]]::new()
+        $grandTotalItems  = 0
+        $grandTotalDecided = 0
+
+        # Step 2-3: For each campaign, get certs and filter by reviewer
+        foreach ($campaign in $campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId   = $campaign.id
+            $campName = $campaign.name
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+            $campItems   = 0
+            $campDecided = 0
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                # Check if effective reviewer matches
+                $reviewerId = $null
+                if ($null -ne $cert.EffectiveReviewer -and
+                    $null -ne $cert.EffectiveReviewer.PSObject.Properties['id']) {
+                    $reviewerId = $cert.EffectiveReviewer.id
+                }
+
+                if ($reviewerId -ne $ReviewerIdentityId) { continue }
+
+                # Capture reviewer name from first match
+                if ([string]::IsNullOrWhiteSpace($reviewerName) -and
+                    $null -ne $cert.EffectiveReviewer.PSObject.Properties['displayName'] -and
+                    -not [string]::IsNullOrWhiteSpace($cert.EffectiveReviewer.displayName)) {
+                    $reviewerName = $cert.EffectiveReviewer.displayName
+                }
+
+                # Extract item counts from certification-level stats
+                $totalItems  = 0
+                $decidedItems = 0
+
+                if ($null -ne $cert.PSObject.Properties['decisionsTotal'] -and
+                    $null -ne $cert.decisionsTotal) {
+                    $totalItems = [int]$cert.decisionsTotal
+                }
+                elseif ($null -ne $cert.PSObject.Properties['totalCount'] -and
+                        $null -ne $cert.totalCount) {
+                    $totalItems = [int]$cert.totalCount
+                }
+
+                if ($null -ne $cert.PSObject.Properties['decisionsMade'] -and
+                    $null -ne $cert.decisionsMade) {
+                    $decidedItems = [int]$cert.decisionsMade
+                }
+                elseif ($null -ne $cert.PSObject.Properties['completedCount'] -and
+                        $null -ne $cert.completedCount) {
+                    $decidedItems = [int]$cert.completedCount
+                }
+
+                $campItems   += $totalItems
+                $campDecided += $decidedItems
+            }
+
+            # Only include campaigns where the reviewer has certifications
+            if ($campItems -gt 0 -or $campDecided -gt 0) {
+                $pending = $campItems - $campDecided
+                if ($pending -lt 0) { $pending = 0 }
+
+                $campaignWorkload.Add([PSCustomObject]@{
+                    CampaignId    = $campId
+                    CampaignName  = $campName
+                    ItemsAssigned = $campItems
+                    ItemsDecided  = $campDecided
+                    ItemsPending  = $pending
+                })
+
+                $grandTotalItems   += $campItems
+                $grandTotalDecided += $campDecided
+            }
+        }
+
+        $grandTotalPending = $grandTotalItems - $grandTotalDecided
+        if ($grandTotalPending -lt 0) { $grandTotalPending = 0 }
+
+        Write-SPLog -Message "Reviewer '$ReviewerIdentityId' workload: $($campaignWorkload.Count) campaigns, $grandTotalItems items ($grandTotalPending pending)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                ReviewerId     = $ReviewerIdentityId
+                ReviewerName   = $reviewerName
+                TotalCampaigns = $campaignWorkload.Count
+                TotalItems     = $grandTotalItems
+                TotalPending   = $grandTotalPending
+                Campaigns      = $campaignWorkload.ToArray()
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPReviewerWorkload failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPReviewerWorkload' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1448,5 +1630,6 @@ Export-ModuleMember -Function @(
     'Get-SPAuditCampaignReport',
     'Import-SPAuditCampaignReport',
     'Get-SPAuditIdentityEvents',
-    'Resolve-SPAuditIdentityAccounts'
+    'Resolve-SPAuditIdentityAccounts',
+    'Get-SPReviewerWorkload'
 )
