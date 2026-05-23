@@ -44,7 +44,7 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| P12-01 | Compliance Evidence Package | none | PENDING |
+| P12-01 | Compliance Evidence Package | none | DONE |
 | P12-02 | Identity Risk Scoring | none | PENDING |
 | P12-03 | Source Governance Scorecard | none | PENDING |
 | P12-04 | Stale Access Detector | P12-03 | PENDING |
@@ -92,7 +92,7 @@ Safe to modify:
 
 ## P12-01: Compliance Evidence Package
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

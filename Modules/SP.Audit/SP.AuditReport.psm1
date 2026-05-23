@@ -7734,6 +7734,323 @@ $($sourceSections -join "`n")
 
 #endregion
 
+#region Compliance Evidence Package (P12-01)
+
+function Export-SPCompliancePackage {
+    <#
+    .SYNOPSIS
+        Bundles audit artifacts from a date range into a single ZIP evidence package.
+    .DESCRIPTION
+        Scans Audit and DeltaCert output directories for HTML, CSV, JSONL, and TXT
+        artifacts, then packages them into a single ZIP file with a JSON manifest
+        containing SHA256 hashes per artifact. Designed for SOX 404, SOC 2, and
+        ISO 27001 evidence delivery.
+    .PARAMETER After
+        Include artifacts modified after this datetime.
+    .PARAMETER Before
+        Include artifacts modified before this datetime.
+    .PARAMETER AuditOutputPath
+        Audit output directory. Resolved from config if omitted.
+    .PARAMETER DeltaCertOutputPath
+        DeltaCert output directory. Resolved from config if omitted.
+    .PARAMETER OutputPath
+        Directory for the output ZIP. Defaults to current directory.
+    .PARAMETER PackageName
+        Custom ZIP file name (without extension). Auto-generated from date range if omitted.
+    .PARAMETER Scope
+        Which directories to include: Full (both), AuditOnly, or DeltaCertOnly.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Package result with path, artifact count, and category breakdown.
+    .EXAMPLE
+        Export-SPCompliancePackage -After (Get-Date).AddDays(-90) -Before (Get-Date)
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][DateTime]$After,
+        [Parameter()][DateTime]$Before,
+        [Parameter()][string]$AuditOutputPath,
+        [Parameter()][string]$DeltaCertOutputPath,
+        [Parameter()][string]$OutputPath = '.',
+        [Parameter()][string]$PackageName,
+        [Parameter()][ValidateSet('Full','AuditOnly','DeltaCertOnly')]
+        [string]$Scope = 'Full',
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: starting (Scope=$Scope)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                $AuditOutputPath = $config.Audit.OutputPath
+            }
+            if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+
+    # Resolve toolkit version
+    $toolkitVersion = 'Unknown'
+    try {
+        $cfgCheck = Get-SPConfig
+        if ($null -ne $cfgCheck -and
+            $cfgCheck.PSObject.Properties.Name -contains 'Global' -and
+            $cfgCheck.Global.PSObject.Properties.Name -contains 'ToolkitVersion') {
+            $toolkitVersion = $cfgCheck.Global.ToolkitVersion
+        }
+    } catch { }
+
+    # Ensure output directory exists
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # Supported artifact extensions
+    $supportedExtensions = @('.html', '.csv', '.jsonl', '.txt', '.json', '.log')
+
+    # Collect artifacts
+    $artifacts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Helper: scan a directory for matching files
+    function _ScanDirectory {
+        param(
+            [string]$Path,
+            [string]$Category,
+            [string]$ZipSubfolder
+        )
+        if (-not (Test-Path -Path $Path -PathType Container)) { return }
+        $files = Get-ChildItem -Path $Path -File -ErrorAction SilentlyContinue
+        foreach ($f in $files) {
+            if ($f.Extension -notin $supportedExtensions) { continue }
+            # Date range filter by last write time
+            if ($PSBoundParameters.ContainsKey('After') -or $After -ne $null) {
+                # Use the outer scope After/Before
+            }
+            if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+            if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+
+            # Determine sub-category
+            $subCategory = $Category
+            if ($f.Extension -eq '.csv') { $subCategory = 'CsvExports' }
+            elseif ($f.Extension -eq '.jsonl') { $subCategory = 'AuditTrails' }
+            elseif ($f.Extension -eq '.txt') { $subCategory = 'RemediationProof' }
+
+            # Determine zip subfolder for CSVs
+            $targetFolder = $ZipSubfolder
+            if ($f.Extension -eq '.csv') { $targetFolder = 'csv' }
+
+            $artifacts.Add(@{
+                FullPath     = $f.FullName
+                FileName     = $f.Name
+                Category     = $subCategory
+                ZipFolder    = $targetFolder
+                SizeBytes    = $f.Length
+                LastModified = $f.LastWriteTime
+            })
+        }
+    }
+
+    # Store filter dates in script scope for the helper
+    $script:filterAfter  = if ($PSBoundParameters.ContainsKey('After'))  { $After }  else { $null }
+    $script:filterBefore = if ($PSBoundParameters.ContainsKey('Before')) { $Before } else { $null }
+
+    # Scan directories based on scope
+    if ($Scope -ne 'DeltaCertOnly') {
+        _ScanDirectory -Path $AuditOutputPath -Category 'AuditReports' -ZipSubfolder 'audit'
+        # Scan leadership subdirectory
+        $leadershipPath = Join-Path -Path $AuditOutputPath -ChildPath 'leadership'
+        if (Test-Path -Path $leadershipPath -PathType Container) {
+            $leaderFiles = Get-ChildItem -Path $leadershipPath -File -ErrorAction SilentlyContinue
+            foreach ($f in $leaderFiles) {
+                if ($f.Extension -notin $supportedExtensions) { continue }
+                if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+                if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+                $artifacts.Add(@{
+                    FullPath     = $f.FullName
+                    FileName     = $f.Name
+                    Category     = 'LeadershipReports'
+                    ZipFolder    = 'leadership'
+                    SizeBytes    = $f.Length
+                    LastModified = $f.LastWriteTime
+                })
+            }
+        }
+    }
+
+    if ($Scope -ne 'AuditOnly') {
+        _ScanDirectory -Path $DeltaCertOutputPath -Category 'DeltaCertReports' -ZipSubfolder 'deltacert'
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: found $($artifacts.Count) artifacts" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Build package name
+    if ([string]::IsNullOrWhiteSpace($PackageName)) {
+        $afterStr  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('yyyy-MM-dd') }  else { 'all' }
+        $beforeStr = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('yyyy-MM-dd') } else { 'now' }
+        $PackageName = "compliance-evidence-${afterStr}-to-${beforeStr}"
+    }
+    $zipFileName = "${PackageName}.zip"
+    $zipFilePath = Join-Path -Path $OutputPath -ChildPath $zipFileName
+
+    # Remove existing ZIP if present (overwrite)
+    if (Test-Path -Path $zipFilePath) {
+        Remove-Item -Path $zipFilePath -Force
+    }
+
+    # Build manifest and create ZIP
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $packageId    = [guid]::NewGuid().ToString()
+    $generatedAt  = (Get-Date).ToUniversalTime().ToString('o')
+    $manifestArts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Compute SHA256 for each artifact
+    foreach ($art in $artifacts) {
+        $sha256 = ''
+        try {
+            $hashResult = Get-FileHash -Path $art.FullPath -Algorithm SHA256
+            $sha256 = $hashResult.Hash
+        } catch {
+            Write-SPLog -Message "Could not hash file $($art.FileName): $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+
+        $manifestArts.Add(@{
+            FileName     = $art.FileName
+            OriginalPath = $art.FullPath
+            Type         = $art.ZipFolder
+            Category     = $art.Category
+            SizeBytes    = $art.SizeBytes
+            SHA256       = $sha256
+        })
+    }
+
+    # Build category counts
+    $categories = @{
+        AuditReports      = 0
+        CsvExports        = 0
+        AuditTrails       = 0
+        LeadershipReports = 0
+        DeltaCertReports  = 0
+        RemediationProof  = 0
+    }
+    foreach ($art in $artifacts) {
+        if ($categories.ContainsKey($art.Category)) {
+            $categories[$art.Category]++
+        }
+    }
+
+    $totalSizeBytes = 0
+    foreach ($art in $artifacts) { $totalSizeBytes += $art.SizeBytes }
+
+    $dateRange = @{
+        After  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('o') }  else { $null }
+        Before = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('o') } else { $null }
+    }
+
+    $manifest = @{
+        PackageId      = $packageId
+        GeneratedAt    = $generatedAt
+        DateRange      = $dateRange
+        ToolkitVersion = $toolkitVersion
+        Artifacts      = @($manifestArts)
+        Summary        = @{
+            TotalArtifacts = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+
+    # Create ZIP archive
+    try {
+        $zipStream  = [System.IO.File]::Create($zipFilePath)
+        $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+
+        # Add manifest.json at root
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $manifestEntry = $zipArchive.CreateEntry('manifest.json')
+        $manifestWriter = [System.IO.StreamWriter]::new($manifestEntry.Open())
+        $manifestWriter.Write($manifestJson)
+        $manifestWriter.Close()
+
+        # Add each artifact to its subfolder
+        foreach ($art in $artifacts) {
+            $entryName = "$($art.ZipFolder)/$($art.FileName)"
+            $entry = $zipArchive.CreateEntry($entryName)
+            $entryStream = $entry.Open()
+            try {
+                $fileBytes = [System.IO.File]::ReadAllBytes($art.FullPath)
+                $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+            } finally {
+                $entryStream.Close()
+            }
+        }
+
+        $zipArchive.Dispose()
+        $zipStream.Close()
+    }
+    catch {
+        Write-SPLog -Message "Failed to create ZIP: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Error   = "Failed to create ZIP: $($_.Exception.Message)"
+        }
+    }
+
+    $resolvedZipPath = (Resolve-Path -Path $zipFilePath).Path
+
+    Write-SPLog -Message "Export-SPCompliancePackage: created $resolvedZipPath ($($artifacts.Count) artifacts, $totalSizeBytes bytes)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            PackagePath    = $resolvedZipPath
+            PackageId      = $packageId
+            ArtifactCount  = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -7759,5 +8076,6 @@ Export-ModuleMember -Function @(
     'Measure-SPCampaignTrends',
     'Export-SPCampaignTrendHtml',
     'Export-SPEntitlementInventoryHtml',
-    'Measure-SPReviewerReputation'
+    'Measure-SPReviewerReputation',
+    'Export-SPCompliancePackage'
 )

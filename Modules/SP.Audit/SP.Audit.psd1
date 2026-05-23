@@ -86,6 +86,9 @@
 
         # SP.AuditReport - Cross-Campaign Reviewer Analysis (P11-08)
         'Measure-SPReviewerReputation'
+
+        # SP.AuditReport - Compliance Evidence Package (P12-01)
+        'Export-SPCompliancePackage'
     )
 
     # Do not export variables or aliases from nested modules
