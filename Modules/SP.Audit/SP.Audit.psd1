@@ -36,6 +36,9 @@
         'Import-SPAuditCampaignReport'
         'Get-SPAuditIdentityEvents'
         'Resolve-SPAuditIdentityAccounts'
+        'Get-SPReviewerWorkload'
+        'Get-SPIdentityDecisionHistory'
+        'Get-SPSourceCampaignCoverage'
 
         # SP.AuditReport - Categorization functions
         'Group-SPAuditDecisions'
@@ -44,6 +47,7 @@
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
         'Measure-SPAuditRubberStampRisk'
+        'Measure-SPCampaignMetrics'
         'Get-SPAuditRiskFlags'
         'Group-SPAuditByLeadership'
 
@@ -55,6 +59,10 @@
         'Export-SPLeadershipDirectorHtml'
         'Export-SPLeadershipLevelHtml'
         'Send-SPReport'
+
+        # SP.AuditReport - Comparison functions
+        'Compare-SPCampaigns'
+        'Export-SPCampaignComparisonHtml'
     )
 
     # Do not export variables or aliases from nested modules

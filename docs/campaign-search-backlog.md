@@ -52,23 +52,23 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| S-01 | Campaign Type Filter | none | PENDING |
-| S-02 | Date Range Search | none | PENDING |
-| S-03 | Deadline Analysis | S-02 | PENDING |
-| S-04 | Reviewer Workload Search | none | PENDING |
-| S-05 | Identity Decision History | none | PENDING |
-| S-06 | Campaign Metrics Aggregation | none | PENDING |
-| S-07 | Source Coverage Analysis | none | PENDING |
-| S-08 | Campaign Comparison | S-06 | PENDING |
-| S-09 | Campaign Search CLI | S-01 to S-08 | PENDING |
-| S-10 | Pester Tests | S-09 | PENDING |
+| S-01 | Campaign Type Filter | none | DONE |
+| S-02 | Date Range Search | none | DONE |
+| S-03 | Deadline Analysis | S-02 | DONE |
+| S-04 | Reviewer Workload Search | none | DONE |
+| S-05 | Identity Decision History | none | DONE |
+| S-06 | Campaign Metrics Aggregation | none | DONE |
+| S-07 | Source Coverage Analysis | none | DONE |
+| S-08 | Campaign Comparison | S-06 | DONE |
+| S-09 | Campaign Search CLI | S-01 to S-08 | DONE |
+| S-10 | Pester Tests | S-09 | DONE |
 
 ---
 
 ## S-01: Campaign Type Filter
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -94,8 +94,8 @@ Use `[ValidateSet('MANAGER','SOURCE_OWNER','SEARCH','ROLE_COMPOSITION')]`.
 
 ## S-02: Date Range Search
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -132,8 +132,8 @@ if ($CreatedAfter -or $CreatedBefore) {
 
 ## S-03: Deadline Analysis
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-02
 
 **Description:**
@@ -186,8 +186,8 @@ function Get-SPCampaignDeadlineStatus {
 
 ## S-04: Reviewer Workload Search
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -242,8 +242,8 @@ function Get-SPReviewerWorkload {
 
 ## S-05: Identity Decision History
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -305,8 +305,8 @@ function Get-SPIdentityDecisionHistory {
 
 ## S-06: Campaign Metrics Aggregation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -339,8 +339,8 @@ comprehensive KPIs for one or more campaigns.
 
 ## S-07: Source Coverage Analysis
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -376,8 +376,8 @@ which sources/applications have been covered by campaigns and which haven't.
 
 ## S-08: Campaign Comparison
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-06
 
 **Description:**
@@ -407,8 +407,8 @@ Pending, Completion %, Avg Response Time, Reviewer Count, Deadline Status.
 
 ## S-09: Campaign Search CLI (Invoke-SPCampaignSearch.ps1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-01 through S-08
 
 **Description:**
@@ -473,8 +473,8 @@ Supports all filter types, output modes, and can chain with comparison/analysis.
 
 ## S-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-09
 
 **Description:**

@@ -268,10 +268,22 @@ function Get-SPAuditCampaigns {
         Optional array of status values to filter by.
         Valid values: STAGED, ACTIVATING, ACTIVE, COMPLETING, COMPLETED, ERROR.
         Translates to: status in ("COMPLETED","ACTIVE")
+    .PARAMETER CampaignType
+        Optional campaign type filter. Valid values: MANAGER, SOURCE_OWNER,
+        SEARCH, ROLE_COMPOSITION. Translates to server-side: type eq "MANAGER".
+    .PARAMETER CreatedAfter
+        Optional lower bound for the campaign 'created' timestamp. Only campaigns
+        created on or after this date are returned. Takes precedence over DaysBack
+        when both are specified. Compared using .ToUniversalTime().
+    .PARAMETER CreatedBefore
+        Optional upper bound for the campaign 'created' timestamp. Only campaigns
+        created on or before this date are returned. Takes precedence over DaysBack
+        when both are specified. Compared using .ToUniversalTime().
     .PARAMETER DaysBack
         Number of calendar days to look back from now when filtering campaigns
         by their 'created' timestamp. Filtering is client-side. Default: 30.
         Set to 0 or a negative number to disable date filtering.
+        Ignored when CreatedAfter or CreatedBefore is specified.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries. Auto-generated if omitted.
     .OUTPUTS
@@ -281,6 +293,12 @@ function Get-SPAuditCampaigns {
         $campaigns = $result.Data
     .EXAMPLE
         $result = Get-SPAuditCampaigns -CampaignName 'Q1 2026 Access Review' -DaysBack 0
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CampaignType 'SOURCE_OWNER' -DaysBack 90
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CreatedAfter '2026-01-01' -CreatedBefore '2026-03-31'
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CreatedAfter '2026-01-01' -Status 'COMPLETED'
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -298,6 +316,16 @@ function Get-SPAuditCampaigns {
         [string[]]$Status,
 
         [Parameter()]
+        [ValidateSet('MANAGER', 'SOURCE_OWNER', 'SEARCH', 'ROLE_COMPOSITION')]
+        [string]$CampaignType,
+
+        [Parameter()]
+        [DateTime]$CreatedAfter,
+
+        [Parameter()]
+        [DateTime]$CreatedBefore,
+
+        [Parameter()]
         [int]$DaysBack = 30,
 
         [Parameter()]
@@ -308,7 +336,16 @@ function Get-SPAuditCampaigns {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')' DaysBack=$DaysBack" `
+    # Determine date filtering mode: explicit range vs DaysBack
+    $useExplicitRange = ($PSBoundParameters.ContainsKey('CreatedAfter') -or $PSBoundParameters.ContainsKey('CreatedBefore'))
+
+    $dateLogPart = if ($useExplicitRange) {
+        "CreatedAfter='$CreatedAfter', CreatedBefore='$CreatedBefore'"
+    } else {
+        "DaysBack=$DaysBack"
+    }
+
+    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')', Type='$CampaignType', $dateLogPart" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
         -CorrelationID $CorrelationID
 
@@ -332,6 +369,10 @@ function Get-SPAuditCampaigns {
         if ($null -ne $Status -and $Status.Count -gt 0) {
             $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
             $filterParts.Add("status in ($quotedStatuses)")
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CampaignType)) {
+            $filterParts.Add("type eq `"$CampaignType`"")
         }
 
         $queryParams = @{
@@ -409,9 +450,33 @@ function Get-SPAuditCampaigns {
             -CorrelationID $CorrelationID
 
         # Client-side date filter on 'created' field
+        # CreatedAfter/CreatedBefore take precedence over DaysBack when specified.
+        # All comparisons use .ToUniversalTime() to avoid Kind mismatch (PS7 auto-converts
+        # ISO 8601 strings to DateTime with Kind=Utc; local cutoffs have Kind=Local).
         $filteredCampaigns = [System.Collections.Generic.List[object]]::new()
-        if ($DaysBack -gt 0) {
-            $cutoff = (Get-Date).AddDays(-$DaysBack)
+
+        $applyDateFilter = $false
+        $rangeAfterUtc   = $null
+        $rangeBeforeUtc  = $null
+        $dateFilterLabel  = ''
+
+        if ($useExplicitRange) {
+            $applyDateFilter = $true
+            if ($PSBoundParameters.ContainsKey('CreatedAfter')) {
+                $rangeAfterUtc = $CreatedAfter.ToUniversalTime()
+            }
+            if ($PSBoundParameters.ContainsKey('CreatedBefore')) {
+                $rangeBeforeUtc = $CreatedBefore.ToUniversalTime()
+            }
+            $dateFilterLabel = "CreatedAfter=$rangeAfterUtc, CreatedBefore=$rangeBeforeUtc"
+        }
+        elseif ($DaysBack -gt 0) {
+            $applyDateFilter = $true
+            $rangeAfterUtc  = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+            $dateFilterLabel = "last $DaysBack days (cutoff=$rangeAfterUtc)"
+        }
+
+        if ($applyDateFilter) {
             foreach ($campaign in $allCampaigns) {
                 $createdRaw = $campaign.created
                 if ($null -eq $createdRaw) {
@@ -422,21 +487,35 @@ function Get-SPAuditCampaigns {
 
                 $createdDate = $null
                 if ($createdRaw -is [datetime]) {
-                    $createdDate = [datetime]$createdRaw
+                    $createdDate = ([datetime]$createdRaw).ToUniversalTime()
                 }
                 else {
                     $parsedDate = [datetime]::MinValue
                     if ([datetime]::TryParse($createdRaw.ToString(), [ref]$parsedDate)) {
-                        $createdDate = $parsedDate
+                        $createdDate = $parsedDate.ToUniversalTime()
                     }
                 }
 
-                if ($null -eq $createdDate -or $createdDate -ge $cutoff) {
+                if ($null -eq $createdDate) {
+                    $filteredCampaigns.Add($campaign)
+                    continue
+                }
+
+                # Apply range bounds
+                $include = $true
+                if ($null -ne $rangeAfterUtc -and $createdDate -lt $rangeAfterUtc) {
+                    $include = $false
+                }
+                if ($include -and $null -ne $rangeBeforeUtc -and $createdDate -gt $rangeBeforeUtc) {
+                    $include = $false
+                }
+
+                if ($include) {
                     $filteredCampaigns.Add($campaign)
                 }
             }
 
-            Write-SPLog -Message "Date filter (last $DaysBack days): $($allCampaigns.Count) -> $($filteredCampaigns.Count) campaigns" `
+            Write-SPLog -Message "Date filter ($dateFilterLabel): $($allCampaigns.Count) -> $($filteredCampaigns.Count) campaigns" `
                 -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
                 -CorrelationID $CorrelationID
         }
@@ -1360,6 +1439,812 @@ function Resolve-SPAuditIdentityAccounts {
     }
 }
 
+function Get-SPReviewerWorkload {
+    <#
+    .SYNOPSIS
+        Finds all active campaigns/certifications assigned to a specific reviewer.
+    .DESCRIPTION
+        Retrieves campaigns matching the status filter, then for each campaign
+        fetches certifications and filters to those where the effective reviewer
+        matches the supplied ReviewerIdentityId. Returns per-campaign workload
+        counts (total items, decided items, pending items) plus aggregate totals.
+
+        Uses Get-SPAuditCampaigns and Get-SPAuditCertifications internally.
+        Item counts are derived from certification-level statistics (decisionsTotal,
+        decisionsMade) to avoid additional per-item API calls.
+    .PARAMETER ReviewerIdentityId
+        The SailPoint ISC identity ID of the reviewer. Mandatory.
+    .PARAMETER Status
+        Campaign status filter. Default: @('ACTIVE').
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@{ReviewerId; ReviewerName; TotalCampaigns;
+        TotalItems; TotalPending; Campaigns=@(...)}; Error=$string}
+    .EXAMPLE
+        $result = Get-SPReviewerWorkload -ReviewerIdentityId 'id-mgr-001'
+        $result.Data.Campaigns | Format-Table CampaignName, ItemsAssigned, ItemsPending
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ReviewerIdentityId,
+
+        [Parameter()]
+        [string[]]$Status = @('ACTIVE'),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting reviewer workload for identity '$ReviewerIdentityId' (Status=$($Status -join ','))" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Get campaigns matching status filter (DaysBack=0 to disable date filter)
+        $campaignResult = Get-SPAuditCampaigns -Status $Status -DaysBack 0 `
+            -CorrelationID $CorrelationID
+
+        if (-not $campaignResult.Success) {
+            $errMsg = "Get-SPReviewerWorkload failed to retrieve campaigns: $($campaignResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPReviewerWorkload' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $campaigns = @($campaignResult.Data)
+        Write-SPLog -Message "Found $($campaigns.Count) campaigns to scan for reviewer '$ReviewerIdentityId'" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+            -CorrelationID $CorrelationID
+
+        $reviewerName     = ''
+        $campaignWorkload = [System.Collections.Generic.List[object]]::new()
+        $grandTotalItems  = 0
+        $grandTotalDecided = 0
+
+        # Step 2-3: For each campaign, get certs and filter by reviewer
+        foreach ($campaign in $campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId   = $campaign.id
+            $campName = $campaign.name
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+            $campItems   = 0
+            $campDecided = 0
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                # Check if effective reviewer matches
+                $reviewerId = $null
+                if ($null -ne $cert.EffectiveReviewer -and
+                    $null -ne $cert.EffectiveReviewer.PSObject.Properties['id']) {
+                    $reviewerId = $cert.EffectiveReviewer.id
+                }
+
+                if ($reviewerId -ne $ReviewerIdentityId) { continue }
+
+                # Capture reviewer name from first match
+                if ([string]::IsNullOrWhiteSpace($reviewerName) -and
+                    $null -ne $cert.EffectiveReviewer.PSObject.Properties['displayName'] -and
+                    -not [string]::IsNullOrWhiteSpace($cert.EffectiveReviewer.displayName)) {
+                    $reviewerName = $cert.EffectiveReviewer.displayName
+                }
+
+                # Extract item counts from certification-level stats
+                $totalItems  = 0
+                $decidedItems = 0
+
+                if ($null -ne $cert.PSObject.Properties['decisionsTotal'] -and
+                    $null -ne $cert.decisionsTotal) {
+                    $totalItems = [int]$cert.decisionsTotal
+                }
+                elseif ($null -ne $cert.PSObject.Properties['totalCount'] -and
+                        $null -ne $cert.totalCount) {
+                    $totalItems = [int]$cert.totalCount
+                }
+
+                if ($null -ne $cert.PSObject.Properties['decisionsMade'] -and
+                    $null -ne $cert.decisionsMade) {
+                    $decidedItems = [int]$cert.decisionsMade
+                }
+                elseif ($null -ne $cert.PSObject.Properties['completedCount'] -and
+                        $null -ne $cert.completedCount) {
+                    $decidedItems = [int]$cert.completedCount
+                }
+
+                $campItems   += $totalItems
+                $campDecided += $decidedItems
+            }
+
+            # Only include campaigns where the reviewer has certifications
+            if ($campItems -gt 0 -or $campDecided -gt 0) {
+                $pending = $campItems - $campDecided
+                if ($pending -lt 0) { $pending = 0 }
+
+                $campaignWorkload.Add([PSCustomObject]@{
+                    CampaignId    = $campId
+                    CampaignName  = $campName
+                    ItemsAssigned = $campItems
+                    ItemsDecided  = $campDecided
+                    ItemsPending  = $pending
+                })
+
+                $grandTotalItems   += $campItems
+                $grandTotalDecided += $campDecided
+            }
+        }
+
+        $grandTotalPending = $grandTotalItems - $grandTotalDecided
+        if ($grandTotalPending -lt 0) { $grandTotalPending = 0 }
+
+        Write-SPLog -Message "Reviewer '$ReviewerIdentityId' workload: $($campaignWorkload.Count) campaigns, $grandTotalItems items ($grandTotalPending pending)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerWorkload' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                ReviewerId     = $ReviewerIdentityId
+                ReviewerName   = $reviewerName
+                TotalCampaigns = $campaignWorkload.Count
+                TotalItems     = $grandTotalItems
+                TotalPending   = $grandTotalPending
+                Campaigns      = $campaignWorkload.ToArray()
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPReviewerWorkload failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPReviewerWorkload' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPIdentityDecisionHistory {
+    <#
+    .SYNOPSIS
+        Finds all access review decisions made about a specific identity across campaigns.
+    .DESCRIPTION
+        Answers: "What has been decided about this identity's access in every campaign?"
+        Retrieves campaigns matching status and date filters, then for each campaign
+        fetches certifications and access review items, filtering to items where
+        identitySummary.id matches the supplied IdentityId.
+
+        Returns a chronological list (newest first) of decisions grouped by campaign,
+        including the access name, decision, reviewer name, and decision date.
+
+        Uses Get-SPAuditCampaigns, Get-SPAuditCertifications, and
+        Get-SPAuditCertificationItems internally.
+    .PARAMETER IdentityId
+        The SailPoint ISC identity ID to search decisions for. Mandatory.
+    .PARAMETER Status
+        Campaign status filter. Default: @('COMPLETED','ACTIVE').
+    .PARAMETER DaysBack
+        Number of calendar days to look back. Default: 365.
+        Set to 0 to disable date filtering.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@{IdentityId; IdentityName; TotalDecisions;
+        Campaigns=@(@{CampaignName; CampaignDate; Decisions=@(...)})}; Error=$string}
+    .EXAMPLE
+        $result = Get-SPIdentityDecisionHistory -IdentityId 'id-001' -DaysBack 365
+        $result.Data.Campaigns | ForEach-Object { $_.CampaignName; $_.Decisions.Count }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$IdentityId,
+
+        [Parameter()]
+        [string[]]$Status = @('COMPLETED', 'ACTIVE'),
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting identity decision history for '$IdentityId' (Status=$($Status -join ','), DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Step 1: Get campaigns matching status + date filters
+        $campaignResult = Get-SPAuditCampaigns -Status $Status -DaysBack $DaysBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $campaignResult.Success) {
+            $errMsg = "Get-SPIdentityDecisionHistory failed to retrieve campaigns: $($campaignResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPIdentityDecisionHistory' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $campaigns = @($campaignResult.Data)
+        Write-SPLog -Message "Found $($campaigns.Count) campaigns to scan for identity '$IdentityId'" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+            -CorrelationID $CorrelationID
+
+        $identityName       = ''
+        $totalDecisions     = 0
+        $campaignResults    = [System.Collections.Generic.List[object]]::new()
+
+        # Step 2-4: For each campaign, get certs -> items -> filter by identity
+        foreach ($campaign in $campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId   = $campaign.id
+            $campName = $campaign.name
+
+            # Extract campaign date (use 'created' field)
+            $campDate = ''
+            if ($null -ne $campaign.created) {
+                if ($campaign.created -is [datetime]) {
+                    $campDate = ([datetime]$campaign.created).ToUniversalTime().ToString('yyyy-MM-dd')
+                }
+                else {
+                    $parsedDate = [datetime]::MinValue
+                    if ([datetime]::TryParse($campaign.created.ToString(), [ref]$parsedDate)) {
+                        $campDate = $parsedDate.ToUniversalTime().ToString('yyyy-MM-dd')
+                    }
+                    else {
+                        $campDate = $campaign.created.ToString()
+                    }
+                }
+            }
+
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+            $campDecisions = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                $certId = $cert.id
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                    -CorrelationID $CorrelationID
+
+                if (-not $itemResult.Success) {
+                    Write-SPLog -Message "Skipping cert '$certId' in campaign '$campName': $($itemResult.Error)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+
+                $items = @($itemResult.Data)
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+
+                    # Check if this item is for our target identity
+                    $itemIdentityId = $null
+                    if ($null -ne $item.PSObject.Properties['identitySummary'] -and
+                        $null -ne $item.identitySummary -and
+                        $null -ne $item.identitySummary.PSObject.Properties['id']) {
+                        $itemIdentityId = $item.identitySummary.id
+                    }
+
+                    if ($itemIdentityId -ne $IdentityId) { continue }
+
+                    # Capture identity name from first match
+                    if ([string]::IsNullOrWhiteSpace($identityName) -and
+                        $null -ne $item.identitySummary.PSObject.Properties['name'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.identitySummary.name)) {
+                        $identityName = $item.identitySummary.name
+                    }
+
+                    # Extract decision details
+                    $accessName   = ''
+                    $decision     = ''
+                    $reviewerName = ''
+                    $decisionDate = ''
+
+                    # Access name: try access.name, then entitlementName, then displayName
+                    if ($null -ne $item.PSObject.Properties['access'] -and
+                        $null -ne $item.access -and
+                        $null -ne $item.access.PSObject.Properties['name']) {
+                        $accessName = $item.access.name
+                    }
+                    elseif ($null -ne $item.PSObject.Properties['entitlementName'] -and
+                            -not [string]::IsNullOrWhiteSpace($item.entitlementName)) {
+                        $accessName = $item.entitlementName
+                    }
+                    elseif ($null -ne $item.PSObject.Properties['displayName'] -and
+                            -not [string]::IsNullOrWhiteSpace($item.displayName)) {
+                        $accessName = $item.displayName
+                    }
+
+                    # Decision
+                    if ($null -ne $item.PSObject.Properties['decision'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.decision)) {
+                        $decision = $item.decision
+                    }
+
+                    # Reviewer name
+                    if ($null -ne $item.PSObject.Properties['reviewer'] -and
+                        $null -ne $item.reviewer -and
+                        $null -ne $item.reviewer.PSObject.Properties['name']) {
+                        $reviewerName = $item.reviewer.name
+                    }
+                    # Fallback to cert-level effective reviewer
+                    if ([string]::IsNullOrWhiteSpace($reviewerName) -and
+                        $null -ne $cert.EffectiveReviewer -and
+                        $null -ne $cert.EffectiveReviewer.PSObject.Properties['displayName']) {
+                        $reviewerName = $cert.EffectiveReviewer.displayName
+                    }
+
+                    # Decision date
+                    if ($null -ne $item.PSObject.Properties['completed'] -and
+                        $null -ne $item.completed) {
+                        if ($item.completed -is [datetime]) {
+                            $decisionDate = ([datetime]$item.completed).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                        else {
+                            $decisionDate = $item.completed.ToString()
+                        }
+                    }
+
+                    $campDecisions.Add([PSCustomObject]@{
+                        AccessName   = $accessName
+                        Decision     = $decision
+                        ReviewerName = $reviewerName
+                        DecisionDate = $decisionDate
+                    })
+                }
+            }
+
+            # Only include campaigns where this identity had review items
+            if ($campDecisions.Count -gt 0) {
+                $totalDecisions += $campDecisions.Count
+
+                $campaignResults.Add([PSCustomObject]@{
+                    CampaignId   = $campId
+                    CampaignName = $campName
+                    CampaignDate = $campDate
+                    Decisions    = $campDecisions.ToArray()
+                })
+            }
+        }
+
+        # Sort campaigns newest first by CampaignDate
+        $sortedCampaigns = @($campaignResults | Sort-Object -Property CampaignDate -Descending)
+
+        Write-SPLog -Message "Identity '$IdentityId' decision history: $totalDecisions decisions across $($sortedCampaigns.Count) campaigns" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPIdentityDecisionHistory' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                IdentityId     = $IdentityId
+                IdentityName   = $identityName
+                TotalDecisions = $totalDecisions
+                Campaigns      = $sortedCampaigns
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPIdentityDecisionHistory failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPIdentityDecisionHistory' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPSourceCampaignCoverage {
+    <#
+    .SYNOPSIS
+        Analyzes which sources have been covered by campaigns and which have not.
+    .DESCRIPTION
+        Builds a coverage map of all ISC sources against certification campaigns.
+
+        Step 1: Paginate GET /v3/sources to retrieve every source.
+        Step 2: Get campaigns matching the supplied status and date filters.
+        Step 3: For SOURCE_OWNER campaigns, extract sourceIds directly from the
+                campaign object (no need to drill into items).
+        Step 4: For other campaign types, drill into certifications and access
+                review items to discover which sourceIds were covered.
+        Step 5: Build the coverage map -- each source mapped to the campaigns
+                that audited it, with a last-campaign date and count.
+
+        Sources that appear in zero campaigns are flagged as Uncovered.
+        A Summary hashtable provides TotalSources, Covered, Uncovered, and
+        CoverageRate (percentage).
+
+        All DateTime comparisons use .ToUniversalTime() to avoid Kind mismatch.
+    .PARAMETER Status
+        Campaign status filter. Default: @('COMPLETED','ACTIVE').
+    .PARAMETER DaysBack
+        Number of calendar days to look back for campaigns. Default: 365.
+        Set to 0 to disable date filtering.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Covered   = @(@{ SourceId; SourceName; LastCampaign; LastCampaignDate; CampaignCount })
+                Uncovered = @(@{ SourceId; SourceName; NeverAudited=$true })
+                Summary   = @{ TotalSources=N; Covered=N; Uncovered=N; CoverageRate=N }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $result = Get-SPSourceCampaignCoverage -DaysBack 365
+        $result.Data.Summary
+    .EXAMPLE
+        $result = Get-SPSourceCampaignCoverage -Status 'COMPLETED' -DaysBack 180
+        $result.Data.Uncovered | ForEach-Object { $_.SourceName }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$Status = @('COMPLETED', 'ACTIVE'),
+
+        [Parameter()]
+        [int]$DaysBack = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting source campaign coverage: Status='$($Status -join ',')', DaysBack=$DaysBack" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Retrieve all sources via GET /v3/sources (paginated)
+        # -----------------------------------------------------------
+        $allSources = [System.Collections.Generic.List[object]]::new()
+        $pageSize   = 250
+        $offset     = 0
+        $pageNum    = 0
+
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached fetching sources: $maxPages pages ($($allSources.Count) sources). Raise Api.MaxPaginationPages if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPSourceCampaignCoverage' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams = @{
+                'limit'  = $pageSize.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            $srcResult = Invoke-SPApiRequest -Method GET -Endpoint '/sources' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $srcResult.Success) {
+                $errMsg = "Failed to retrieve sources at page $pageNum (offset $offset): $($srcResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPSourceCampaignCoverage' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $page = $srcResult.Data
+            if ($null -ne $srcResult.Data -and $srcResult.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $srcResult.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($src in $page) { $allSources.Add($src) }
+            }
+
+            Write-SPLog -Message "Sources page ${pageNum}: $($page.Count) sources (running total: $($allSources.Count))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($page.Count -ge $pageSize)
+
+        Write-SPLog -Message "Retrieved $($allSources.Count) total sources" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+            -CorrelationID $CorrelationID
+
+        if ($allSources.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Covered   = @()
+                    Uncovered = @()
+                    Summary   = @{ TotalSources = 0; Covered = 0; Uncovered = 0; CoverageRate = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        # Build source lookup: id -> name
+        $sourceMap = @{}
+        foreach ($src in $allSources) {
+            $srcId   = $src.id
+            $srcName = $src.name
+            if ([string]::IsNullOrWhiteSpace($srcName)) { $srcName = $srcId }
+            $sourceMap[$srcId] = $srcName
+            # Also populate the module-scope cache for downstream use
+            $script:SourceNameCache[$srcId] = $srcName
+        }
+
+        # -----------------------------------------------------------
+        # Step 2: Get campaigns matching status + date filters
+        # -----------------------------------------------------------
+        $campaignResult = Get-SPAuditCampaigns -Status $Status -DaysBack $DaysBack `
+            -CorrelationID $CorrelationID
+
+        if (-not $campaignResult.Success) {
+            $errMsg = "Get-SPSourceCampaignCoverage failed to retrieve campaigns: $($campaignResult.Error)"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPSourceCampaignCoverage' -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $campaigns = @($campaignResult.Data)
+        Write-SPLog -Message "Found $($campaigns.Count) campaigns to scan for source coverage" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+            -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------
+        # Steps 3-4: Build coverage data -- sourceId -> list of campaign info
+        # -----------------------------------------------------------
+        # Key: sourceId, Value: List of @{CampaignId; CampaignName; CampaignDate}
+        $coverageData = @{}
+
+        foreach ($campaign in $campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId   = $campaign.id
+            $campName = $campaign.name
+            $campType = $campaign.type
+
+            # Parse campaign date
+            $campDate = ''
+            if ($null -ne $campaign.created) {
+                if ($campaign.created -is [datetime]) {
+                    $campDate = ([datetime]$campaign.created).ToUniversalTime().ToString('yyyy-MM-dd')
+                } else {
+                    $parsedDate = [datetime]::MinValue
+                    if ([datetime]::TryParse($campaign.created.ToString(), [ref]$parsedDate)) {
+                        $campDate = $parsedDate.ToUniversalTime().ToString('yyyy-MM-dd')
+                    } else {
+                        $campDate = $campaign.created.ToString()
+                    }
+                }
+            }
+
+            $campInfo = @{
+                CampaignId   = $campId
+                CampaignName = $campName
+                CampaignDate = $campDate
+            }
+
+            # Step 3: SOURCE_OWNER campaigns have sourceIds directly
+            if ($campType -eq 'SOURCE_OWNER') {
+                $sourceIds = @()
+                if ($null -ne $campaign.PSObject.Properties['sourceIds'] -and
+                    $null -ne $campaign.sourceIds) {
+                    $sourceIds = @($campaign.sourceIds)
+                }
+                # Also check searchCampaignInfo.sourcedIds or sourcedApplicationIds
+                if ($sourceIds.Count -eq 0 -and
+                    $null -ne $campaign.PSObject.Properties['searchCampaignInfo'] -and
+                    $null -ne $campaign.searchCampaignInfo) {
+                    $sci = $campaign.searchCampaignInfo
+                    if ($null -ne $sci.PSObject.Properties['sourceIds'] -and $null -ne $sci.sourceIds) {
+                        $sourceIds = @($sci.sourceIds)
+                    }
+                }
+
+                foreach ($sid in $sourceIds) {
+                    if ([string]::IsNullOrWhiteSpace($sid)) { continue }
+                    if (-not $coverageData.ContainsKey($sid)) {
+                        $coverageData[$sid] = [System.Collections.Generic.List[object]]::new()
+                    }
+                    $coverageData[$sid].Add($campInfo)
+                }
+
+                # If we found sourceIds, no need to drill into items
+                if ($sourceIds.Count -gt 0) { continue }
+            }
+
+            # Step 4: For non-SOURCE_OWNER (or SOURCE_OWNER with no sourceIds),
+            # drill into certifications -> items -> access.sourceId
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId) for source coverage: $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+            # Track which sourceIds we already found for this campaign to avoid
+            # redundant item-level API calls
+            $campaignSourceIds = [System.Collections.Generic.HashSet[string]]::new(
+                [System.StringComparer]::OrdinalIgnoreCase)
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id `
+                    -CorrelationID $CorrelationID
+
+                if (-not $itemResult.Success) {
+                    Write-SPLog -Message "Skipping cert '$($cert.id)' in campaign '$campName': $($itemResult.Error)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+
+                $items = @($itemResult.Data)
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+
+                    # Extract sourceId from the access review item
+                    $itemSourceId = $null
+
+                    # Try access.sourceId first
+                    if ($null -ne $item.PSObject.Properties['access'] -and
+                        $null -ne $item.access) {
+                        if ($null -ne $item.access.PSObject.Properties['sourceId'] -and
+                            -not [string]::IsNullOrWhiteSpace($item.access.sourceId)) {
+                            $itemSourceId = $item.access.sourceId
+                        }
+                        elseif ($null -ne $item.access.PSObject.Properties['source'] -and
+                                $null -ne $item.access.source -and
+                                $null -ne $item.access.source.PSObject.Properties['id']) {
+                            $itemSourceId = $item.access.source.id
+                        }
+                    }
+
+                    # Fallback: item-level sourceId
+                    if ([string]::IsNullOrWhiteSpace($itemSourceId) -and
+                        $null -ne $item.PSObject.Properties['sourceId'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.sourceId)) {
+                        $itemSourceId = $item.sourceId
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($itemSourceId)) { continue }
+
+                    # Only record once per source per campaign
+                    if ($campaignSourceIds.Add($itemSourceId)) {
+                        if (-not $coverageData.ContainsKey($itemSourceId)) {
+                            $coverageData[$itemSourceId] = [System.Collections.Generic.List[object]]::new()
+                        }
+                        $coverageData[$itemSourceId].Add($campInfo)
+                    }
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 5: Build the coverage result
+        # -----------------------------------------------------------
+        $coveredList   = [System.Collections.Generic.List[object]]::new()
+        $uncoveredList = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($srcId in $sourceMap.Keys) {
+            $srcName = $sourceMap[$srcId]
+
+            if ($coverageData.ContainsKey($srcId) -and $coverageData[$srcId].Count -gt 0) {
+                $campList = @($coverageData[$srcId])
+
+                # Determine last campaign by date (string sort works for yyyy-MM-dd)
+                $sorted = @($campList | Sort-Object -Property CampaignDate -Descending)
+                $lastCamp     = $sorted[0].CampaignName
+                $lastCampDate = $sorted[0].CampaignDate
+
+                $coveredList.Add([PSCustomObject]@{
+                    SourceId         = $srcId
+                    SourceName       = $srcName
+                    LastCampaign     = $lastCamp
+                    LastCampaignDate = $lastCampDate
+                    CampaignCount    = $campList.Count
+                })
+            }
+            else {
+                $uncoveredList.Add([PSCustomObject]@{
+                    SourceId      = $srcId
+                    SourceName    = $srcName
+                    NeverAudited  = $true
+                })
+            }
+        }
+
+        $totalSources = $sourceMap.Count
+        $coveredCount = $coveredList.Count
+        $uncoveredCount = $uncoveredList.Count
+        $coverageRate = if ($totalSources -gt 0) {
+            [math]::Round(($coveredCount / $totalSources) * 100, 1)
+        } else { 0 }
+
+        Write-SPLog -Message ("Source coverage analysis complete: " +
+            "Total=$totalSources, Covered=$coveredCount, Uncovered=$uncoveredCount, " +
+            "CoverageRate=${coverageRate}%") `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceCampaignCoverage' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Covered   = $coveredList.ToArray()
+                Uncovered = $uncoveredList.ToArray()
+                Summary   = @{
+                    TotalSources = $totalSources
+                    Covered      = $coveredCount
+                    Uncovered    = $uncoveredCount
+                    CoverageRate = $coverageRate
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPSourceCampaignCoverage failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPSourceCampaignCoverage' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1369,5 +2254,8 @@ Export-ModuleMember -Function @(
     'Get-SPAuditCampaignReport',
     'Import-SPAuditCampaignReport',
     'Get-SPAuditIdentityEvents',
-    'Resolve-SPAuditIdentityAccounts'
+    'Resolve-SPAuditIdentityAccounts',
+    'Get-SPReviewerWorkload',
+    'Get-SPIdentityDecisionHistory',
+    'Get-SPSourceCampaignCoverage'
 )

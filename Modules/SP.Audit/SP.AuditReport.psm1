@@ -5149,6 +5149,696 @@ function Send-SPReport {
     }
 }
 
+function Measure-SPCampaignMetrics {
+    <#
+    .SYNOPSIS
+        Calculates comprehensive KPIs for one or more campaigns.
+    .DESCRIPTION
+        For each supplied campaign, retrieves certifications and access review items,
+        then computes per-campaign metrics:
+
+          - Approval rate (%)
+          - Revocation rate (%)
+          - Completion rate (%)
+          - Average reviewer response time (hours)
+          - Fastest / slowest reviewer (by avg response time)
+          - Reviewer count
+          - Reassignment count
+          - Items per reviewer (distribution)
+          - Deadline compliance (on-time vs overdue)
+
+        Designed to be composable with Measure-SPAuditReviewerMetrics for deeper
+        per-reviewer analysis, and consumable by Compare-SPCampaigns (S-08) for
+        side-by-side comparison.
+
+        All DateTime comparisons use .ToUniversalTime() to avoid Kind mismatch.
+    .PARAMETER Campaigns
+        Array of campaign objects as returned by Get-SPAuditCampaigns. Each must
+        have at minimum: id, name, status, type. Optional: created, deadline.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @([PSCustomObject] per-campaign metrics)
+            Error   = $string
+        }
+
+        Each metrics object contains:
+            CampaignId, CampaignName, CampaignType, CampaignStatus,
+            TotalItems, ApprovedCount, RevokedCount, PendingCount,
+            ApprovalRate, RevocationRate, CompletionRate,
+            ReviewerCount, ReassignmentCount,
+            AvgResponseTimeHours, MinResponseTimeHours, MaxResponseTimeHours,
+            MedianResponseTimeHours,
+            FastestReviewer, SlowestReviewer,
+            ItemsPerReviewer (hashtable: reviewer -> count),
+            DeadlineStatus (OnTime/Overdue/NoDeadline/Active),
+            CampaignCreated, CampaignDeadline
+    .EXAMPLE
+        $camps = (Get-SPAuditCampaigns -Status 'COMPLETED' -DaysBack 90).Data
+        $result = Measure-SPCampaignMetrics -Campaigns $camps
+        $result.Data | Format-Table CampaignName, ApprovalRate, CompletionRate
+    .EXAMPLE
+        $result = Measure-SPCampaignMetrics -Campaigns @($singleCampaign)
+        $result.Data[0].FastestReviewer
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$Campaigns,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measuring campaign metrics for $($Campaigns.Count) campaign(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $metricsResults = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($campaign in $Campaigns) {
+            if ($null -eq $campaign) { continue }
+
+            $campId     = $campaign.id
+            $campName   = $campaign.name
+            $campType   = if ($null -ne $campaign.type) { [string]$campaign.type } else { '' }
+            $campStatus = if ($null -ne $campaign.status) { [string]$campaign.status } else { '' }
+
+            Write-SPLog -Message "Computing metrics for campaign '$campName' ($campId)" `
+                -Severity DEBUG -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+                -CorrelationID $CorrelationID
+
+            # --- Extract campaign dates ---
+            $campCreated  = ''
+            $campDeadline = ''
+            if ($null -ne $campaign.created) {
+                $campCreated = [string]$campaign.created
+            }
+            if ($null -ne $campaign.PSObject.Properties['deadline'] -and $null -ne $campaign.deadline) {
+                $campDeadline = [string]$campaign.deadline
+            }
+
+            # --- Get certifications ---
+            $certResult = Get-SPAuditCertifications -CampaignId $campId `
+                -CorrelationID $CorrelationID
+
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Skipping campaign '$campName' ($campId): $($certResult.Error)" `
+                    -Severity WARN -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+                    -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certs = @($certResult.Data)
+
+            # --- Reviewer-level time metrics via existing function ---
+            $reviewerMetrics = Measure-SPAuditReviewerMetrics -Certifications $certs
+
+            # --- Collect all access review items across certs ---
+            $totalItems    = 0
+            $approvedCount = 0
+            $revokedCount  = 0
+            $pendingCount  = 0
+            $reassignmentCount = 0
+            $reviewerItemCounts = @{}
+
+            foreach ($cert in $certs) {
+                if ($null -eq $cert) { continue }
+
+                # Count reassignments
+                if ($null -ne $cert.ReviewerClassification -and
+                    $cert.ReviewerClassification -eq 'Reassigned') {
+                    $reassignmentCount++
+                }
+
+                # Get effective reviewer name for item distribution
+                $effReviewerName = 'Unknown'
+                if ($null -ne $cert.EffectiveReviewer -and
+                    $null -ne $cert.EffectiveReviewer.PSObject.Properties['displayName'] -and
+                    -not [string]::IsNullOrWhiteSpace($cert.EffectiveReviewer.displayName)) {
+                    $effReviewerName = $cert.EffectiveReviewer.displayName
+                }
+                elseif ($null -ne $cert.EffectiveReviewer -and
+                        $null -ne $cert.EffectiveReviewer.PSObject.Properties['name'] -and
+                        -not [string]::IsNullOrWhiteSpace($cert.EffectiveReviewer.name)) {
+                    $effReviewerName = $cert.EffectiveReviewer.name
+                }
+
+                $certId = $cert.id
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                    -CorrelationID $CorrelationID
+
+                if (-not $itemResult.Success) {
+                    Write-SPLog -Message "Skipping cert '$certId' in campaign '$campName': $($itemResult.Error)" `
+                        -Severity WARN -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+
+                $items = @($itemResult.Data)
+                $certItemCount = 0
+
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+                    $totalItems++
+                    $certItemCount++
+
+                    $decision = ''
+                    if ($null -ne $item.PSObject.Properties['decision'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.decision)) {
+                        $decision = [string]$item.decision
+                    }
+
+                    switch ($decision.ToUpper()) {
+                        'APPROVE'  { $approvedCount++ }
+                        'APPROVED' { $approvedCount++ }
+                        'REVOKE'   { $revokedCount++ }
+                        'REVOKED'  { $revokedCount++ }
+                        default    { $pendingCount++ }
+                    }
+                }
+
+                # Accumulate items per reviewer
+                if ($reviewerItemCounts.ContainsKey($effReviewerName)) {
+                    $reviewerItemCounts[$effReviewerName] += $certItemCount
+                }
+                else {
+                    $reviewerItemCounts[$effReviewerName] = $certItemCount
+                }
+            }
+
+            # --- Calculate rates (guard against divide-by-zero) ---
+            $approvalRate   = if ($totalItems -gt 0) { [Math]::Round(($approvedCount / $totalItems) * 100, 1) } else { 0.0 }
+            $revocationRate = if ($totalItems -gt 0) { [Math]::Round(($revokedCount / $totalItems) * 100, 1) } else { 0.0 }
+            $decidedCount   = $approvedCount + $revokedCount
+            $completionRate = if ($totalItems -gt 0) { [Math]::Round(($decidedCount / $totalItems) * 100, 1) } else { 0.0 }
+
+            # --- Identify fastest / slowest reviewer ---
+            $fastestReviewer = ''
+            $slowestReviewer = ''
+            $reviewerCount   = 0
+
+            if ($null -ne $reviewerMetrics.ReviewerMetrics -and $reviewerMetrics.ReviewerMetrics.Count -gt 0) {
+                $reviewerCount = $reviewerMetrics.ReviewerMetrics.Count
+
+                $sorted = @($reviewerMetrics.ReviewerMetrics |
+                    Where-Object { $null -ne $_.AvgHours } |
+                    Sort-Object -Property AvgHours)
+
+                if ($sorted.Count -gt 0) {
+                    $fastestReviewer = $sorted[0].Name
+                    $slowestReviewer = $sorted[$sorted.Count - 1].Name
+                }
+            }
+
+            # --- Deadline compliance ---
+            $deadlineStatus = 'NoDeadline'
+            if (-not [string]::IsNullOrWhiteSpace($campDeadline)) {
+                $dtDeadline = $null
+                try {
+                    if ($campaign.deadline -is [datetime]) {
+                        $dtDeadline = ([datetime]$campaign.deadline).ToUniversalTime()
+                    }
+                    else {
+                        $parsedDl = [datetime]::MinValue
+                        if ([datetime]::TryParse($campDeadline, [ref]$parsedDl)) {
+                            $dtDeadline = $parsedDl.ToUniversalTime()
+                        }
+                    }
+                }
+                catch { }
+
+                if ($null -ne $dtDeadline) {
+                    $nowUtc = (Get-Date).ToUniversalTime()
+                    if ($campStatus -eq 'COMPLETED') {
+                        # Check if completed before deadline
+                        $completedDate = $null
+                        if ($null -ne $campaign.PSObject.Properties['completed'] -and
+                            $null -ne $campaign.completed) {
+                            try {
+                                if ($campaign.completed -is [datetime]) {
+                                    $completedDate = ([datetime]$campaign.completed).ToUniversalTime()
+                                }
+                                else {
+                                    $parsedComp = [datetime]::MinValue
+                                    if ([datetime]::TryParse([string]$campaign.completed, [ref]$parsedComp)) {
+                                        $completedDate = $parsedComp.ToUniversalTime()
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if ($null -ne $completedDate -and $completedDate -le $dtDeadline) {
+                            $deadlineStatus = 'OnTime'
+                        }
+                        elseif ($null -ne $completedDate) {
+                            $deadlineStatus = 'Overdue'
+                        }
+                        else {
+                            # No completed date but COMPLETED status -- assume on-time
+                            $deadlineStatus = 'OnTime'
+                        }
+                    }
+                    elseif ($campStatus -eq 'ACTIVE' -or $campStatus -eq 'ACTIVATING') {
+                        if ($dtDeadline -lt $nowUtc) {
+                            $deadlineStatus = 'Overdue'
+                        }
+                        else {
+                            $deadlineStatus = 'Active'
+                        }
+                    }
+                    else {
+                        $deadlineStatus = 'Active'
+                    }
+                }
+            }
+
+            # --- Build metrics object ---
+            $metricsObj = [PSCustomObject]@{
+                CampaignId              = $campId
+                CampaignName            = $campName
+                CampaignType            = $campType
+                CampaignStatus          = $campStatus
+                CampaignCreated         = $campCreated
+                CampaignDeadline        = $campDeadline
+                TotalItems              = $totalItems
+                ApprovedCount           = $approvedCount
+                RevokedCount            = $revokedCount
+                PendingCount            = $pendingCount
+                ApprovalRate            = $approvalRate
+                RevocationRate          = $revocationRate
+                CompletionRate          = $completionRate
+                ReviewerCount           = $reviewerCount
+                ReassignmentCount       = $reassignmentCount
+                AvgResponseTimeHours    = $reviewerMetrics.CampaignAvgHours
+                MinResponseTimeHours    = $reviewerMetrics.CampaignMinHours
+                MaxResponseTimeHours    = $reviewerMetrics.CampaignMaxHours
+                MedianResponseTimeHours = $reviewerMetrics.CampaignMedianHours
+                FastestReviewer         = $fastestReviewer
+                SlowestReviewer         = $slowestReviewer
+                ItemsPerReviewer        = $reviewerItemCounts
+                DeadlineStatus          = $deadlineStatus
+            }
+
+            $metricsResults.Add($metricsObj)
+
+            Write-SPLog -Message "Campaign '$campName': $totalItems items, $approvalRate% approved, $revocationRate% revoked, $completionRate% complete, $reviewerCount reviewers, deadline=$deadlineStatus" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+                -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Campaign metrics complete: $($metricsResults.Count) campaign(s) measured" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPCampaignMetrics' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = $metricsResults.ToArray()
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Measure-SPCampaignMetrics failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+            -Action 'Measure-SPCampaignMetrics' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Compare-SPCampaigns {
+    <#
+    .SYNOPSIS
+        Side-by-side comparison of metrics for two or more campaigns.
+    .DESCRIPTION
+        Accepts campaign IDs (resolved via API) or pre-fetched campaign objects,
+        runs Measure-SPCampaignMetrics on each, then returns a comparison table
+        with per-metric delta highlighting.
+
+        Output options:
+          - PSCustomObject comparison table (default)
+          - HTML comparison report via Export-SPCampaignComparisonHtml
+          - CSV export via Export-Csv pipeline
+
+        All DateTime comparisons use .ToUniversalTime() to avoid Kind mismatch.
+    .PARAMETER CampaignIds
+        Two or more campaign IDs to compare. Campaigns are fetched from the API.
+    .PARAMETER Campaigns
+        Pre-fetched campaign objects (as from Get-SPAuditCampaigns). Use instead
+        of CampaignIds to avoid redundant API calls.
+    .PARAMETER OutputMode
+        Console (default), HTML, or CSV.
+    .PARAMETER OutputPath
+        Directory for HTML/CSV output. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data; Error }
+        Data contains: Metrics (array of per-campaign metric objects),
+                       ComparisonTable (array of row objects for display),
+                       HtmlPath (if OutputMode=HTML)
+    .EXAMPLE
+        $result = Compare-SPCampaigns -CampaignIds 'camp-001','camp-002'
+        $result.Data.ComparisonTable | Format-Table
+    .EXAMPLE
+        Compare-SPCampaigns -CampaignIds 'camp-001','camp-002' -OutputMode HTML -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'ById')]
+        [ValidateCount(2, 20)]
+        [string[]]$CampaignIds,
+
+        [Parameter(Mandatory, ParameterSetName = 'ByObject')]
+        [ValidateCount(2, 20)]
+        [object[]]$Campaigns,
+
+        [Parameter()]
+        [ValidateSet('Console', 'HTML', 'CSV')]
+        [string]$OutputMode = 'Console',
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Compare-SPCampaigns: starting comparison" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPCampaigns' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # --- Resolve campaigns ---
+        if ($PSCmdlet.ParameterSetName -eq 'ById') {
+            # Fetch each campaign by searching all campaigns and filtering
+            $allCampsResult = Get-SPAuditCampaigns -Status @('STAGED','ACTIVATING','ACTIVE','COMPLETING','COMPLETED') `
+                -DaysBack 3650 -CorrelationID $CorrelationID
+            if (-not $allCampsResult.Success) {
+                return @{ Success = $false; Data = $null; Error = "Failed to fetch campaigns: $($allCampsResult.Error)" }
+            }
+
+            $campObjects = [System.Collections.Generic.List[object]]::new()
+            foreach ($cid in $CampaignIds) {
+                $match = $allCampsResult.Data | Where-Object { $_.id -eq $cid }
+                if ($null -eq $match) {
+                    return @{ Success = $false; Data = $null; Error = "Campaign not found: $cid" }
+                }
+                $campObjects.Add($match)
+            }
+            $Campaigns = $campObjects.ToArray()
+        }
+
+        # --- Compute metrics via Measure-SPCampaignMetrics ---
+        $metricsResult = Measure-SPCampaignMetrics -Campaigns $Campaigns -CorrelationID $CorrelationID
+        if (-not $metricsResult.Success) {
+            return @{ Success = $false; Data = $null; Error = "Metrics calculation failed: $($metricsResult.Error)" }
+        }
+
+        $metrics = @($metricsResult.Data)
+        if ($metrics.Count -lt 2) {
+            return @{ Success = $false; Data = $null; Error = "Need metrics for at least 2 campaigns, got $($metrics.Count)" }
+        }
+
+        # --- Build comparison table (metric-per-row, campaign-per-column) ---
+        $metricDefs = @(
+            @{ Label = 'Campaign Name';       Prop = 'CampaignName';            Format = 'string' }
+            @{ Label = 'Type';                 Prop = 'CampaignType';            Format = 'string' }
+            @{ Label = 'Status';               Prop = 'CampaignStatus';          Format = 'string' }
+            @{ Label = 'Created';              Prop = 'CampaignCreated';         Format = 'date' }
+            @{ Label = 'Deadline';             Prop = 'CampaignDeadline';        Format = 'date' }
+            @{ Label = 'Total Items';          Prop = 'TotalItems';              Format = 'int' }
+            @{ Label = 'Approved';             Prop = 'ApprovedCount';           Format = 'int' }
+            @{ Label = 'Revoked';              Prop = 'RevokedCount';            Format = 'int' }
+            @{ Label = 'Pending';              Prop = 'PendingCount';            Format = 'int' }
+            @{ Label = 'Approval Rate (%)';    Prop = 'ApprovalRate';            Format = 'pct' }
+            @{ Label = 'Revocation Rate (%)';  Prop = 'RevocationRate';          Format = 'pct' }
+            @{ Label = 'Completion Rate (%)';  Prop = 'CompletionRate';          Format = 'pct' }
+            @{ Label = 'Reviewer Count';       Prop = 'ReviewerCount';           Format = 'int' }
+            @{ Label = 'Reassignment Count';   Prop = 'ReassignmentCount';       Format = 'int' }
+            @{ Label = 'Avg Response (hours)'; Prop = 'AvgResponseTimeHours';    Format = 'hours' }
+            @{ Label = 'Fastest Reviewer';     Prop = 'FastestReviewer';         Format = 'string' }
+            @{ Label = 'Slowest Reviewer';     Prop = 'SlowestReviewer';         Format = 'string' }
+            @{ Label = 'Deadline Status';      Prop = 'DeadlineStatus';          Format = 'string' }
+        )
+
+        $comparisonRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($mdef in $metricDefs) {
+            $row = [ordered]@{ Metric = $mdef.Label }
+            for ($i = 0; $i -lt $metrics.Count; $i++) {
+                $val = $metrics[$i].PSObject.Properties[$mdef.Prop].Value
+                $colName = "Campaign_$($i + 1)"
+                $row[$colName] = $val
+            }
+
+            # Delta column (first two campaigns only, numeric types)
+            if ($metrics.Count -ge 2 -and $mdef.Format -in @('int', 'pct', 'hours')) {
+                $v1 = $metrics[0].PSObject.Properties[$mdef.Prop].Value
+                $v2 = $metrics[1].PSObject.Properties[$mdef.Prop].Value
+                if ($null -ne $v1 -and $null -ne $v2) {
+                    $delta = [Math]::Round(([double]$v2 - [double]$v1), 1)
+                    $sign = if ($delta -gt 0) { '+' } else { '' }
+                    $row['Delta_1v2'] = "${sign}${delta}"
+                }
+                else {
+                    $row['Delta_1v2'] = 'N/A'
+                }
+            }
+
+            $comparisonRows.Add([PSCustomObject]$row)
+        }
+
+        $resultData = @{
+            Metrics         = $metrics
+            ComparisonTable = $comparisonRows.ToArray()
+            HtmlPath        = $null
+            CsvPath         = $null
+        }
+
+        # --- Output mode handling ---
+        if ($OutputMode -eq 'HTML') {
+            if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+                $OutputPath = (Get-Location).Path
+            }
+            $htmlPath = Export-SPCampaignComparisonHtml -Metrics $metrics `
+                -MetricDefs $metricDefs -OutputPath $OutputPath -CorrelationID $CorrelationID
+            $resultData.HtmlPath = $htmlPath
+            Write-SPLog -Message "HTML comparison report written: $htmlPath" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPCampaigns' `
+                -CorrelationID $CorrelationID
+        }
+        elseif ($OutputMode -eq 'CSV') {
+            if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+                $OutputPath = (Get-Location).Path
+            }
+            if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+                New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+            }
+            $timestamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+            $csvPath = Join-Path $OutputPath "CampaignComparison-${timestamp}.csv"
+            $comparisonRows.ToArray() | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $resultData.CsvPath = $csvPath
+            Write-SPLog -Message "CSV comparison written: $csvPath" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPCampaigns' `
+                -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Compare-SPCampaigns: compared $($metrics.Count) campaigns" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPCampaigns' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = $resultData
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Compare-SPCampaigns failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+            -Action 'Compare-SPCampaigns' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPCampaignComparisonHtml {
+    <#
+    .SYNOPSIS
+        Generates a Word-compatible HTML comparison report for campaign metrics.
+    .DESCRIPTION
+        Produces a column-per-campaign comparison table with delta highlighting.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+        Called by Compare-SPCampaigns when OutputMode=HTML.
+    .PARAMETER Metrics
+        Array of per-campaign metric objects from Measure-SPCampaignMetrics.
+    .PARAMETER MetricDefs
+        Array of metric definition hashtables (Label, Prop, Format).
+    .PARAMETER OutputPath
+        Directory for HTML output.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Metrics,
+
+        [Parameter(Mandatory)]
+        [object[]]$MetricDefs,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignComparison-${timestamp}.html"
+
+    # --- Build header columns ---
+    $headerLabels = @('Metric')
+    for ($i = 0; $i -lt $Metrics.Count; $i++) {
+        $campName = ConvertTo-SafeHtml $Metrics[$i].CampaignName
+        $headerLabels += $campName
+    }
+    if ($Metrics.Count -eq 2) {
+        $headerLabels += 'Delta'
+    }
+    $theadHtml = Build-HtmlTableHeader -Headers $headerLabels
+
+    # --- Build data rows ---
+    $tbodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+    foreach ($mdef in $MetricDefs) {
+        $cells = [System.Collections.Generic.List[string]]::new()
+
+        # Metric label
+        $cells.Add((ConvertTo-SafeHtml $mdef.Label))
+
+        # Per-campaign values
+        $numericValues = [System.Collections.Generic.List[object]]::new()
+        for ($i = 0; $i -lt $Metrics.Count; $i++) {
+            $rawVal = $Metrics[$i].PSObject.Properties[$mdef.Prop].Value
+            $numericValues.Add($rawVal)
+            $displayVal = Format-ComparisonCellValue -Value $rawVal -Format $mdef.Format
+            $cells.Add($displayVal)
+        }
+
+        # Delta column (first two campaigns, numeric types)
+        if ($Metrics.Count -eq 2 -and $mdef.Format -in @('int', 'pct', 'hours')) {
+            $v1 = $numericValues[0]
+            $v2 = $numericValues[1]
+            if ($null -ne $v1 -and $null -ne $v2) {
+                $delta = [Math]::Round(([double]$v2 - [double]$v1), 1)
+                $sign = if ($delta -gt 0) { '+' } else { '' }
+                $color = if ($delta -gt 0) { '#339933' } elseif ($delta -lt 0) { '#CC3333' } else { '#777777' }
+                # For revocation rate, invert colors (lower is better)
+                if ($mdef.Prop -eq 'RevocationRate') {
+                    $color = if ($delta -gt 0) { '#CC3333' } elseif ($delta -lt 0) { '#339933' } else { '#777777' }
+                }
+                $cells.Add("<span style=""color:${color}; font-weight:bold;"">${sign}${delta}</span>")
+            }
+            else {
+                $cells.Add('N/A')
+            }
+        }
+
+        $isAlt = (($rowIdx % 2) -eq 1)
+        $tbodyRows.Add((Build-HtmlTableRow -Cells $cells.ToArray() -IsAlternate $isAlt))
+        $rowIdx++
+    }
+
+    $tbodyHtml = $tbodyRows -join "`n"
+
+    # --- Campaign name list for title ---
+    $campNames = ($Metrics | ForEach-Object { ConvertTo-SafeHtml $_.CampaignName }) -join ' vs '
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Campaign Comparison - $campNames</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Campaign Comparison Report</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:20px;">$campNames</p>
+
+<h2 style="font-size:16px; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px;">Side-by-Side Metrics</h2>
+
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
+$theadHtml
+<tbody>
+$tbodyHtml
+</tbody>
+</table>
+
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Campaign Comparison &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+
+</body>
+</html>
+"@
+
+    [System.IO.File]::WriteAllText($htmlFile, $html, [System.Text.Encoding]::UTF8)
+    return $htmlFile
+}
+
+function Format-ComparisonCellValue {
+    <#
+    .SYNOPSIS
+        Formats a metric value for display in comparison tables.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        $Value,
+
+        [Parameter()]
+        [string]$Format = 'string'
+    )
+
+    if ($null -eq $Value) { return (ConvertTo-SafeHtml 'N/A') }
+
+    switch ($Format) {
+        'string' { return (ConvertTo-SafeHtml ([string]$Value)) }
+        'int'    { return (ConvertTo-SafeHtml ([string][int]$Value)) }
+        'pct'    { return (ConvertTo-SafeHtml "$([Math]::Round([double]$Value, 1))%") }
+        'hours'  { return (ConvertTo-SafeHtml (Format-HoursDisplay $Value)) }
+        'date'   {
+            if ([string]::IsNullOrWhiteSpace([string]$Value)) { return '' }
+            return (ConvertTo-SafeHtml (Format-HtmlDate ([string]$Value)))
+        }
+        default  { return (ConvertTo-SafeHtml ([string]$Value)) }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -5158,6 +5848,7 @@ Export-ModuleMember -Function @(
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
     'Measure-SPAuditRubberStampRisk',
+    'Measure-SPCampaignMetrics',
     'Get-SPAuditRiskFlags',
     'Group-SPAuditByLeadership',
     'Export-SPAuditHtml',
@@ -5166,5 +5857,7 @@ Export-ModuleMember -Function @(
     'Export-SPLeadershipExecutiveHtml',
     'Export-SPLeadershipDirectorHtml',
     'Export-SPLeadershipLevelHtml',
-    'Send-SPReport'
+    'Send-SPReport',
+    'Compare-SPCampaigns',
+    'Export-SPCampaignComparisonHtml'
 )
