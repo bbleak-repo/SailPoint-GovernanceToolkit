@@ -60,7 +60,7 @@ Safe to modify:
 | S-06 | Campaign Metrics Aggregation | none | DONE |
 | S-07 | Source Coverage Analysis | none | DONE |
 | S-08 | Campaign Comparison | S-06 | DONE |
-| S-09 | Campaign Search CLI | S-01 to S-08 | PENDING |
+| S-09 | Campaign Search CLI | S-01 to S-08 | DONE |
 | S-10 | Pester Tests | S-09 | PENDING |
 
 ---
@@ -407,8 +407,8 @@ Pending, Completion %, Avg Response Time, Reviewer Count, Deadline Status.
 
 ## S-09: Campaign Search CLI (Invoke-SPCampaignSearch.ps1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** S-01 through S-08
 
 **Description:**
