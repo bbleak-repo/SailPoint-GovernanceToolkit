@@ -6190,6 +6190,492 @@ $tbodyHtml
 
 #endregion
 
+#region CSV Export (P11-03)
+
+function Export-SPAuditCsv {
+    <#
+    .SYNOPSIS
+        Exports campaign audit data to CSV files for GRC/SIEM integration.
+    .DESCRIPTION
+        Produces one or more CSV files from campaign audit data, suitable for
+        import into GRC tools (ServiceNow GRC, RSA Archer), SIEM platforms
+        (Splunk, Sentinel), or SharePoint/Excel.
+
+        Output files (one CSV per data type):
+        - decisions-{correlationId}.csv  -- one row per access review decision
+        - reviewers-{correlationId}.csv  -- one row per reviewer per campaign
+        - campaigns-{correlationId}.csv  -- one row per campaign
+        - remediation-{correlationId}.csv -- one row per revoked item
+
+        Uses Export-Csv -NoTypeInformation for PS 5.1 compatibility.
+        Date columns are ISO 8601 format. Risk flags are semicolon-delimited.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables as produced by the campaign audit
+        pipeline (Invoke-SPCampaignAudit). Each must contain: CampaignName,
+        Decisions, ReviewerMetrics, RubberStampRisk, and campaign metadata.
+    .PARAMETER OutputPath
+        Directory in which to write CSV files. Created if absent.
+    .PARAMETER Sheets
+        Which CSV sheets to generate. Defaults to all four.
+        Valid values: 'Decisions', 'Reviewers', 'Campaigns', 'Remediation'
+    .PARAMETER CorrelationID
+        Unique ID for tracing and file naming. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Files = @{ Decisions = 'path'; ... }; RowCounts = @{ ... } }
+    .EXAMPLE
+        Export-SPAuditCsv -CampaignAudits $audits -OutputPath 'C:\Reports'
+    .EXAMPLE
+        Export-SPAuditCsv -CampaignAudits $audits -OutputPath 'C:\Reports' -Sheets 'Decisions'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [ValidateSet('Decisions', 'Reviewers', 'Campaigns', 'Remediation')]
+        [string[]]$Sheets = @('Decisions', 'Reviewers', 'Campaigns', 'Remediation'),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting audit CSV for $($CampaignAudits.Count) campaign(s), sheets: $($Sheets -join ', ')" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $files     = @{}
+    $rowCounts = @{}
+
+    # --- Helper: safe string extraction from hashtable or PSCustomObject ---
+    function _Val ($obj, [string]$key, [string]$default = '') {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return [string]$obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return [string]$v }
+        }
+        return $default
+    }
+
+    # ================================================================
+    # DECISIONS CSV
+    # ================================================================
+    if ($Sheets -contains 'Decisions') {
+        $decisionRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName   = _Val $audit 'CampaignName'
+            $campStatus = _Val $audit 'Status'
+            $campStart  = _Val $audit 'Created'
+            $campDue    = _Val $audit 'Deadline'
+
+            # Determine campaign type from the audit data
+            $campType = _Val $audit 'CampaignType'
+
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            } elseif ($null -ne $audit.PSObject -and $null -ne $audit.PSObject.Properties['Decisions']) {
+                $decisions = $audit.Decisions
+            }
+            if ($null -eq $decisions) { continue }
+
+            foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+                $items = @()
+                if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                    $items = @($decisions[$category])
+                } elseif ($null -ne $decisions.PSObject -and $null -ne $decisions.PSObject.Properties[$category]) {
+                    $items = @($decisions.$category)
+                }
+
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+
+                    # Risk flags: join as semicolons for CSV compatibility
+                    $riskFlags = ''
+                    $rf = $null
+                    if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['RiskFlags']) {
+                        $rf = $item.RiskFlags
+                    }
+                    if ($null -ne $rf -and $rf -is [array] -and $rf.Count -gt 0) {
+                        $riskFlags = ($rf | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+                    } elseif ($null -ne $rf -and $rf -is [string] -and -not [string]::IsNullOrWhiteSpace($rf)) {
+                        $riskFlags = $rf
+                    }
+
+                    $decisionRows.Add([PSCustomObject]@{
+                        CampaignName      = $campName
+                        CampaignType      = $campType
+                        CampaignStatus    = $campStatus
+                        IdentityName      = if ($null -ne $item.IdentityName)      { [string]$item.IdentityName }      else { '' }
+                        IdentityId        = if ($null -ne $item.IdentityId)        { [string]$item.IdentityId }        else { '' }
+                        AccountName       = if ($null -ne $item.AccountName)       { [string]$item.AccountName }       else { '' }
+                        SourceName        = if ($null -ne $item.SourceName)        { [string]$item.SourceName }        else { '' }
+                        EntitlementName   = if ($null -ne $item.AccessName)        { [string]$item.AccessName }        else { '' }
+                        AccessType        = if ($null -ne $item.AccessType)        { [string]$item.AccessType }        else { '' }
+                        Decision          = if ($null -ne $item.Decision)          { [string]$item.Decision }          else { $category }
+                        DecisionDate      = if ($null -ne $item.DecisionDate)      { [string]$item.DecisionDate }      else { '' }
+                        ReviewerName      = if ($null -ne $item.ReviewerName)      { [string]$item.ReviewerName }      else { '' }
+                        ReviewerEmail     = if ($null -ne $item.ReviewerEmail)     { [string]$item.ReviewerEmail }     else { '' }
+                        Justification     = if ($null -ne $item.Justification)     { [string]$item.Justification }     else { '' }
+                        RemediationStatus = if ($null -ne $item.RemediationStatus) { [string]$item.RemediationStatus } else { '' }
+                        RemediationDate   = if ($null -ne $item.RemediationDate)   { [string]$item.RemediationDate }   else { '' }
+                        RiskFlags         = $riskFlags
+                        CampaignStartDate = if ($null -ne $item.CampaignStartDate) { [string]$item.CampaignStartDate } else { $campStart }
+                        CampaignDueDate   = if ($null -ne $item.CampaignDueDate)   { [string]$item.CampaignDueDate }   else { $campDue }
+                        SystemTimestamp    = if ($null -ne $item.SystemTimestamp)   { [string]$item.SystemTimestamp }   else { '' }
+                    })
+                }
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "decisions-${CorrelationID}.csv"
+        if ($decisionRows.Count -gt 0) {
+            $decisionRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            # Write header-only CSV
+            [PSCustomObject]@{
+                CampaignName='';CampaignType='';CampaignStatus='';IdentityName='';IdentityId='';
+                AccountName='';SourceName='';EntitlementName='';AccessType='';Decision='';
+                DecisionDate='';ReviewerName='';ReviewerEmail='';Justification='';
+                RemediationStatus='';RemediationDate='';RiskFlags='';CampaignStartDate='';
+                CampaignDueDate='';SystemTimestamp=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            # Remove the empty data row, keep only headers
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Decisions']     = $csvPath
+        $rowCounts['Decisions'] = $decisionRows.Count
+
+        Write-SPLog -Message "Decisions CSV written ($($decisionRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # REVIEWERS CSV
+    # ================================================================
+    if ($Sheets -contains 'Reviewers') {
+        $reviewerRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName = _Val $audit 'CampaignName'
+
+            # Get reviewer metrics
+            $reviewerMetrics = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('ReviewerMetrics')) {
+                $reviewerMetrics = $audit['ReviewerMetrics']
+            }
+
+            # Get rubber stamp risk data
+            $rubberStampRisk = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('RubberStampRisk')) {
+                $rubberStampRisk = $audit['RubberStampRisk']
+            }
+
+            # Build rubber stamp risk lookup by reviewer name
+            $riskLookup = @{}
+            if ($null -ne $rubberStampRisk -and $rubberStampRisk -is [hashtable] -and
+                $rubberStampRisk.ContainsKey('ReviewerRisks') -and $null -ne $rubberStampRisk['ReviewerRisks']) {
+                foreach ($rr in @($rubberStampRisk['ReviewerRisks'])) {
+                    $rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($rrName)) {
+                        $riskLookup[$rrName] = if ($null -ne $rr.Severity) { [string]$rr.Severity } else { 'None' }
+                    }
+                }
+            }
+
+            # Get decisions for per-reviewer item counts
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+
+            # Build per-reviewer decision counts from decision items
+            $reviewerApproved = @{}
+            $reviewerRevoked  = @{}
+            $reviewerPending  = @{}
+
+            if ($null -ne $decisions -and $decisions -is [hashtable]) {
+                foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
+                    if (-not $decisions.ContainsKey($cat) -or $null -eq $decisions[$cat]) { continue }
+                    foreach ($item in @($decisions[$cat])) {
+                        $rn = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { 'Unknown' }
+                        switch ($cat) {
+                            'Approved' {
+                                if ($reviewerApproved.ContainsKey($rn)) { $reviewerApproved[$rn]++ } else { $reviewerApproved[$rn] = 1 }
+                            }
+                            'Revoked'  {
+                                if ($reviewerRevoked.ContainsKey($rn))  { $reviewerRevoked[$rn]++ }  else { $reviewerRevoked[$rn] = 1 }
+                            }
+                            'Pending'  {
+                                if ($reviewerPending.ContainsKey($rn))  { $reviewerPending[$rn]++ }  else { $reviewerPending[$rn] = 1 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable] -and
+                $reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+                foreach ($rm in @($reviewerMetrics['ReviewerMetrics'])) {
+                    $name  = if ($null -ne $rm.Name)  { [string]$rm.Name }  else { '' }
+                    $email = if ($null -ne $rm.Email) { [string]$rm.Email } else { '' }
+
+                    $approved = if ($reviewerApproved.ContainsKey($name)) { $reviewerApproved[$name] } else { 0 }
+                    $revoked  = if ($reviewerRevoked.ContainsKey($name))  { $reviewerRevoked[$name] }  else { 0 }
+                    $pending  = if ($reviewerPending.ContainsKey($name))  { $reviewerPending[$name] }  else { 0 }
+                    $assigned = $approved + $revoked + $pending
+                    $decided  = $approved + $revoked
+
+                    $approvalRate  = if ($decided -gt 0) { [Math]::Round(($approved / $decided) * 100, 1) } else { 0.0 }
+                    $revocationRate = if ($decided -gt 0) { [Math]::Round(($revoked / $decided) * 100, 1) } else { 0.0 }
+
+                    $rubberStampSeverity = if ($riskLookup.ContainsKey($name)) { $riskLookup[$name] } else { 'None' }
+
+                    $reviewerRows.Add([PSCustomObject]@{
+                        CampaignName        = $campName
+                        ReviewerName        = $name
+                        ReviewerIdentityId  = ''
+                        ItemsAssigned       = $assigned
+                        ItemsDecided        = $decided
+                        ItemsPending        = $pending
+                        ApprovalRate        = $approvalRate
+                        RevocationRate      = $revocationRate
+                        AvgResponseHours    = if ($null -ne $rm.AvgHours)  { $rm.AvgHours }  else { '' }
+                        FastestResponseHours = if ($null -ne $rm.MinHours) { $rm.MinHours } else { '' }
+                        SlowestResponseHours = if ($null -ne $rm.MaxHours) { $rm.MaxHours } else { '' }
+                        RubberStampRisk     = $rubberStampSeverity
+                    })
+                }
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "reviewers-${CorrelationID}.csv"
+        if ($reviewerRows.Count -gt 0) {
+            $reviewerRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignName='';ReviewerName='';ReviewerIdentityId='';ItemsAssigned='';
+                ItemsDecided='';ItemsPending='';ApprovalRate='';RevocationRate='';
+                AvgResponseHours='';FastestResponseHours='';SlowestResponseHours='';
+                RubberStampRisk=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Reviewers']     = $csvPath
+        $rowCounts['Reviewers'] = $reviewerRows.Count
+
+        Write-SPLog -Message "Reviewers CSV written ($($reviewerRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # CAMPAIGNS CSV
+    # ================================================================
+    if ($Sheets -contains 'Campaigns') {
+        $campaignRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName   = _Val $audit 'CampaignName'
+            $campId     = _Val $audit 'CampaignId'
+            $campType   = _Val $audit 'CampaignType'
+            $campStatus = _Val $audit 'Status'
+            $created    = _Val $audit 'Created'
+            $deadline   = _Val $audit 'Deadline'
+            $completed  = _Val $audit 'Completed'
+
+            # Count items from decisions
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+
+            $totalItems = 0; $approvedCt = 0; $revokedCt = 0; $pendingCt = 0
+            if ($null -ne $decisions -and $decisions -is [hashtable]) {
+                if ($decisions.ContainsKey('Approved') -and $null -ne $decisions['Approved']) {
+                    $approvedCt = @($decisions['Approved']).Count
+                }
+                if ($decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                    $revokedCt = @($decisions['Revoked']).Count
+                }
+                if ($decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                    $pendingCt = @($decisions['Pending']).Count
+                }
+            }
+            $totalItems = $approvedCt + $revokedCt + $pendingCt
+            $completionPct = if ($totalItems -gt 0) { [Math]::Round((($approvedCt + $revokedCt) / $totalItems) * 100, 1) } else { 0.0 }
+
+            # Reviewer count and response time from ReviewerMetrics
+            $reviewerCount = 0
+            $avgRespHours  = ''
+            $medianRespHours = ''
+            $reviewerMetrics = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('ReviewerMetrics')) {
+                $reviewerMetrics = $audit['ReviewerMetrics']
+            }
+            if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable]) {
+                if ($reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+                    $reviewerCount = @($reviewerMetrics['ReviewerMetrics']).Count
+                }
+                if ($reviewerMetrics.ContainsKey('CampaignAvgHours') -and $null -ne $reviewerMetrics['CampaignAvgHours']) {
+                    $avgRespHours = $reviewerMetrics['CampaignAvgHours']
+                }
+                if ($reviewerMetrics.ContainsKey('CampaignMedianHours') -and $null -ne $reviewerMetrics['CampaignMedianHours']) {
+                    $medianRespHours = $reviewerMetrics['CampaignMedianHours']
+                }
+            }
+
+            $campaignRows.Add([PSCustomObject]@{
+                CampaignId         = $campId
+                CampaignName       = $campName
+                CampaignType       = $campType
+                Status             = $campStatus
+                Created            = $created
+                Deadline           = $deadline
+                Completed          = $completed
+                TotalItems         = $totalItems
+                Approved           = $approvedCt
+                Revoked            = $revokedCt
+                Pending            = $pendingCt
+                CompletionPct      = $completionPct
+                ReviewerCount      = $reviewerCount
+                AvgResponseHours   = $avgRespHours
+                MedianResponseHours = $medianRespHours
+            })
+        }
+
+        $csvPath = Join-Path $OutputPath "campaigns-${CorrelationID}.csv"
+        if ($campaignRows.Count -gt 0) {
+            $campaignRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignId='';CampaignName='';CampaignType='';Status='';Created='';
+                Deadline='';Completed='';TotalItems='';Approved='';Revoked='';Pending='';
+                CompletionPct='';ReviewerCount='';AvgResponseHours='';MedianResponseHours=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Campaigns']     = $csvPath
+        $rowCounts['Campaigns'] = $campaignRows.Count
+
+        Write-SPLog -Message "Campaigns CSV written ($($campaignRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    # ================================================================
+    # REMEDIATION CSV
+    # ================================================================
+    if ($Sheets -contains 'Remediation') {
+        $remediationRows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($audit in $CampaignAudits) {
+            $campName = _Val $audit 'CampaignName'
+
+            $decisions = $null
+            if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+                $decisions = $audit['Decisions']
+            }
+            if ($null -eq $decisions) { continue }
+
+            $revokedItems = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                $revokedItems = @($decisions['Revoked'])
+            }
+
+            foreach ($item in $revokedItems) {
+                if ($null -eq $item) { continue }
+
+                # Calculate days to remediate
+                $daysToRemediate = ''
+                $decDateStr = if ($null -ne $item.DecisionDate)    { [string]$item.DecisionDate }    else { '' }
+                $remDateStr = if ($null -ne $item.RemediationDate) { [string]$item.RemediationDate } else { '' }
+
+                if (-not [string]::IsNullOrWhiteSpace($decDateStr) -and -not [string]::IsNullOrWhiteSpace($remDateStr)) {
+                    try {
+                        $dtDec = [datetime]::Parse($decDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $dtRem = [datetime]::Parse($remDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $daysToRemediate = [Math]::Round(($dtRem - $dtDec).TotalDays, 3)
+                    } catch { }
+                }
+
+                $remediationRows.Add([PSCustomObject]@{
+                    CampaignName        = $campName
+                    IdentityName        = if ($null -ne $item.IdentityName)      { [string]$item.IdentityName }      else { '' }
+                    AccountName         = if ($null -ne $item.AccountName)       { [string]$item.AccountName }       else { '' }
+                    EntitlementRevoked  = if ($null -ne $item.AccessName)        { [string]$item.AccessName }        else { '' }
+                    DecisionDate        = $decDateStr
+                    RemediationStatus   = if ($null -ne $item.RemediationStatus) { [string]$item.RemediationStatus } else { '' }
+                    RemediationDate     = $remDateStr
+                    ProvisioningEventId = ''
+                    DaysToRemediate     = $daysToRemediate
+                })
+            }
+        }
+
+        $csvPath = Join-Path $OutputPath "remediation-${CorrelationID}.csv"
+        if ($remediationRows.Count -gt 0) {
+            $remediationRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        } else {
+            [PSCustomObject]@{
+                CampaignName='';IdentityName='';AccountName='';EntitlementRevoked='';
+                DecisionDate='';RemediationStatus='';RemediationDate='';
+                ProvisioningEventId='';DaysToRemediate=''
+            } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        }
+
+        $files['Remediation']     = $csvPath
+        $rowCounts['Remediation'] = $remediationRows.Count
+
+        Write-SPLog -Message "Remediation CSV written ($($remediationRows.Count) rows): $csvPath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+            -CorrelationID $CorrelationID
+    }
+
+    Write-SPLog -Message "CSV export complete: $($files.Count) file(s), total rows: $(($rowCounts.Values | Measure-Object -Sum).Sum)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCsv' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Files     = $files
+        RowCounts = $rowCounts
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -6210,5 +6696,6 @@ Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Export-SPCampaignComparisonHtml',
     'Get-SPAuditTrail',
-    'Export-SPAuditTrailHtml'
+    'Export-SPAuditTrailHtml',
+    'Export-SPAuditCsv'
 )

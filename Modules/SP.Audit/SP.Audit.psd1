@@ -67,6 +67,9 @@
         # SP.AuditReport - Audit Trail Consolidator (P11-02)
         'Get-SPAuditTrail'
         'Export-SPAuditTrailHtml'
+
+        # SP.AuditReport - CSV Export (P11-03)
+        'Export-SPAuditCsv'
     )
 
     # Do not export variables or aliases from nested modules
