@@ -549,8 +549,26 @@ foreach ($campaign in $campaigns) {
         }
     }
 
+    # --- Build campaign metadata for compliance fields ---
+    $campaignMetadata = @{
+        StartDate      = if ($null -ne $campaign.created)  { [string]$campaign.created }  else { '' }
+        DueDate        = if ($null -ne $campaign.deadline) { [string]$campaign.deadline }
+                         elseif ($null -ne $campaign.due)   { [string]$campaign.due }      else { '' }
+        CompletionDate = if ($null -ne $campaign.completed) { [string]$campaign.completed } else { '' }
+    }
+
+    # --- Build cert ID -> reviewer email map for compliance non-repudiation ---
+    $certReviewerEmailMap = @{}
+    foreach ($cert in $certifications) {
+        if ($null -ne $cert.id -and $null -ne $cert.reviewer -and
+            $null -ne $cert.reviewer.email -and
+            -not [string]::IsNullOrWhiteSpace([string]$cert.reviewer.email)) {
+            $certReviewerEmailMap[[string]$cert.id] = [string]$cert.reviewer.email
+        }
+    }
+
     # --- Categorize decisions and actions ---
-    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray() -AccountMap $accountMap
+    $decisionGroups   = Group-SPAuditDecisions         -Items $wrappedAllItems.ToArray() -AccountMap $accountMap -CampaignMetadata $campaignMetadata -CertReviewerEmailMap $certReviewerEmailMap
     $reviewerActions  = Group-SPReviewerActions        -Certifications $certifications
     $reviewerMetrics  = Measure-SPAuditReviewerMetrics -Certifications $certifications
     $eventGroups      = Group-SPAuditIdentityEvents    -Events $identityEvents
@@ -646,6 +664,60 @@ $jsonlEvents = foreach ($audit in $allCampaignAudits) {
         DecisionsRevoked  = if ($null -ne $d -and $null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
         DecisionsPending  = if ($null -ne $d -and $null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
         RubberStampRisk   = $rsData
+    }
+
+    # Per-decision compliance events (18 mandatory fields)
+    if ($null -ne $d) {
+        # Build reassignment chain lookup by certification ID
+        $reassignChainMap = @{}
+        $rp = if ($audit.ContainsKey('RemediationProof') -and $null -ne $audit['RemediationProof']) { $audit['RemediationProof'] } else { $null }
+        if ($null -ne $rp -and $null -ne $rp['ReassignmentChain']) {
+            foreach ($hop in @($rp['ReassignmentChain'])) {
+                $chainCertName = if ($null -ne $hop.CertificationName) { [string]$hop.CertificationName } else { '' }
+                $chainEntry = "$($hop.ReassignedFrom) -> $($hop.CurrentReviewer)"
+                if (-not [string]::IsNullOrWhiteSpace($chainCertName)) {
+                    if (-not $reassignChainMap.ContainsKey($chainCertName)) {
+                        $reassignChainMap[$chainCertName] = [System.Collections.Generic.List[string]]::new()
+                    }
+                    $reassignChainMap[$chainCertName].Add($chainEntry)
+                }
+            }
+        }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            if (-not $d.ContainsKey($category) -or $null -eq $d[$category]) { continue }
+            foreach ($item in @($d[$category])) {
+                # Resolve reassignment chain for this item's certification
+                $reassignChain = ''
+                $itemCertName = if ($null -ne $item.CertificationName) { [string]$item.CertificationName } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($itemCertName) -and $reassignChainMap.ContainsKey($itemCertName)) {
+                    $reassignChain = ($reassignChainMap[$itemCertName] -join '; ')
+                }
+
+                @{
+                    Action                 = 'DecisionRecorded'
+                    IdentityName           = $item.IdentityName
+                    IdentityId             = $item.IdentityId
+                    AccountId              = $item.AccountIdentifier
+                    ApplicationSource      = $item.SourceName
+                    EntitlementName        = $item.AccessName
+                    AccessType             = $item.AccessType
+                    ReviewerName           = $item.ReviewerName
+                    ReviewerEmail          = $item.ReviewerEmail
+                    Decision               = $item.Decision
+                    DecisionDateTime       = $item.DecisionDate
+                    Justification          = $item.Justification
+                    CampaignName           = $item.CampaignName
+                    CampaignStart          = $item.CampaignStartDate
+                    CampaignDueDate        = $item.CampaignDueDate
+                    CampaignCompletion     = $item.CampaignCompletionDate
+                    RemediationStatus      = $item.RemediationStatus
+                    RemediationDate        = $item.RemediationDate
+                    ReassignmentChain      = $reassignChain
+                    SystemTimestamp        = $item.SystemTimestamp
+                }
+            }
+        }
     }
 }
 Export-SPAuditJsonl `

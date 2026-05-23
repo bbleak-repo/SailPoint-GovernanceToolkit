@@ -46,7 +46,18 @@ function Group-SPAuditDecisions {
     .OUTPUTS
         [hashtable] @{ Approved = @(...); Revoked = @(...); Pending = @(...) }
         Each element is a PSCustomObject with: IdentityName, AccessName, AccessType,
-        ReviewerName, CertificationId, CertificationName, CampaignName, DecisionDate.
+        ReviewerName, CertificationId, CertificationName, CampaignName, DecisionDate,
+        plus compliance fields: Justification, RemediationStatus, SystemTimestamp,
+        CampaignStartDate, CampaignDueDate, ReviewerEmail, Decision, SourceName,
+        CampaignCompletionDate.
+    .PARAMETER CampaignMetadata
+        Optional hashtable with campaign-level dates for compliance output:
+            StartDate      - Campaign creation date (ISO 8601 string)
+            DueDate        - Campaign deadline (ISO 8601 string)
+            CompletionDate - Campaign completion date (ISO 8601 string)
+    .PARAMETER CertReviewerEmailMap
+        Optional hashtable mapping CertificationId to reviewer email address.
+        Used as fallback when the item-level reviewedBy object lacks an email.
     .EXAMPLE
         $grouped = Group-SPAuditDecisions -Items $enrichedItems
         Write-Host "Revoked: $($grouped.Revoked.Count)"
@@ -59,7 +70,13 @@ function Group-SPAuditDecisions {
         [object[]]$Items,
 
         [Parameter()]
-        [hashtable]$AccountMap = $null
+        [hashtable]$AccountMap = $null,
+
+        [Parameter()]
+        [hashtable]$CampaignMetadata = $null,
+
+        [Parameter()]
+        [hashtable]$CertReviewerEmailMap = $null
     )
 
     $approved = [System.Collections.Generic.List[object]]::new()
@@ -116,22 +133,99 @@ function Group-SPAuditDecisions {
                                  else { '' }
         }
 
-        # Build normalized output object
-        $out = [PSCustomObject]@{
-            IdentityId        = $identityId
-            IdentityName      = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
-            AccountName       = $accountName
-            AccountIdentifier = $accountIdentifier
-            AccessName        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
-            AccessType        = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
-            ReviewerName      = $reviewerName
-            CertificationId   = $certId
-            CertificationName = $certName
-            CampaignName      = $campaignName
-            DecisionDate      = if ($null -ne $rawItem.decisionDate) { $rawItem.decisionDate } else { '' }
+        # Extract compliance fields
+        $justification = ''
+        if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['comment'] -and
+            $null -ne $rawItem.comment -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.comment)) {
+            $justification = [string]$rawItem.comment
         }
 
+        $systemTimestamp = ''
+        if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['modified'] -and
+            $null -ne $rawItem.modified) {
+            $systemTimestamp = [string]$rawItem.modified
+        }
+        elseif ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['created'] -and
+                $null -ne $rawItem.created) {
+            $systemTimestamp = [string]$rawItem.created
+        }
+
+        # Reviewer email: try item-level reviewedBy.email, fall back to cert-level map
+        $reviewerEmail = ''
+        if ($null -ne $rawItem.reviewedBy -and
+            $null -ne $rawItem.reviewedBy.PSObject.Properties['email'] -and
+            -not [string]::IsNullOrWhiteSpace([string]$rawItem.reviewedBy.email)) {
+            $reviewerEmail = [string]$rawItem.reviewedBy.email
+        }
+        elseif ($null -ne $CertReviewerEmailMap -and -not [string]::IsNullOrWhiteSpace($certId) -and
+                $CertReviewerEmailMap.ContainsKey($certId)) {
+            $reviewerEmail = [string]$CertReviewerEmailMap[$certId]
+        }
+
+        # Source/Application name
+        $sourceName = ''
+        if ($null -ne $rawItem.access -and
+            $null -ne $rawItem.access.PSObject.Properties['source'] -and
+            $null -ne $rawItem.access.source -and
+            $null -ne $rawItem.access.source.PSObject.Properties['name'] -and
+            $null -ne $rawItem.access.source.name) {
+            $sourceName = [string]$rawItem.access.source.name
+        }
+
+        # Campaign metadata fields
+        $campaignStartDate      = ''
+        $campaignDueDate        = ''
+        $campaignCompletionDate = ''
+        if ($null -ne $CampaignMetadata) {
+            if ($CampaignMetadata.ContainsKey('StartDate'))      { $campaignStartDate      = [string]$CampaignMetadata['StartDate'] }
+            if ($CampaignMetadata.ContainsKey('DueDate'))        { $campaignDueDate        = [string]$CampaignMetadata['DueDate'] }
+            if ($CampaignMetadata.ContainsKey('CompletionDate')) { $campaignCompletionDate = [string]$CampaignMetadata['CompletionDate'] }
+        }
+
+        # Decision and remediation status
         $decision = if ($null -ne $rawItem.decision) { [string]$rawItem.decision } else { '' }
+        $remediationStatus = 'N/A'
+        $remediationDate   = ''
+        if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+            $isCompleted = $false
+            if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['completed'] -and
+                $null -ne $rawItem.completed) {
+                try { $isCompleted = [bool]$rawItem.completed } catch { $isCompleted = $false }
+            }
+            if ($isCompleted) {
+                $remediationStatus = 'Provisioned'
+                # Use modified timestamp as best available remediation date
+                $remediationDate = $systemTimestamp
+            }
+            else {
+                $remediationStatus = 'Pending'
+            }
+        }
+
+        # Build normalized output object
+        $out = [PSCustomObject]@{
+            IdentityId             = $identityId
+            IdentityName           = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
+            AccountName            = $accountName
+            AccountIdentifier      = $accountIdentifier
+            AccessName             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
+            AccessType             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
+            SourceName             = $sourceName
+            ReviewerName           = $reviewerName
+            ReviewerEmail          = $reviewerEmail
+            Decision               = $decision
+            CertificationId        = $certId
+            CertificationName      = $certName
+            CampaignName           = $campaignName
+            DecisionDate           = if ($null -ne $rawItem.decisionDate) { $rawItem.decisionDate } else { '' }
+            Justification          = $justification
+            RemediationStatus      = $remediationStatus
+            RemediationDate        = $remediationDate
+            SystemTimestamp        = $systemTimestamp
+            CampaignStartDate      = $campaignStartDate
+            CampaignDueDate        = $campaignDueDate
+            CampaignCompletionDate = $campaignCompletionDate
+        }
 
         switch ($decision.ToUpperInvariant()) {
             'APPROVE' { $approved.Add($out) }
@@ -2561,11 +2655,11 @@ function Build-SingleCampaignHtml {
             $html += "<details$openAttr>`n"
             $html += "<summary $summaryStyle>$catLabel ($countLabel)</summary>`n"
             $html += "<table $tableStyle>`n"
-            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
+            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date', 'Justification', 'Remediation'))
             $html += "<tbody>`n"
 
             if ($catItems.Count -eq 0) {
-                $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
+                $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
             }
             else {
                 $rowIdx = 0
@@ -2576,13 +2670,37 @@ function Build-SingleCampaignHtml {
                         $null -ne $item.RiskFlags -and @($item.RiskFlags).Count -gt 0) {
                         $riskBadges = Format-RiskFlagBadges -Flags @($item.RiskFlags)
                     }
+
+                    # Justification display
+                    $justDisplay = 'N/A'
+                    if ($null -ne $item.PSObject.Properties['Justification'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.Justification)) {
+                        $justDisplay = $item.Justification
+                    }
+
+                    # Remediation status display with color coding
+                    $remStatus = 'N/A'
+                    $remHtml   = '<span style="color:#777777;">N/A</span>'
+                    if ($null -ne $item.PSObject.Properties['RemediationStatus'] -and
+                        -not [string]::IsNullOrWhiteSpace($item.RemediationStatus)) {
+                        $remStatus = $item.RemediationStatus
+                    }
+                    if ($remStatus -eq 'Provisioned') {
+                        $remHtml = '<span style="color:#339933; font-weight:bold;">Provisioned</span>'
+                    }
+                    elseif ($remStatus -eq 'Pending') {
+                        $remHtml = '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
+                    }
+
                     $cells = @(
                         ((ConvertTo-SafeHtml $item.IdentityName) + $riskBadges),
                         (ConvertTo-SafeHtml $item.AccountIdentifier),
                         (ConvertTo-SafeHtml $item.AccessName),
                         (ConvertTo-SafeHtml $item.AccessType),
                         (ConvertTo-SafeHtml $item.ReviewerName),
-                        (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate))
+                        (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate)),
+                        (ConvertTo-SafeHtml $justDisplay),
+                        $remHtml
                     )
                     $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
                     $rowIdx++
