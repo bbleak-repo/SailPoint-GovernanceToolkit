@@ -2967,6 +2967,430 @@ $footerHtml
     return $filePath
 }
 
+function Export-SPLeadershipDirectorHtml {
+    <#
+    .SYNOPSIS
+        Generates per-director leadership HTML reports.
+    .DESCRIPTION
+        Produces one self-contained, Word-compatible HTML file per director. Each
+        report includes:
+        - Director name and campaign name header
+        - Director-level metrics (total, approved, revoked, pending, completion %)
+        - Per-manager summary table sorted by completion % ascending
+        - Per-manager identity detail tables showing individual decisions
+        - Navigation link back to executive-summary.html
+
+        All CSS is inline on elements for Word copy-paste compatibility.
+        No flexbox, no grid, no external resources.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership with Directors and Executive keys.
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER OrgTree
+        Hashtable from Build-SPOrgTree .Data containing Nodes, TopLeaders, etc.
+    .PARAMETER CampaignName
+        Display name of the campaign (or combined campaign label).
+    .PARAMETER DateRange
+        Descriptive date range string for the report header.
+    .PARAMETER OutputPath
+        Directory in which to write the HTML files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in each report footer.
+    .OUTPUTS
+        [string[]] Array of file paths written.
+    .EXAMPLE
+        $paths = Export-SPLeadershipDirectorHtml -LeadershipData $leadership `
+                    -Decisions $grouped -OrgTree $tree.Data `
+                    -CampaignName 'Q1 Access Review' -OutputPath 'C:\Reports\leadership'
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $directors   = if ($LeadershipData.ContainsKey('Directors')) { $LeadershipData['Directors'] } else { @{} }
+    $nodes       = $OrgTree.Nodes
+
+    # --- Build identity name -> leaf node ID -> manager ID lookup ---
+    $nameToLeafId  = @{}
+    $leafToManager = @{}
+    foreach ($nodeId in $nodes.Keys) {
+        $node = $nodes[$nodeId]
+        if ($node.Level -eq 0) {
+            if ($null -ne $node.Identity -and
+                -not [string]::IsNullOrWhiteSpace($node.Identity.Name)) {
+                $nameToLeafId[$node.Identity.Name] = $nodeId
+            }
+            $leafToManager[$nodeId] = $node.ManagerId
+        }
+    }
+
+    # --- Build manager -> director lookup ---
+    $managerToDirector = @{}
+    foreach ($nodeId in $nodes.Keys) {
+        $node = $nodes[$nodeId]
+        if ($node.Level -eq 1) {
+            $dirId = $node.ManagerId
+            if (-not [string]::IsNullOrWhiteSpace($dirId) -and $nodes.ContainsKey($dirId)) {
+                $managerToDirector[$nodeId] = $dirId
+            } else {
+                $managerToDirector[$nodeId] = ''
+            }
+        }
+    }
+
+    # --- Group decision items by director -> manager ---
+    # Structure: directorId -> managerId -> [List of decision items]
+    $dirMgrItems = @{}
+    $unmanagedKey = '__unmanaged__'
+
+    foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+        $items = @()
+        if ($Decisions.ContainsKey($category) -and $null -ne $Decisions[$category]) {
+            $items = @($Decisions[$category])
+        }
+
+        foreach ($item in $items) {
+            $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+
+            $managerId  = $unmanagedKey
+            $directorId = $unmanagedKey
+
+            if (-not [string]::IsNullOrWhiteSpace($identityName) -and
+                $nameToLeafId.ContainsKey($identityName)) {
+                $leafId = $nameToLeafId[$identityName]
+
+                if ($leafToManager.ContainsKey($leafId)) {
+                    $mgr = $leafToManager[$leafId]
+                    if (-not [string]::IsNullOrWhiteSpace($mgr) -and $nodes.ContainsKey($mgr)) {
+                        $managerId = $mgr
+                        if ($managerToDirector.ContainsKey($mgr) -and
+                            -not [string]::IsNullOrWhiteSpace($managerToDirector[$mgr])) {
+                            $directorId = $managerToDirector[$mgr]
+                        }
+                        # If manager is itself a director-level node (level >= 2)
+                        if ($directorId -eq $unmanagedKey -and $nodes[$mgr].Level -ge 2) {
+                            $directorId = $mgr
+                        }
+                    }
+                }
+            }
+
+            if (-not $dirMgrItems.ContainsKey($directorId)) { $dirMgrItems[$directorId] = @{} }
+            if (-not $dirMgrItems[$directorId].ContainsKey($managerId)) {
+                $dirMgrItems[$directorId][$managerId] = [System.Collections.Generic.List[object]]::new()
+            }
+
+            $dirMgrItems[$directorId][$managerId].Add(@{
+                IdentityName = $identityName
+                AccountIdentifier = if ($null -ne $item.AccountIdentifier) { [string]$item.AccountIdentifier } else { '' }
+                AccessName   = if ($null -ne $item.AccessName) { [string]$item.AccessName } else { '' }
+                Decision     = $category
+                ReviewerName = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+                DecisionDate = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+            })
+        }
+    }
+
+    # --- Style constants ---
+    $fontFamily = "-apple-system,'Segoe UI',system-ui,sans-serif"
+    $thStyle    = "style=""background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:$fontFamily; font-size:13px;"""
+    $tdStyle    = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px;"""
+    $safeCampaignName = ConvertTo-SafeHtml $CampaignName
+    $safeDateRange    = ConvertTo-SafeHtml $DateRange
+
+    # --- Generate one HTML file per director ---
+    $outputPaths = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($dirId in $directors.Keys) {
+        $d = $directors[$dirId]
+        $dirName = if ($null -ne $d.Name) { $d.Name } else { $dirId }
+
+        # Sanitize name for filename: keep only alphanumeric, hyphen, underscore
+        $safeName = ($dirName -replace '[^a-zA-Z0-9_-]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = $dirId -replace '[^a-zA-Z0-9_-]', '' }
+
+        $safeDirName = ConvertTo-SafeHtml $dirName
+
+        # --- Director-level metrics ---
+        $totalItems    = [int]$d.TotalItems
+        $totalApproved = [int]$d.Approved
+        $totalRevoked  = [int]$d.Revoked
+        $totalPending  = [int]$d.Pending
+        $completionPct = [double]$d.CompletionPct
+
+        $approvalRate   = if ($totalItems -gt 0) { [Math]::Round($totalApproved / $totalItems * 100, 1) } else { 0.0 }
+        $revocationRate = if ($totalItems -gt 0) { [Math]::Round($totalRevoked  / $totalItems * 100, 1) } else { 0.0 }
+
+        $completionColor = if ($completionPct -ge 95) { '#339933' } elseif ($completionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+
+        $dateRangeHtml = if (-not [string]::IsNullOrWhiteSpace($DateRange)) {
+            "<p style=""font-family:$fontFamily; color:#777777; font-size:13px; margin:0 0 20px 0;"">$safeDateRange</p>"
+        } else { '' }
+
+        # --- Summary cards ---
+        $summaryCardsHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<tr>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#2c3e50;">$totalItems</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Total Items</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#339933;">$($approvalRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Approval Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:#CC3333;">$($revocationRate)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Revocation Rate</div>
+    </td>
+    <td style="width:25%; text-align:center; padding:16px 8px; vertical-align:top;">
+        <div style="font-family:$fontFamily; font-size:32px; font-weight:bold; color:$completionColor;">$($completionPct)%</div>
+        <div style="font-family:$fontFamily; font-size:12px; color:#777;">Completion</div>
+    </td>
+</tr>
+</table>
+"@
+
+        # --- Per-manager summary table ---
+        $managerRows = @()
+        $managersMap = if ($null -ne $d.Managers) { $d.Managers } else { @{} }
+
+        foreach ($mgrId in $managersMap.Keys) {
+            $mgr = $managersMap[$mgrId]
+            $mgrApproved = [int]$mgr.Approved
+            $mgrRevoked  = [int]$mgr.Revoked
+            $mgrPending  = [int]$mgr.Pending
+            $mgrTotal    = $mgrApproved + $mgrRevoked + $mgrPending
+            $mgrPct      = if ($mgrTotal -gt 0) { [Math]::Round(($mgrApproved + $mgrRevoked) / $mgrTotal * 100, 1) } else { 0.0 }
+
+            $managerRows += @{
+                Id            = $mgrId
+                Name          = if ($null -ne $mgr.Name) { $mgr.Name } else { $mgrId }
+                TotalItems    = $mgrTotal
+                Approved      = $mgrApproved
+                Revoked       = $mgrRevoked
+                Pending       = $mgrPending
+                CompletionPct = $mgrPct
+                AvgHours      = $mgr.AvgHours
+            }
+        }
+        $managerRows = @($managerRows | Sort-Object { $_.CompletionPct })
+
+        $mgrTableBody = ''
+        $mgrIndex = 0
+        foreach ($mr in $managerRows) {
+            $isAlt = ($mgrIndex % 2 -eq 1)
+            $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+            $mgrPctColor = if ($mr.CompletionPct -ge 95) { '#339933' } elseif ($mr.CompletionPct -ge 80) { '#FF8800' } else { '#CC3333' }
+            $pctCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$mgrPctColor;"""
+            $avgHoursDisplay = Format-HoursDisplay $mr.AvgHours
+            $safeMgrName = ConvertTo-SafeHtml $mr.Name
+
+            $mgrTableBody += @"
+<tr$rowBg>
+    <td $tdStyle>$safeMgrName</td>
+    <td $tdStyle>$($mr.TotalItems)</td>
+    <td $tdStyle>$($mr.Approved)</td>
+    <td $tdStyle>$($mr.Revoked)</td>
+    <td $tdStyle>$($mr.Pending)</td>
+    <td $pctCellStyle>$($mr.CompletionPct)%</td>
+    <td $tdStyle>$avgHoursDisplay</td>
+</tr>
+"@
+            $mgrIndex++
+        }
+
+        $managerTableHtml = @"
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Manager Summary</h3>
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+<thead>
+<tr>
+    <th $thStyle>Manager</th>
+    <th $thStyle>Total</th>
+    <th $thStyle>Approved</th>
+    <th $thStyle>Revoked</th>
+    <th $thStyle>Pending</th>
+    <th $thStyle>Completion %</th>
+    <th $thStyle>Avg Response Time</th>
+</tr>
+</thead>
+<tbody>
+$mgrTableBody
+</tbody>
+</table>
+"@
+
+        # --- Per-manager identity detail sections ---
+        $detailSectionsHtml = ''
+        $mgrItemsForDir = if ($dirMgrItems.ContainsKey($dirId)) { $dirMgrItems[$dirId] } else { @{} }
+
+        foreach ($mr in $managerRows) {
+            $mgrId   = $mr.Id
+            $mgrName = $mr.Name
+            $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
+
+            $itemList = @()
+            if ($mgrItemsForDir.ContainsKey($mgrId)) {
+                $itemList = @($mgrItemsForDir[$mgrId])
+            }
+
+            # Sort items: Pending first, then Revoked, then Approved (attention-worthy first)
+            $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
+            $itemList = @($itemList | Sort-Object {
+                $so = $sortOrder[$_.Decision]
+                if ($null -eq $so) { 3 } else { $so }
+            }, { $_.IdentityName })
+
+            $detailRows = ''
+            $detailIndex = 0
+            foreach ($di in $itemList) {
+                $isAlt = ($detailIndex % 2 -eq 1)
+                $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                $decisionColor = switch ($di.Decision) {
+                    'Approved' { '#339933' }
+                    'Revoked'  { '#CC3333' }
+                    'Pending'  { '#FF8800' }
+                    default    { '#333333' }
+                }
+                $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
+
+                $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
+                $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
+                $safeAccess   = ConvertTo-SafeHtml $di.AccessName
+                $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
+                $safeDate     = Format-HtmlDate $di.DecisionDate
+
+                $detailRows += @"
+<tr$rowBg>
+    <td $tdStyle>$safeIdentity</td>
+    <td $tdStyle>$safeAccount</td>
+    <td $tdStyle>$safeAccess</td>
+    <td $decisionCellStyle>$($di.Decision)</td>
+    <td $tdStyle>$safeReviewer</td>
+    <td $tdStyle>$safeDate</td>
+</tr>
+"@
+                $detailIndex++
+            }
+
+            $itemCountLabel = "$($itemList.Count) item"
+            if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
+
+            $detailSectionsHtml += @"
+<div style="margin-top:24px; page-break-inside:avoid;">
+<h4 style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></h4>
+<table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+<thead>
+<tr>
+    <th $thStyle>Identity</th>
+    <th $thStyle>Account (UPN)</th>
+    <th $thStyle>Access</th>
+    <th $thStyle>Decision</th>
+    <th $thStyle>Reviewer</th>
+    <th $thStyle>Date</th>
+</tr>
+</thead>
+<tbody>
+$detailRows
+</tbody>
+</table>
+</div>
+"@
+        }
+
+        # --- Navigation link ---
+        $navHtml = @"
+<p style="margin-bottom:20px;"><a href="executive-summary.html" style="font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;">&larr; Back to Executive Summary</a></p>
+"@
+
+        # --- Footer ---
+        $footerHtml = @"
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Director Report: $safeDirName &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+</div>
+"@
+
+        # --- Assemble full HTML document ---
+        $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Director Report: $safeDirName - $safeCampaignName</title>
+</head>
+<body style="font-family:$fontFamily; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+$navHtml
+
+<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">Director Report: $safeDirName</h1>
+<p style="font-family:$fontFamily; color:#555; font-size:14px; margin:0 0 4px 0;">$safeCampaignName</p>
+$dateRangeHtml
+
+$summaryCardsHtml
+
+$managerTableHtml
+
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Identity Decision Detail</h3>
+
+$detailSectionsHtml
+
+$footerHtml
+
+</div>
+</body>
+</html>
+"@
+
+        $fileName = "director-$safeName.html"
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+        $html | Set-Content -Path $filePath -Encoding UTF8
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Director report written: $filePath" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLeadershipDirectorHtml' `
+                -CorrelationID $CorrelationID
+        }
+
+        $outputPaths.Add($filePath)
+    }
+
+    return @($outputPaths.ToArray())
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2979,5 +3403,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
     'Export-SPAuditJsonl',
-    'Export-SPLeadershipExecutiveHtml'
+    'Export-SPLeadershipExecutiveHtml',
+    'Export-SPLeadershipDirectorHtml'
 )

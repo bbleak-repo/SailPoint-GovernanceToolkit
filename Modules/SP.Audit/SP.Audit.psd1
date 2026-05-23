@@ -50,6 +50,7 @@
         'Export-SPAuditText'
         'Export-SPAuditJsonl'
         'Export-SPLeadershipExecutiveHtml'
+        'Export-SPLeadershipDirectorHtml'
     )
 
     # Do not export variables or aliases from nested modules
