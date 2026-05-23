@@ -53,7 +53,7 @@ Safe to modify:
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | S-01 | Campaign Type Filter | none | DONE |
-| S-02 | Date Range Search | none | PENDING |
+| S-02 | Date Range Search | none | DONE |
 | S-03 | Deadline Analysis | S-02 | PENDING |
 | S-04 | Reviewer Workload Search | none | PENDING |
 | S-05 | Identity Decision History | none | PENDING |
@@ -94,8 +94,8 @@ Use `[ValidateSet('MANAGER','SOURCE_OWNER','SEARCH','ROLE_COMPOSITION')]`.
 
 ## S-02: Date Range Search
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

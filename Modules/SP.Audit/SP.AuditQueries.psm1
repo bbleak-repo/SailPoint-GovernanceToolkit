@@ -271,10 +271,19 @@ function Get-SPAuditCampaigns {
     .PARAMETER CampaignType
         Optional campaign type filter. Valid values: MANAGER, SOURCE_OWNER,
         SEARCH, ROLE_COMPOSITION. Translates to server-side: type eq "MANAGER".
+    .PARAMETER CreatedAfter
+        Optional lower bound for the campaign 'created' timestamp. Only campaigns
+        created on or after this date are returned. Takes precedence over DaysBack
+        when both are specified. Compared using .ToUniversalTime().
+    .PARAMETER CreatedBefore
+        Optional upper bound for the campaign 'created' timestamp. Only campaigns
+        created on or before this date are returned. Takes precedence over DaysBack
+        when both are specified. Compared using .ToUniversalTime().
     .PARAMETER DaysBack
         Number of calendar days to look back from now when filtering campaigns
         by their 'created' timestamp. Filtering is client-side. Default: 30.
         Set to 0 or a negative number to disable date filtering.
+        Ignored when CreatedAfter or CreatedBefore is specified.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries. Auto-generated if omitted.
     .OUTPUTS
@@ -286,6 +295,10 @@ function Get-SPAuditCampaigns {
         $result = Get-SPAuditCampaigns -CampaignName 'Q1 2026 Access Review' -DaysBack 0
     .EXAMPLE
         $result = Get-SPAuditCampaigns -CampaignType 'SOURCE_OWNER' -DaysBack 90
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CreatedAfter '2026-01-01' -CreatedBefore '2026-03-31'
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CreatedAfter '2026-01-01' -Status 'COMPLETED'
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -307,6 +320,12 @@ function Get-SPAuditCampaigns {
         [string]$CampaignType,
 
         [Parameter()]
+        [DateTime]$CreatedAfter,
+
+        [Parameter()]
+        [DateTime]$CreatedBefore,
+
+        [Parameter()]
         [int]$DaysBack = 30,
 
         [Parameter()]
@@ -317,7 +336,16 @@ function Get-SPAuditCampaigns {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')', Type='$CampaignType', DaysBack=$DaysBack" `
+    # Determine date filtering mode: explicit range vs DaysBack
+    $useExplicitRange = ($PSBoundParameters.ContainsKey('CreatedAfter') -or $PSBoundParameters.ContainsKey('CreatedBefore'))
+
+    $dateLogPart = if ($useExplicitRange) {
+        "CreatedAfter='$CreatedAfter', CreatedBefore='$CreatedBefore'"
+    } else {
+        "DaysBack=$DaysBack"
+    }
+
+    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')', Type='$CampaignType', $dateLogPart" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
         -CorrelationID $CorrelationID
 
@@ -422,9 +450,33 @@ function Get-SPAuditCampaigns {
             -CorrelationID $CorrelationID
 
         # Client-side date filter on 'created' field
+        # CreatedAfter/CreatedBefore take precedence over DaysBack when specified.
+        # All comparisons use .ToUniversalTime() to avoid Kind mismatch (PS7 auto-converts
+        # ISO 8601 strings to DateTime with Kind=Utc; local cutoffs have Kind=Local).
         $filteredCampaigns = [System.Collections.Generic.List[object]]::new()
-        if ($DaysBack -gt 0) {
-            $cutoff = (Get-Date).AddDays(-$DaysBack)
+
+        $applyDateFilter = $false
+        $rangeAfterUtc   = $null
+        $rangeBeforeUtc  = $null
+        $dateFilterLabel  = ''
+
+        if ($useExplicitRange) {
+            $applyDateFilter = $true
+            if ($PSBoundParameters.ContainsKey('CreatedAfter')) {
+                $rangeAfterUtc = $CreatedAfter.ToUniversalTime()
+            }
+            if ($PSBoundParameters.ContainsKey('CreatedBefore')) {
+                $rangeBeforeUtc = $CreatedBefore.ToUniversalTime()
+            }
+            $dateFilterLabel = "CreatedAfter=$rangeAfterUtc, CreatedBefore=$rangeBeforeUtc"
+        }
+        elseif ($DaysBack -gt 0) {
+            $applyDateFilter = $true
+            $rangeAfterUtc  = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+            $dateFilterLabel = "last $DaysBack days (cutoff=$rangeAfterUtc)"
+        }
+
+        if ($applyDateFilter) {
             foreach ($campaign in $allCampaigns) {
                 $createdRaw = $campaign.created
                 if ($null -eq $createdRaw) {
@@ -435,21 +487,35 @@ function Get-SPAuditCampaigns {
 
                 $createdDate = $null
                 if ($createdRaw -is [datetime]) {
-                    $createdDate = [datetime]$createdRaw
+                    $createdDate = ([datetime]$createdRaw).ToUniversalTime()
                 }
                 else {
                     $parsedDate = [datetime]::MinValue
                     if ([datetime]::TryParse($createdRaw.ToString(), [ref]$parsedDate)) {
-                        $createdDate = $parsedDate
+                        $createdDate = $parsedDate.ToUniversalTime()
                     }
                 }
 
-                if ($null -eq $createdDate -or $createdDate -ge $cutoff) {
+                if ($null -eq $createdDate) {
+                    $filteredCampaigns.Add($campaign)
+                    continue
+                }
+
+                # Apply range bounds
+                $include = $true
+                if ($null -ne $rangeAfterUtc -and $createdDate -lt $rangeAfterUtc) {
+                    $include = $false
+                }
+                if ($include -and $null -ne $rangeBeforeUtc -and $createdDate -gt $rangeBeforeUtc) {
+                    $include = $false
+                }
+
+                if ($include) {
                     $filteredCampaigns.Add($campaign)
                 }
             }
 
-            Write-SPLog -Message "Date filter (last $DaysBack days): $($allCampaigns.Count) -> $($filteredCampaigns.Count) campaigns" `
+            Write-SPLog -Message "Date filter ($dateFilterLabel): $($allCampaigns.Count) -> $($filteredCampaigns.Count) campaigns" `
                 -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
                 -CorrelationID $CorrelationID
         }
