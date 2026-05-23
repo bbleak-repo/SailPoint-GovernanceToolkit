@@ -123,6 +123,8 @@
                         <ComboBoxItem Content="30 days" IsSelected="True"/>
                         <ComboBoxItem Content="60 days"/>
                         <ComboBoxItem Content="90 days"/>
+                        <ComboBoxItem Content="180 days"/>
+                        <ComboBoxItem Content="365 days"/>
                     </ComboBox>
                 </StackPanel>
             </Grid>

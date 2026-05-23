@@ -77,7 +77,7 @@ Remove-Item Config\settings-real.json
 |----|-------|-------|------------|--------|
 | W-01 | Prerequisites + Pester | 3 | none | DONE |
 | W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
-| W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | PENDING |
+| W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | DONE |
 | W-04 | GUI: Delta Cert tab (all 5 buttons + dialogs) | 14 | W-01 | PENDING |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
 | W-06 | Playwright: Screenshot + visual validation | 10 | W-03, W-05 | PENDING |
@@ -160,9 +160,10 @@ WG-02-08: All 5 tab headers visible and clickable
 
 ## W-03: GUI -- Audit Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 10/10 testable, BLOCKED 2 (mock down) -- headless WPF harness `Tests\Harness\Test-W03-AuditTabStructure.ps1` (STA, no ShowDialog) verified Audit tab Row 0 layout, AuditQueryDialog 3 fields + new 365-day timespan option, Update-AuditSummaryLabel formatter ("Status: COMPLETED | Timespan: 365 days"), AuditCampaignGrid 6-column schema, checkbox defaults (Reports/Events checked, Leadership unchecked), BtnRunAudit disabled-at-startup, AuditReportList green-brush color coding via Load-AuditReportList, MouseDoubleClick handler wired on list, Click handler wired on Open Reports Folder + absolute path from Resolve-AuditOutputPath. WG-03-08 (full audit run via Invoke-SPCampaignAudit.ps1) + WG-03-09 (Audit\leadership\ HTMLs) BLOCKED -- mock Pode server at 10.0.0.143:8080 unreachable this round. Fix shipped: added "180 days" + "365 days" options to AuditQueryDialog timespan. See docs\windows-test-rounds\round-04.md.
 
 **Tests:**
 
