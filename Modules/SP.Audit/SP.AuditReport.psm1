@@ -8603,6 +8603,651 @@ $($tierSections -join "`n")
 
 #endregion
 
+#region P12-03: Source Governance Scorecard
+
+function Measure-SPSourceGovernance {
+    <#
+    .SYNOPSIS
+        Calculates a governance coverage score per configured source.
+    .DESCRIPTION
+        Combines entitlement inventory data with campaign review history to produce
+        a per-source governance grade (A-F). Answers: "How well is each source
+        being governed? Where are the blind spots?"
+
+        Grade calculation (weighted):
+        - Entitlement coverage (40%): Higher coverage = better grade
+        - Privileged coverage (25%): Privileged entitlements reviewed more strictly
+        - Review recency (20%): Recent review within window = better
+        - Campaign frequency (15%): Multiple campaigns = better
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions, RubberStampRisk, etc.
+    .PARAMETER EntitlementInventory
+        Hashtable from Get-SPEntitlementInventory .Data output containing Sources
+        and Summary. Optional -- if not provided, grades based on campaign data only.
+    .PARAMETER ReviewWindowDays
+        Number of days within which a review is considered recent. Default 365.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Sources = @(...); Summary = @{...} }
+    .EXAMPLE
+        $inv = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $audits = Get-SPAuditCampaigns -DaysBack 90 | ForEach-Object { Get-SPAuditCampaignReport -CampaignId $_.id }
+        $result = Measure-SPSourceGovernance -CampaignAudits $audits -EntitlementInventory $inv.Data
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [int]$ReviewWindowDays = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPSourceGovernance: starting with $($CampaignAudits.Count) campaign(s), ReviewWindowDays=$ReviewWindowDays" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPSourceGovernance' `
+        -CorrelationID $CorrelationID
+
+    # Return empty result for empty input
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Sources = @()
+            Summary = @{
+                TotalSources       = 0
+                GradeDistribution  = @{ A = 0; B = 0; C = 0; D = 0; F = 0 }
+                OverallCoveragePct = 0
+                AvgGovernanceScore = 0
+            }
+        }
+    }
+
+    $now = Get-Date
+
+    # -------------------------------------------------------------------
+    # Step 1: Build per-source review data from campaign decision items
+    # -------------------------------------------------------------------
+    # sourceMap: SourceName -> @{ ReviewedEntitlements (set); PrivilegedReviewed (set);
+    #   CampaignSet (set); LastReviewDate; DecisionDates (list) }
+    $sourceMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        $campaignName = ''
+        if ($audit.ContainsKey('CampaignName')) { $campaignName = [string]$audit['CampaignName'] }
+        if ([string]::IsNullOrWhiteSpace($campaignName) -and $audit.ContainsKey('CampaignId')) {
+            $campaignName = [string]$audit['CampaignId']
+        }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                # Extract fields -- support both hashtable and PSObject
+                $sourceName = ''
+                $accessName = ''
+                $decisionDate = ''
+                $riskFlags = @()
+
+                if ($item -is [hashtable]) {
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($sourceName)) { continue }
+
+                # Initialize source record
+                if (-not $sourceMap.ContainsKey($sourceName)) {
+                    $sourceMap[$sourceName] = @{
+                        SourceId             = ''
+                        ReviewedEntitlements = @{}
+                        PrivilegedReviewed   = @{}
+                        CampaignSet          = @{}
+                        LastReviewDate       = $null
+                        DecisionDates        = [System.Collections.Generic.List[datetime]]::new()
+                    }
+                }
+
+                $srcRec = $sourceMap[$sourceName]
+
+                # Track reviewed entitlements
+                if (-not [string]::IsNullOrWhiteSpace($accessName)) {
+                    $srcRec['ReviewedEntitlements'][$accessName] = $true
+
+                    # Check if privileged
+                    $isPrivileged = $false
+                    foreach ($flag in $riskFlags) {
+                        if ($flag -eq 'PRIVILEGED') { $isPrivileged = $true; break }
+                    }
+                    if ($isPrivileged) {
+                        $srcRec['PrivilegedReviewed'][$accessName] = $true
+                    }
+                }
+
+                # Track campaign participation
+                if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                    $srcRec['CampaignSet'][$campaignName] = $true
+                }
+
+                # Track review dates
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $srcRec['LastReviewDate'] -or $dt -gt $srcRec['LastReviewDate']) {
+                            $srcRec['LastReviewDate'] = $dt
+                        }
+                        $srcRec['DecisionDates'].Add($dt)
+                    } catch { }
+                }
+            }
+        }
+    }
+
+    # -------------------------------------------------------------------
+    # Step 2: Cross-reference with entitlement inventory if provided
+    # -------------------------------------------------------------------
+    # Build inventory lookup: SourceName -> @{ TotalEntitlements; PrivilegedCount; SourceId }
+    $inventoryLookup = @{}
+    if ($null -ne $EntitlementInventory -and $EntitlementInventory.ContainsKey('Sources')) {
+        $invSources = $EntitlementInventory['Sources']
+        foreach ($srcId in $invSources.Keys) {
+            $srcData = $invSources[$srcId]
+            $srcName = ''
+            if ($srcData -is [hashtable]) {
+                $srcName = if ($srcData.ContainsKey('SourceName')) { [string]$srcData['SourceName'] } else { '' }
+            } else {
+                $snProp = $srcData.PSObject.Properties['SourceName']
+                $srcName = if ($null -ne $snProp) { [string]$snProp.Value } else { '' }
+            }
+            if ([string]::IsNullOrWhiteSpace($srcName)) { continue }
+
+            $totalEnt = 0
+            $privCount = 0
+            if ($srcData -is [hashtable]) {
+                $totalEnt  = if ($srcData.ContainsKey('TotalEntitlements')) { [int]$srcData['TotalEntitlements'] } else { 0 }
+                $privCount = if ($srcData.ContainsKey('Privileged'))       { [int]$srcData['Privileged'] }       else { 0 }
+            } else {
+                $teProp = $srcData.PSObject.Properties['TotalEntitlements']
+                $totalEnt = if ($null -ne $teProp) { [int]$teProp.Value } else { 0 }
+                $ppProp = $srcData.PSObject.Properties['Privileged']
+                $privCount = if ($null -ne $ppProp) { [int]$ppProp.Value } else { 0 }
+            }
+
+            $inventoryLookup[$srcName] = @{
+                TotalEntitlements    = $totalEnt
+                PrivilegedEntitlements = $privCount
+                SourceId             = [string]$srcId
+            }
+
+            # Ensure this source appears in sourceMap even if no campaign data
+            if (-not $sourceMap.ContainsKey($srcName)) {
+                $sourceMap[$srcName] = @{
+                    SourceId             = [string]$srcId
+                    ReviewedEntitlements = @{}
+                    PrivilegedReviewed   = @{}
+                    CampaignSet          = @{}
+                    LastReviewDate       = $null
+                    DecisionDates        = [System.Collections.Generic.List[datetime]]::new()
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($sourceMap[$srcName]['SourceId'])) {
+                $sourceMap[$srcName]['SourceId'] = [string]$srcId
+            }
+        }
+    }
+
+    # -------------------------------------------------------------------
+    # Step 3: Calculate per-source governance grade
+    # -------------------------------------------------------------------
+    $sourceResults = [System.Collections.Generic.List[hashtable]]::new()
+    $gradeDistribution = @{ A = 0; B = 0; C = 0; D = 0; F = 0 }
+    $totalCoverage = 0.0
+    $totalGovernanceScore = 0.0
+    $sourcesWithCoverage = 0
+
+    foreach ($srcName in $sourceMap.Keys) {
+        $srcRec = $sourceMap[$srcName]
+        $invData = if ($inventoryLookup.ContainsKey($srcName)) { $inventoryLookup[$srcName] } else { $null }
+
+        $sourceId = $srcRec['SourceId']
+        $reviewedCount = $srcRec['ReviewedEntitlements'].Count
+        $privReviewedCount = $srcRec['PrivilegedReviewed'].Count
+        $campaignCount = $srcRec['CampaignSet'].Count
+        $lastReviewDate = $srcRec['LastReviewDate']
+
+        # Total entitlements and privileged from inventory
+        $totalEntitlements = $null
+        $privilegedEntitlements = 0
+        if ($null -ne $invData) {
+            $totalEntitlements = $invData['TotalEntitlements']
+            $privilegedEntitlements = $invData['PrivilegedEntitlements']
+            if ([string]::IsNullOrWhiteSpace($sourceId)) {
+                $sourceId = $invData['SourceId']
+            }
+        }
+
+        # Entitlement coverage percentage
+        $entCoveragePct = $null
+        if ($null -ne $totalEntitlements -and $totalEntitlements -gt 0) {
+            $entCoveragePct = [Math]::Round(($reviewedCount / $totalEntitlements) * 100, 1)
+            if ($entCoveragePct -gt 100) { $entCoveragePct = 100.0 }
+        }
+
+        # Privileged reviewed percentage
+        $privReviewedPct = $null
+        if ($privilegedEntitlements -gt 0) {
+            $privReviewedPct = [Math]::Round(($privReviewedCount / $privilegedEntitlements) * 100, 1)
+            if ($privReviewedPct -gt 100) { $privReviewedPct = 100.0 }
+        } elseif ($null -ne $invData) {
+            # Source is in inventory but has 0 privileged -- full privileged coverage by default
+            $privReviewedPct = 100.0
+        }
+
+        # Days since last review
+        $daysSinceLastReview = $null
+        $lastReviewStr = $null
+        if ($null -ne $lastReviewDate) {
+            $daysSinceLastReview = [int]($now - $lastReviewDate).TotalDays
+            $lastReviewStr = $lastReviewDate.ToString('yyyy-MM-dd')
+        }
+
+        # Average review cycle days
+        $avgReviewCycleDays = $null
+        $decisionDates = $srcRec['DecisionDates']
+        if ($decisionDates.Count -ge 2) {
+            $sortedDates = @($decisionDates | Sort-Object)
+            $totalGap = ($sortedDates[-1] - $sortedDates[0]).TotalDays
+            $avgReviewCycleDays = [int][Math]::Round($totalGap / ($sortedDates.Count - 1))
+        }
+
+        # --- Governance score calculation (0-100 weighted) ---
+        $entCoverageScore = 0.0
+        $privCoverageScore = 0.0
+        $recencyScore = 0.0
+        $frequencyScore = 0.0
+
+        # Entitlement coverage (40% weight)
+        if ($null -ne $entCoveragePct) {
+            $entCoverageScore = $entCoveragePct
+        } elseif ($campaignCount -gt 0) {
+            # No inventory data but has campaign reviews -- assume partial coverage
+            $entCoverageScore = 50.0
+        }
+        # else: 0 (no inventory, no campaigns)
+
+        # Privileged coverage (25% weight)
+        if ($null -ne $privReviewedPct) {
+            $privCoverageScore = $privReviewedPct
+        } elseif ($campaignCount -gt 0) {
+            # No inventory data but has campaigns -- assume moderate
+            $privCoverageScore = 50.0
+        }
+
+        # Review recency (20% weight)
+        if ($null -ne $daysSinceLastReview) {
+            if ($daysSinceLastReview -le 0) {
+                $recencyScore = 100.0
+            } elseif ($daysSinceLastReview -le $ReviewWindowDays) {
+                $recencyScore = [Math]::Round((1 - ($daysSinceLastReview / $ReviewWindowDays)) * 100, 1)
+                if ($recencyScore -lt 0) { $recencyScore = 0.0 }
+            }
+            # else: beyond window -> 0
+        }
+
+        # Campaign frequency (15% weight)
+        if ($campaignCount -ge 4) {
+            $frequencyScore = 100.0
+        } elseif ($campaignCount -ge 3) {
+            $frequencyScore = 80.0
+        } elseif ($campaignCount -ge 2) {
+            $frequencyScore = 60.0
+        } elseif ($campaignCount -ge 1) {
+            $frequencyScore = 40.0
+        }
+
+        $governanceScore = [Math]::Round(
+            ($entCoverageScore * 0.40) +
+            ($privCoverageScore * 0.25) +
+            ($recencyScore * 0.20) +
+            ($frequencyScore * 0.15),
+            1
+        )
+
+        # Grade assignment
+        $grade = if     ($governanceScore -ge 90) { 'A' }
+                 elseif ($governanceScore -ge 75) { 'B' }
+                 elseif ($governanceScore -ge 60) { 'C' }
+                 elseif ($governanceScore -ge 40) { 'D' }
+                 else                             { 'F' }
+
+        $gradeDistribution[$grade]++
+        $totalGovernanceScore += $governanceScore
+
+        if ($null -ne $entCoveragePct) {
+            $totalCoverage += $entCoveragePct
+            $sourcesWithCoverage++
+        }
+
+        $sourceResults.Add(@{
+            SourceId               = $sourceId
+            SourceName             = $srcName
+            TotalEntitlements      = if ($null -ne $totalEntitlements) { $totalEntitlements } else { 'Unknown' }
+            ReviewedEntitlements   = $reviewedCount
+            EntitlementCoveragePct = if ($null -ne $entCoveragePct) { $entCoveragePct } else { 'Unknown' }
+            PrivilegedEntitlements = $privilegedEntitlements
+            PrivilegedReviewedPct  = if ($null -ne $privReviewedPct) { $privReviewedPct } else { 'Unknown' }
+            CampaignCount          = $campaignCount
+            LastReviewDate         = $lastReviewStr
+            DaysSinceLastReview    = $daysSinceLastReview
+            AvgReviewCycleDays     = $avgReviewCycleDays
+            GovernanceGrade        = $grade
+            GovernanceScore        = $governanceScore
+        })
+    }
+
+    # Sort by governance score ascending (worst first for attention)
+    $sorted = @($sourceResults | Sort-Object { $_['GovernanceScore'] })
+
+    $totalSources = $sorted.Count
+    $avgGovScore = if ($totalSources -gt 0) {
+        [Math]::Round($totalGovernanceScore / $totalSources, 1)
+    } else { 0 }
+    $overallCoverage = if ($sourcesWithCoverage -gt 0) {
+        [Math]::Round($totalCoverage / $sourcesWithCoverage, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Measure-SPSourceGovernance: scored $totalSources source(s) (A=$($gradeDistribution['A']), B=$($gradeDistribution['B']), C=$($gradeDistribution['C']), D=$($gradeDistribution['D']), F=$($gradeDistribution['F']))" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPSourceGovernance' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Sources = $sorted
+        Summary = @{
+            TotalSources       = $totalSources
+            GradeDistribution  = $gradeDistribution
+            OverallCoveragePct = $overallCoverage
+            AvgGovernanceScore = $avgGovScore
+        }
+    }
+}
+
+function Export-SPSourceGovernanceHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML source governance scorecard from Measure-SPSourceGovernance output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source governance cards showing
+        grade badges (color-coded A-F), entitlement coverage bars, privileged entitlement
+        highlights, review recency indicators, and a summary card with overall coverage.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER GovernanceData
+        Hashtable output from Measure-SPSourceGovernance.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $gov = Measure-SPSourceGovernance -CampaignAudits $audits -EntitlementInventory $inv.Data
+        $path = Export-SPSourceGovernanceHtml -GovernanceData $gov -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$GovernanceData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "SourceGovernance-${timestamp}.html"
+
+    $summary = $GovernanceData['Summary']
+    $sources = @($GovernanceData['Sources'])
+
+    # --- Summary card ---
+    $gradeDist = $summary['GradeDistribution']
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary['TotalSources'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade A<br/><span style="font-size:22px;">$($gradeDist['A'])</span>
+</td>
+<td style="padding:12px 16px; background:#2980b9; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade B<br/><span style="font-size:22px;">$($gradeDist['B'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade C<br/><span style="font-size:22px;">$($gradeDist['C'])</span>
+</td>
+<td style="padding:12px 16px; background:#e74c3c; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade D<br/><span style="font-size:22px;">$($gradeDist['D'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade F<br/><span style="font-size:22px;">$($gradeDist['F'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Coverage<br/><span style="font-size:22px;">$($summary['OverallCoveragePct'])%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Source table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Grade', 'Score', 'Entitlements', 'Reviewed',
+        'Coverage %', 'Privileged', 'Priv Reviewed %', 'Campaigns',
+        'Last Review', 'Days Since'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($src in $sources) {
+        $rowIdx++
+
+        $gradeColor = switch ($src['GovernanceGrade']) {
+            'A' { 'color:#fff; background:#27ae60;' }
+            'B' { 'color:#fff; background:#2980b9;' }
+            'C' { 'color:#fff; background:#e67e22;' }
+            'D' { 'color:#fff; background:#e74c3c;' }
+            'F' { 'color:#fff; background:#c0392b;' }
+            default { 'color:#fff; background:#777777;' }
+        }
+        $gradeBadge = "<span style=""display:inline-block; padding:2px 10px; border-radius:3px; font-size:14px; font-weight:bold; $gradeColor"">$($src['GovernanceGrade'])</span>"
+
+        $coverageDisplay = if ($src['EntitlementCoveragePct'] -eq 'Unknown') { 'Unknown' } else { "$($src['EntitlementCoveragePct'])%" }
+        $privDisplay = if ($src['PrivilegedReviewedPct'] -eq 'Unknown') { 'Unknown' } else { "$($src['PrivilegedReviewedPct'])%" }
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($src['LastReviewDate'])) {
+            ConvertTo-SafeHtml $src['LastReviewDate']
+        } else { 'Never' }
+        $daysSince = if ($null -ne $src['DaysSinceLastReview']) {
+            $d = $src['DaysSinceLastReview']
+            if ($d -gt 365) {
+                "<span style=""color:#c0392b; font-weight:bold;"">$d</span>"
+            } elseif ($d -gt 180) {
+                "<span style=""color:#e67e22;"">$d</span>"
+            } else {
+                [string]$d
+            }
+        } else { 'N/A' }
+
+        $totalEntDisplay = if ($src['TotalEntitlements'] -eq 'Unknown') { 'Unknown' } else { [string]$src['TotalEntitlements'] }
+
+        # Coverage bar
+        $coverageBarHtml = ''
+        if ($src['EntitlementCoveragePct'] -ne 'Unknown') {
+            $pct = [int]$src['EntitlementCoveragePct']
+            $barColor = if ($pct -ge 90) { '#27ae60' } elseif ($pct -ge 60) { '#e67e22' } else { '#c0392b' }
+            $coverageBarHtml = "<div style=""width:60px; height:8px; background:#eeeeee; display:inline-block; vertical-align:middle; margin-left:4px;""><div style=""width:${pct}%; height:8px; background:${barColor};""></div></div>"
+            $coverageDisplay = "$($src['EntitlementCoveragePct'])% $coverageBarHtml"
+        }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $src['SourceName']),
+            $gradeBadge,
+            [string]$src['GovernanceScore'],
+            $totalEntDisplay,
+            [string]$src['ReviewedEntitlements'],
+            $coverageDisplay,
+            [string]$src['PrivilegedEntitlements'],
+            $privDisplay,
+            [string]$src['CampaignCount'],
+            $lastReview,
+            $daysSince
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail cards ---
+    $detailCards = [System.Collections.Generic.List[string]]::new()
+    foreach ($src in $sources) {
+        $gradeCardColor = switch ($src['GovernanceGrade']) {
+            'A' { '#27ae60' }
+            'B' { '#2980b9' }
+            'C' { '#e67e22' }
+            'D' { '#e74c3c' }
+            'F' { '#c0392b' }
+            default { '#777777' }
+        }
+
+        $nameHtml = ConvertTo-SafeHtml $src['SourceName']
+        $totalEntStr = if ($src['TotalEntitlements'] -eq 'Unknown') { 'Unknown' } else { [string]$src['TotalEntitlements'] }
+        $covPctStr = if ($src['EntitlementCoveragePct'] -eq 'Unknown') { 'Unknown' } else { "$($src['EntitlementCoveragePct'])%" }
+        $privPctStr = if ($src['PrivilegedReviewedPct'] -eq 'Unknown') { 'Unknown' } else { "$($src['PrivilegedReviewedPct'])%" }
+        $lastReviewStr = if (-not [string]::IsNullOrWhiteSpace($src['LastReviewDate'])) { $src['LastReviewDate'] } else { 'Never' }
+        $cycleDaysStr = if ($null -ne $src['AvgReviewCycleDays']) { "$($src['AvgReviewCycleDays']) days" } else { 'N/A' }
+
+        $cardHtml = @"
+<div style="margin-bottom:16px; padding:12px 16px; border-left:5px solid ${gradeCardColor}; background:#fafafa; border:1px solid #eeeeee;">
+<table style="width:100%; border-collapse:collapse;">
+<tr>
+<td style="vertical-align:top; width:70%; padding:0;">
+<strong style="font-size:15px;">${nameHtml}</strong>
+<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:14px; font-weight:bold; color:#fff; background:${gradeCardColor}; margin-left:8px;">$($src['GovernanceGrade'])</span>
+<span style="font-size:13px; color:#666666; margin-left:8px;">Score: $($src['GovernanceScore'])</span>
+</td>
+</tr>
+</table>
+<table style="width:100%; border-collapse:collapse; font-size:12px; color:#555555; margin-top:8px;">
+<tr>
+<td style="padding:2px 8px;">Entitlements: ${totalEntStr}</td>
+<td style="padding:2px 8px;">Reviewed: $($src['ReviewedEntitlements'])</td>
+<td style="padding:2px 8px;">Coverage: ${covPctStr}</td>
+<td style="padding:2px 8px;">Privileged: $($src['PrivilegedEntitlements'])</td>
+</tr>
+<tr>
+<td style="padding:2px 8px;">Priv Reviewed: ${privPctStr}</td>
+<td style="padding:2px 8px;">Campaigns: $($src['CampaignCount'])</td>
+<td style="padding:2px 8px;">Last Review: ${lastReviewStr}</td>
+<td style="padding:2px 8px;">Avg Cycle: ${cycleDaysStr}</td>
+</tr>
+</table>
+</div>
+"@
+        $detailCards.Add($cardHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Source Governance Scorecard</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Source Governance Scorecard</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Sources by Governance Score</h2>
+${tableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Detail Cards</h2>
+$($detailCards -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Source governance HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceGovernanceHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -8631,5 +9276,7 @@ Export-ModuleMember -Function @(
     'Measure-SPReviewerReputation',
     'Export-SPCompliancePackage',
     'Measure-SPIdentityRisk',
-    'Export-SPIdentityRiskHtml'
+    'Export-SPIdentityRiskHtml',
+    'Measure-SPSourceGovernance',
+    'Export-SPSourceGovernanceHtml'
 )

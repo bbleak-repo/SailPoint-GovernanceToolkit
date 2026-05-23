@@ -46,7 +46,7 @@ Safe to modify:
 |----|---------|------------|--------|
 | P12-01 | Compliance Evidence Package | none | DONE |
 | P12-02 | Identity Risk Scoring | none | DONE |
-| P12-03 | Source Governance Scorecard | none | PENDING |
+| P12-03 | Source Governance Scorecard | none | DONE |
 | P12-04 | Stale Access Detector | P12-03 | PENDING |
 | P12-05 | Campaign Completion Summary | none | PENDING |
 | P12-06 | Notification Dispatcher | none | PENDING |
@@ -286,7 +286,7 @@ New function `Export-SPIdentityRiskHtml` generates an HTML risk report:
 
 ## P12-03: Source Governance Scorecard
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

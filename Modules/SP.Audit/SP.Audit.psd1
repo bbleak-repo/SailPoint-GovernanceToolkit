@@ -93,6 +93,10 @@
         # SP.AuditReport - Identity Risk Scoring (P12-02)
         'Measure-SPIdentityRisk'
         'Export-SPIdentityRiskHtml'
+
+        # SP.AuditReport - Source Governance Scorecard (P12-03)
+        'Measure-SPSourceGovernance'
+        'Export-SPSourceGovernanceHtml'
     )
 
     # Do not export variables or aliases from nested modules
