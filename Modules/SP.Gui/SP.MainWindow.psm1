@@ -1495,6 +1495,7 @@ function Invoke-GuiAuditRun {
     $chkIdentEvents  = Find-Control -Parent $TabContent -Name 'ChkIdentityEvents'
     $chkLeadership   = Find-Control -Parent $TabContent -Name 'ChkLeadershipRollup'
     $cboStartLevel   = Find-Control -Parent $TabContent -Name 'CboLeadershipStartLevel'
+    $cboDetailLevel  = Find-Control -Parent $TabContent -Name 'CboDetailLevel'
 
     $selectedCampaigns = @($script:AuditCampaignDataSource | Where-Object { $_.IsSelected -eq $true })
 
@@ -1514,6 +1515,14 @@ function Invoke-GuiAuditRun {
         $startLevelText = $cboStartLevel.SelectedItem.Content
         if ($startLevelText -ne 'Auto' -and $startLevelText -match '^\d+$') {
             $leadershipStartLevel = [int]$startLevelText
+        }
+    }
+
+    $detailLevel = 'Verbose'
+    if ($null -ne $cboDetailLevel -and $null -ne $cboDetailLevel.SelectedItem) {
+        $detailLevelText = $cboDetailLevel.SelectedItem.Content
+        if ($detailLevelText -in @('Summary', 'Detailed', 'Verbose')) {
+            $detailLevel = $detailLevelText
         }
     }
 
@@ -1551,6 +1560,7 @@ function Invoke-GuiAuditRun {
     $runspace.SessionStateProxy.SetVariable('IncludeIdentEvents',   $includeIdentEvents)
     $runspace.SessionStateProxy.SetVariable('IncludeLeadership',    $includeLeadership)
     $runspace.SessionStateProxy.SetVariable('LeadershipStartLevel', $leadershipStartLevel)
+    $runspace.SessionStateProxy.SetVariable('DetailLevel',          $detailLevel)
     $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
     $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPercent)
@@ -1586,7 +1596,8 @@ function Invoke-GuiAuditRun {
             -IncludeCampaignReports:$IncludeCampaignReports `
             -IncludeIdentityEvents:$IncludeIdentEvents `
             -IncludeLeadershipRollup:$IncludeLeadership `
-            -LeadershipStartLevel   $LeadershipStartLevel
+            -LeadershipStartLevel   $LeadershipStartLevel `
+            -DetailLevel            $DetailLevel
 
         # Marshal result back to UI thread
         $dispatcher       = $MainWindow.Dispatcher

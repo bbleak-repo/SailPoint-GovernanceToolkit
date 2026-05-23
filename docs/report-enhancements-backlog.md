@@ -26,7 +26,7 @@ R-01 -> R-02 -> R-03 -> R-04 -> R-05 -> R-06 -> R-07 -> R-08 -> R-09 -> R-10
 |----|---------|------------|--------|
 | R-01 | Dynamic Org Levels | none | DONE |
 | R-02 | Per-Level Report Generation | R-01 | DONE |
-| R-03 | Expandable Detail Mode | R-02 | PENDING |
+| R-03 | Expandable Detail Mode | R-02 | DONE |
 | R-04 | Delta Report Generator | none | PENDING |
 | R-05 | Delta Report Mock Data | R-04 | PENDING |
 | R-06 | Delta Report CLI + GUI | R-05 | PENDING |
@@ -182,8 +182,8 @@ their branch.
 
 ## R-03: Expandable Detail Mode
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 6d60d84
 - **Depends On:** R-02
 
 **Description:**

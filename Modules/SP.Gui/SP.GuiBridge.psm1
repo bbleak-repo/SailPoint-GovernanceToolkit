@@ -578,7 +578,11 @@ function Invoke-SPGuiAudit {
         [string]$OutputPath,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -746,7 +750,7 @@ function Invoke-SPGuiAudit {
 
             # --- Per-campaign export ---
             $htmlFiles = Export-SPAuditHtml -CampaignAudits @($campaignAudit) `
-                -OutputPath $OutputPath -CorrelationID $CorrelationID
+                -OutputPath $OutputPath -CorrelationID $CorrelationID -DetailLevel $DetailLevel
             Export-SPAuditText -CampaignAudits @($campaignAudit) `
                 -OutputPath $OutputPath -CorrelationID $CorrelationID
 
@@ -768,7 +772,7 @@ function Invoke-SPGuiAudit {
         # --- Combined HTML if multiple campaigns ---
         if ($allCampaignAudits.Count -gt 1) {
             $combinedFiles = Export-SPAuditHtml -CampaignAudits $allCampaignAudits.ToArray() `
-                -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID
+                -OutputPath $OutputPath -Combined -CorrelationID $CorrelationID -DetailLevel $DetailLevel
             foreach ($f in $combinedFiles) { $allWrittenFiles.Add($f) }
         }
 
@@ -905,7 +909,8 @@ function Invoke-SPGuiAudit {
                                 -CampaignName $leadershipCampaignName `
                                 -DateRange $leadershipDateRange `
                                 -OutputPath $leadershipOutputPath `
-                                -CorrelationID $CorrelationID
+                                -CorrelationID $CorrelationID `
+                                -DetailLevel $DetailLevel
                             foreach ($lp in @($lvlPaths)) {
                                 $allWrittenFiles.Add($lp)
                             }
@@ -929,7 +934,8 @@ function Invoke-SPGuiAudit {
                                 -CampaignName $leadershipCampaignName `
                                 -DateRange $leadershipDateRange `
                                 -OutputPath $leadershipOutputPath `
-                                -CorrelationID $CorrelationID
+                                -CorrelationID $CorrelationID `
+                                -DetailLevel $DetailLevel
                             foreach ($dp in @($dirPaths)) {
                                 $allWrittenFiles.Add($dp)
                             }

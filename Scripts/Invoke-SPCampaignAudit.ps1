@@ -150,6 +150,10 @@ param(
     [int]$LeadershipStartLevel = -1,
 
     [Parameter()]
+    [ValidateSet('Summary', 'Detailed', 'Verbose')]
+    [string]$DetailLevel = 'Verbose',
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -353,6 +357,7 @@ if (($WhatIfPreference -eq $true)) {
             Write-Host "    LeadershipStartLevel: (auto: highest level found)"
         }
     }
+    Write-Host "    DetailLevel:         $DetailLevel"
     Write-Host ''
     Write-Host "  Would write output to: $OutputPath" -ForegroundColor Cyan
     Write-Host "  CorrelationID:         $correlationID" -ForegroundColor DarkGray
@@ -584,7 +589,8 @@ foreach ($campaign in $campaigns) {
     Export-SPAuditHtml `
         -CampaignAudits @($campaignAudit) `
         -OutputPath $campOutputDir `
-        -CorrelationID $correlationID
+        -CorrelationID $correlationID `
+        -DetailLevel $DetailLevel
 
     # Text summary
     Export-SPAuditText `
@@ -603,7 +609,8 @@ Export-SPAuditHtml `
     -CampaignAudits $allCampaignAudits.ToArray() `
     -OutputPath $OutputPath `
     -Combined `
-    -CorrelationID $correlationID
+    -CorrelationID $correlationID `
+    -DetailLevel $DetailLevel
 
 # --- JSONL audit trail ---
 $jsonlEvents = foreach ($audit in $allCampaignAudits) {
@@ -773,7 +780,8 @@ if ($effectiveLeadershipRollup) {
                         -CampaignName $leadershipCampaignName `
                         -DateRange $leadershipDateRange `
                         -OutputPath $leadershipOutputPath `
-                        -CorrelationID $correlationID
+                        -CorrelationID $correlationID `
+                        -DetailLevel $DetailLevel
 
                     foreach ($lp in @($lvlPaths)) {
                         Write-Host "    $($lvlLabel): $lp" -ForegroundColor Green
@@ -802,7 +810,8 @@ if ($effectiveLeadershipRollup) {
                         -CampaignName $leadershipCampaignName `
                         -DateRange $leadershipDateRange `
                         -OutputPath $leadershipOutputPath `
-                        -CorrelationID $correlationID
+                        -CorrelationID $correlationID `
+                        -DetailLevel $DetailLevel
                     foreach ($dp in @($dirPaths)) {
                         Write-Host "    Director report: $dp" -ForegroundColor Green
                     }

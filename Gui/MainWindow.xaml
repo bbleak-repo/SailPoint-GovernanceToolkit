@@ -882,6 +882,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
@@ -916,13 +917,24 @@
                             </ComboBox>
                         </StackPanel>
 
-                        <Button Grid.Column="4" x:Name="BtnRunAudit"
+                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    x:Name="PnlDetailLevel">
+                            <TextBlock Text="Detail:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox x:Name="CboDetailLevel" Style="{StaticResource FieldCombo}"
+                                      Width="90" ToolTip="Report detail level: Summary (counts only), Detailed (expandable sections), Verbose (all expanded)">
+                                <ComboBoxItem Content="Summary"/>
+                                <ComboBoxItem Content="Detailed"/>
+                                <ComboBoxItem Content="Verbose" IsSelected="True"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <Button Grid.Column="5" x:Name="BtnRunAudit"
                                 Content="Run Audit"
                                 Style="{StaticResource ToolkitButton}"
                                 IsEnabled="False"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="5" x:Name="BtnOpenAuditFolder"
+                        <Button Grid.Column="6" x:Name="BtnOpenAuditFolder"
                                 Content="Open Reports Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>

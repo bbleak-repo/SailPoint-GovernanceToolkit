@@ -1762,7 +1762,11 @@ function Build-SingleCampaignHtml {
         [hashtable]$CampaignAudit,
 
         [Parameter()]
-        [string]$AnchorId = ''
+        [string]$AnchorId = '',
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     $campaignName   = ConvertTo-SafeHtml ($CampaignAudit['CampaignName'])
@@ -1855,59 +1859,74 @@ function Build-SingleCampaignHtml {
 
     # Primary Reviewers
     $primaryRows = $reviewers['Primary']
-    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">Primary Reviewers</p>`n"
-    $html += "<table $tableStyle>`n"
-    $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Certs Assigned', 'Decisions Made', 'Sign-Off Date', 'Phase'))
-    $html += "<tbody>`n"
-
-    if ($null -eq $primaryRows -or $primaryRows.Count -eq 0) {
-        $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No primary reviewers found.</td></tr>`n"
-    }
-    else {
-        $rowIdx = 0
-        foreach ($r in $primaryRows) {
-            $cells = @(
-                (ConvertTo-SafeHtml $r.Name),
-                (ConvertTo-SafeHtml $r.Email),
-                (ConvertTo-SafeHtml $r.CertsAssigned),
-                (ConvertTo-SafeHtml $r.DecisionsMade),
-                (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
-                (ConvertTo-SafeHtml $r.Phase)
-            )
-            $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-            $rowIdx++
-        }
-    }
-    $html += "</tbody></table>`n"
-
-    # Reassigned Reviewers
+    $primaryCount = if ($null -ne $primaryRows) { @($primaryRows).Count } else { 0 }
     $reassignedRows = $reviewers['Reassigned']
-    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px;"">Reassigned Reviewers</p>`n"
-    $html += "<table $tableStyle>`n"
-    $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Reassigned From', 'Decisions Made', 'Sign-Off Date', 'Phase', 'Proof of Action'))
-    $html += "<tbody>`n"
+    $reassignedCount = if ($null -ne $reassignedRows) { @($reassignedRows).Count } else { 0 }
 
-    if ($null -eq $reassignedRows -or $reassignedRows.Count -eq 0) {
-        $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+    if ($DetailLevel -eq 'Summary') {
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px;"">Primary Reviewers: $primaryCount | Reassigned Reviewers: $reassignedCount</p>`n"
     }
     else {
-        $rowIdx = 0
-        foreach ($r in $reassignedRows) {
-            $proofLabel = if ($r.ProofOfAction) { '<span style="color:#339933; font-weight:bold;">Yes</span>' } else { '<span style="color:#CC3333;">No</span>' }
-            $cells = @(
-                (ConvertTo-SafeHtml $r.Name),
-                (ConvertTo-SafeHtml $r.Email),
-                (ConvertTo-SafeHtml $r.ReassignedFrom),
-                (ConvertTo-SafeHtml $r.DecisionsMade),
-                (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
-                (ConvertTo-SafeHtml $r.Phase),
-                $proofLabel
-            )
-            $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-            $rowIdx++
+        $s2OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+
+        # Primary Reviewers
+        $html += "<details$s2OpenAttr>`n"
+        $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">Primary Reviewers ($primaryCount)</summary>`n"
+        $html += "<table $tableStyle>`n"
+        $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Certs Assigned', 'Decisions Made', 'Sign-Off Date', 'Phase'))
+        $html += "<tbody>`n"
+
+        if ($primaryCount -eq 0) {
+            $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No primary reviewers found.</td></tr>`n"
         }
+        else {
+            $rowIdx = 0
+            foreach ($r in $primaryRows) {
+                $cells = @(
+                    (ConvertTo-SafeHtml $r.Name),
+                    (ConvertTo-SafeHtml $r.Email),
+                    (ConvertTo-SafeHtml $r.CertsAssigned),
+                    (ConvertTo-SafeHtml $r.DecisionsMade),
+                    (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
+                    (ConvertTo-SafeHtml $r.Phase)
+                )
+                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                $rowIdx++
+            }
+        }
+        $html += "</tbody></table>`n"
+        $html += "</details>`n"
+
+        # Reassigned Reviewers
+        $html += "<details$s2OpenAttr>`n"
+        $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">Reassigned Reviewers ($reassignedCount)</summary>`n"
+        $html += "<table $tableStyle>`n"
+        $html += (Build-HtmlTableHeader -Headers @('Name', 'Email', 'Reassigned From', 'Decisions Made', 'Sign-Off Date', 'Phase', 'Proof of Action'))
+        $html += "<tbody>`n"
+
+        if ($reassignedCount -eq 0) {
+            $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+        }
+        else {
+            $rowIdx = 0
+            foreach ($r in $reassignedRows) {
+                $proofLabel = if ($r.ProofOfAction) { '<span style="color:#339933; font-weight:bold;">Yes</span>' } else { '<span style="color:#CC3333;">No</span>' }
+                $cells = @(
+                    (ConvertTo-SafeHtml $r.Name),
+                    (ConvertTo-SafeHtml $r.Email),
+                    (ConvertTo-SafeHtml $r.ReassignedFrom),
+                    (ConvertTo-SafeHtml $r.DecisionsMade),
+                    (ConvertTo-SafeHtml (Format-HtmlDate $r.SignOffDate)),
+                    (ConvertTo-SafeHtml $r.Phase),
+                    $proofLabel
+                )
+                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                $rowIdx++
+            }
+        }
+        $html += "</tbody></table>`n"
+        $html += "</details>`n"
     }
-    $html += "</tbody></table>`n"
 
     # --- Section 3: Reviewer Performance ---
     $html += "<h3 $sectionHeadStyle>3. Reviewer Performance</h3>`n"
@@ -1916,7 +1935,7 @@ function Build-SingleCampaignHtml {
         $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Reviewer performance metrics not available (no certification timing data provided).</p>`n"
     }
     else {
-        # Campaign-level summary table
+        # Campaign-level summary table (always shown - it IS the summary)
         $campMinDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignMinHours']
         $campMaxDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignMaxHours']
         $campAvgDisplay    = Format-HoursDisplay $reviewerMetrics['CampaignAvgHours']
@@ -1931,54 +1950,61 @@ function Build-SingleCampaignHtml {
         $html += "    </tbody>`n"
         $html += "</table>`n"
 
-        # Per-reviewer table
+        # Per-reviewer table (wrapped in <details> for Detailed/Verbose, omitted for Summary)
         $perReviewerRows = @($reviewerMetrics['ReviewerMetrics'])
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Classification', 'Certs', 'Decisions', 'Min Time', 'Max Time', 'Avg Time'))
-        $html += "<tbody>`n"
+        if ($DetailLevel -ne 'Summary') {
+            $s3OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            $s3ReviewerCount = if ($null -ne $perReviewerRows) { @($perReviewerRows).Count } else { 0 }
+            $html += "<details$s3OpenAttr>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">Per-Reviewer Breakdown ($s3ReviewerCount reviewer(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Reviewer', 'Classification', 'Certs', 'Decisions', 'Min Time', 'Max Time', 'Avg Time'))
+            $html += "<tbody>`n"
 
-        if ($null -eq $perReviewerRows -or $perReviewerRows.Count -eq 0) {
-            $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No completed certifications with timing data.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($rm in $perReviewerRows) {
-                # Color-code the avg time cell based on threshold
-                $avgHours = $rm.AvgHours
-                $avgColor = if ($null -eq $avgHours) {
-                    '#777777'
-                }
-                elseif ($avgHours -le 24) {
-                    '#339933'
-                }
-                elseif ($avgHours -le 72) {
-                    '#336699'
-                }
-                else {
-                    '#FF8800'
-                }
-
-                $minDisplay = Format-HoursDisplay $rm.MinHours
-                $maxDisplay = Format-HoursDisplay $rm.MaxHours
-                $avgDisplay = Format-HoursDisplay $rm.AvgHours
-
-                $rowStyle   = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
-                $tdPadding  = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
-                $avgTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$avgColor; font-weight:bold;"""
-
-                $html += "<tr$rowStyle>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Name)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Classification)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.CertsCompleted)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.DecisionsMade)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $minDisplay)</td>"
-                $html += "<td $tdPadding>$(ConvertTo-SafeHtml $maxDisplay)</td>"
-                $html += "<td $avgTdStyle>$(ConvertTo-SafeHtml $avgDisplay)</td>"
-                $html += "</tr>`n"
-                $rowIdx++
+            if ($null -eq $perReviewerRows -or $perReviewerRows.Count -eq 0) {
+                $html += "<tr><td colspan=""7"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No completed certifications with timing data.</td></tr>`n"
             }
+            else {
+                $rowIdx = 0
+                foreach ($rm in $perReviewerRows) {
+                    # Color-code the avg time cell based on threshold
+                    $avgHours = $rm.AvgHours
+                    $avgColor = if ($null -eq $avgHours) {
+                        '#777777'
+                    }
+                    elseif ($avgHours -le 24) {
+                        '#339933'
+                    }
+                    elseif ($avgHours -le 72) {
+                        '#336699'
+                    }
+                    else {
+                        '#FF8800'
+                    }
+
+                    $minDisplay = Format-HoursDisplay $rm.MinHours
+                    $maxDisplay = Format-HoursDisplay $rm.MaxHours
+                    $avgDisplay = Format-HoursDisplay $rm.AvgHours
+
+                    $rowStyle   = if (($rowIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
+                    $tdPadding  = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+                    $avgTdStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:$avgColor; font-weight:bold;"""
+
+                    $html += "<tr$rowStyle>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Name)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.Classification)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.CertsCompleted)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $rm.DecisionsMade)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $minDisplay)</td>"
+                    $html += "<td $tdPadding>$(ConvertTo-SafeHtml $maxDisplay)</td>"
+                    $html += "<td $avgTdStyle>$(ConvertTo-SafeHtml $avgDisplay)</td>"
+                    $html += "</tr>`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
 
     # --- Section 4: Decision Summary ---
@@ -1995,81 +2021,105 @@ function Build-SingleCampaignHtml {
         $catColor = $cat['Color']
         $catLabel = $cat['Label']
 
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:$catColor; margin-bottom:6px; margin-top:12px;"">$catLabel ($($catItems.Count))</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
-        $html += "<tbody>`n"
+        $countLabel = "$($catItems.Count) item"
+        if ($catItems.Count -ne 1) { $countLabel += 's' }
 
-        if ($catItems.Count -eq 0) {
-            $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
+        if ($DetailLevel -eq 'Summary') {
+            # Summary mode: aggregate counts only, no detail tables
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:${catColor}; margin-bottom:6px; margin-top:12px;"">${catLabel}: $countLabel</p>`n"
         }
         else {
-            $rowIdx = 0
-            foreach ($item in $catItems) {
-                $cells = @(
-                    (ConvertTo-SafeHtml $item.IdentityName),
-                    (ConvertTo-SafeHtml $item.AccountIdentifier),
-                    (ConvertTo-SafeHtml $item.AccessName),
-                    (ConvertTo-SafeHtml $item.AccessType),
-                    (ConvertTo-SafeHtml $item.ReviewerName),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate))
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            # Detailed/Verbose: wrap in <details>/<summary>
+            # Detailed: revocations auto-expanded, others collapsed
+            # Verbose: all expanded
+            $openAttr = if ($DetailLevel -eq 'Verbose' -or $catLabel -eq 'Revoked') { ' open' } else { '' }
+            $summaryStyle = "style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; color:${catColor}; margin-bottom:6px; margin-top:12px; cursor:pointer;"""
+
+            $html += "<details$openAttr>`n"
+            $html += "<summary $summaryStyle>$catLabel ($countLabel)</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Reviewer', 'Decision Date'))
+            $html += "<tbody>`n"
+
+            if ($catItems.Count -eq 0) {
+                $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">None.</td></tr>`n"
             }
+            else {
+                $rowIdx = 0
+                foreach ($item in $catItems) {
+                    $cells = @(
+                        (ConvertTo-SafeHtml $item.IdentityName),
+                        (ConvertTo-SafeHtml $item.AccountIdentifier),
+                        (ConvertTo-SafeHtml $item.AccessName),
+                        (ConvertTo-SafeHtml $item.AccessType),
+                        (ConvertTo-SafeHtml $item.ReviewerName),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $item.DecisionDate))
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
 
     # --- Section 5: Campaign Reports ---
-    $html += "<h3 $sectionHeadStyle>5. Campaign Reports</h3>`n"
+    if ($DetailLevel -ne 'Summary') {
+        $html += "<h3 $sectionHeadStyle>5. Campaign Reports</h3>`n"
 
-    if (-not $rptAvailable -or $null -eq $campRpts) {
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Campaign reports not available for this campaign (API does not provide on-demand report data).</p>`n"
-    }
-    else {
-        # Render each report type as a table
-        foreach ($rptKey in $campRpts.Keys) {
-            $rptData = @($campRpts[$rptKey])
-            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">$([System.Net.WebUtility]::HtmlEncode($rptKey))</p>`n"
+        if (-not $rptAvailable -or $null -eq $campRpts) {
+            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">Campaign reports not available for this campaign (API does not provide on-demand report data).</p>`n"
+        }
+        else {
+            $s5OpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
 
-            if ($rptData.Count -eq 0) {
-                $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">No records.</p>`n"
-                continue
-            }
+            # Render each report type as a table wrapped in <details>
+            foreach ($rptKey in $campRpts.Keys) {
+                $rptData = @($campRpts[$rptKey])
 
-            # Derive headers from first row
-            $firstRow = $rptData[0]
-            $headers = @()
-            if ($firstRow -is [hashtable]) {
-                $headers = @($firstRow.Keys)
-            }
-            elseif ($null -ne $firstRow.PSObject) {
-                $headers = @($firstRow.PSObject.Properties.Name)
-            }
+                $html += "<details$s5OpenAttr>`n"
+                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">$([System.Net.WebUtility]::HtmlEncode($rptKey)) ($($rptData.Count) row(s))</summary>`n"
 
-            $html += "<table $tableStyle>`n"
-            $html += (Build-HtmlTableHeader -Headers $headers)
-            $html += "<tbody>`n"
-
-            $rowIdx = 0
-            foreach ($row in $rptData) {
-                $cells = @()
-                foreach ($h in $headers) {
-                    $val = ''
-                    if ($row -is [hashtable]) {
-                        $val = if ($row.ContainsKey($h)) { [string]$row[$h] } else { '' }
-                    }
-                    else {
-                        $prop = $row.PSObject.Properties[$h]
-                        $val  = if ($null -ne $prop) { [string]$prop.Value } else { '' }
-                    }
-                    $cells += [System.Net.WebUtility]::HtmlEncode($val)
+                if ($rptData.Count -eq 0) {
+                    $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">No records.</p>`n"
                 }
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+                else {
+                    # Derive headers from first row
+                    $firstRow = $rptData[0]
+                    $headers = @()
+                    if ($firstRow -is [hashtable]) {
+                        $headers = @($firstRow.Keys)
+                    }
+                    elseif ($null -ne $firstRow.PSObject) {
+                        $headers = @($firstRow.PSObject.Properties.Name)
+                    }
+
+                    $html += "<table $tableStyle>`n"
+                    $html += (Build-HtmlTableHeader -Headers $headers)
+                    $html += "<tbody>`n"
+
+                    $rowIdx = 0
+                    foreach ($row in $rptData) {
+                        $cells = @()
+                        foreach ($h in $headers) {
+                            $val = ''
+                            if ($row -is [hashtable]) {
+                                $val = if ($row.ContainsKey($h)) { [string]$row[$h] } else { '' }
+                            }
+                            else {
+                                $prop = $row.PSObject.Properties[$h]
+                                $val  = if ($null -ne $prop) { [string]$prop.Value } else { '' }
+                            }
+                            $cells += [System.Net.WebUtility]::HtmlEncode($val)
+                        }
+                        $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                        $rowIdx++
+                    }
+                    $html += "</tbody></table>`n"
+                }
+                $html += "</details>`n"
             }
-            $html += "</tbody></table>`n"
         }
     }
 
@@ -2077,7 +2127,7 @@ function Build-SingleCampaignHtml {
     $html += "<h3 $sectionHeadStyle>6. Remediation &amp; Reassignment Proof</h3>`n"
 
     if ($null -ne $remediationProof) {
-        # Sub-section A: Remediation Summary
+        # Sub-section A: Remediation Summary (always shown - it IS the summary)
         $totalRevoked     = [int]$remediationProof['TotalRevoked']
         $completeCount    = [int]$remediationProof['RemediationCompleteCount']
         $pendingCount     = [int]$remediationProof['RemediationPendingCount']
@@ -2093,66 +2143,74 @@ function Build-SingleCampaignHtml {
         $html += "    </tbody>`n"
         $html += "</table>`n"
 
-        # Sub-section B: Revoked Items - Remediation Status
-        $revokedRows = @($remediationProof['RevokedItems'])
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;"">Revoked Items - Remediation Status</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
-        $html += "<tbody>`n"
+        if ($DetailLevel -ne 'Summary') {
+            # Sub-section B: Revoked Items - Remediation Status (wrapped in <details>)
+            $revokedRows = @($remediationProof['RevokedItems'])
+            # Revocations auto-expanded in both Detailed and Verbose
+            $html += "<details open>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px; cursor:pointer;"">Revoked Items - Remediation Status ($($revokedRows.Count) item(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Account', 'Access Name', 'Type', 'Source', 'Reviewer', 'Decision Date', 'Remediation'))
+            $html += "<tbody>`n"
 
-        if ($revokedRows.Count -eq 0) {
-            $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($ri in $revokedRows) {
-                $remLabel = if ($ri.RemediationComplete) {
-                    '<span style="color:#339933; font-weight:bold;">Complete</span>'
-                }
-                else {
-                    '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
-                }
-                $cells = @(
-                    (ConvertTo-SafeHtml $ri.IdentityName),
-                    (ConvertTo-SafeHtml $ri.AccountIdentifier),
-                    (ConvertTo-SafeHtml $ri.AccessName),
-                    (ConvertTo-SafeHtml $ri.AccessType),
-                    (ConvertTo-SafeHtml $ri.SourceName),
-                    (ConvertTo-SafeHtml $ri.ReviewerName),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $ri.DecisionDate)),
-                    $remLabel
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            if ($revokedRows.Count -eq 0) {
+                $html += "<tr><td colspan=""8"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No revoked items recorded.</td></tr>`n"
             }
-        }
-        $html += "</tbody></table>`n"
-
-        # Sub-section C: Reassignment Chain
-        $chainRows = @($remediationProof['ReassignmentChain'])
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px;"">Reassignment Chain</p>`n"
-        $html += "<table $tableStyle>`n"
-        $html += (Build-HtmlTableHeader -Headers @('Certification', 'Reassigned From', 'Current Reviewer', 'Sign-Off Date', 'Phase'))
-        $html += "<tbody>`n"
-
-        if ($chainRows.Count -eq 0) {
-            $html += "<tr><td colspan=""5"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
-        }
-        else {
-            $rowIdx = 0
-            foreach ($hop in $chainRows) {
-                $cells = @(
-                    (ConvertTo-SafeHtml $hop.CertificationName),
-                    (ConvertTo-SafeHtml $hop.ReassignedFrom),
-                    (ConvertTo-SafeHtml $hop.CurrentReviewer),
-                    (ConvertTo-SafeHtml (Format-HtmlDate $hop.SignOffDate)),
-                    (ConvertTo-SafeHtml $hop.Phase)
-                )
-                $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                $rowIdx++
+            else {
+                $rowIdx = 0
+                foreach ($ri in $revokedRows) {
+                    $remLabel = if ($ri.RemediationComplete) {
+                        '<span style="color:#339933; font-weight:bold;">Complete</span>'
+                    }
+                    else {
+                        '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
+                    }
+                    $cells = @(
+                        (ConvertTo-SafeHtml $ri.IdentityName),
+                        (ConvertTo-SafeHtml $ri.AccountIdentifier),
+                        (ConvertTo-SafeHtml $ri.AccessName),
+                        (ConvertTo-SafeHtml $ri.AccessType),
+                        (ConvertTo-SafeHtml $ri.SourceName),
+                        (ConvertTo-SafeHtml $ri.ReviewerName),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $ri.DecisionDate)),
+                        $remLabel
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
             }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
+
+            # Sub-section C: Reassignment Chain
+            $chainRows = @($remediationProof['ReassignmentChain'])
+            $s6cOpenAttr = if ($DetailLevel -eq 'Verbose') { ' open' } else { '' }
+            $html += "<details$s6cOpenAttr>`n"
+            $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:16px; cursor:pointer;"">Reassignment Chain ($($chainRows.Count) record(s))</summary>`n"
+            $html += "<table $tableStyle>`n"
+            $html += (Build-HtmlTableHeader -Headers @('Certification', 'Reassigned From', 'Current Reviewer', 'Sign-Off Date', 'Phase'))
+            $html += "<tbody>`n"
+
+            if ($chainRows.Count -eq 0) {
+                $html += "<tr><td colspan=""5"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No reassignments recorded.</td></tr>`n"
+            }
+            else {
+                $rowIdx = 0
+                foreach ($hop in $chainRows) {
+                    $cells = @(
+                        (ConvertTo-SafeHtml $hop.CertificationName),
+                        (ConvertTo-SafeHtml $hop.ReassignedFrom),
+                        (ConvertTo-SafeHtml $hop.CurrentReviewer),
+                        (ConvertTo-SafeHtml (Format-HtmlDate $hop.SignOffDate)),
+                        (ConvertTo-SafeHtml $hop.Phase)
+                    )
+                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                    $rowIdx++
+                }
+            }
+            $html += "</tbody></table>`n"
+            $html += "</details>`n"
         }
-        $html += "</tbody></table>`n"
     }
     else {
         # Backward-compatible fallback: render old account-activities data when RemediationProof is absent
@@ -2163,30 +2221,39 @@ function Build-SingleCampaignHtml {
 
         foreach ($pcat in $provCategories) {
             $pcatItems = @($pcat['Items'])
-            $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px;"">$($pcat['Label']) ($($pcatItems.Count))</p>`n"
-            $html += "<table $tableStyle>`n"
-            $html += (Build-HtmlTableHeader -Headers @('Identity', 'Actor', 'Source', 'Operation', 'Date', 'Status'))
-            $html += "<tbody>`n"
 
-            if ($pcatItems.Count -eq 0) {
-                $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No events recorded.</td></tr>`n"
+            if ($DetailLevel -eq 'Summary') {
+                $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:6px; margin-top:12px;"">$($pcat['Label']): $($pcatItems.Count) event(s)</p>`n"
             }
             else {
-                $rowIdx = 0
-                foreach ($ev in $pcatItems) {
-                    $cells = @(
-                        (ConvertTo-SafeHtml $ev.TargetName),
-                        (ConvertTo-SafeHtml $ev.Actor),
-                        (ConvertTo-SafeHtml $ev.SourceName),
-                        (ConvertTo-SafeHtml $ev.Operation),
-                        (ConvertTo-SafeHtml (Format-HtmlDate $ev.Date)),
-                        (ConvertTo-SafeHtml $ev.Status)
-                    )
-                    $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
-                    $rowIdx++
+                $s6fOpenAttr = if ($DetailLevel -eq 'Verbose' -or $pcat['Label'] -eq 'Access Revoked Events') { ' open' } else { '' }
+                $html += "<details$s6fOpenAttr>`n"
+                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; margin-top:12px; cursor:pointer;"">$($pcat['Label']) ($($pcatItems.Count))</summary>`n"
+                $html += "<table $tableStyle>`n"
+                $html += (Build-HtmlTableHeader -Headers @('Identity', 'Actor', 'Source', 'Operation', 'Date', 'Status'))
+                $html += "<tbody>`n"
+
+                if ($pcatItems.Count -eq 0) {
+                    $html += "<tr><td colspan=""6"" style=""padding:8px 10px; color:#777777; font-style:italic;"">No events recorded.</td></tr>`n"
                 }
+                else {
+                    $rowIdx = 0
+                    foreach ($ev in $pcatItems) {
+                        $cells = @(
+                            (ConvertTo-SafeHtml $ev.TargetName),
+                            (ConvertTo-SafeHtml $ev.Actor),
+                            (ConvertTo-SafeHtml $ev.SourceName),
+                            (ConvertTo-SafeHtml $ev.Operation),
+                            (ConvertTo-SafeHtml (Format-HtmlDate $ev.Date)),
+                            (ConvertTo-SafeHtml $ev.Status)
+                        )
+                        $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
+                        $rowIdx++
+                    }
+                }
+                $html += "</tbody></table>`n"
+                $html += "</details>`n"
             }
-            $html += "</tbody></table>`n"
         }
     }
 
@@ -2254,7 +2321,11 @@ function Export-SPAuditHtml {
         [string]$CorrelationID,
 
         [Parameter()]
-        [hashtable]$RunMetadata
+        [hashtable]$RunMetadata,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     $writtenFiles = [System.Collections.Generic.List[string]]::new()
@@ -2325,7 +2396,7 @@ function Export-SPAuditHtml {
         $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
 
         $anchorId  = "campaign-$safeName"
-        $bodyHtml  = Build-SingleCampaignHtml -CampaignAudit $audit -AnchorId $anchorId
+        $bodyHtml  = Build-SingleCampaignHtml -CampaignAudit $audit -AnchorId $anchorId -DetailLevel $DetailLevel
 
         $perCampaignHtml = $htmlOpen + $bodyHtml + $metaSection + $footerHtml + $htmlClose
         $perCampaignHtml | Set-Content -Path $filePath -Encoding UTF8
@@ -3131,7 +3202,11 @@ function Export-SPLeadershipDirectorHtml {
         [string]$OutputPath,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -3357,48 +3432,49 @@ $mgrTableBody
 </table>
 "@
 
-        # --- Per-manager identity detail sections ---
+        # --- Per-manager identity detail sections (skipped in Summary mode) ---
         $detailSectionsHtml = ''
-        $mgrItemsForDir = if ($dirMgrItems.ContainsKey($dirId)) { $dirMgrItems[$dirId] } else { @{} }
+        if ($DetailLevel -ne 'Summary') {
+            $mgrItemsForDir = if ($dirMgrItems.ContainsKey($dirId)) { $dirMgrItems[$dirId] } else { @{} }
 
-        foreach ($mr in $managerRows) {
-            $mgrId   = $mr.Id
-            $mgrName = $mr.Name
-            $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
+            foreach ($mr in $managerRows) {
+                $mgrId   = $mr.Id
+                $mgrName = $mr.Name
+                $safeMgrDetailName = ConvertTo-SafeHtml $mgrName
 
-            $itemList = @()
-            if ($mgrItemsForDir.ContainsKey($mgrId)) {
-                $itemList = @($mgrItemsForDir[$mgrId])
-            }
-
-            # Sort items: Pending first, then Revoked, then Approved (attention-worthy first)
-            $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
-            $itemList = @($itemList | Sort-Object {
-                $so = $sortOrder[$_.Decision]
-                if ($null -eq $so) { 3 } else { $so }
-            }, { $_.IdentityName })
-
-            $detailRows = ''
-            $detailIndex = 0
-            foreach ($di in $itemList) {
-                $isAlt = ($detailIndex % 2 -eq 1)
-                $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
-
-                $decisionColor = switch ($di.Decision) {
-                    'Approved' { '#339933' }
-                    'Revoked'  { '#CC3333' }
-                    'Pending'  { '#FF8800' }
-                    default    { '#333333' }
+                $itemList = @()
+                if ($mgrItemsForDir.ContainsKey($mgrId)) {
+                    $itemList = @($mgrItemsForDir[$mgrId])
                 }
-                $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
 
-                $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
-                $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
-                $safeAccess   = ConvertTo-SafeHtml $di.AccessName
-                $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
-                $safeDate     = Format-HtmlDate $di.DecisionDate
+                # Sort items: Pending first, then Revoked, then Approved (attention-worthy first)
+                $sortOrder = @{ 'Pending' = 0; 'Revoked' = 1; 'Approved' = 2 }
+                $itemList = @($itemList | Sort-Object {
+                    $so = $sortOrder[$_.Decision]
+                    if ($null -eq $so) { 3 } else { $so }
+                }, { $_.IdentityName })
 
-                $detailRows += @"
+                $detailRows = ''
+                $detailIndex = 0
+                foreach ($di in $itemList) {
+                    $isAlt = ($detailIndex % 2 -eq 1)
+                    $rowBg = if ($isAlt) { ' style="background:#f9f9f9;"' } else { '' }
+
+                    $decisionColor = switch ($di.Decision) {
+                        'Approved' { '#339933' }
+                        'Revoked'  { '#CC3333' }
+                        'Pending'  { '#FF8800' }
+                        default    { '#333333' }
+                    }
+                    $decisionCellStyle = "style=""padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-family:$fontFamily; font-size:13px; font-weight:bold; color:$decisionColor;"""
+
+                    $safeIdentity = ConvertTo-SafeHtml $di.IdentityName
+                    $safeAccount  = ConvertTo-SafeHtml $di.AccountIdentifier
+                    $safeAccess   = ConvertTo-SafeHtml $di.AccessName
+                    $safeReviewer = ConvertTo-SafeHtml $di.ReviewerName
+                    $safeDate     = Format-HtmlDate $di.DecisionDate
+
+                    $detailRows += @"
 <tr$rowBg>
     <td $tdStyle>$safeIdentity</td>
     <td $tdStyle>$safeAccount</td>
@@ -3408,15 +3484,20 @@ $mgrTableBody
     <td $tdStyle>$safeDate</td>
 </tr>
 "@
-                $detailIndex++
-            }
+                    $detailIndex++
+                }
 
-            $itemCountLabel = "$($itemList.Count) item"
-            if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
+                $itemCountLabel = "$($itemList.Count) item"
+                if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
 
-            $detailSectionsHtml += @"
-<div style="margin-top:24px; page-break-inside:avoid;">
-<h4 style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></h4>
+                # Wrap in <details>/<summary> for Detailed/Verbose modes
+                $dirHasRevocations = @($itemList | Where-Object { $_.Decision -eq 'Revoked' }).Count -gt 0
+                $dirMgrOpenAttr = if ($DetailLevel -eq 'Verbose' -or $dirHasRevocations) { ' open' } else { '' }
+
+                $detailSectionsHtml += @"
+<details$dirMgrOpenAttr>
+<summary style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-top:24px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6; cursor:pointer;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></summary>
+<div style="page-break-inside:avoid;">
 <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
 <thead>
 <tr>
@@ -3433,7 +3514,9 @@ $detailRows
 </tbody>
 </table>
 </div>
+</details>
 "@
+            }
         }
 
         # --- Navigation link ---
@@ -3470,9 +3553,10 @@ $summaryCardsHtml
 
 $managerTableHtml
 
-<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Identity Decision Detail</h3>
-
-$detailSectionsHtml
+$(if (-not [string]::IsNullOrWhiteSpace($detailSectionsHtml)) {
+"<h3 style=""font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;"">Identity Decision Detail</h3>
+$detailSectionsHtml"
+})
 
 $footerHtml
 
@@ -3571,7 +3655,11 @@ function Export-SPLeadershipLevelHtml {
         [string]$OutputPath,
 
         [Parameter()]
-        [string]$CorrelationID
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -3878,9 +3966,9 @@ $mgrTableBody
             }
         }
 
-        # --- Per-identity decision detail (only at lowest generated level) ---
+        # --- Per-identity decision detail (only at lowest generated level, not in Summary mode) ---
         $detailSectionsHtml = ''
-        if ($isLowestLevel -and $null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
+        if ($DetailLevel -ne 'Summary' -and $isLowestLevel -and $null -ne $leaderData.Managers -and $leaderData.Managers.Count -gt 0) {
             # Build decision items grouped by manager under this leader
             $mgrItemsForLeader = @{}
 
@@ -4001,9 +4089,14 @@ $mgrTableBody
                 $itemCountLabel = "$($itemList.Count) item"
                 if ($itemList.Count -ne 1) { $itemCountLabel += 's' }
 
+                # Determine <details> open attribute: Detailed = collapsed (except revocations), Verbose = all open
+                $hasRevocations = @($itemList | Where-Object { $_.Decision -eq 'Revoked' }).Count -gt 0
+                $mgrOpenAttr = if ($DetailLevel -eq 'Verbose' -or $hasRevocations) { ' open' } else { '' }
+
                 $detailSectionsHtml += @"
-<div style="margin-top:24px; page-break-inside:avoid;">
-<h4 style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></h4>
+<details$mgrOpenAttr>
+<summary style="font-family:$fontFamily; color:#2c3e50; font-size:14px; margin-top:24px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #dee2e6; cursor:pointer;">$safeMgrDetailName <span style="font-weight:normal; color:#777; font-size:12px;">($itemCountLabel)</span></summary>
+<div style="page-break-inside:avoid;">
 <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
 <thead>
 <tr>
@@ -4020,6 +4113,7 @@ $detailRows
 </tbody>
 </table>
 </div>
+</details>
 "@
             }
 
