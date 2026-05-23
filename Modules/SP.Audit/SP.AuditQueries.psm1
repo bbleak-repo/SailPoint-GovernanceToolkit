@@ -268,6 +268,9 @@ function Get-SPAuditCampaigns {
         Optional array of status values to filter by.
         Valid values: STAGED, ACTIVATING, ACTIVE, COMPLETING, COMPLETED, ERROR.
         Translates to: status in ("COMPLETED","ACTIVE")
+    .PARAMETER CampaignType
+        Optional campaign type filter. Valid values: MANAGER, SOURCE_OWNER,
+        SEARCH, ROLE_COMPOSITION. Translates to server-side: type eq "MANAGER".
     .PARAMETER DaysBack
         Number of calendar days to look back from now when filtering campaigns
         by their 'created' timestamp. Filtering is client-side. Default: 30.
@@ -281,6 +284,8 @@ function Get-SPAuditCampaigns {
         $campaigns = $result.Data
     .EXAMPLE
         $result = Get-SPAuditCampaigns -CampaignName 'Q1 2026 Access Review' -DaysBack 0
+    .EXAMPLE
+        $result = Get-SPAuditCampaigns -CampaignType 'SOURCE_OWNER' -DaysBack 90
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -298,6 +303,10 @@ function Get-SPAuditCampaigns {
         [string[]]$Status,
 
         [Parameter()]
+        [ValidateSet('MANAGER', 'SOURCE_OWNER', 'SEARCH', 'ROLE_COMPOSITION')]
+        [string]$CampaignType,
+
+        [Parameter()]
         [int]$DaysBack = 30,
 
         [Parameter()]
@@ -308,7 +317,7 @@ function Get-SPAuditCampaigns {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')' DaysBack=$DaysBack" `
+    Write-SPLog -Message "Getting audit campaigns: Name='$CampaignName', NameSW='$CampaignNameStartsWith', NameCO='$CampaignNameContains', Status='$($Status -join ',')', Type='$CampaignType', DaysBack=$DaysBack" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
         -CorrelationID $CorrelationID
 
@@ -332,6 +341,10 @@ function Get-SPAuditCampaigns {
         if ($null -ne $Status -and $Status.Count -gt 0) {
             $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
             $filterParts.Add("status in ($quotedStatuses)")
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CampaignType)) {
+            $filterParts.Add("type eq `"$CampaignType`"")
         }
 
         $queryParams = @{

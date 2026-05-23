@@ -492,6 +492,9 @@ function Search-SPCampaigns {
     .PARAMETER Status
         Optional status filter. Valid values: STAGED, ACTIVATING, ACTIVE,
         COMPLETING, COMPLETED, ERROR.
+    .PARAMETER Type
+        Optional campaign type filter. Valid values: MANAGER, SOURCE_OWNER,
+        SEARCH, ROLE_COMPOSITION. Translates to: type eq "MANAGER" (server-side).
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries.
     .OUTPUTS
@@ -501,6 +504,8 @@ function Search-SPCampaigns {
         $result.Data | ForEach-Object { $_.name }
     .EXAMPLE
         $result = Search-SPCampaigns -Keyword 'Q1' -Status 'COMPLETED'
+    .EXAMPLE
+        $result = Search-SPCampaigns -Keyword 'Review' -Type 'MANAGER'
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -514,6 +519,10 @@ function Search-SPCampaigns {
         [string[]]$Status,
 
         [Parameter()]
+        [ValidateSet('MANAGER', 'SOURCE_OWNER', 'SEARCH', 'ROLE_COMPOSITION')]
+        [string]$Type,
+
+        [Parameter()]
         [string]$CorrelationID
     )
 
@@ -521,7 +530,7 @@ function Search-SPCampaigns {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Searching campaigns: Keyword='$Keyword', Status='$($Status -join ',')'" `
+    Write-SPLog -Message "Searching campaigns: Keyword='$Keyword', Status='$($Status -join ',')', Type='$Type'" `
         -Severity INFO -Component 'SP.Campaigns' -Action 'Search-SPCampaigns' `
         -CorrelationID $CorrelationID
 
@@ -535,6 +544,10 @@ function Search-SPCampaigns {
         if ($null -ne $Status -and $Status.Count -gt 0) {
             $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
             $filterParts.Add("status in ($quotedStatuses)")
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($Type)) {
+            $filterParts.Add("type eq `"$Type`"")
         }
 
         $queryParams = @{

@@ -52,7 +52,7 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| S-01 | Campaign Type Filter | none | PENDING |
+| S-01 | Campaign Type Filter | none | DONE |
 | S-02 | Date Range Search | none | PENDING |
 | S-03 | Deadline Analysis | S-02 | PENDING |
 | S-04 | Reviewer Workload Search | none | PENDING |
@@ -67,8 +67,8 @@ Safe to modify:
 
 ## S-01: Campaign Type Filter
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
