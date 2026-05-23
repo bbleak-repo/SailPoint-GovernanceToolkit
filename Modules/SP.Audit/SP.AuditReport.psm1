@@ -1545,15 +1545,29 @@ function Group-SPAuditByLeadership {
     }
 
     # --- Build per-level Levels structure ---
-    $levelLabels = if ($OrgTree.ContainsKey('LevelLabels')) { $OrgTree.LevelLabels } else {
-        @{ 0 = 'Individual Contributors'; 1 = 'Managers'; 2 = 'Directors';
-           3 = 'Vice Presidents'; 4 = 'Senior Vice Presidents'; 5 = 'Executive Leadership' }
-    }
 
     $discoveredTopLevel = 0
     foreach ($nodeId in $nodes.Keys) {
         $lvl = $nodes[$nodeId].Level
         if ($lvl -gt $discoveredTopLevel) { $discoveredTopLevel = $lvl }
+    }
+
+    # Labels assigned by position FROM THE TOP (not from leaves).
+    # Position 0 = top leader, 1 = one below, 2 = two below, etc.
+    $topDownLabelList = @(
+        'Executive Leadership'    # 0: top
+        'Vice Presidents'         # 1: one below top
+        'Directors'               # 2: two below top
+        'Managers'                # 3: three below top
+        'Team Leads'              # 4
+        'Individual Contributors' # 5+
+    )
+    $levelLabels = @{}
+    for ($lvl = 0; $lvl -le [Math]::Max($discoveredTopLevel, 5); $lvl++) {
+        $posFromTop = $discoveredTopLevel - $lvl
+        if ($posFromTop -lt 0) { $posFromTop = $topDownLabelList.Count - 1 }
+        if ($posFromTop -ge $topDownLabelList.Count) { $posFromTop = 0 }
+        $levelLabels[$lvl] = $topDownLabelList[$posFromTop]
     }
 
     $levels = @{}
@@ -1704,11 +1718,35 @@ function Group-SPAuditByLeadership {
         }
     }
 
+    # Determine the label for the "Directors" bucket. Level numbers are relative to
+    # leaves (0=IC, counting up). To find the right label, calculate distance from
+    # top: the Directors bucket is always one level below the top leader. In the
+    # label table, that corresponds to the label at position (topLevel - directorLevel)
+    # counting from the top: position 1 = one below top.
+    #
+    # Label mapping (position from top):
+    #   0 = Executive/President, 1 = VP, 2 = Director, 3 = Manager, 4+ = Team Lead
+    $directorLabel = 'Director'
+    $topDownLabels = @(
+        'Executive Leadership'  # 0: top
+        'Vice President'        # 1: one below top
+        'Director'              # 2: two below top
+        'Manager'               # 3: three below top
+        'Team Lead'             # 4: four below top
+    )
+    # The Directors bucket is at the level just below the top leader
+    $posFromTop = 1  # Directors are always 1 level below TopLeaders
+    if ($posFromTop -lt $topDownLabels.Count) {
+        $directorLabel = $topDownLabels[$posFromTop]
+    }
+
     return @{
-        Directors = $directors
-        Executive = $executive
-        Levels    = $levels
-        TopLevel  = $discoveredTopLevel
+        Directors      = $directors
+        DirectorLabel  = $directorLabel
+        Executive      = $executive
+        Levels         = $levels
+        TopLevel       = $discoveredTopLevel
+        LevelLabels    = $levelLabels
     }
 }
 
@@ -3548,6 +3586,9 @@ function Export-SPLeadershipExecutiveHtml {
     $directors   = if ($LeadershipData.ContainsKey('Directors')) { $LeadershipData['Directors'] } else { @{} }
     $executive   = if ($LeadershipData.ContainsKey('Executive')) { $LeadershipData['Executive'] } else { @{} }
 
+    # Use the dynamic label from the leadership data (e.g., "Vice President" instead of "Director")
+    $directorLevelLabel = if ($LeadershipData.ContainsKey('DirectorLabel')) { $LeadershipData['DirectorLabel'] } else { 'Director' }
+
     # --- Aggregate overall totals across all directors ---
     $totalItems    = 0
     $totalApproved = 0
@@ -3700,11 +3741,11 @@ function Export-SPLeadershipExecutiveHtml {
     $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px;"'
 
     $directorTableHtml = @"
-<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">Director Summary</h3>
+<h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$directorLevelLabel Summary</h3>
 <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
 <thead>
 <tr>
-    <th $thStyle>Director</th>
+    <th $thStyle>$directorLevelLabel</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -3785,7 +3826,7 @@ $dirTableBody
 <thead>
 <tr>
     <th $thStyle>Leader</th>
-    <th $thStyle>Directors</th>
+    <th $thStyle>${directorLevelLabel}s</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -5124,5 +5165,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditJsonl',
     'Export-SPLeadershipExecutiveHtml',
     'Export-SPLeadershipDirectorHtml',
+    'Export-SPLeadershipLevelHtml',
     'Send-SPReport'
 )
