@@ -51,7 +51,7 @@ Safe to modify:
 | P12-05 | Campaign Completion Summary | none | DONE |
 | P12-06 | Notification Dispatcher | none | DONE |
 | P12-07 | Orchestrator Run History | none | DONE |
-| P12-08 | Weekly Governance Digest Script | P12-02, P12-07 | PENDING |
+| P12-08 | Weekly Governance Digest Script | P12-02, P12-07 | DONE |
 | P12-09 | Log Retention and Archival | none | PENDING |
 | P12-10 | Pester Tests | P12-09 | PENDING |
 
@@ -795,7 +795,7 @@ New function `Export-SPOrchestratorHistoryHtml`:
 
 ## P12-08: Weekly Governance Digest Script
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P12-02, P12-07
 
 **Description:**
