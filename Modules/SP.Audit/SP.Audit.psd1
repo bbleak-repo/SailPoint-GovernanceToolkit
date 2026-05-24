@@ -106,6 +106,10 @@
 
         # SP.AuditReport - Campaign Completion Report (P12-05)
         'Export-SPCampaignCompletionReport'
+
+        # SP.AuditReport - Notification Dispatcher (P12-06)
+        'Send-SPNotification'
+        'Send-SPWebhook'
     )
 
     # Do not export variables or aliases from nested modules

@@ -10125,6 +10125,394 @@ ${riskHtml}
     }
 }
 
+function Send-SPWebhook {
+    <#
+    .SYNOPSIS
+        Sends a JSON payload to an HTTP webhook endpoint.
+    .DESCRIPTION
+        Converts the payload hashtable to JSON and sends it via Invoke-RestMethod.
+        Returns a result hashtable with Success, StatusCode, Response, and Error fields.
+    .PARAMETER Url
+        The webhook endpoint URL.
+    .PARAMETER Payload
+        Hashtable to serialize as the JSON request body.
+    .PARAMETER Method
+        HTTP method. Defaults to POST.
+    .PARAMETER Headers
+        Optional hashtable of additional HTTP headers.
+    .PARAMETER TimeoutSeconds
+        Request timeout in seconds. Defaults to 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; StatusCode; Response; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Payload,
+
+        [Parameter()]
+        [string]$Method = 'POST',
+
+        [Parameter()]
+        [hashtable]$Headers,
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 30,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 10 -Compress
+
+        $restParams = @{
+            Method      = $Method
+            Uri         = $Url
+            Body        = $json
+            ContentType = 'application/json'
+            TimeoutSec  = $TimeoutSeconds
+            ErrorAction = 'Stop'
+        }
+        if ($null -ne $Headers -and $Headers.Count -gt 0) {
+            $restParams['Headers'] = $Headers
+        }
+
+        $response = Invoke-RestMethod @restParams
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Webhook sent to $Url ($Method)" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $true
+            StatusCode = 200
+            Response   = $response
+            Error      = $null
+        }
+    }
+    catch {
+        $statusCode = 0
+        if ($_.Exception.PSObject.Properties.Name -contains 'Response' -and
+            $null -ne $_.Exception.Response) {
+            try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+        }
+
+        $errMsg = "Webhook call to $Url failed: $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg `
+                -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $false
+            StatusCode = $statusCode
+            Response   = $null
+            Error      = $errMsg
+        }
+    }
+}
+
+function Send-SPNotification {
+    <#
+    .SYNOPSIS
+        Dispatches notifications via configured backends (Log, Smtp, Webhook).
+    .DESCRIPTION
+        Reads the Notification config section and delivers the message through
+        each active backend. The Log backend always runs. Smtp sends email via
+        Send-MailMessage. Webhook sends a JSON POST via Send-SPWebhook.
+
+        Missing or incomplete backend configuration produces a WARN log and
+        skips that backend (does not throw).
+    .PARAMETER Subject
+        Notification subject line.
+    .PARAMETER Body
+        Notification body content. For SMTP this is sent as HTML.
+    .PARAMETER Severity
+        Severity level: Info, Warning, or Critical. Maps to log severity and
+        is included in webhook payloads.
+    .PARAMETER Category
+        Notification category (e.g. HealthAlert, Escalation, Completion, Digest).
+    .PARAMETER Recipients
+        Email addresses for the SMTP backend.
+    .PARAMETER Attachments
+        File paths to attach (SMTP only). Non-existent files are skipped with WARN.
+    .PARAMETER Metadata
+        Extra fields included in the webhook JSON payload.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Backends=@(...) } }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Subject,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Body,
+
+        [Parameter()]
+        [ValidateSet('Info','Warning','Critical')]
+        [string]$Severity = 'Info',
+
+        [Parameter()]
+        [string]$Category,
+
+        [Parameter()]
+        [string[]]$Recipients,
+
+        [Parameter()]
+        [string[]]$Attachments,
+
+        [Parameter()]
+        [hashtable]$Metadata,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Load notification config
+    $notifConfig = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Notification') {
+            $notifConfig = $config.Notification
+        }
+    }
+    catch {
+        # Config unavailable -- fall back to Log only
+    }
+
+    # Determine active backends
+    $backends = @('Log')
+    if ($null -ne $notifConfig -and
+        $notifConfig.PSObject.Properties.Name -contains 'Backends') {
+        $configuredBackends = @($notifConfig.Backends)
+        if ($configuredBackends.Count -gt 0) {
+            $backends = $configuredBackends
+        }
+    }
+
+    # Ensure Log is always present
+    if ('Log' -notin $backends) {
+        $backends = @('Log') + $backends
+    }
+
+    $backendResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Map severity to Write-SPLog severity
+    $logSeverity = switch ($Severity) {
+        'Critical' { 'ERROR' }
+        'Warning'  { 'WARN'  }
+        default    { 'INFO'  }
+    }
+
+    # --- Log backend (always) ---
+    $logMsg = "[$Severity] $Subject -- $Body"
+    if (-not [string]::IsNullOrWhiteSpace($Category)) {
+        $logMsg = "[$Severity][$Category] $Subject -- $Body"
+    }
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message $logMsg `
+            -Severity $logSeverity -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+            -CorrelationID $CorrelationID
+    }
+    $backendResults.Add(@{ Backend = 'Log'; Status = 'Sent' })
+
+    # --- SMTP backend ---
+    if ('Smtp' -in $backends) {
+        $smtpResult = @{ Backend = 'Smtp'; Status = 'Skipped' }
+
+        # Read SMTP settings from Notification.Smtp config
+        $smtpConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Smtp') {
+            $smtpConf = $notifConfig.Smtp
+        }
+
+        $smtpServer = ''
+        $smtpPort   = 587
+        $smtpFrom   = ''
+        $smtpUseSsl = $true
+
+        if ($null -ne $smtpConf) {
+            if ($smtpConf.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConf.Server }
+            if ($smtpConf.PSObject.Properties.Name -contains 'Port')   { $smtpPort   = $smtpConf.Port }
+            if ($smtpConf.PSObject.Properties.Name -contains 'From')   { $smtpFrom   = $smtpConf.From }
+            if ($smtpConf.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConf.UseSsl -eq $true }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
+            $warnMsg = 'SMTP backend configured but Server or From is empty -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        elseif ($null -eq $Recipients -or $Recipients.Count -eq 0) {
+            $warnMsg = 'SMTP backend configured but no Recipients provided -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            # Validate attachments
+            $validAttachments = @()
+            if ($null -ne $Attachments -and $Attachments.Count -gt 0) {
+                foreach ($att in $Attachments) {
+                    if (Test-Path -Path $att -PathType Leaf) {
+                        $validAttachments += $att
+                    }
+                    else {
+                        $attWarn = "Attachment not found, skipping: $att"
+                        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                            Write-SPLog -Message $attWarn -Severity WARN -Component 'SP.AuditReport' `
+                                -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+                        }
+                    }
+                }
+            }
+
+            try {
+                $mailParams = @{
+                    SmtpServer = $smtpServer
+                    Port       = $smtpPort
+                    From       = $smtpFrom
+                    To         = $Recipients
+                    Subject    = $Subject
+                    Body       = $Body
+                    BodyAsHtml = $true
+                    UseSsl     = $smtpUseSsl
+                    ErrorAction = 'Stop'
+                    WarningAction = 'SilentlyContinue'
+                }
+                if ($validAttachments.Count -gt 0) {
+                    $mailParams['Attachments'] = $validAttachments
+                }
+
+                Send-MailMessage @mailParams
+                $smtpResult['Status'] = 'Sent'
+
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP notification sent to $($Recipients -join ', ')" `
+                        -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+            catch {
+                $smtpResult['Status'] = 'Failed'
+                $smtpResult['Error']  = $_.Exception.Message
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP send failed: $($_.Exception.Message)" `
+                        -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+        }
+
+        $backendResults.Add($smtpResult)
+    }
+
+    # --- Webhook backend ---
+    if ('Webhook' -in $backends) {
+        $webhookResult = @{ Backend = 'Webhook'; Status = 'Skipped' }
+
+        $webhookConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Webhook') {
+            $webhookConf = $notifConfig.Webhook
+        }
+
+        $webhookUrl     = ''
+        $webhookMethod  = 'POST'
+        $webhookHeaders = @{}
+        $includePayload = $true
+
+        if ($null -ne $webhookConf) {
+            if ($webhookConf.PSObject.Properties.Name -contains 'Url')            { $webhookUrl     = $webhookConf.Url }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Method')         { $webhookMethod  = $webhookConf.Method }
+            if ($webhookConf.PSObject.Properties.Name -contains 'IncludePayload') { $includePayload = $webhookConf.IncludePayload -eq $true }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Headers' -and
+                $null -ne $webhookConf.Headers) {
+                # Convert PSCustomObject headers to hashtable
+                $webhookHeaders = @{}
+                foreach ($prop in $webhookConf.Headers.PSObject.Properties) {
+                    $webhookHeaders[$prop.Name] = $prop.Value
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($webhookUrl)) {
+            $warnMsg = 'Webhook backend configured but Url is empty -- skipping webhook delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            $payload = @{
+                timestamp = (Get-Date).ToUniversalTime().ToString('o')
+                severity  = $Severity
+                subject   = $Subject
+            }
+            if (-not [string]::IsNullOrWhiteSpace($Category)) {
+                $payload['category'] = $Category
+            }
+            if ($includePayload) {
+                $payload['body'] = $Body
+            }
+            if ($null -ne $Metadata -and $Metadata.Count -gt 0) {
+                $payload['metadata'] = $Metadata
+            }
+
+            $whResult = Send-SPWebhook -Url $webhookUrl -Payload $payload `
+                -Method $webhookMethod -Headers $webhookHeaders -CorrelationID $CorrelationID
+
+            $webhookResult['Status']     = if ($whResult.Success) { 'Sent' } else { 'Failed' }
+            $webhookResult['StatusCode'] = $whResult.StatusCode
+            if (-not $whResult.Success) {
+                $webhookResult['Error'] = $whResult.Error
+            }
+        }
+
+        $backendResults.Add($webhookResult)
+    }
+
+    # Determine overall success -- true if at least one backend sent successfully
+    $overallSuccess = ($backendResults | Where-Object { $_.Status -eq 'Sent' }).Count -gt 0
+
+    return @{
+        Success = $overallSuccess
+        Data    = @{
+            Backends = @($backendResults)
+        }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -10159,5 +10547,7 @@ Export-ModuleMember -Function @(
     'Measure-SPSourceGovernance',
     'Export-SPSourceGovernanceHtml',
     'Export-SPStaleAccessHtml',
-    'Export-SPCampaignCompletionReport'
+    'Export-SPCampaignCompletionReport',
+    'Send-SPNotification',
+    'Send-SPWebhook'
 )

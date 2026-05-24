@@ -78,6 +78,21 @@
             "SubjectPrefix": "[SailPoint Audit]"
         }
     },
+    "Notification": {
+        "Backends": ["Log"],
+        "Smtp": {
+            "Server": "",
+            "Port": 587,
+            "From": "",
+            "UseSsl": true
+        },
+        "Webhook": {
+            "Url": "",
+            "Method": "POST",
+            "Headers": {},
+            "IncludePayload": true
+        }
+    },
     "DeltaCert": {
         "SourceIds": [],
         "DefaultHoursBack": 24,

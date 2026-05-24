@@ -110,6 +110,21 @@ function Get-SPConfigDefaults {
                 SubjectPrefix = '[SailPoint Audit]'
             }
         }
+        Notification = @{
+            Backends = @('Log')
+            Smtp = @{
+                Server = ''
+                Port   = 587
+                From   = ''
+                UseSsl = $true
+            }
+            Webhook = @{
+                Url            = ''
+                Method         = 'POST'
+                Headers        = @{}
+                IncludePayload = $true
+            }
+        }
         DeltaCert = @{
             SourceIds                  = @()
             DefaultHoursBack           = 24
@@ -319,6 +334,21 @@ function Get-SPConfigTemplate {
                 From          = ''
                 UseSsl        = $true
                 SubjectPrefix = '[SailPoint Audit]'
+            }
+        }
+        Notification = [ordered]@{
+            Backends = @('Log')
+            Smtp = [ordered]@{
+                Server = ''
+                Port   = 587
+                From   = ''
+                UseSsl = $true
+            }
+            Webhook = [ordered]@{
+                Url            = ''
+                Method         = 'POST'
+                Headers        = @{}
+                IncludePayload = $true
             }
         }
         DeltaCert = [ordered]@{
