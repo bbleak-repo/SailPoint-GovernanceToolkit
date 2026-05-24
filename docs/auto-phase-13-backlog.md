@@ -45,7 +45,7 @@ Safe to modify:
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | P13-01 | Access Profile Inventory | none | DONE |
-| P13-02 | Role Inventory & Assignment Analysis | P13-01 | PENDING |
+| P13-02 | Role Inventory & Assignment Analysis | P13-01 | DONE |
 | P13-03 | Multi-Source Identity Correlation | none | PENDING |
 | P13-04 | Governance Policy Engine | none | PENDING |
 | P13-05 | Policy Compliance Report | P13-04 | PENDING |
@@ -200,7 +200,7 @@ New function `Export-SPAccessProfileInventoryHtml`:
 
 ## P13-02: Role Inventory & Assignment Analysis
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P13-01
 
 **Description:**

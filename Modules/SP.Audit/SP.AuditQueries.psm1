@@ -3410,6 +3410,310 @@ function Get-SPAccessProfileInventory {
 
 #endregion
 
+#region P13-02: Role Inventory & Assignment Analysis
+
+function Get-SPRoleInventory {
+    <#
+    .SYNOPSIS
+        Queries ISC /v3/roles to catalog roles with access profile mappings and health indicators.
+    .DESCRIPTION
+        Retrieves all roles via paginated GET /v3/roles calls. Records each role's
+        membership type, access profile count, enabled/requestable state, and owner.
+        Optionally enriches with transitive entitlement counts when access profile
+        inventory data is provided.
+
+        Calculates role health indicators: empty roles (0 access profiles), single-
+        profile roles, disabled roles, and ownerless roles.
+    .PARAMETER IncludeAccessProfiles
+        When set and AccessProfileInventory is provided, enriches each role with
+        transitive entitlement count from the access profile inventory.
+    .PARAMETER AccessProfileInventory
+        Hashtable output from Get-SPAccessProfileInventory (.Data property).
+        Required for transitive entitlement enrichment.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Roles = @(...)
+                Summary = @{...}
+                HealthIndicators = @{...}
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $result = Get-SPRoleInventory -IncludeAccessProfiles -AccessProfileInventory $apInventory.Data
+        $result.Data.Summary
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [switch]$IncludeAccessProfiles,
+
+        [Parameter()]
+        [hashtable]$AccessProfileInventory,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting role inventory: IncludeAccessProfiles=$IncludeAccessProfiles" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Pagination ceiling from config
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # -----------------------------------------------------------
+        # Step 1: Retrieve roles (paginated)
+        # -----------------------------------------------------------
+        $allRoles = [System.Collections.Generic.List[object]]::new()
+        $pageSize = 50
+        $offset   = 0
+        $pageNum  = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached fetching roles: $maxPages pages ($($allRoles.Count) roles). Raise Api.MaxPaginationPages if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPRoleInventory' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams = @{
+                'limit'  = $pageSize.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/roles' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                $errMsg = "Failed to retrieve roles at page $pageNum (offset $offset): $($result.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPRoleInventory' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($r in $page) { $allRoles.Add($r) }
+            }
+
+            Write-SPLog -Message "Roles page ${pageNum}: $($page.Count) items (running total: $($allRoles.Count))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($page.Count -ge $pageSize)
+
+        Write-SPLog -Message "Retrieved $($allRoles.Count) role(s)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+            -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------
+        # Step 2: Build access profile name -> entitlement count lookup
+        # -----------------------------------------------------------
+        $apEntitlementLookup = @{}  # access profile name (lowercase) -> entitlement count
+        if ($IncludeAccessProfiles) {
+            if ($null -eq $AccessProfileInventory -or $null -eq $AccessProfileInventory.Sources) {
+                Write-SPLog -Message "IncludeAccessProfiles requested but no AccessProfileInventory provided -- skipping transitive entitlement enrichment" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+                    -CorrelationID $CorrelationID
+            } else {
+                foreach ($srcId in $AccessProfileInventory.Sources.Keys) {
+                    $srcData = $AccessProfileInventory.Sources[$srcId]
+                    if ($null -ne $srcData.AccessProfiles) {
+                        foreach ($ap in $srcData.AccessProfiles) {
+                            $key = if (-not [string]::IsNullOrWhiteSpace($ap.Name)) { $ap.Name.ToLower() } else { '' }
+                            if (-not [string]::IsNullOrWhiteSpace($key)) {
+                                $apEntitlementLookup[$key] = [int]$ap.EntitlementCount
+                            }
+                        }
+                    }
+                }
+                Write-SPLog -Message "Access profile entitlement lookup built: $($apEntitlementLookup.Count) profile(s)" `
+                    -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 3: Build role records and health indicators
+        # -----------------------------------------------------------
+        $roleRecords = [System.Collections.Generic.List[hashtable]]::new()
+
+        $totalEnabled        = 0
+        $totalDisabled       = 0
+        $totalRequestable    = 0
+        $totalStandard       = 0
+        $totalIdentityList   = 0
+        $totalApCount        = 0
+
+        $emptyRoles         = [System.Collections.Generic.List[string]]::new()
+        $disabledRoles      = [System.Collections.Generic.List[string]]::new()
+        $ownerlessRoles     = [System.Collections.Generic.List[string]]::new()
+        $singleProfileRoles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($role in $allRoles) {
+            $roleId   = if ($null -ne $role.id) { $role.id } else { '' }
+            $roleName = if ($null -ne $role.name) { $role.name } else { '' }
+            $roleDesc = if ($null -ne $role.description) { $role.description } else { '' }
+            $roleEnabled = if ($null -ne $role.enabled) { [bool]$role.enabled } else { $false }
+            $roleRequestable = if ($null -ne $role.requestable) { [bool]$role.requestable } else { $false }
+            $roleCreated  = if ($null -ne $role.created) { $role.created } else { '' }
+            $roleModified = if ($null -ne $role.modified) { $role.modified } else { '' }
+
+            # Owner
+            $ownerName = ''
+            $ownerId   = ''
+            if ($null -ne $role.owner) {
+                if ($null -ne $role.owner.name) { $ownerName = $role.owner.name }
+                if ($null -ne $role.owner.id) { $ownerId = $role.owner.id }
+            }
+
+            # Membership type
+            $membershipType = 'STANDARD'
+            if ($null -ne $role.membership -and $null -ne $role.membership.type) {
+                $membershipType = $role.membership.type.ToString().ToUpper()
+            }
+
+            # Access profiles
+            $apNames = [System.Collections.Generic.List[string]]::new()
+            $apCount = 0
+            if ($null -ne $role.accessProfiles) {
+                $apArray = @($role.accessProfiles)
+                $apCount = $apArray.Count
+                foreach ($ap in $apArray) {
+                    $apName = ''
+                    if ($ap -is [string]) {
+                        $apName = $ap
+                    } elseif ($null -ne $ap.name) {
+                        $apName = $ap.name
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($apName)) {
+                        $apNames.Add($apName)
+                    }
+                }
+            }
+
+            $totalApCount += $apCount
+
+            # Transitive entitlements (only when enrichment data available)
+            $transitiveEntitlements = $null
+            if ($IncludeAccessProfiles -and $apEntitlementLookup.Count -gt 0) {
+                $transitiveEntitlements = 0
+                foreach ($apn in $apNames) {
+                    $key = $apn.ToLower()
+                    if ($apEntitlementLookup.ContainsKey($key)) {
+                        $transitiveEntitlements += $apEntitlementLookup[$key]
+                    }
+                }
+            }
+
+            # Counters
+            if ($roleEnabled) { $totalEnabled++ } else { $totalDisabled++ }
+            if ($roleRequestable) { $totalRequestable++ }
+            if ($membershipType -eq 'STANDARD') { $totalStandard++ } else { $totalIdentityList++ }
+
+            # Health indicators
+            if ($apCount -eq 0) { $emptyRoles.Add($roleName) }
+            if ($apCount -eq 1) { $singleProfileRoles.Add($roleName) }
+            if (-not $roleEnabled) { $disabledRoles.Add($roleName) }
+            if ([string]::IsNullOrWhiteSpace($ownerName) -and [string]::IsNullOrWhiteSpace($ownerId)) {
+                $ownerlessRoles.Add($roleName)
+            }
+
+            $record = @{
+                Id                     = $roleId
+                Name                   = $roleName
+                Description            = $roleDesc
+                Enabled                = $roleEnabled
+                Requestable            = $roleRequestable
+                OwnerName              = $ownerName
+                OwnerId                = $ownerId
+                MembershipType         = $membershipType
+                AccessProfileCount     = $apCount
+                AccessProfileNames     = $apNames.ToArray()
+                TransitiveEntitlements = $transitiveEntitlements
+                Created                = $roleCreated
+                Modified               = $roleModified
+            }
+            $roleRecords.Add($record)
+        }
+
+        # -----------------------------------------------------------
+        # Step 4: Build summary
+        # -----------------------------------------------------------
+        $totalRoles = $allRoles.Count
+        $avgApPerRole = if ($totalRoles -gt 0) {
+            [Math]::Round($totalApCount / $totalRoles, 1)
+        } else { 0 }
+
+        $summary = @{
+            TotalRoles              = $totalRoles
+            Enabled                 = $totalEnabled
+            Disabled                = $totalDisabled
+            Requestable             = $totalRequestable
+            StandardMembership      = $totalStandard
+            IdentityListMembership  = $totalIdentityList
+            AvgAccessProfilesPerRole = $avgApPerRole
+            EmptyRoles              = $emptyRoles.Count
+            SingleProfileRoles      = $singleProfileRoles.Count
+            OwnerlessRoles          = $ownerlessRoles.Count
+        }
+
+        $healthIndicators = @{
+            EmptyRoles         = $emptyRoles.ToArray()
+            DisabledRoles      = $disabledRoles.ToArray()
+            OwnerlessRoles     = $ownerlessRoles.ToArray()
+            SingleProfileRoles = $singleProfileRoles.ToArray()
+        }
+
+        Write-SPLog -Message "Role inventory: $totalRoles roles, $totalEnabled enabled, $totalDisabled disabled, $($emptyRoles.Count) empty, $($ownerlessRoles.Count) ownerless" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPRoleInventory' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Roles            = $roleRecords.ToArray()
+                Summary          = $summary
+                HealthIndicators = $healthIndicators
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPRoleInventory failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPRoleInventory' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 #region P12-04: Stale Access Detector
 
 function Get-SPStaleAccess {
