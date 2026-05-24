@@ -44,7 +44,7 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| P13-01 | Access Profile Inventory | none | PENDING |
+| P13-01 | Access Profile Inventory | none | DONE |
 | P13-02 | Role Inventory & Assignment Analysis | P13-01 | PENDING |
 | P13-03 | Multi-Source Identity Correlation | none | PENDING |
 | P13-04 | Governance Policy Engine | none | PENDING |
@@ -88,7 +88,7 @@ Safe to modify:
 
 ## P13-01: Access Profile Inventory
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

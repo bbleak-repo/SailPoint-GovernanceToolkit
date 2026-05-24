@@ -117,6 +117,12 @@
 
         # SP.AuditReport - Log Retention and Archival (P12-09)
         'Invoke-SPLogRetention'
+
+        # SP.AuditQueries - Access Profile Inventory (P13-01)
+        'Get-SPAccessProfileInventory'
+
+        # SP.AuditReport - Access Profile Inventory HTML (P13-01)
+        'Export-SPAccessProfileInventoryHtml'
     )
 
     # Do not export variables or aliases from nested modules
