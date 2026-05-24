@@ -113,7 +113,7 @@ The window *will* be visible while the test runs; this is intentional.
 | W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | DONE |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | DONE |
 | W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | DONE |
-| W-07 | Report content deep validation | 15 | W-06 | PENDING |
+| W-07 | Report content deep validation | 15 | W-06 | DONE |
 
 ---
 
@@ -428,9 +428,12 @@ WV-06-10: Color coding consistent: green=#339933, red=#CC3333, orange=#FF8800
 
 ## W-07: Report Content Deep Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-06
+- **Results:** PASS 15/15 -- harness `Tests\Harness\Test-W07-ReportContent.ps1` loads `Audit\campaign-audit-combined-*.html` with `Get-Content -Raw` and runs 15 precise regex assertions against the HTML structure emitted by `Build-SPCampaignAuditHtml`. COMPLETED status badge (green `#339933` + `<span>`); donut counts 16/4/5 with 64%/16%/20% percentages; Remediation Completion bar at 0%; Risk Indicators -> Pending Items = 5; Reviewer Response Time block lists 4 reviewers (Diana Brown, Edward Jones, Fiona Garcia, George Miller); Campaign Summary with name + status + Total Certifications; Reviewer Accountability with Primary (4) + Reassigned (1) expandable blocks; Reviewer Performance with Fastest/Slowest/Average/Median rows; Decision Summary with Approved (16) collapsed + `<details open>` Revoked (4) + Pending (5) collapsed; Revoked items table has 6 columns (Identity/Account/Access/Decision Date/Justification/Remediation) with UPN data; Campaign Reports `<details>` for CERTIFICATION_SIGNOFF_REPORT + CAMPAIGN_STATUS_REPORT; Remediation Summary shows 4 revoked items + per-item status table; Reassignment Chain table with 1 data record; Audit Metadata has Correlation ID + Report Generated; Footer has `SailPoint ISC Governance Toolkit v1.0.0`, ISO date, 36-char correlation GUID. No production bugs found in the HTML template. See `docs\windows-test-rounds\round-10.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W07-ReportContent.ps1`.
 
 **Open each HTML report in Edge/Chrome. Verify every section:**
 
