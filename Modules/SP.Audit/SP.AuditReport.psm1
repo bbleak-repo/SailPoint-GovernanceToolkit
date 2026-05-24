@@ -7734,6 +7734,483 @@ $($sourceSections -join "`n")
 
 #endregion
 
+#region Access Profile Inventory HTML (P13-01)
+
+function Export-SPAccessProfileInventoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML access profile inventory report grouped by source.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source access profile tables.
+        Access profiles containing privileged entitlements are highlighted in red,
+        unreviewed access profiles in orange. Includes a summary card with total
+        counts and coverage percentage. Uses inline CSS only for Word compatibility.
+    .PARAMETER InventoryData
+        Hashtable output from Get-SPAccessProfileInventory (the .Data property).
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ ReportPath } }
+    .EXAMPLE
+        $inv = Get-SPAccessProfileInventory -SourceIds 'src-ad-001' -IncludeEntitlements
+        Export-SPAccessProfileInventoryHtml -InventoryData $inv.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$InventoryData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "AccessProfileInventory-${timestamp}.html"
+
+    $summary = $InventoryData.Summary
+    $sources = $InventoryData.Sources
+
+    $hasReviewData = ($null -ne $summary.ReviewCoverage)
+    $coverageDisplay = if ($hasReviewData) { "$($summary.ReviewCoverage)%" } else { 'N/A' }
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary.TotalSources)</span>
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Access Profiles<br/><span style="font-size:22px;">$($summary.TotalAccessProfiles)</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Enabled<br/><span style="font-size:22px;">$($summary.TotalEnabled)</span>
+</td>
+<td style="padding:12px 16px; background:#2980b9; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Requestable<br/><span style="font-size:22px;">$($summary.TotalRequestable)</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Review Coverage<br/><span style="font-size:22px;">$coverageDisplay</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source sections ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($srcId in ($sources.Keys | Sort-Object)) {
+        $srcData = $sources[$srcId]
+        $srcName = ConvertTo-SafeHtml $srcData.SourceName
+
+        $sectionHeader = @"
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:4px;">$srcName</h2>
+<p style="font-size:12px; color:#666666; margin-top:0; margin-bottom:8px;">Source ID: $(ConvertTo-SafeHtml $srcId) | Access Profiles: $($srcData.TotalAccessProfiles) | Enabled: $($srcData.Enabled) | Requestable: $($srcData.Requestable)</p>
+"@
+
+        if ($srcData.TotalAccessProfiles -eq 0) {
+            $sourceSections.Add("${sectionHeader}<p style=""font-style:italic; color:#999999;"">No access profiles found for this source.</p>")
+            continue
+        }
+
+        # Build table headers
+        $headers = @('Name', 'Description', 'Enabled', 'Requestable', 'Owner', 'Entitlements')
+        if ($hasReviewData) {
+            $headers += @('Reviewed', 'Last Review')
+        }
+
+        $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; border:1px solid #dddddd;"'
+        $headerRow = "<thead><tr>" + (($headers | ForEach-Object { "<th $thStyle>$_</th>" }) -join '') + "</tr></thead>"
+
+        $bodyRows = [System.Collections.Generic.List[string]]::new()
+        $rowIdx = 0
+
+        foreach ($ap in $srcData.AccessProfiles) {
+            $rowIdx++
+            $bgColor = if (($rowIdx % 2) -eq 0) { '#f8f9fa' } else { '#ffffff' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-size:13px;"
+
+            # Highlight: privileged in red, unreviewed in orange
+            $rowBg = $bgColor
+            if ($ap.HasPrivileged) {
+                $rowBg = '#fce4e4'
+            } elseif ($hasReviewData -and $ap.Reviewed -eq $false) {
+                $rowBg = '#fff3e0'
+            }
+
+            $enabledDisplay = if ($ap.Enabled) { '<span style="color:#27ae60;">Yes</span>' } else { '<span style="color:#999999;">No</span>' }
+            $requestableDisplay = if ($ap.Requestable) { '<span style="color:#2980b9;">Yes</span>' } else { 'No' }
+
+            # Entitlement count display, with expandable detail if names are available
+            $entDisplay = "$($ap.EntitlementCount)"
+            if ($ap.HasPrivileged) {
+                $entDisplay += ' <span style="color:#c0392b; font-weight:bold;">(privileged)</span>'
+            }
+            if ($null -ne $ap.Entitlements -and $ap.Entitlements.Count -gt 0) {
+                $entList = ($ap.Entitlements | ForEach-Object { ConvertTo-SafeHtml $_ }) -join '<br/>'
+                $entDisplay = "<details><summary>$($ap.EntitlementCount)"
+                if ($ap.HasPrivileged) {
+                    $entDisplay += ' <span style="color:#c0392b; font-weight:bold;">(privileged)</span>'
+                }
+                $entDisplay += "</summary><div style=""padding:4px 0; font-size:12px; color:#555555;"">$entList</div></details>"
+            }
+
+            $cells = @(
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ap.Name)</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ap.Description)</td>"
+                "<td style=""$tdStyle"">$enabledDisplay</td>"
+                "<td style=""$tdStyle"">$requestableDisplay</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $ap.OwnerName)</td>"
+                "<td style=""$tdStyle"">$entDisplay</td>"
+            )
+
+            if ($hasReviewData) {
+                $reviewDisplay = if ($ap.Reviewed) {
+                    '<span style="color:#27ae60;">Yes</span>'
+                } elseif ($ap.Reviewed -eq $false) {
+                    '<span style="color:#e67e22; font-weight:bold;">No</span>'
+                } else { 'N/A' }
+
+                $lastReview = if (-not [string]::IsNullOrWhiteSpace($ap.LastReviewDate)) {
+                    ConvertTo-SafeHtml (Format-HtmlDate $ap.LastReviewDate)
+                } else { '' }
+                $cells += @(
+                    "<td style=""$tdStyle"">$reviewDisplay</td>"
+                    "<td style=""$tdStyle"">$lastReview</td>"
+                )
+            }
+
+            $bodyRows.Add("<tr style=""background:$rowBg;"">$($cells -join '')</tr>")
+        }
+
+        $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+        $sourceSections.Add("${sectionHeader}${tableHtml}")
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Access Profile Inventory Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Access Profile Inventory Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+$($sourceSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Access profile inventory HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAccessProfileInventoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ReportPath = $htmlFile
+        }
+    }
+}
+
+#endregion
+
+#region Role Inventory HTML (P13-02)
+
+function Export-SPRoleInventoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML role inventory report with health indicators.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with a role table showing access profile
+        count, membership type, enabled/requestable badges, and health indicator
+        sections highlighting empty, disabled, and ownerless roles. Includes expandable
+        per-role access profile detail and a summary card with role sprawl indicators.
+        Uses inline CSS only for Word compatibility.
+    .PARAMETER InventoryData
+        Hashtable output from Get-SPRoleInventory (the .Data property).
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ ReportPath } }
+    .EXAMPLE
+        $inv = Get-SPRoleInventory -IncludeAccessProfiles -AccessProfileInventory $apData
+        Export-SPRoleInventoryHtml -InventoryData $inv.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$InventoryData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "RoleInventory-${timestamp}.html"
+
+    $summary          = $InventoryData.Summary
+    $roles            = $InventoryData.Roles
+    $healthIndicators = $InventoryData.HealthIndicators
+
+    $hasTransitive = ($null -ne $roles -and $roles.Count -gt 0 -and $null -ne $roles[0].TransitiveEntitlements)
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Roles<br/><span style="font-size:22px;">$($summary.TotalRoles)</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Enabled<br/><span style="font-size:22px;">$($summary.Enabled)</span>
+</td>
+<td style="padding:12px 16px; background:#e74c3c; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Disabled<br/><span style="font-size:22px;">$($summary.Disabled)</span>
+</td>
+<td style="padding:12px 16px; background:#2980b9; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Requestable<br/><span style="font-size:22px;">$($summary.Requestable)</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Avg AP/Role<br/><span style="font-size:22px;">$($summary.AvgAccessProfilesPerRole)</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Empty Roles<br/><span style="font-size:22px;">$($summary.EmptyRoles)</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Membership breakdown ---
+    $membershipHtml = @"
+<table style="width:50%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:8px 12px; background:#f0f0f0; border:1px solid #dddddd; font-weight:bold;">STANDARD Membership</td>
+<td style="padding:8px 12px; border:1px solid #dddddd; text-align:center;">$($summary.StandardMembership)</td>
+<td style="padding:8px 12px; background:#f0f0f0; border:1px solid #dddddd; font-weight:bold;">IDENTITY_LIST Membership</td>
+<td style="padding:8px 12px; border:1px solid #dddddd; text-align:center;">$($summary.IdentityListMembership)</td>
+</tr>
+</table>
+"@
+
+    # --- Health indicators section ---
+    $healthSections = [System.Collections.Generic.List[string]]::new()
+
+    if ($null -ne $healthIndicators.EmptyRoles -and $healthIndicators.EmptyRoles.Count -gt 0) {
+        $items = ($healthIndicators.EmptyRoles | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join ''
+        $healthSections.Add(@"
+<div style="margin-bottom:12px; padding:10px; background:#fff3e0; border-left:4px solid #e67e22;">
+<strong style="color:#e67e22;">Empty Roles (0 Access Profiles): $($healthIndicators.EmptyRoles.Count)</strong>
+<ul style="margin:4px 0 0 0; padding-left:20px;">$items</ul>
+</div>
+"@)
+    }
+
+    if ($null -ne $healthIndicators.DisabledRoles -and $healthIndicators.DisabledRoles.Count -gt 0) {
+        $items = ($healthIndicators.DisabledRoles | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join ''
+        $healthSections.Add(@"
+<div style="margin-bottom:12px; padding:10px; background:#fce4e4; border-left:4px solid #e74c3c;">
+<strong style="color:#e74c3c;">Disabled Roles: $($healthIndicators.DisabledRoles.Count)</strong>
+<ul style="margin:4px 0 0 0; padding-left:20px;">$items</ul>
+</div>
+"@)
+    }
+
+    if ($null -ne $healthIndicators.OwnerlessRoles -and $healthIndicators.OwnerlessRoles.Count -gt 0) {
+        $items = ($healthIndicators.OwnerlessRoles | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join ''
+        $healthSections.Add(@"
+<div style="margin-bottom:12px; padding:10px; background:#fce4e4; border-left:4px solid #c0392b;">
+<strong style="color:#c0392b;">Ownerless Roles: $($healthIndicators.OwnerlessRoles.Count)</strong>
+<ul style="margin:4px 0 0 0; padding-left:20px;">$items</ul>
+</div>
+"@)
+    }
+
+    if ($null -ne $healthIndicators.SingleProfileRoles -and $healthIndicators.SingleProfileRoles.Count -gt 0) {
+        $items = ($healthIndicators.SingleProfileRoles | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join ''
+        $healthSections.Add(@"
+<div style="margin-bottom:12px; padding:10px; background:#fff8e1; border-left:4px solid #f9a825;">
+<strong style="color:#f9a825;">Single-Profile Roles: $($healthIndicators.SingleProfileRoles.Count)</strong>
+<ul style="margin:4px 0 0 0; padding-left:20px;">$items</ul>
+</div>
+"@)
+    }
+
+    $healthHtml = ''
+    if ($healthSections.Count -gt 0) {
+        $healthHtml = @"
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Health Indicators</h2>
+$($healthSections -join "`n")
+"@
+    }
+
+    # --- Role detail table ---
+    $headers = @('Name', 'Enabled', 'Requestable', 'Membership', 'Owner', 'Access Profiles')
+    if ($hasTransitive) {
+        $headers += 'Transitive Entitlements'
+    }
+
+    $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; border:1px solid #dddddd;"'
+    $headerRow = "<thead><tr>" + (($headers | ForEach-Object { "<th $thStyle>$_</th>" }) -join '') + "</tr></thead>"
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+
+    if ($null -ne $roles -and $roles.Count -gt 0) {
+        $rowIdx = 0
+        foreach ($role in $roles) {
+            $rowIdx++
+            $bgColor = if (($rowIdx % 2) -eq 0) { '#f8f9fa' } else { '#ffffff' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; font-size:13px;"
+
+            # Highlight: disabled in red tint, empty in orange tint
+            $rowBg = $bgColor
+            if (-not $role.Enabled) {
+                $rowBg = '#fce4e4'
+            } elseif ($role.AccessProfileCount -eq 0) {
+                $rowBg = '#fff3e0'
+            }
+
+            $enabledDisplay = if ($role.Enabled) { '<span style="color:#27ae60;">Yes</span>' } else { '<span style="color:#e74c3c;">No</span>' }
+            $requestableDisplay = if ($role.Requestable) { '<span style="color:#2980b9;">Yes</span>' } else { 'No' }
+
+            $membershipDisplay = if ($role.MembershipType -eq 'STANDARD') {
+                '<span style="color:#27ae60;">STANDARD</span>'
+            } else {
+                '<span style="color:#e67e22;">IDENTITY_LIST</span>'
+            }
+
+            # Access profile display with expandable detail
+            $apDisplay = "$($role.AccessProfileCount)"
+            if ($null -ne $role.AccessProfileNames -and $role.AccessProfileNames.Count -gt 0) {
+                $apList = ($role.AccessProfileNames | ForEach-Object { ConvertTo-SafeHtml $_ }) -join '<br/>'
+                $apDisplay = "<details><summary>$($role.AccessProfileCount)</summary><div style=""padding:4px 0; font-size:12px; color:#555555;"">$apList</div></details>"
+            }
+
+            $cells = @(
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $role.Name)</td>"
+                "<td style=""$tdStyle"">$enabledDisplay</td>"
+                "<td style=""$tdStyle"">$requestableDisplay</td>"
+                "<td style=""$tdStyle"">$membershipDisplay</td>"
+                "<td style=""$tdStyle"">$(ConvertTo-SafeHtml $role.OwnerName)</td>"
+                "<td style=""$tdStyle"">$apDisplay</td>"
+            )
+
+            if ($hasTransitive) {
+                $teDisplay = if ($null -ne $role.TransitiveEntitlements) { $role.TransitiveEntitlements } else { 'N/A' }
+                $cells += "<td style=""$tdStyle"">$teDisplay</td>"
+            }
+
+            $bodyRows.Add("<tr style=""background:$rowBg;"">$($cells -join '')</tr>")
+        }
+    } else {
+        $colSpan = $headers.Count
+        $bodyRows.Add("<tr><td colspan=""$colSpan"" style=""padding:12px; text-align:center; font-style:italic; color:#999999;"">No roles found.</td></tr>")
+    }
+
+    $tableHtml = @"
+<h2 style="font-size:16px; color:#336699; margin-top:24px; margin-bottom:8px;">Role Detail</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Role Inventory Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Role Inventory Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${membershipHtml}
+
+${healthHtml}
+
+${tableHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Role inventory HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRoleInventoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ReportPath = $htmlFile
+        }
+    }
+}
+
+#endregion
+
 #region Compliance Evidence Package (P12-01)
 
 function Export-SPCompliancePackage {
@@ -11374,5 +11851,6 @@ Export-ModuleMember -Function @(
     'Send-SPWebhook',
     'Get-SPOrchestratorHistory',
     'Export-SPOrchestratorHistoryHtml',
-    'Invoke-SPLogRetention'
+    'Invoke-SPLogRetention',
+    'Export-SPAccessProfileInventoryHtml'
 )
