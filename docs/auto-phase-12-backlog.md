@@ -48,7 +48,7 @@ Safe to modify:
 | P12-02 | Identity Risk Scoring | none | DONE |
 | P12-03 | Source Governance Scorecard | none | DONE |
 | P12-04 | Stale Access Detector | P12-03 | DONE |
-| P12-05 | Campaign Completion Summary | none | PENDING |
+| P12-05 | Campaign Completion Summary | none | DONE |
 | P12-06 | Notification Dispatcher | none | PENDING |
 | P12-07 | Orchestrator Run History | none | PENDING |
 | P12-08 | Weekly Governance Digest Script | P12-02, P12-07 | PENDING |
@@ -478,7 +478,7 @@ New function `Export-SPStaleAccessHtml`:
 
 ## P12-05: Campaign Completion Summary
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

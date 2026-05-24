@@ -103,6 +103,9 @@
 
         # SP.AuditReport - Stale Access HTML (P12-04)
         'Export-SPStaleAccessHtml'
+
+        # SP.AuditReport - Campaign Completion Report (P12-05)
+        'Export-SPCampaignCompletionReport'
     )
 
     # Do not export variables or aliases from nested modules
