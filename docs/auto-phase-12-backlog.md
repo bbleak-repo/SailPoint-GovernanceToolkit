@@ -53,7 +53,7 @@ Safe to modify:
 | P12-07 | Orchestrator Run History | none | DONE |
 | P12-08 | Weekly Governance Digest Script | P12-02, P12-07 | DONE |
 | P12-09 | Log Retention and Archival | none | DONE |
-| P12-10 | Pester Tests | P12-09 | PENDING |
+| P12-10 | Pester Tests | P12-09 | DONE |
 
 ---
 
@@ -1033,7 +1033,7 @@ function Invoke-SPLogRetention {
 
 ## P12-10: Pester Tests
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P12-09
 
 **Description:**
