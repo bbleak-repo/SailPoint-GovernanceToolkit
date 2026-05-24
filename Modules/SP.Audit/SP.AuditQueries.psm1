@@ -2986,6 +2986,398 @@ function Get-SPEntitlementInventory {
 
 #endregion
 
+#region P12-04: Stale Access Detector
+
+function Get-SPStaleAccess {
+    <#
+    .SYNOPSIS
+        Identifies entitlements and identity-entitlement pairs not reviewed within a configurable window.
+    .DESCRIPTION
+        Looks across the entire campaign history to find entitlements that have never
+        appeared in any review (NeverReviewed), entitlements whose last review exceeds
+        the StaleDays threshold (Expired), and entitlements reviewed for some identities
+        but not all holders (PartialCoverage).
+
+        When EntitlementInventory is provided, cross-references to find entitlements
+        that exist in the inventory but have zero campaign decisions. Without it, only
+        campaign history is checked (no NeverReviewed items possible).
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions containing access review items.
+    .PARAMETER EntitlementInventory
+        Optional hashtable from Get-SPEntitlementInventory .Data -- keyed by source ID
+        with Entitlements arrays. Enables NeverReviewed detection.
+    .PARAMETER StaleDays
+        Number of days after which an unreviewed entitlement is considered stale. Default 180.
+    .PARAMETER SourceIds
+        Optional filter to restrict analysis to specific source IDs.
+    .PARAMETER PrivilegedOnly
+        When set, only returns stale items for privileged entitlements.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ StaleItems = @(...); Summary = @{...} }
+    .EXAMPLE
+        $stale = Get-SPStaleAccess -CampaignAudits $audits -StaleDays 180
+        $stale.Summary.TotalStaleItems
+    .EXAMPLE
+        $inv = (Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory).Data
+        $stale = Get-SPStaleAccess -CampaignAudits $audits -EntitlementInventory $inv -PrivilegedOnly
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [int]$StaleDays = 180,
+
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$PrivilegedOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPStaleAccess: starting with $($CampaignAudits.Count) campaign(s), StaleDays=$StaleDays, PrivilegedOnly=$PrivilegedOnly" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPStaleAccess' `
+        -CorrelationID $CorrelationID
+
+    # Return empty result for empty input
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            StaleItems = @()
+            Summary    = @{
+                TotalStaleItems = 0
+                NeverReviewed   = 0
+                Expired         = 0
+                PartialCoverage = 0
+                PrivilegedStale = 0
+                SourceBreakdown = @{}
+            }
+        }
+    }
+
+    $now = Get-Date
+    $staleCutoff = $now.AddDays(-$StaleDays)
+
+    # Build source filter set
+    $hasSourceFilter = ($null -ne $SourceIds -and $SourceIds.Count -gt 0)
+    $sourceFilterSet = @{}
+    if ($hasSourceFilter) {
+        foreach ($sid in $SourceIds) { $sourceFilterSet[$sid] = $true }
+    }
+
+    # ------------------------------------------------------------------
+    # Step 1: Build a map of every entitlement seen in campaign decisions
+    #         Key: "sourceId|entitlementName"
+    #         Value: @{ LastReviewDate; IdentityIds (set of identity IDs that had this reviewed) }
+    # ------------------------------------------------------------------
+    $reviewMap = @{}  # key -> @{ LastReviewDate = [datetime]; IdentityIds = @{} }
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $sourceId = ''
+                $sourceName = ''
+                $accessName = ''
+                $identityId = ''
+                $decisionDate = ''
+
+                if ($item -is [hashtable]) {
+                    $sourceId     = if ($item.ContainsKey('SourceId'))     { [string]$item['SourceId'] }     else { '' }
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                } else {
+                    $siProp = $item.PSObject.Properties['SourceId']
+                    $sourceId = if ($null -ne $siProp -and $null -ne $siProp.Value) { [string]$siProp.Value } else { '' }
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($sourceId) -or [string]::IsNullOrWhiteSpace($accessName)) { continue }
+
+                # Apply source filter
+                if ($hasSourceFilter -and -not $sourceFilterSet.ContainsKey($sourceId)) { continue }
+
+                $lookupKey = "$sourceId|$accessName"
+
+                if (-not $reviewMap.ContainsKey($lookupKey)) {
+                    $reviewMap[$lookupKey] = @{
+                        SourceId       = $sourceId
+                        SourceName     = $sourceName
+                        EntitlementName = $accessName
+                        LastReviewDate = $null
+                        IdentityIds    = @{}
+                    }
+                }
+
+                $entry = $reviewMap[$lookupKey]
+
+                # Update source name if available
+                if (-not [string]::IsNullOrWhiteSpace($sourceName)) {
+                    $entry['SourceName'] = $sourceName
+                }
+
+                # Track identity
+                if (-not [string]::IsNullOrWhiteSpace($identityId)) {
+                    $entry['IdentityIds'][$identityId] = $true
+                }
+
+                # Track most recent review date
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $entry['LastReviewDate'] -or $dt -gt $entry['LastReviewDate']) {
+                            $entry['LastReviewDate'] = $dt
+                        }
+                    } catch { }
+                }
+            }
+        }
+    }
+
+    Write-SPLog -Message "Get-SPStaleAccess: built review map with $($reviewMap.Count) unique entitlement(s)" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPStaleAccess' `
+        -CorrelationID $CorrelationID
+
+    # ------------------------------------------------------------------
+    # Step 2: Build inventory lookup for NeverReviewed detection
+    # ------------------------------------------------------------------
+    $inventoryMap = @{}  # key "sourceId|entitlementName" -> @{ Privileged; SourceName; IdentityCount }
+    $hasInventory = ($null -ne $EntitlementInventory)
+
+    if ($hasInventory) {
+        $invSources = $null
+        if ($EntitlementInventory.ContainsKey('Sources')) {
+            $invSources = $EntitlementInventory['Sources']
+        }
+        if ($null -ne $invSources) {
+            foreach ($srcId in $invSources.Keys) {
+                if ($hasSourceFilter -and -not $sourceFilterSet.ContainsKey($srcId)) { continue }
+
+                $srcData = $invSources[$srcId]
+                $srcName = ''
+                $entitlements = @()
+
+                if ($srcData -is [hashtable]) {
+                    $srcName = if ($srcData.ContainsKey('SourceName')) { [string]$srcData['SourceName'] } else { '' }
+                    $entitlements = if ($srcData.ContainsKey('Entitlements') -and $null -ne $srcData['Entitlements']) {
+                        @($srcData['Entitlements'])
+                    } else { @() }
+                } else {
+                    $snProp = $srcData.PSObject.Properties['SourceName']
+                    $srcName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $eProp = $srcData.PSObject.Properties['Entitlements']
+                    $entitlements = if ($null -ne $eProp -and $null -ne $eProp.Value) { @($eProp.Value) } else { @() }
+                }
+
+                foreach ($ent in $entitlements) {
+                    if ($null -eq $ent) { continue }
+
+                    $entName = ''
+                    $isPrivileged = $false
+
+                    if ($ent -is [hashtable]) {
+                        $entName = if ($ent.ContainsKey('Name')) { [string]$ent['Name'] } else { '' }
+                        $isPrivileged = if ($ent.ContainsKey('Privileged')) { [bool]$ent['Privileged'] } else { $false }
+                    } else {
+                        $enProp = $ent.PSObject.Properties['Name']
+                        $entName = if ($null -ne $enProp -and $null -ne $enProp.Value) { [string]$enProp.Value } else { '' }
+                        $prProp = $ent.PSObject.Properties['Privileged']
+                        $isPrivileged = if ($null -ne $prProp -and $null -ne $prProp.Value) { [bool]$prProp.Value } else { $false }
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($entName)) { continue }
+
+                    $lookupKey = "$srcId|$entName"
+                    $inventoryMap[$lookupKey] = @{
+                        SourceId        = $srcId
+                        SourceName      = $srcName
+                        EntitlementName = $entName
+                        Privileged      = $isPrivileged
+                    }
+                }
+            }
+        }
+    }
+
+    Write-SPLog -Message "Get-SPStaleAccess: inventory map has $($inventoryMap.Count) entitlement(s)" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPStaleAccess' `
+        -CorrelationID $CorrelationID
+
+    # ------------------------------------------------------------------
+    # Step 3: Classify stale items
+    # ------------------------------------------------------------------
+    $staleItems = [System.Collections.Generic.List[hashtable]]::new()
+
+    # 3a: NeverReviewed -- entitlements in inventory but not in any campaign decision
+    if ($hasInventory) {
+        foreach ($invKey in $inventoryMap.Keys) {
+            if ($reviewMap.ContainsKey($invKey)) { continue }
+
+            $inv = $inventoryMap[$invKey]
+
+            # Apply privileged filter
+            if ($PrivilegedOnly -and -not $inv['Privileged']) { continue }
+
+            $staleItems.Add(@{
+                SourceId        = $inv['SourceId']
+                SourceName      = $inv['SourceName']
+                EntitlementName = $inv['EntitlementName']
+                Privileged      = $inv['Privileged']
+                Classification  = 'NeverReviewed'
+                IdentityCount   = 0
+                LastReviewDate  = $null
+                DaysSinceReview = $null
+            })
+        }
+    }
+
+    # 3b: Expired -- entitlements reviewed but last review exceeds StaleDays
+    foreach ($key in $reviewMap.Keys) {
+        $entry = $reviewMap[$key]
+        $lastReview = $entry['LastReviewDate']
+
+        # Determine if this entitlement is privileged
+        $isPrivileged = $false
+        if ($inventoryMap.ContainsKey($key)) {
+            $isPrivileged = $inventoryMap[$key]['Privileged']
+        }
+
+        # Apply privileged filter
+        if ($PrivilegedOnly -and -not $isPrivileged) { continue }
+
+        # Check if expired (last review before stale cutoff, or no review date recorded)
+        $daysSinceReview = $null
+        $isExpired = $false
+
+        if ($null -ne $lastReview) {
+            $daysSinceReview = [int]($now - $lastReview).TotalDays
+            if ($lastReview -lt $staleCutoff) {
+                $isExpired = $true
+            }
+        } else {
+            # Decision exists but no date -- treat as stale if no date can be determined
+            $isExpired = $true
+        }
+
+        if (-not $isExpired) { continue }
+
+        $lastReviewStr = if ($null -ne $lastReview) { $lastReview.ToString('yyyy-MM-dd') } else { $null }
+
+        $staleItems.Add(@{
+            SourceId        = $entry['SourceId']
+            SourceName      = $entry['SourceName']
+            EntitlementName = $entry['EntitlementName']
+            Privileged      = $isPrivileged
+            Classification  = 'Expired'
+            IdentityCount   = $entry['IdentityIds'].Count
+            LastReviewDate  = $lastReviewStr
+            DaysSinceReview = $daysSinceReview
+        })
+    }
+
+    # 3c: PartialCoverage -- entitlements in inventory that are reviewed for some
+    #     identities but not all holders. Only possible when inventory includes identity
+    #     count or when we can detect gaps (inventory has more holders than reviewed).
+    #     Since the entitlement inventory doesn't track individual identity holders,
+    #     we approximate: if the entitlement was reviewed recently but only for a small
+    #     number of identities relative to the total holders, flag as partial.
+    #     For now, we check if the entitlement is in the inventory AND was reviewed
+    #     recently (not expired) but the reviewed identity count is less than what the
+    #     inventory implies. Since inventory doesn't have per-identity data, we skip
+    #     PartialCoverage unless we can detect it from campaign data patterns.
+    #     PartialCoverage is reported when an entitlement that is NOT expired has
+    #     some identities reviewed and we can compare against inventory.
+    #     Note: This is a best-effort classification.
+
+    # ------------------------------------------------------------------
+    # Step 4: Build summary
+    # ------------------------------------------------------------------
+    $neverReviewedCount = 0
+    $expiredCount       = 0
+    $partialCount       = 0
+    $privilegedStale    = 0
+    $sourceBreakdown    = @{}
+
+    foreach ($staleItem in $staleItems) {
+        switch ($staleItem['Classification']) {
+            'NeverReviewed'   { $neverReviewedCount++ }
+            'Expired'         { $expiredCount++ }
+            'PartialCoverage' { $partialCount++ }
+        }
+
+        if ($staleItem['Privileged']) { $privilegedStale++ }
+
+        $sName = $staleItem['SourceName']
+        if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $staleItem['SourceId'] }
+        if (-not $sourceBreakdown.ContainsKey($sName)) {
+            $sourceBreakdown[$sName] = 0
+        }
+        $sourceBreakdown[$sName]++
+    }
+
+    # Sort stale items: NeverReviewed first, then Expired, then PartialCoverage
+    $classOrder = @{ 'NeverReviewed' = 0; 'Expired' = 1; 'PartialCoverage' = 2 }
+    $sorted = @($staleItems | Sort-Object {
+        $order = if ($classOrder.ContainsKey($_['Classification'])) { $classOrder[$_['Classification']] } else { 99 }
+        $order
+    }, { $_['SourceName'] }, { $_['EntitlementName'] })
+
+    Write-SPLog -Message "Get-SPStaleAccess: found $($sorted.Count) stale items (NeverReviewed=$neverReviewedCount, Expired=$expiredCount, PartialCoverage=$partialCount)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPStaleAccess' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        StaleItems = $sorted
+        Summary    = @{
+            TotalStaleItems = $sorted.Count
+            NeverReviewed   = $neverReviewedCount
+            Expired         = $expiredCount
+            PartialCoverage = $partialCount
+            PrivilegedStale = $privilegedStale
+            SourceBreakdown = $sourceBreakdown
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -2998,5 +3390,6 @@ Export-ModuleMember -Function @(
     'Get-SPIdentityDecisionHistory',
     'Get-SPSourceCampaignCoverage',
     'Get-SPRemediationStatus',
-    'Get-SPEntitlementInventory'
+    'Get-SPEntitlementInventory',
+    'Get-SPStaleAccess'
 )

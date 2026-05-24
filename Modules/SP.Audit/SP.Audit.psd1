@@ -86,6 +86,37 @@
 
         # SP.AuditReport - Cross-Campaign Reviewer Analysis (P11-08)
         'Measure-SPReviewerReputation'
+
+        # SP.AuditReport - Compliance Evidence Package (P12-01)
+        'Export-SPCompliancePackage'
+
+        # SP.AuditReport - Identity Risk Scoring (P12-02)
+        'Measure-SPIdentityRisk'
+        'Export-SPIdentityRiskHtml'
+
+        # SP.AuditReport - Source Governance Scorecard (P12-03)
+        'Measure-SPSourceGovernance'
+        'Export-SPSourceGovernanceHtml'
+
+        # SP.AuditQueries - Stale Access Detector (P12-04)
+        'Get-SPStaleAccess'
+
+        # SP.AuditReport - Stale Access HTML (P12-04)
+        'Export-SPStaleAccessHtml'
+
+        # SP.AuditReport - Campaign Completion Report (P12-05)
+        'Export-SPCampaignCompletionReport'
+
+        # SP.AuditReport - Notification Dispatcher (P12-06)
+        'Send-SPNotification'
+        'Send-SPWebhook'
+
+        # SP.AuditReport - Orchestrator Run History (P12-07)
+        'Get-SPOrchestratorHistory'
+        'Export-SPOrchestratorHistoryHtml'
+
+        # SP.AuditReport - Log Retention and Archival (P12-09)
+        'Invoke-SPLogRetention'
     )
 
     # Do not export variables or aliases from nested modules

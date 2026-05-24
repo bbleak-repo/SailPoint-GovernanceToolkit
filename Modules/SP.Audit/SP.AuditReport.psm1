@@ -7734,6 +7734,3609 @@ $($sourceSections -join "`n")
 
 #endregion
 
+#region Compliance Evidence Package (P12-01)
+
+function Export-SPCompliancePackage {
+    <#
+    .SYNOPSIS
+        Bundles audit artifacts from a date range into a single ZIP evidence package.
+    .DESCRIPTION
+        Scans Audit and DeltaCert output directories for HTML, CSV, JSONL, and TXT
+        artifacts, then packages them into a single ZIP file with a JSON manifest
+        containing SHA256 hashes per artifact. Designed for SOX 404, SOC 2, and
+        ISO 27001 evidence delivery.
+    .PARAMETER After
+        Include artifacts modified after this datetime.
+    .PARAMETER Before
+        Include artifacts modified before this datetime.
+    .PARAMETER AuditOutputPath
+        Audit output directory. Resolved from config if omitted.
+    .PARAMETER DeltaCertOutputPath
+        DeltaCert output directory. Resolved from config if omitted.
+    .PARAMETER OutputPath
+        Directory for the output ZIP. Defaults to current directory.
+    .PARAMETER PackageName
+        Custom ZIP file name (without extension). Auto-generated from date range if omitted.
+    .PARAMETER Scope
+        Which directories to include: Full (both), AuditOnly, or DeltaCertOnly.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Package result with path, artifact count, and category breakdown.
+    .EXAMPLE
+        Export-SPCompliancePackage -After (Get-Date).AddDays(-90) -Before (Get-Date)
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][DateTime]$After,
+        [Parameter()][DateTime]$Before,
+        [Parameter()][string]$AuditOutputPath,
+        [Parameter()][string]$DeltaCertOutputPath,
+        [Parameter()][string]$OutputPath = '.',
+        [Parameter()][string]$PackageName,
+        [Parameter()][ValidateSet('Full','AuditOnly','DeltaCertOnly')]
+        [string]$Scope = 'Full',
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: starting (Scope=$Scope)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                $AuditOutputPath = $config.Audit.OutputPath
+            }
+            if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+
+    # Resolve toolkit version
+    $toolkitVersion = 'Unknown'
+    try {
+        $cfgCheck = Get-SPConfig
+        if ($null -ne $cfgCheck -and
+            $cfgCheck.PSObject.Properties.Name -contains 'Global' -and
+            $cfgCheck.Global.PSObject.Properties.Name -contains 'ToolkitVersion') {
+            $toolkitVersion = $cfgCheck.Global.ToolkitVersion
+        }
+    } catch { }
+
+    # Ensure output directory exists
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # Supported artifact extensions
+    $supportedExtensions = @('.html', '.csv', '.jsonl', '.txt', '.json', '.log')
+
+    # Collect artifacts
+    $artifacts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Helper: scan a directory for matching files
+    function _ScanDirectory {
+        param(
+            [string]$Path,
+            [string]$Category,
+            [string]$ZipSubfolder
+        )
+        if (-not (Test-Path -Path $Path -PathType Container)) { return }
+        $files = Get-ChildItem -Path $Path -File -ErrorAction SilentlyContinue
+        foreach ($f in $files) {
+            if ($f.Extension -notin $supportedExtensions) { continue }
+            # Date range filter by last write time
+            if ($PSBoundParameters.ContainsKey('After') -or $After -ne $null) {
+                # Use the outer scope After/Before
+            }
+            if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+            if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+
+            # Determine sub-category
+            $subCategory = $Category
+            if ($f.Extension -eq '.csv') { $subCategory = 'CsvExports' }
+            elseif ($f.Extension -eq '.jsonl') { $subCategory = 'AuditTrails' }
+            elseif ($f.Extension -eq '.txt') { $subCategory = 'RemediationProof' }
+
+            # Determine zip subfolder for CSVs
+            $targetFolder = $ZipSubfolder
+            if ($f.Extension -eq '.csv') { $targetFolder = 'csv' }
+
+            $artifacts.Add(@{
+                FullPath     = $f.FullName
+                FileName     = $f.Name
+                Category     = $subCategory
+                ZipFolder    = $targetFolder
+                SizeBytes    = $f.Length
+                LastModified = $f.LastWriteTime
+            })
+        }
+    }
+
+    # Store filter dates in script scope for the helper
+    $script:filterAfter  = if ($PSBoundParameters.ContainsKey('After'))  { $After }  else { $null }
+    $script:filterBefore = if ($PSBoundParameters.ContainsKey('Before')) { $Before } else { $null }
+
+    # Scan directories based on scope
+    if ($Scope -ne 'DeltaCertOnly') {
+        _ScanDirectory -Path $AuditOutputPath -Category 'AuditReports' -ZipSubfolder 'audit'
+        # Scan leadership subdirectory
+        $leadershipPath = Join-Path -Path $AuditOutputPath -ChildPath 'leadership'
+        if (Test-Path -Path $leadershipPath -PathType Container) {
+            $leaderFiles = Get-ChildItem -Path $leadershipPath -File -ErrorAction SilentlyContinue
+            foreach ($f in $leaderFiles) {
+                if ($f.Extension -notin $supportedExtensions) { continue }
+                if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+                if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+                $artifacts.Add(@{
+                    FullPath     = $f.FullName
+                    FileName     = $f.Name
+                    Category     = 'LeadershipReports'
+                    ZipFolder    = 'leadership'
+                    SizeBytes    = $f.Length
+                    LastModified = $f.LastWriteTime
+                })
+            }
+        }
+    }
+
+    if ($Scope -ne 'AuditOnly') {
+        _ScanDirectory -Path $DeltaCertOutputPath -Category 'DeltaCertReports' -ZipSubfolder 'deltacert'
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: found $($artifacts.Count) artifacts" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Build package name
+    if ([string]::IsNullOrWhiteSpace($PackageName)) {
+        $afterStr  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('yyyy-MM-dd') }  else { 'all' }
+        $beforeStr = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('yyyy-MM-dd') } else { 'now' }
+        $PackageName = "compliance-evidence-${afterStr}-to-${beforeStr}"
+    }
+    $zipFileName = "${PackageName}.zip"
+    $zipFilePath = Join-Path -Path $OutputPath -ChildPath $zipFileName
+
+    # Remove existing ZIP if present (overwrite)
+    if (Test-Path -Path $zipFilePath) {
+        Remove-Item -Path $zipFilePath -Force
+    }
+
+    # Build manifest and create ZIP
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $packageId    = [guid]::NewGuid().ToString()
+    $generatedAt  = (Get-Date).ToUniversalTime().ToString('o')
+    $manifestArts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Compute SHA256 for each artifact
+    foreach ($art in $artifacts) {
+        $sha256 = ''
+        try {
+            $hashResult = Get-FileHash -Path $art.FullPath -Algorithm SHA256
+            $sha256 = $hashResult.Hash
+        } catch {
+            Write-SPLog -Message "Could not hash file $($art.FileName): $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+
+        $manifestArts.Add(@{
+            FileName     = $art.FileName
+            OriginalPath = $art.FullPath
+            Type         = $art.ZipFolder
+            Category     = $art.Category
+            SizeBytes    = $art.SizeBytes
+            SHA256       = $sha256
+        })
+    }
+
+    # Build category counts
+    $categories = @{
+        AuditReports      = 0
+        CsvExports        = 0
+        AuditTrails       = 0
+        LeadershipReports = 0
+        DeltaCertReports  = 0
+        RemediationProof  = 0
+    }
+    foreach ($art in $artifacts) {
+        if ($categories.ContainsKey($art.Category)) {
+            $categories[$art.Category]++
+        }
+    }
+
+    $totalSizeBytes = 0
+    foreach ($art in $artifacts) { $totalSizeBytes += $art.SizeBytes }
+
+    $dateRange = @{
+        After  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('o') }  else { $null }
+        Before = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('o') } else { $null }
+    }
+
+    $manifest = @{
+        PackageId      = $packageId
+        GeneratedAt    = $generatedAt
+        DateRange      = $dateRange
+        ToolkitVersion = $toolkitVersion
+        Artifacts      = @($manifestArts)
+        Summary        = @{
+            TotalArtifacts = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+
+    # Create ZIP archive
+    try {
+        $zipStream  = [System.IO.File]::Create($zipFilePath)
+        $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+
+        # Add manifest.json at root
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $manifestEntry = $zipArchive.CreateEntry('manifest.json')
+        $manifestWriter = [System.IO.StreamWriter]::new($manifestEntry.Open())
+        $manifestWriter.Write($manifestJson)
+        $manifestWriter.Close()
+
+        # Add each artifact to its subfolder
+        foreach ($art in $artifacts) {
+            $entryName = "$($art.ZipFolder)/$($art.FileName)"
+            $entry = $zipArchive.CreateEntry($entryName)
+            $entryStream = $entry.Open()
+            try {
+                $fileBytes = [System.IO.File]::ReadAllBytes($art.FullPath)
+                $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+            } finally {
+                $entryStream.Close()
+            }
+        }
+
+        $zipArchive.Dispose()
+        $zipStream.Close()
+    }
+    catch {
+        Write-SPLog -Message "Failed to create ZIP: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Error   = "Failed to create ZIP: $($_.Exception.Message)"
+        }
+    }
+
+    $resolvedZipPath = (Resolve-Path -Path $zipFilePath).Path
+
+    Write-SPLog -Message "Export-SPCompliancePackage: created $resolvedZipPath ($($artifacts.Count) artifacts, $totalSizeBytes bytes)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            PackagePath    = $resolvedZipPath
+            PackageId      = $packageId
+            ArtifactCount  = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+}
+
+#endregion
+
+#region Identity Risk Scoring (P12-02)
+
+function Measure-SPIdentityRisk {
+    <#
+    .SYNOPSIS
+        Aggregates risk signals per identity across all audited campaigns.
+    .DESCRIPTION
+        Consumes an array of campaign audit hashtables (same structure used by
+        Export-SPAuditCsv) and produces a composite risk score (0-100) per identity.
+        Answers: "Which identities should we prioritize for access review?"
+
+        Risk signals accumulated per identity across campaigns:
+        - StaleAccessCount: Items flagged STALE (>90 days unreviewed)
+        - PrivilegedAccessCount: Entitlements matching privileged patterns
+        - RubberStampApprovals: Items approved by reviewers flagged for rubber-stamping
+        - OrphanAccountFlag: Identity has orphan accounts
+        - OverdueRemediations: Revocations past SLA not provisioned
+        - ApprovalOnlyHistory: Never had access revoked across all campaigns
+        - CampaignsReviewed: How many campaigns included this identity
+        - LastReviewDate: Most recent campaign decision date
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions, RubberStampRisk, etc.
+    .PARAMETER HighRiskThreshold
+        Score at or above which an identity is classified High risk. Default 70.
+    .PARAMETER MediumRiskThreshold
+        Score at or above which an identity is classified Medium risk. Default 40.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); Summary = @{...} }
+    .EXAMPLE
+        $risk = Measure-SPIdentityRisk -CampaignAudits $audits
+        $risk.Identities | Where-Object { $_.RiskTier -eq 'High' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$HighRiskThreshold = 70,
+
+        [Parameter()]
+        [int]$MediumRiskThreshold = 40,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityRisk: starting with $($CampaignAudits.Count) campaign(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    # Return empty result for empty input
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Identities = @()
+            Summary    = @{
+                TotalIdentities = 0
+                High            = 0
+                Medium          = 0
+                Low             = 0
+                AvgRiskScore    = 0
+            }
+        }
+    }
+
+    # Per-identity accumulator: keyed by IdentityId
+    $identityMap = @{}
+
+    # Build rubber-stamp reviewer set per campaign
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        # Identify rubber-stamp reviewers (Medium or High severity)
+        $rubberStampReviewers = @{}
+        if ($audit.ContainsKey('RubberStampRisk') -and $null -ne $audit['RubberStampRisk']) {
+            $rsRisk = $audit['RubberStampRisk']
+            $reviewerRisks = if ($rsRisk.ContainsKey('ReviewerRisks') -and $null -ne $rsRisk['ReviewerRisks']) {
+                @($rsRisk['ReviewerRisks'])
+            } else { @() }
+            foreach ($rr in $reviewerRisks) {
+                if ($null -eq $rr) { continue }
+                $sev = ''
+                if ($rr -is [hashtable]) {
+                    $sev = if ($rr.ContainsKey('Severity')) { [string]$rr['Severity'] } else { '' }
+                } else {
+                    $sevProp = $rr.PSObject.Properties['Severity']
+                    $sev = if ($null -ne $sevProp) { [string]$sevProp.Value } else { '' }
+                }
+                if ($sev -eq 'Medium' -or $sev -eq 'High') {
+                    $name = ''
+                    if ($rr -is [hashtable]) {
+                        $name = if ($rr.ContainsKey('ReviewerName')) { [string]$rr['ReviewerName'] } else { '' }
+                    } else {
+                        $nameProp = $rr.PSObject.Properties['ReviewerName']
+                        $name = if ($null -ne $nameProp) { [string]$nameProp.Value } else { '' }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($name)) {
+                        $rubberStampReviewers[$name] = $true
+                    }
+                }
+            }
+        }
+
+        # Process all decision categories
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                # Extract identity info
+                $identityId = ''
+                $identityName = ''
+                $accessName = ''
+                $reviewerName = ''
+                $decisionDate = ''
+                $riskFlags = @()
+
+                if ($item -is [hashtable]) {
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $reviewerName = if ($item.ContainsKey('ReviewerName')) { [string]$item['ReviewerName'] } else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $nmProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $nmProp -and $null -ne $nmProp.Value) { [string]$nmProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $rnProp = $item.PSObject.Properties['ReviewerName']
+                    $reviewerName = if ($null -ne $rnProp -and $null -ne $rnProp.Value) { [string]$rnProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($identityId)) { continue }
+
+                # Initialize identity record if not seen
+                if (-not $identityMap.ContainsKey($identityId)) {
+                    $identityMap[$identityId] = @{
+                        IdentityId            = $identityId
+                        IdentityName          = $identityName
+                        StaleAccessCount      = 0
+                        PrivilegedAccessCount = 0
+                        RubberStampApprovals  = 0
+                        OrphanAccountFlag     = $false
+                        OverdueRemediations   = 0
+                        HasRevocation         = $false
+                        CampaignSet           = @{}
+                        LastReviewDate        = $null
+                    }
+                }
+
+                $idRec = $identityMap[$identityId]
+
+                # Update identity name if we have a better one
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    $idRec['IdentityName'] = $identityName
+                }
+
+                # Track campaign participation
+                $campaignName = ''
+                if ($audit.ContainsKey('CampaignName')) { $campaignName = [string]$audit['CampaignName'] }
+                if ($audit.ContainsKey('CampaignId'))   { $campaignName = [string]$audit['CampaignId'] }
+                if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                    $idRec['CampaignSet'][$campaignName] = $true
+                }
+
+                # Track last review date
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $idRec['LastReviewDate'] -or $dt -gt $idRec['LastReviewDate']) {
+                            $idRec['LastReviewDate'] = $dt
+                        }
+                    } catch { }
+                }
+
+                # Accumulate risk flags
+                foreach ($flag in $riskFlags) {
+                    switch ($flag) {
+                        'STALE'      { $idRec['StaleAccessCount']++ }
+                        'PRIVILEGED' { $idRec['PrivilegedAccessCount']++ }
+                        'ORPHAN'     { $idRec['OrphanAccountFlag'] = $true }
+                    }
+                }
+
+                # Track revocations
+                if ($category -eq 'Revoked') {
+                    $idRec['HasRevocation'] = $true
+                }
+
+                # Track rubber-stamp approvals
+                if ($category -eq 'Approved' -and
+                    -not [string]::IsNullOrWhiteSpace($reviewerName) -and
+                    $rubberStampReviewers.ContainsKey($reviewerName)) {
+                    $idRec['RubberStampApprovals']++
+                }
+
+                # Track overdue remediations (revoked items with overdue remediation)
+                if ($category -eq 'Revoked') {
+                    $remStatus = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('RemediationStatus')) {
+                        $remStatus = [string]$item['RemediationStatus']
+                    } elseif ($item -isnot [hashtable]) {
+                        $rsProp = $item.PSObject.Properties['RemediationStatus']
+                        if ($null -ne $rsProp -and $null -ne $rsProp.Value) {
+                            $remStatus = [string]$rsProp.Value
+                        }
+                    }
+                    if ($remStatus -eq 'Overdue' -or $remStatus -eq 'overdue') {
+                        $idRec['OverdueRemediations']++
+                    }
+                }
+            }
+        }
+    }
+
+    # Calculate risk scores
+    $now = Get-Date
+    $identityResults = [System.Collections.Generic.List[hashtable]]::new()
+    $highCount = 0
+    $mediumCount = 0
+    $lowCount = 0
+    $totalScore = 0.0
+
+    foreach ($idKey in $identityMap.Keys) {
+        $idRec = $identityMap[$idKey]
+
+        $score = 0
+
+        # Privileged access: +15 per privileged entitlement (max 30)
+        $privScore = [Math]::Min($idRec['PrivilegedAccessCount'] * 15, 30)
+        $score += $privScore
+
+        # Stale access: +10 per stale item (max 20)
+        $staleScore = [Math]::Min($idRec['StaleAccessCount'] * 10, 20)
+        $score += $staleScore
+
+        # Rubber-stamp approvals: +10 per rubber-stamp approval (max 20)
+        $rsScore = [Math]::Min($idRec['RubberStampApprovals'] * 10, 20)
+        $score += $rsScore
+
+        # Orphan account: +15 (flat)
+        if ($idRec['OrphanAccountFlag']) { $score += 15 }
+
+        # Overdue remediation: +15 per overdue item (max 15)
+        $overdueScore = [Math]::Min($idRec['OverdueRemediations'] * 15, 15)
+        $score += $overdueScore
+
+        # Approval-only history with 3+ campaigns: +10
+        $campaignsReviewed = $idRec['CampaignSet'].Count
+        $approvalOnly = (-not $idRec['HasRevocation']) -and ($campaignsReviewed -ge 3)
+        if ($approvalOnly) { $score += 10 }
+
+        # Not reviewed in 180+ days: +10
+        $daysSinceReview = $null
+        if ($null -ne $idRec['LastReviewDate']) {
+            $daysSinceReview = [int]($now - $idRec['LastReviewDate']).TotalDays
+            if ($daysSinceReview -ge 180) { $score += 10 }
+        }
+
+        # Clamp to 0-100
+        $score = [Math]::Max(0, [Math]::Min(100, $score))
+
+        # Determine risk tier
+        $tier = if ($score -ge $HighRiskThreshold) { 'High' }
+                elseif ($score -ge $MediumRiskThreshold) { 'Medium' }
+                else { 'Low' }
+
+        # Build top risk factors list
+        $topFactors = [System.Collections.Generic.List[string]]::new()
+        if ($idRec['PrivilegedAccessCount'] -gt 0) { $topFactors.Add('Privileged Access') }
+        if ($idRec['StaleAccessCount'] -gt 0)      { $topFactors.Add('Stale Access') }
+        if ($idRec['RubberStampApprovals'] -gt 0)   { $topFactors.Add('Rubber-Stamp Approvals') }
+        if ($idRec['OrphanAccountFlag'])            { $topFactors.Add('Orphan Account') }
+        if ($idRec['OverdueRemediations'] -gt 0)    { $topFactors.Add('Overdue Remediation') }
+        if ($approvalOnly)                          { $topFactors.Add('Approval-Only History') }
+        if ($null -ne $daysSinceReview -and $daysSinceReview -ge 180) { $topFactors.Add('Not Recently Reviewed') }
+
+        $lastReviewStr = if ($null -ne $idRec['LastReviewDate']) {
+            $idRec['LastReviewDate'].ToString('yyyy-MM-dd')
+        } else { $null }
+
+        $identityResults.Add(@{
+            IdentityId            = $idRec['IdentityId']
+            IdentityName          = $idRec['IdentityName']
+            RiskScore             = $score
+            RiskTier              = $tier
+            StaleAccessCount      = $idRec['StaleAccessCount']
+            PrivilegedAccessCount = $idRec['PrivilegedAccessCount']
+            RubberStampApprovals  = $idRec['RubberStampApprovals']
+            OrphanAccountFlag     = $idRec['OrphanAccountFlag']
+            OverdueRemediations   = $idRec['OverdueRemediations']
+            ApprovalOnlyHistory   = $approvalOnly
+            CampaignsReviewed     = $campaignsReviewed
+            LastReviewDate        = $lastReviewStr
+            TopRiskFactors        = @($topFactors)
+        })
+
+        $totalScore += $score
+        switch ($tier) {
+            'High'   { $highCount++ }
+            'Medium' { $mediumCount++ }
+            'Low'    { $lowCount++ }
+        }
+    }
+
+    # Sort by risk score descending
+    $sorted = @($identityResults | Sort-Object { $_['RiskScore'] } -Descending)
+
+    $totalIdentities = $sorted.Count
+    $avgScore = if ($totalIdentities -gt 0) {
+        [Math]::Round($totalScore / $totalIdentities, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Measure-SPIdentityRisk: scored $totalIdentities identities (High=$highCount, Medium=$mediumCount, Low=$lowCount)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Identities = $sorted
+        Summary    = @{
+            TotalIdentities = $totalIdentities
+            High            = $highCount
+            Medium          = $mediumCount
+            Low             = $lowCount
+            AvgRiskScore    = $avgScore
+        }
+    }
+}
+
+function Export-SPIdentityRiskHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML identity risk report from Measure-SPIdentityRisk output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with identities sorted by risk score.
+        Includes risk tier badges (red/orange/green), per-identity detail rows
+        showing contributing risk factors, and a summary card with tier distribution.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER RiskData
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $risk = Measure-SPIdentityRisk -CampaignAudits $audits
+        $path = Export-SPIdentityRiskHtml -RiskData $risk -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RiskData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "IdentityRisk-${timestamp}.html"
+
+    $summary    = $RiskData['Summary']
+    $identities = @($RiskData['Identities'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Total Identities<br/><span style="font-size:22px;">$($summary['TotalIdentities'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+High Risk<br/><span style="font-size:22px;">$($summary['High'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Medium Risk<br/><span style="font-size:22px;">$($summary['Medium'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Low Risk<br/><span style="font-size:22px;">$($summary['Low'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Score<br/><span style="font-size:22px;">$($summary['AvgRiskScore'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Identity table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Identity', 'Score', 'Tier', 'Privileged', 'Stale',
+        'Rubber-Stamp', 'Orphan', 'Overdue', 'Campaigns', 'Last Review', 'Top Risk Factors'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($id in $identities) {
+        $rowIdx++
+
+        $tierColor = switch ($id['RiskTier']) {
+            'High'   { 'color:#fff; background:#c0392b;' }
+            'Medium' { 'color:#fff; background:#e67e22;' }
+            'Low'    { 'color:#fff; background:#27ae60;' }
+            default  { 'color:#fff; background:#777777;' }
+        }
+        $tierBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $tierColor"">$($id['RiskTier'])</span>"
+
+        $orphanDisplay = if ($id['OrphanAccountFlag']) {
+            '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($id['LastReviewDate'])) {
+            ConvertTo-SafeHtml $id['LastReviewDate']
+        } else { 'Never' }
+
+        $factors = @($id['TopRiskFactors'])
+        $factorsDisplay = if ($factors.Count -gt 0) {
+            ($factors | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+        } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $id['IdentityName']),
+            [string]$id['RiskScore'],
+            $tierBadge,
+            [string]$id['PrivilegedAccessCount'],
+            [string]$id['StaleAccessCount'],
+            [string]$id['RubberStampApprovals'],
+            $orphanDisplay,
+            [string]$id['OverdueRemediations'],
+            [string]$id['CampaignsReviewed'],
+            $lastReview,
+            $factorsDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-tier sections ---
+    $tierSections = [System.Collections.Generic.List[string]]::new()
+    foreach ($tierName in @('High', 'Medium', 'Low')) {
+        $tierIds = @($identities | Where-Object { $_['RiskTier'] -eq $tierName })
+        if ($tierIds.Count -eq 0) { continue }
+
+        $tierHeaderColor = switch ($tierName) {
+            'High'   { '#c0392b' }
+            'Medium' { '#e67e22' }
+            'Low'    { '#27ae60' }
+        }
+
+        $detailHtml = "<h2 style=""font-size:16px; color:${tierHeaderColor}; margin-top:24px; margin-bottom:8px;"">${tierName} Risk Identities ($($tierIds.Count))</h2>"
+
+        foreach ($id in $tierIds) {
+            $nameHtml = ConvertTo-SafeHtml $id['IdentityName']
+            $detailHtml += @"
+<div style="margin-bottom:12px; padding:8px 12px; border-left:4px solid ${tierHeaderColor}; background:#fafafa;">
+<strong>${nameHtml}</strong> (Score: $($id['RiskScore']))<br/>
+<span style="font-size:12px; color:#666666;">
+Privileged: $($id['PrivilegedAccessCount']) | Stale: $($id['StaleAccessCount']) | Rubber-Stamp: $($id['RubberStampApprovals']) | Orphan: $($id['OrphanAccountFlag']) | Overdue: $($id['OverdueRemediations']) | Campaigns: $($id['CampaignsReviewed']) | Last Review: $(if ($id['LastReviewDate']) { $id['LastReviewDate'] } else { 'Never' })
+</span>
+</div>
+"@
+        }
+
+        $tierSections.Add($detailHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Risk Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Risk Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Identities by Risk Score</h2>
+${tableHtml}
+
+$($tierSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Identity risk HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityRiskHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P12-03: Source Governance Scorecard
+
+function Measure-SPSourceGovernance {
+    <#
+    .SYNOPSIS
+        Calculates a governance coverage score per configured source.
+    .DESCRIPTION
+        Combines entitlement inventory data with campaign review history to produce
+        a per-source governance grade (A-F). Answers: "How well is each source
+        being governed? Where are the blind spots?"
+
+        Grade calculation (weighted):
+        - Entitlement coverage (40%): Higher coverage = better grade
+        - Privileged coverage (25%): Privileged entitlements reviewed more strictly
+        - Review recency (20%): Recent review within window = better
+        - Campaign frequency (15%): Multiple campaigns = better
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions, RubberStampRisk, etc.
+    .PARAMETER EntitlementInventory
+        Hashtable from Get-SPEntitlementInventory .Data output containing Sources
+        and Summary. Optional -- if not provided, grades based on campaign data only.
+    .PARAMETER ReviewWindowDays
+        Number of days within which a review is considered recent. Default 365.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Sources = @(...); Summary = @{...} }
+    .EXAMPLE
+        $inv = Get-SPEntitlementInventory -SourceIds 'src-ad-001' -IncludeReviewHistory
+        $audits = Get-SPAuditCampaigns -DaysBack 90 | ForEach-Object { Get-SPAuditCampaignReport -CampaignId $_.id }
+        $result = Measure-SPSourceGovernance -CampaignAudits $audits -EntitlementInventory $inv.Data
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [int]$ReviewWindowDays = 365,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPSourceGovernance: starting with $($CampaignAudits.Count) campaign(s), ReviewWindowDays=$ReviewWindowDays" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPSourceGovernance' `
+        -CorrelationID $CorrelationID
+
+    # Return empty result for empty input
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Sources = @()
+            Summary = @{
+                TotalSources       = 0
+                GradeDistribution  = @{ A = 0; B = 0; C = 0; D = 0; F = 0 }
+                OverallCoveragePct = 0
+                AvgGovernanceScore = 0
+            }
+        }
+    }
+
+    $now = Get-Date
+
+    # -------------------------------------------------------------------
+    # Step 1: Build per-source review data from campaign decision items
+    # -------------------------------------------------------------------
+    # sourceMap: SourceName -> @{ ReviewedEntitlements (set); PrivilegedReviewed (set);
+    #   CampaignSet (set); LastReviewDate; DecisionDates (list) }
+    $sourceMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        $campaignName = ''
+        if ($audit.ContainsKey('CampaignName')) { $campaignName = [string]$audit['CampaignName'] }
+        if ([string]::IsNullOrWhiteSpace($campaignName) -and $audit.ContainsKey('CampaignId')) {
+            $campaignName = [string]$audit['CampaignId']
+        }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                # Extract fields -- support both hashtable and PSObject
+                $sourceName = ''
+                $accessName = ''
+                $decisionDate = ''
+                $riskFlags = @()
+
+                if ($item -is [hashtable]) {
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($sourceName)) { continue }
+
+                # Initialize source record
+                if (-not $sourceMap.ContainsKey($sourceName)) {
+                    $sourceMap[$sourceName] = @{
+                        SourceId             = ''
+                        ReviewedEntitlements = @{}
+                        PrivilegedReviewed   = @{}
+                        CampaignSet          = @{}
+                        LastReviewDate       = $null
+                        DecisionDates        = [System.Collections.Generic.List[datetime]]::new()
+                    }
+                }
+
+                $srcRec = $sourceMap[$sourceName]
+
+                # Track reviewed entitlements
+                if (-not [string]::IsNullOrWhiteSpace($accessName)) {
+                    $srcRec['ReviewedEntitlements'][$accessName] = $true
+
+                    # Check if privileged
+                    $isPrivileged = $false
+                    foreach ($flag in $riskFlags) {
+                        if ($flag -eq 'PRIVILEGED') { $isPrivileged = $true; break }
+                    }
+                    if ($isPrivileged) {
+                        $srcRec['PrivilegedReviewed'][$accessName] = $true
+                    }
+                }
+
+                # Track campaign participation
+                if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                    $srcRec['CampaignSet'][$campaignName] = $true
+                }
+
+                # Track review dates
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $srcRec['LastReviewDate'] -or $dt -gt $srcRec['LastReviewDate']) {
+                            $srcRec['LastReviewDate'] = $dt
+                        }
+                        $srcRec['DecisionDates'].Add($dt)
+                    } catch { }
+                }
+            }
+        }
+    }
+
+    # -------------------------------------------------------------------
+    # Step 2: Cross-reference with entitlement inventory if provided
+    # -------------------------------------------------------------------
+    # Build inventory lookup: SourceName -> @{ TotalEntitlements; PrivilegedCount; SourceId }
+    $inventoryLookup = @{}
+    if ($null -ne $EntitlementInventory -and $EntitlementInventory.ContainsKey('Sources')) {
+        $invSources = $EntitlementInventory['Sources']
+        foreach ($srcId in $invSources.Keys) {
+            $srcData = $invSources[$srcId]
+            $srcName = ''
+            if ($srcData -is [hashtable]) {
+                $srcName = if ($srcData.ContainsKey('SourceName')) { [string]$srcData['SourceName'] } else { '' }
+            } else {
+                $snProp = $srcData.PSObject.Properties['SourceName']
+                $srcName = if ($null -ne $snProp) { [string]$snProp.Value } else { '' }
+            }
+            if ([string]::IsNullOrWhiteSpace($srcName)) { continue }
+
+            $totalEnt = 0
+            $privCount = 0
+            if ($srcData -is [hashtable]) {
+                $totalEnt  = if ($srcData.ContainsKey('TotalEntitlements')) { [int]$srcData['TotalEntitlements'] } else { 0 }
+                $privCount = if ($srcData.ContainsKey('Privileged'))       { [int]$srcData['Privileged'] }       else { 0 }
+            } else {
+                $teProp = $srcData.PSObject.Properties['TotalEntitlements']
+                $totalEnt = if ($null -ne $teProp) { [int]$teProp.Value } else { 0 }
+                $ppProp = $srcData.PSObject.Properties['Privileged']
+                $privCount = if ($null -ne $ppProp) { [int]$ppProp.Value } else { 0 }
+            }
+
+            $inventoryLookup[$srcName] = @{
+                TotalEntitlements    = $totalEnt
+                PrivilegedEntitlements = $privCount
+                SourceId             = [string]$srcId
+            }
+
+            # Ensure this source appears in sourceMap even if no campaign data
+            if (-not $sourceMap.ContainsKey($srcName)) {
+                $sourceMap[$srcName] = @{
+                    SourceId             = [string]$srcId
+                    ReviewedEntitlements = @{}
+                    PrivilegedReviewed   = @{}
+                    CampaignSet          = @{}
+                    LastReviewDate       = $null
+                    DecisionDates        = [System.Collections.Generic.List[datetime]]::new()
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($sourceMap[$srcName]['SourceId'])) {
+                $sourceMap[$srcName]['SourceId'] = [string]$srcId
+            }
+        }
+    }
+
+    # -------------------------------------------------------------------
+    # Step 3: Calculate per-source governance grade
+    # -------------------------------------------------------------------
+    $sourceResults = [System.Collections.Generic.List[hashtable]]::new()
+    $gradeDistribution = @{ A = 0; B = 0; C = 0; D = 0; F = 0 }
+    $totalCoverage = 0.0
+    $totalGovernanceScore = 0.0
+    $sourcesWithCoverage = 0
+
+    foreach ($srcName in $sourceMap.Keys) {
+        $srcRec = $sourceMap[$srcName]
+        $invData = if ($inventoryLookup.ContainsKey($srcName)) { $inventoryLookup[$srcName] } else { $null }
+
+        $sourceId = $srcRec['SourceId']
+        $reviewedCount = $srcRec['ReviewedEntitlements'].Count
+        $privReviewedCount = $srcRec['PrivilegedReviewed'].Count
+        $campaignCount = $srcRec['CampaignSet'].Count
+        $lastReviewDate = $srcRec['LastReviewDate']
+
+        # Total entitlements and privileged from inventory
+        $totalEntitlements = $null
+        $privilegedEntitlements = 0
+        if ($null -ne $invData) {
+            $totalEntitlements = $invData['TotalEntitlements']
+            $privilegedEntitlements = $invData['PrivilegedEntitlements']
+            if ([string]::IsNullOrWhiteSpace($sourceId)) {
+                $sourceId = $invData['SourceId']
+            }
+        }
+
+        # Entitlement coverage percentage
+        $entCoveragePct = $null
+        if ($null -ne $totalEntitlements -and $totalEntitlements -gt 0) {
+            $entCoveragePct = [Math]::Round(($reviewedCount / $totalEntitlements) * 100, 1)
+            if ($entCoveragePct -gt 100) { $entCoveragePct = 100.0 }
+        }
+
+        # Privileged reviewed percentage
+        $privReviewedPct = $null
+        if ($privilegedEntitlements -gt 0) {
+            $privReviewedPct = [Math]::Round(($privReviewedCount / $privilegedEntitlements) * 100, 1)
+            if ($privReviewedPct -gt 100) { $privReviewedPct = 100.0 }
+        } elseif ($null -ne $invData) {
+            # Source is in inventory but has 0 privileged -- full privileged coverage by default
+            $privReviewedPct = 100.0
+        }
+
+        # Days since last review
+        $daysSinceLastReview = $null
+        $lastReviewStr = $null
+        if ($null -ne $lastReviewDate) {
+            $daysSinceLastReview = [int]($now - $lastReviewDate).TotalDays
+            $lastReviewStr = $lastReviewDate.ToString('yyyy-MM-dd')
+        }
+
+        # Average review cycle days
+        $avgReviewCycleDays = $null
+        $decisionDates = $srcRec['DecisionDates']
+        if ($decisionDates.Count -ge 2) {
+            $sortedDates = @($decisionDates | Sort-Object)
+            $totalGap = ($sortedDates[-1] - $sortedDates[0]).TotalDays
+            $avgReviewCycleDays = [int][Math]::Round($totalGap / ($sortedDates.Count - 1))
+        }
+
+        # --- Governance score calculation (0-100 weighted) ---
+        $entCoverageScore = 0.0
+        $privCoverageScore = 0.0
+        $recencyScore = 0.0
+        $frequencyScore = 0.0
+
+        # Entitlement coverage (40% weight)
+        if ($null -ne $entCoveragePct) {
+            $entCoverageScore = $entCoveragePct
+        } elseif ($campaignCount -gt 0) {
+            # No inventory data but has campaign reviews -- assume partial coverage
+            $entCoverageScore = 50.0
+        }
+        # else: 0 (no inventory, no campaigns)
+
+        # Privileged coverage (25% weight)
+        if ($null -ne $privReviewedPct) {
+            $privCoverageScore = $privReviewedPct
+        } elseif ($campaignCount -gt 0) {
+            # No inventory data but has campaigns -- assume moderate
+            $privCoverageScore = 50.0
+        }
+
+        # Review recency (20% weight)
+        if ($null -ne $daysSinceLastReview) {
+            if ($daysSinceLastReview -le 0) {
+                $recencyScore = 100.0
+            } elseif ($daysSinceLastReview -le $ReviewWindowDays) {
+                $recencyScore = [Math]::Round((1 - ($daysSinceLastReview / $ReviewWindowDays)) * 100, 1)
+                if ($recencyScore -lt 0) { $recencyScore = 0.0 }
+            }
+            # else: beyond window -> 0
+        }
+
+        # Campaign frequency (15% weight)
+        if ($campaignCount -ge 4) {
+            $frequencyScore = 100.0
+        } elseif ($campaignCount -ge 3) {
+            $frequencyScore = 80.0
+        } elseif ($campaignCount -ge 2) {
+            $frequencyScore = 60.0
+        } elseif ($campaignCount -ge 1) {
+            $frequencyScore = 40.0
+        }
+
+        $governanceScore = [Math]::Round(
+            ($entCoverageScore * 0.40) +
+            ($privCoverageScore * 0.25) +
+            ($recencyScore * 0.20) +
+            ($frequencyScore * 0.15),
+            1
+        )
+
+        # Grade assignment
+        $grade = if     ($governanceScore -ge 90) { 'A' }
+                 elseif ($governanceScore -ge 75) { 'B' }
+                 elseif ($governanceScore -ge 60) { 'C' }
+                 elseif ($governanceScore -ge 40) { 'D' }
+                 else                             { 'F' }
+
+        $gradeDistribution[$grade]++
+        $totalGovernanceScore += $governanceScore
+
+        if ($null -ne $entCoveragePct) {
+            $totalCoverage += $entCoveragePct
+            $sourcesWithCoverage++
+        }
+
+        $sourceResults.Add(@{
+            SourceId               = $sourceId
+            SourceName             = $srcName
+            TotalEntitlements      = if ($null -ne $totalEntitlements) { $totalEntitlements } else { 'Unknown' }
+            ReviewedEntitlements   = $reviewedCount
+            EntitlementCoveragePct = if ($null -ne $entCoveragePct) { $entCoveragePct } else { 'Unknown' }
+            PrivilegedEntitlements = $privilegedEntitlements
+            PrivilegedReviewedPct  = if ($null -ne $privReviewedPct) { $privReviewedPct } else { 'Unknown' }
+            CampaignCount          = $campaignCount
+            LastReviewDate         = $lastReviewStr
+            DaysSinceLastReview    = $daysSinceLastReview
+            AvgReviewCycleDays     = $avgReviewCycleDays
+            GovernanceGrade        = $grade
+            GovernanceScore        = $governanceScore
+        })
+    }
+
+    # Sort by governance score ascending (worst first for attention)
+    $sorted = @($sourceResults | Sort-Object { $_['GovernanceScore'] })
+
+    $totalSources = $sorted.Count
+    $avgGovScore = if ($totalSources -gt 0) {
+        [Math]::Round($totalGovernanceScore / $totalSources, 1)
+    } else { 0 }
+    $overallCoverage = if ($sourcesWithCoverage -gt 0) {
+        [Math]::Round($totalCoverage / $sourcesWithCoverage, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Measure-SPSourceGovernance: scored $totalSources source(s) (A=$($gradeDistribution['A']), B=$($gradeDistribution['B']), C=$($gradeDistribution['C']), D=$($gradeDistribution['D']), F=$($gradeDistribution['F']))" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPSourceGovernance' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Sources = $sorted
+        Summary = @{
+            TotalSources       = $totalSources
+            GradeDistribution  = $gradeDistribution
+            OverallCoveragePct = $overallCoverage
+            AvgGovernanceScore = $avgGovScore
+        }
+    }
+}
+
+function Export-SPSourceGovernanceHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML source governance scorecard from Measure-SPSourceGovernance output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source governance cards showing
+        grade badges (color-coded A-F), entitlement coverage bars, privileged entitlement
+        highlights, review recency indicators, and a summary card with overall coverage.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER GovernanceData
+        Hashtable output from Measure-SPSourceGovernance.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $gov = Measure-SPSourceGovernance -CampaignAudits $audits -EntitlementInventory $inv.Data
+        $path = Export-SPSourceGovernanceHtml -GovernanceData $gov -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$GovernanceData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "SourceGovernance-${timestamp}.html"
+
+    $summary = $GovernanceData['Summary']
+    $sources = @($GovernanceData['Sources'])
+
+    # --- Summary card ---
+    $gradeDist = $summary['GradeDistribution']
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary['TotalSources'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade A<br/><span style="font-size:22px;">$($gradeDist['A'])</span>
+</td>
+<td style="padding:12px 16px; background:#2980b9; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade B<br/><span style="font-size:22px;">$($gradeDist['B'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade C<br/><span style="font-size:22px;">$($gradeDist['C'])</span>
+</td>
+<td style="padding:12px 16px; background:#e74c3c; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade D<br/><span style="font-size:22px;">$($gradeDist['D'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Grade F<br/><span style="font-size:22px;">$($gradeDist['F'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Coverage<br/><span style="font-size:22px;">$($summary['OverallCoveragePct'])%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Source table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Grade', 'Score', 'Entitlements', 'Reviewed',
+        'Coverage %', 'Privileged', 'Priv Reviewed %', 'Campaigns',
+        'Last Review', 'Days Since'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($src in $sources) {
+        $rowIdx++
+
+        $gradeColor = switch ($src['GovernanceGrade']) {
+            'A' { 'color:#fff; background:#27ae60;' }
+            'B' { 'color:#fff; background:#2980b9;' }
+            'C' { 'color:#fff; background:#e67e22;' }
+            'D' { 'color:#fff; background:#e74c3c;' }
+            'F' { 'color:#fff; background:#c0392b;' }
+            default { 'color:#fff; background:#777777;' }
+        }
+        $gradeBadge = "<span style=""display:inline-block; padding:2px 10px; border-radius:3px; font-size:14px; font-weight:bold; $gradeColor"">$($src['GovernanceGrade'])</span>"
+
+        $coverageDisplay = if ($src['EntitlementCoveragePct'] -eq 'Unknown') { 'Unknown' } else { "$($src['EntitlementCoveragePct'])%" }
+        $privDisplay = if ($src['PrivilegedReviewedPct'] -eq 'Unknown') { 'Unknown' } else { "$($src['PrivilegedReviewedPct'])%" }
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($src['LastReviewDate'])) {
+            ConvertTo-SafeHtml $src['LastReviewDate']
+        } else { 'Never' }
+        $daysSince = if ($null -ne $src['DaysSinceLastReview']) {
+            $d = $src['DaysSinceLastReview']
+            if ($d -gt 365) {
+                "<span style=""color:#c0392b; font-weight:bold;"">$d</span>"
+            } elseif ($d -gt 180) {
+                "<span style=""color:#e67e22;"">$d</span>"
+            } else {
+                [string]$d
+            }
+        } else { 'N/A' }
+
+        $totalEntDisplay = if ($src['TotalEntitlements'] -eq 'Unknown') { 'Unknown' } else { [string]$src['TotalEntitlements'] }
+
+        # Coverage bar
+        $coverageBarHtml = ''
+        if ($src['EntitlementCoveragePct'] -ne 'Unknown') {
+            $pct = [int]$src['EntitlementCoveragePct']
+            $barColor = if ($pct -ge 90) { '#27ae60' } elseif ($pct -ge 60) { '#e67e22' } else { '#c0392b' }
+            $coverageBarHtml = "<div style=""width:60px; height:8px; background:#eeeeee; display:inline-block; vertical-align:middle; margin-left:4px;""><div style=""width:${pct}%; height:8px; background:${barColor};""></div></div>"
+            $coverageDisplay = "$($src['EntitlementCoveragePct'])% $coverageBarHtml"
+        }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $src['SourceName']),
+            $gradeBadge,
+            [string]$src['GovernanceScore'],
+            $totalEntDisplay,
+            [string]$src['ReviewedEntitlements'],
+            $coverageDisplay,
+            [string]$src['PrivilegedEntitlements'],
+            $privDisplay,
+            [string]$src['CampaignCount'],
+            $lastReview,
+            $daysSince
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail cards ---
+    $detailCards = [System.Collections.Generic.List[string]]::new()
+    foreach ($src in $sources) {
+        $gradeCardColor = switch ($src['GovernanceGrade']) {
+            'A' { '#27ae60' }
+            'B' { '#2980b9' }
+            'C' { '#e67e22' }
+            'D' { '#e74c3c' }
+            'F' { '#c0392b' }
+            default { '#777777' }
+        }
+
+        $nameHtml = ConvertTo-SafeHtml $src['SourceName']
+        $totalEntStr = if ($src['TotalEntitlements'] -eq 'Unknown') { 'Unknown' } else { [string]$src['TotalEntitlements'] }
+        $covPctStr = if ($src['EntitlementCoveragePct'] -eq 'Unknown') { 'Unknown' } else { "$($src['EntitlementCoveragePct'])%" }
+        $privPctStr = if ($src['PrivilegedReviewedPct'] -eq 'Unknown') { 'Unknown' } else { "$($src['PrivilegedReviewedPct'])%" }
+        $lastReviewStr = if (-not [string]::IsNullOrWhiteSpace($src['LastReviewDate'])) { $src['LastReviewDate'] } else { 'Never' }
+        $cycleDaysStr = if ($null -ne $src['AvgReviewCycleDays']) { "$($src['AvgReviewCycleDays']) days" } else { 'N/A' }
+
+        $cardHtml = @"
+<div style="margin-bottom:16px; padding:12px 16px; border-left:5px solid ${gradeCardColor}; background:#fafafa; border:1px solid #eeeeee;">
+<table style="width:100%; border-collapse:collapse;">
+<tr>
+<td style="vertical-align:top; width:70%; padding:0;">
+<strong style="font-size:15px;">${nameHtml}</strong>
+<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:14px; font-weight:bold; color:#fff; background:${gradeCardColor}; margin-left:8px;">$($src['GovernanceGrade'])</span>
+<span style="font-size:13px; color:#666666; margin-left:8px;">Score: $($src['GovernanceScore'])</span>
+</td>
+</tr>
+</table>
+<table style="width:100%; border-collapse:collapse; font-size:12px; color:#555555; margin-top:8px;">
+<tr>
+<td style="padding:2px 8px;">Entitlements: ${totalEntStr}</td>
+<td style="padding:2px 8px;">Reviewed: $($src['ReviewedEntitlements'])</td>
+<td style="padding:2px 8px;">Coverage: ${covPctStr}</td>
+<td style="padding:2px 8px;">Privileged: $($src['PrivilegedEntitlements'])</td>
+</tr>
+<tr>
+<td style="padding:2px 8px;">Priv Reviewed: ${privPctStr}</td>
+<td style="padding:2px 8px;">Campaigns: $($src['CampaignCount'])</td>
+<td style="padding:2px 8px;">Last Review: ${lastReviewStr}</td>
+<td style="padding:2px 8px;">Avg Cycle: ${cycleDaysStr}</td>
+</tr>
+</table>
+</div>
+"@
+        $detailCards.Add($cardHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Source Governance Scorecard</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Source Governance Scorecard</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Sources by Governance Score</h2>
+${tableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Detail Cards</h2>
+$($detailCards -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Source governance HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceGovernanceHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P12-04: Stale Access Detector HTML Report
+
+function Export-SPStaleAccessHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPStaleAccess output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with stale access items grouped by source,
+        sorted by classification (NeverReviewed first). Privileged entitlements are
+        highlighted in red. Includes a summary card with total stale count and source
+        breakdown. Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER StaleData
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $stale = Get-SPStaleAccess -CampaignAudits $audits -StaleDays 180
+        $path = Export-SPStaleAccessHtml -StaleData $stale -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$StaleData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "StaleAccess-${timestamp}.html"
+
+    $summary    = $StaleData['Summary']
+    $staleItems = @($StaleData['StaleItems'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Stale<br/><span style="font-size:22px;">$($summary['TotalStaleItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Never Reviewed<br/><span style="font-size:22px;">$($summary['NeverReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Expired<br/><span style="font-size:22px;">$($summary['Expired'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Partial Coverage<br/><span style="font-size:22px;">$($summary['PartialCoverage'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Privileged Stale<br/><span style="font-size:22px;">$($summary['PrivilegedStale'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Source breakdown ---
+    $sourceBreakdown = $summary['SourceBreakdown']
+    $breakdownRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $sourceBreakdown -and $sourceBreakdown.Count -gt 0) {
+        $sbIdx = 0
+        foreach ($sName in ($sourceBreakdown.Keys | Sort-Object)) {
+            $sbIdx++
+            $cells = @((ConvertTo-SafeHtml $sName), [string]$sourceBreakdown[$sName])
+            $breakdownRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sbIdx % 2) -eq 0)))
+        }
+    }
+
+    $breakdownHtml = ''
+    if ($breakdownRows.Count -gt 0) {
+        $bHeader = Build-HtmlTableHeader -Headers @('Source', 'Stale Items')
+        $breakdownHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Breakdown</h2>
+<table style="width:50%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${bHeader}
+<tbody>
+$($breakdownRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Main table grouped by source ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Entitlement', 'Privileged', 'Classification',
+        'Identity Count', 'Last Review', 'Days Since Review'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($item in $staleItems) {
+        $rowIdx++
+
+        # Classification badge
+        $classColor = switch ($item['Classification']) {
+            'NeverReviewed'   { 'color:#fff; background:#c0392b;' }
+            'Expired'         { 'color:#fff; background:#e67e22;' }
+            'PartialCoverage' { 'color:#fff; background:#f39c12;' }
+            default           { 'color:#fff; background:#777777;' }
+        }
+        $classBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $classColor"">$($item['Classification'])</span>"
+
+        # Privileged highlight
+        $privDisplay = if ($item['Privileged']) {
+            '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        # Last review date
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($item['LastReviewDate'])) {
+            ConvertTo-SafeHtml $item['LastReviewDate']
+        } else { 'Never' }
+
+        # Days since review with color coding
+        $daysSince = if ($null -ne $item['DaysSinceReview']) {
+            $days = [int]$item['DaysSinceReview']
+            $dayColor = if ($days -ge 365) { '#c0392b' } elseif ($days -ge 180) { '#e67e22' } else { '#27ae60' }
+            "<span style=""color:${dayColor}; font-weight:bold;"">$days</span>"
+        } else { '-' }
+
+        $identityCount = if ($null -ne $item['IdentityCount']) { [string]$item['IdentityCount'] } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $item['SourceName']),
+            (ConvertTo-SafeHtml $item['EntitlementName']),
+            $privDisplay,
+            $classBadge,
+            $identityCount,
+            $lastReview,
+            $daysSince
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail sections ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    # Group items by source
+    $sourceGroups = @{}
+    foreach ($item in $staleItems) {
+        $sName = $item['SourceName']
+        if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $item['SourceId'] }
+        if (-not $sourceGroups.ContainsKey($sName)) {
+            $sourceGroups[$sName] = [System.Collections.Generic.List[hashtable]]::new()
+        }
+        $sourceGroups[$sName].Add($item)
+    }
+
+    foreach ($sName in ($sourceGroups.Keys | Sort-Object)) {
+        $groupItems = $sourceGroups[$sName]
+        $sectionHtml = "<h2 style=""font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;"">$(ConvertTo-SafeHtml $sName) ($($groupItems.Count) stale)</h2>"
+
+        foreach ($item in $groupItems) {
+            $entHtml = ConvertTo-SafeHtml $item['EntitlementName']
+            $classLabel = $item['Classification']
+            $borderColor = switch ($classLabel) {
+                'NeverReviewed'   { '#c0392b' }
+                'Expired'         { '#e67e22' }
+                'PartialCoverage' { '#f39c12' }
+                default           { '#777777' }
+            }
+
+            $privTag = if ($item['Privileged']) { ' <span style="color:#c0392b; font-weight:bold;">[PRIVILEGED]</span>' } else { '' }
+
+            $lastReviewDetail = if (-not [string]::IsNullOrWhiteSpace($item['LastReviewDate'])) {
+                $item['LastReviewDate']
+            } else { 'Never' }
+
+            $daysDetail = if ($null -ne $item['DaysSinceReview']) { "$($item['DaysSinceReview']) days" } else { 'N/A' }
+
+            $sectionHtml += @"
+<div style="margin-bottom:8px; padding:6px 12px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>${entHtml}</strong>${privTag} - <em>${classLabel}</em><br/>
+<span style="font-size:12px; color:#666666;">
+Identities: $($item['IdentityCount']) | Last Review: ${lastReviewDetail} | Days Since: ${daysDetail}
+</span>
+</div>
+"@
+        }
+
+        $sourceSections.Add($sectionHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Stale Access Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Stale Access Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${breakdownHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Stale Access Items</h2>
+${tableHtml}
+
+$($sourceSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Stale access HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPStaleAccessHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P12-05: Campaign Completion Summary
+
+function Export-SPCampaignCompletionReport {
+    <#
+    .SYNOPSIS
+        Generates a per-campaign completion report HTML file with KPIs and reviewer scorecard.
+    .DESCRIPTION
+        Produces a focused single-campaign wrap-up report with six sections:
+        1) Campaign header  2) KPI dashboard  3) Cycle-over-cycle comparison
+        4) Reviewer scorecard  5) Remediation tracking  6) Risk summary
+
+        Designed as the operational "how did this campaign go?" report for campaign
+        owners. Also serves as an attachment for the notification dispatcher (P12-06).
+        Uses the same inline-CSS-only pattern as Export-SPAuditHtml for Word compatibility.
+    .PARAMETER CampaignAudit
+        Single campaign audit hashtable (same structure as Build-SingleCampaignHtml):
+        CampaignName, CampaignId, Status, Created, Completed, Deadline,
+        Decisions, Reviewers, ReviewerMetrics, RubberStampRisk, etc.
+    .PARAMETER PreviousCycleAudit
+        Optional campaign audit hashtable from the previous cycle of the same campaign
+        type. When provided, a cycle-over-cycle comparison section is generated.
+    .PARAMETER RemediationStatus
+        Optional hashtable from Get-SPRemediationStatus. When provided, a remediation
+        tracking section is generated.
+    .PARAMETER OutputPath
+        Directory for the HTML output file. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID for log entries and report footer.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ ReportPath; CampaignName; KPIs } }
+    .EXAMPLE
+        $result = Export-SPCampaignCompletionReport -CampaignAudit $audit -OutputPath '.\Audit'
+        Write-Host "Report: $($result.Data.ReportPath)"
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$CampaignAudit,
+
+        [Parameter()]
+        [hashtable]$PreviousCycleAudit,
+
+        [Parameter()]
+        [hashtable]$RemediationStatus,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Generating campaign completion report" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionReport' `
+        -CorrelationID $CorrelationID
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $dateStamp   = (Get-Date).ToString('yyyy-MM-dd')
+
+        # --- Extract campaign fields ---
+        $campaignName = if ($CampaignAudit.ContainsKey('CampaignName') -and $null -ne $CampaignAudit['CampaignName']) { [string]$CampaignAudit['CampaignName'] } else { 'Unknown' }
+        $campaignId   = if ($CampaignAudit.ContainsKey('CampaignId')   -and $null -ne $CampaignAudit['CampaignId'])   { [string]$CampaignAudit['CampaignId']   } else { '' }
+        $status       = if ($CampaignAudit.ContainsKey('Status')       -and $null -ne $CampaignAudit['Status'])       { [string]$CampaignAudit['Status']       } else { '' }
+        $createdRaw   = if ($CampaignAudit.ContainsKey('Created')      -and $null -ne $CampaignAudit['Created'])      { [string]$CampaignAudit['Created']      } else { '' }
+        $completedRaw = if ($CampaignAudit.ContainsKey('Completed')    -and $null -ne $CampaignAudit['Completed'])    { [string]$CampaignAudit['Completed']    } else { '' }
+        $deadlineRaw  = if ($CampaignAudit.ContainsKey('Deadline')     -and $null -ne $CampaignAudit['Deadline'])     { [string]$CampaignAudit['Deadline']     }
+                        elseif ($CampaignAudit.ContainsKey('deadline')  -and $null -ne $CampaignAudit['deadline'])     { [string]$CampaignAudit['deadline']     }
+                        else { '' }
+        $campaignType = if ($CampaignAudit.ContainsKey('CampaignType')  -and $null -ne $CampaignAudit['CampaignType'])  { [string]$CampaignAudit['CampaignType']  } else { '' }
+
+        $decisions       = if ($CampaignAudit.ContainsKey('Decisions')       -and $null -ne $CampaignAudit['Decisions'])       { $CampaignAudit['Decisions']       } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+        $reviewerMetrics = if ($CampaignAudit.ContainsKey('ReviewerMetrics') -and $null -ne $CampaignAudit['ReviewerMetrics']) { $CampaignAudit['ReviewerMetrics'] } else { $null }
+        $rubberStampRisk = if ($CampaignAudit.ContainsKey('RubberStampRisk') -and $null -ne $CampaignAudit['RubberStampRisk']) { $CampaignAudit['RubberStampRisk'] } else { $null }
+        $riskFlags       = if ($CampaignAudit.ContainsKey('RiskFlags')       -and $null -ne $CampaignAudit['RiskFlags'])       { $CampaignAudit['RiskFlags']       } else { $null }
+
+        # --- Decision counts ---
+        $approvedCount = if ($null -ne $decisions['Approved']) { @($decisions['Approved']).Count } else { 0 }
+        $revokedCount  = if ($null -ne $decisions['Revoked'])  { @($decisions['Revoked']).Count  } else { 0 }
+        $pendingCount  = if ($null -ne $decisions['Pending'])  { @($decisions['Pending']).Count  } else { 0 }
+        $totalItems    = $approvedCount + $revokedCount + $pendingCount
+        $decidedCount  = $approvedCount + $revokedCount
+
+        # --- KPI calculations ---
+        $completionRate  = if ($totalItems -gt 0) { [Math]::Round(($decidedCount / $totalItems) * 100, 1) } else { 0.0 }
+        $approvalRate    = if ($totalItems -gt 0) { [Math]::Round(($approvedCount / $totalItems) * 100, 1) } else { 0.0 }
+        $revocationRate  = if ($totalItems -gt 0) { [Math]::Round(($revokedCount / $totalItems) * 100, 1) } else { 0.0 }
+
+        $avgResponseHours = 0.0
+        if ($null -ne $reviewerMetrics -and $null -ne $reviewerMetrics['CampaignAvgHours']) {
+            $avgResponseHours = [Math]::Round([double]$reviewerMetrics['CampaignAvgHours'], 1)
+        }
+        elseif ($null -ne $reviewerMetrics -and $null -ne $reviewerMetrics.CampaignAvgHours) {
+            $avgResponseHours = [Math]::Round([double]$reviewerMetrics.CampaignAvgHours, 1)
+        }
+
+        # On-time completion
+        $onTimeCompletion = $false
+        $dtCreated   = $null
+        $dtCompleted = $null
+        $dtDeadline  = $null
+
+        if (-not [string]::IsNullOrWhiteSpace($createdRaw)) {
+            try { $dtCreated = [datetime]::Parse($createdRaw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($completedRaw)) {
+            try { $dtCompleted = [datetime]::Parse($completedRaw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($deadlineRaw)) {
+            try { $dtDeadline = [datetime]::Parse($deadlineRaw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        }
+
+        if ($null -ne $dtCompleted -and $null -ne $dtDeadline) {
+            $onTimeCompletion = ($dtCompleted.ToUniversalTime() -le $dtDeadline.ToUniversalTime())
+        }
+        elseif ($null -ne $dtCompleted) {
+            # No deadline -- treat as on-time
+            $onTimeCompletion = $true
+        }
+
+        # Duration display
+        $durationDisplay = 'N/A'
+        if ($null -ne $dtCreated -and $null -ne $dtCompleted) {
+            $durationHours = ($dtCompleted - $dtCreated).TotalHours
+            if ($durationHours -lt 0) { $durationHours = 0 }
+            $durationDisplay = Format-HoursDisplay $durationHours
+        }
+
+        # --- Inline styles ---
+        $sectionHeadStyle = 'style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;"'
+        $tableStyle       = 'style="width:100%; border-collapse:collapse; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; margin-bottom:20px;"'
+        $summaryTdLabel   = 'style="padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;"'
+        $summaryTdValue   = 'style="padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+
+        $statusColor = switch ($status.ToUpperInvariant()) {
+            'COMPLETED' { '#339933' }
+            'ACTIVE'    { '#336699' }
+            'STAGED'    { '#FF8800' }
+            default     { '#777777' }
+        }
+        $statusBadge = "<span style=""display:inline-block; padding:3px 10px; border-radius:3px; color:#ffffff; background:${statusColor}; font-size:12px; font-weight:bold;"">$(ConvertTo-SafeHtml $status)</span>"
+
+        $onTimeDisplay = if ($onTimeCompletion) {
+            '<span style="color:#339933; font-weight:bold;">Yes</span>'
+        } else {
+            '<span style="color:#CC3333; font-weight:bold;">No</span>'
+        }
+
+        # ===================================================================
+        # SECTION 1: Campaign Header
+        # ===================================================================
+        $headerHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">1. Campaign Overview</h2>
+<table $tableStyle>
+<tbody>
+<tr><td $summaryTdLabel>Campaign Name</td><td $summaryTdValue>$(ConvertTo-SafeHtml $campaignName)</td></tr>
+<tr><td $summaryTdLabel>Campaign ID</td><td $summaryTdValue>$(ConvertTo-SafeHtml $campaignId)</td></tr>
+<tr><td $summaryTdLabel>Type</td><td $summaryTdValue>$(ConvertTo-SafeHtml $campaignType)</td></tr>
+<tr><td $summaryTdLabel>Status</td><td $summaryTdValue>${statusBadge}</td></tr>
+<tr><td $summaryTdLabel>Created</td><td $summaryTdValue>$(Format-HtmlDate $createdRaw)</td></tr>
+<tr><td $summaryTdLabel>Completed</td><td $summaryTdValue>$(Format-HtmlDate $completedRaw)</td></tr>
+<tr><td $summaryTdLabel>Deadline</td><td $summaryTdValue>$(Format-HtmlDate $deadlineRaw)</td></tr>
+<tr><td $summaryTdLabel>Duration</td><td $summaryTdValue>$(ConvertTo-SafeHtml $durationDisplay)</td></tr>
+</tbody>
+</table>
+"@
+
+        # ===================================================================
+        # SECTION 2: KPI Dashboard
+        # ===================================================================
+        $kpiHtml = @"
+<h2 $sectionHeadStyle>2. KPI Dashboard</h2>
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Completion<br/><span style="font-size:22px;">${completionRate}%</span>
+</td>
+<td style="padding:12px 16px; background:#339933; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Approval Rate<br/><span style="font-size:22px;">${approvalRate}%</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Revocation Rate<br/><span style="font-size:22px;">${revocationRate}%</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Response<br/><span style="font-size:22px;">$(Format-HoursDisplay $avgResponseHours)</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+On-Time<br/><span style="font-size:22px;">${onTimeDisplay}</span>
+</td>
+</tr>
+</table>
+<table $tableStyle>
+<tbody>
+<tr><td $summaryTdLabel>Total Items</td><td $summaryTdValue>${totalItems}</td></tr>
+<tr><td $summaryTdLabel>Approved</td><td $summaryTdValue>${approvedCount}</td></tr>
+<tr><td $summaryTdLabel>Revoked</td><td $summaryTdValue>${revokedCount}</td></tr>
+<tr><td $summaryTdLabel>Pending</td><td $summaryTdValue>${pendingCount}</td></tr>
+</tbody>
+</table>
+"@
+
+        # ===================================================================
+        # SECTION 3: Cycle-over-Cycle Comparison
+        # ===================================================================
+        $comparisonHtml = ''
+        if ($null -ne $PreviousCycleAudit) {
+            $prevDecisions   = if ($PreviousCycleAudit.ContainsKey('Decisions') -and $null -ne $PreviousCycleAudit['Decisions']) { $PreviousCycleAudit['Decisions'] } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+            $prevApproved    = if ($null -ne $prevDecisions['Approved']) { @($prevDecisions['Approved']).Count } else { 0 }
+            $prevRevoked     = if ($null -ne $prevDecisions['Revoked'])  { @($prevDecisions['Revoked']).Count  } else { 0 }
+            $prevPending     = if ($null -ne $prevDecisions['Pending'])  { @($prevDecisions['Pending']).Count  } else { 0 }
+            $prevTotal       = $prevApproved + $prevRevoked + $prevPending
+            $prevDecided     = $prevApproved + $prevRevoked
+
+            $prevApprovalRate   = if ($prevTotal -gt 0) { [Math]::Round(($prevApproved / $prevTotal) * 100, 1) } else { 0.0 }
+            $prevRevocationRate = if ($prevTotal -gt 0) { [Math]::Round(($prevRevoked / $prevTotal) * 100, 1) } else { 0.0 }
+            $prevCompletionRate = if ($prevTotal -gt 0) { [Math]::Round(($prevDecided / $prevTotal) * 100, 1) } else { 0.0 }
+
+            $prevAvgResponse = 0.0
+            $prevReviewerMetrics = if ($PreviousCycleAudit.ContainsKey('ReviewerMetrics') -and $null -ne $PreviousCycleAudit['ReviewerMetrics']) { $PreviousCycleAudit['ReviewerMetrics'] } else { $null }
+            if ($null -ne $prevReviewerMetrics -and $null -ne $prevReviewerMetrics['CampaignAvgHours']) {
+                $prevAvgResponse = [Math]::Round([double]$prevReviewerMetrics['CampaignAvgHours'], 1)
+            }
+            elseif ($null -ne $prevReviewerMetrics -and $null -ne $prevReviewerMetrics.CampaignAvgHours) {
+                $prevAvgResponse = [Math]::Round([double]$prevReviewerMetrics.CampaignAvgHours, 1)
+            }
+
+            $prevCampaignName = if ($PreviousCycleAudit.ContainsKey('CampaignName') -and $null -ne $PreviousCycleAudit['CampaignName']) { [string]$PreviousCycleAudit['CampaignName'] } else { 'Previous Cycle' }
+
+            # Delta calculations with arrow indicators
+            $deltaApproval   = [Math]::Round($approvalRate - $prevApprovalRate, 1)
+            $deltaRevocation = [Math]::Round($revocationRate - $prevRevocationRate, 1)
+            $deltaResponse   = [Math]::Round($avgResponseHours - $prevAvgResponse, 1)
+            $deltaRevCount   = $revokedCount - $prevRevoked
+
+            # Format delta cells with color coding
+            # For approval rate: up is neutral, down is neutral (depends on context)
+            # For response time: down (faster) is green, up (slower) is red
+            $approvalDeltaColor = if ($deltaApproval -gt 0) { '#336699' } elseif ($deltaApproval -lt 0) { '#CC3333' } else { '#777777' }
+            $approvalArrow = if ($deltaApproval -gt 0) { '&#9650;' } elseif ($deltaApproval -lt 0) { '&#9660;' } else { '&#9644;' }
+
+            $responseDeltaColor = if ($deltaResponse -lt 0) { '#339933' } elseif ($deltaResponse -gt 0) { '#CC3333' } else { '#777777' }
+            $responseArrow = if ($deltaResponse -lt 0) { '&#9660;' } elseif ($deltaResponse -gt 0) { '&#9650;' } else { '&#9644;' }
+
+            $revCountDeltaColor = if ($deltaRevCount -gt 0) { '#CC3333' } elseif ($deltaRevCount -lt 0) { '#339933' } else { '#777777' }
+            $revCountArrow = if ($deltaRevCount -gt 0) { '&#9650;' } elseif ($deltaRevCount -lt 0) { '&#9660;' } else { '&#9644;' }
+
+            $comparisonHtml = @"
+<h2 $sectionHeadStyle>3. Cycle-over-Cycle Comparison</h2>
+<p style="font-size:13px; color:#666666; margin-bottom:8px;">Comparing with: $(ConvertTo-SafeHtml $prevCampaignName)</p>
+<table $tableStyle>
+$(Build-HtmlTableHeader -Headers @('Metric', 'Current', 'Previous', 'Delta'))
+<tbody>
+$(Build-HtmlTableRow -Cells @('Approval Rate', "${approvalRate}%", "${prevApprovalRate}%", "<span style=""color:${approvalDeltaColor}; font-weight:bold;"">${approvalArrow} ${deltaApproval}%</span>") -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('Revocation Rate', "${revocationRate}%", "${prevRevocationRate}%", "<span style=""color:${revCountDeltaColor}; font-weight:bold;"">${revCountArrow} $([Math]::Round($revocationRate - $prevRevocationRate, 1))%</span>") -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('Revocation Count', "${revokedCount}", "${prevRevoked}", "<span style=""color:${revCountDeltaColor}; font-weight:bold;"">${revCountArrow} ${deltaRevCount}</span>") -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('Avg Response Time', "$(Format-HoursDisplay $avgResponseHours)", "$(Format-HoursDisplay $prevAvgResponse)", "<span style=""color:${responseDeltaColor}; font-weight:bold;"">${responseArrow} $(Format-HoursDisplay ([Math]::Abs($deltaResponse)))</span>") -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('Total Items', "${totalItems}", "${prevTotal}", "$($totalItems - $prevTotal)") -IsAlternate $false)
+</tbody>
+</table>
+"@
+        }
+        else {
+            $comparisonHtml = @"
+<h2 $sectionHeadStyle>3. Cycle-over-Cycle Comparison</h2>
+<p style="font-size:13px; color:#888888; padding:12px; background:#f9f9f9; border-left:4px solid #dddddd;">No prior cycle data available for comparison.</p>
+"@
+        }
+
+        # ===================================================================
+        # SECTION 4: Reviewer Scorecard
+        # ===================================================================
+        $reviewerHtml = "<h2 $sectionHeadStyle>4. Reviewer Scorecard</h2>"
+
+        $reviewerList = @()
+        if ($null -ne $reviewerMetrics) {
+            if ($null -ne $reviewerMetrics['ReviewerMetrics']) {
+                $reviewerList = @($reviewerMetrics['ReviewerMetrics'])
+            }
+            elseif ($null -ne $reviewerMetrics.ReviewerMetrics) {
+                $reviewerList = @($reviewerMetrics.ReviewerMetrics)
+            }
+        }
+
+        # Build rubber-stamp lookup
+        $rubberStampMap = @{}
+        if ($null -ne $rubberStampRisk) {
+            $rsReviewers = @()
+            if ($null -ne $rubberStampRisk['ReviewerRisks']) {
+                $rsReviewers = @($rubberStampRisk['ReviewerRisks'])
+            }
+            elseif ($null -ne $rubberStampRisk.ReviewerRisks) {
+                $rsReviewers = @($rubberStampRisk.ReviewerRisks)
+            }
+            foreach ($rs in $rsReviewers) {
+                $rsName = ''
+                if ($null -ne $rs.Name) { $rsName = [string]$rs.Name }
+                elseif ($null -ne $rs.ReviewerName) { $rsName = [string]$rs.ReviewerName }
+                if (-not [string]::IsNullOrWhiteSpace($rsName)) {
+                    $rsSeverity = ''
+                    if ($null -ne $rs.Severity) { $rsSeverity = [string]$rs.Severity }
+                    elseif ($null -ne $rs.RiskLevel) { $rsSeverity = [string]$rs.RiskLevel }
+                    $rubberStampMap[$rsName] = $rsSeverity
+                }
+            }
+        }
+
+        if ($reviewerList.Count -gt 0) {
+            $revHeaderRow = Build-HtmlTableHeader -Headers @('Reviewer', 'Items', 'Decisions', 'Pending', 'Avg Response', 'Rubber-Stamp Risk')
+            $revBodyRows = [System.Collections.Generic.List[string]]::new()
+            $revIdx = 0
+
+            foreach ($rev in $reviewerList) {
+                $revIdx++
+                $revName       = if ($null -ne $rev.Name)          { ConvertTo-SafeHtml $rev.Name }          else { 'Unknown' }
+                $revTotalItems = if ($null -ne $rev.TotalItems)    { [int]$rev.TotalItems }    else { 0 }
+                $revDecisions  = if ($null -ne $rev.DecisionsMade) { [int]$rev.DecisionsMade } else { 0 }
+                $revPending    = $revTotalItems - $revDecisions
+                if ($revPending -lt 0) { $revPending = 0 }
+                $revAvgHours   = if ($null -ne $rev.AvgHours)     { Format-HoursDisplay $rev.AvgHours }     else { 'N/A' }
+
+                # Rubber-stamp flag
+                $rsFlag = 'None'
+                $rsFlagHtml = '<span style="color:#339933;">None</span>'
+                $revNameRaw = if ($null -ne $rev.Name) { [string]$rev.Name } else { '' }
+                if ($rubberStampMap.ContainsKey($revNameRaw)) {
+                    $rsFlag = $rubberStampMap[$revNameRaw]
+                    $rsFlagHtml = switch ($rsFlag.ToUpperInvariant()) {
+                        'HIGH'   { '<span style="color:#CC3333; font-weight:bold;">High</span>' }
+                        'MEDIUM' { '<span style="color:#FF8800; font-weight:bold;">Medium</span>' }
+                        'LOW'    { '<span style="color:#336699;">Low</span>' }
+                        default  { '<span style="color:#339933;">None</span>' }
+                    }
+                }
+
+                $cells = @($revName, [string]$revTotalItems, [string]$revDecisions, [string]$revPending, $revAvgHours, $rsFlagHtml)
+                $revBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($revIdx % 2) -eq 0)))
+            }
+
+            $reviewerHtml += @"
+<table $tableStyle>
+${revHeaderRow}
+<tbody>
+$($revBodyRows -join "`n")
+</tbody>
+</table>
+"@
+        }
+        else {
+            $reviewerHtml += '<p style="font-size:13px; color:#888888; padding:12px; background:#f9f9f9; border-left:4px solid #dddddd;">No reviewer metrics available.</p>'
+        }
+
+        # ===================================================================
+        # SECTION 5: Remediation Tracking
+        # ===================================================================
+        $remediationHtml = "<h2 $sectionHeadStyle>5. Remediation Tracking</h2>"
+
+        if ($null -ne $RemediationStatus -and $null -ne $RemediationStatus['Data']) {
+            $remData = $RemediationStatus['Data']
+            $remItems = @()
+            if ($null -ne $remData.Items) { $remItems = @($remData.Items) }
+            elseif ($null -ne $remData['Items']) { $remItems = @($remData['Items']) }
+
+            $remProvisionedCount = 0
+            $remPendingCount     = 0
+            $remOverdueCount     = 0
+            $remFailedCount      = 0
+            $remDaysList         = [System.Collections.Generic.List[double]]::new()
+
+            foreach ($ri in $remItems) {
+                $riStatus = ''
+                if ($null -ne $ri.Status) { $riStatus = [string]$ri.Status }
+                elseif ($null -ne $ri['Status']) { $riStatus = [string]$ri['Status'] }
+
+                switch ($riStatus.ToUpperInvariant()) {
+                    'PROVISIONED' { $remProvisionedCount++ }
+                    'COMPLETED'   { $remProvisionedCount++ }
+                    'PENDING'     { $remPendingCount++ }
+                    'OVERDUE'     { $remOverdueCount++ }
+                    'FAILED'      { $remFailedCount++ }
+                    default       { $remPendingCount++ }
+                }
+
+                # Collect days to remediate for completed items
+                $remDays = $null
+                if ($null -ne $ri.DaysToRemediate) { $remDays = $ri.DaysToRemediate }
+                elseif ($null -ne $ri['DaysToRemediate']) { $remDays = $ri['DaysToRemediate'] }
+                if ($null -ne $remDays) {
+                    try { $remDaysList.Add([double]$remDays) } catch { }
+                }
+            }
+
+            $remTotal = $remProvisionedCount + $remPendingCount + $remOverdueCount + $remFailedCount
+            $slaCompliancePct = if ($remTotal -gt 0) { [Math]::Round(($remProvisionedCount / $remTotal) * 100, 1) } else { 0.0 }
+            $avgDaysToRemediate = if ($remDaysList.Count -gt 0) { [Math]::Round(($remDaysList | Measure-Object -Average).Average, 1) } else { 0.0 }
+
+            $slaColor = if ($slaCompliancePct -ge 90) { '#339933' } elseif ($slaCompliancePct -ge 70) { '#FF8800' } else { '#CC3333' }
+
+            $remediationHtml += @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+<tr>
+<td style="padding:12px 16px; background:${slaColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+SLA Compliance<br/><span style="font-size:22px;">${slaCompliancePct}%</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Avg Days to Remediate<br/><span style="font-size:22px;">${avgDaysToRemediate}</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Total Remediations<br/><span style="font-size:22px;">${remTotal}</span>
+</td>
+<td style="padding:12px 16px; background:$(if ($remOverdueCount -gt 0) { '#CC3333' } else { '#339933' }); color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Overdue<br/><span style="font-size:22px;">${remOverdueCount}</span>
+</td>
+</tr>
+</table>
+<table $tableStyle>
+$(Build-HtmlTableHeader -Headers @('Status', 'Count'))
+<tbody>
+$(Build-HtmlTableRow -Cells @('Provisioned / Completed', [string]$remProvisionedCount) -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('Pending', [string]$remPendingCount) -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('Overdue', "<span style=""color:#CC3333; font-weight:bold;"">${remOverdueCount}</span>") -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('Failed', "<span style=""color:#CC3333; font-weight:bold;"">${remFailedCount}</span>") -IsAlternate $true)
+</tbody>
+</table>
+"@
+        }
+        else {
+            $remediationHtml += '<p style="font-size:13px; color:#888888; padding:12px; background:#f9f9f9; border-left:4px solid #dddddd;">Remediation data not available.</p>'
+        }
+
+        # ===================================================================
+        # SECTION 6: Risk Summary
+        # ===================================================================
+        $riskHtml = "<h2 $sectionHeadStyle>6. Risk Summary</h2>"
+
+        $riskSummary = $null
+        if ($null -ne $riskFlags) {
+            if ($null -ne $riskFlags['Summary']) { $riskSummary = $riskFlags['Summary'] }
+            elseif ($null -ne $riskFlags.Summary) { $riskSummary = $riskFlags.Summary }
+        }
+
+        if ($null -ne $riskSummary) {
+            $riskTotal   = if ($null -ne $riskSummary['Total'])   { [int]$riskSummary['Total'] }   elseif ($null -ne $riskSummary.Total)   { [int]$riskSummary.Total }   else { 0 }
+            $riskFlagged = if ($null -ne $riskSummary['Flagged']) { [int]$riskSummary['Flagged'] } elseif ($null -ne $riskSummary.Flagged) { [int]$riskSummary.Flagged } else { 0 }
+
+            $byFlag = $null
+            if ($null -ne $riskSummary['ByFlag']) { $byFlag = $riskSummary['ByFlag'] }
+            elseif ($null -ne $riskSummary.ByFlag) { $byFlag = $riskSummary.ByFlag }
+
+            $riskHtml += @"
+<table $tableStyle>
+<tbody>
+<tr><td $summaryTdLabel>Total Items Assessed</td><td $summaryTdValue>${riskTotal}</td></tr>
+<tr><td $summaryTdLabel>Items with Risk Flags</td><td $summaryTdValue><span style="color:#CC3333; font-weight:bold;">${riskFlagged}</span></td></tr>
+</tbody>
+</table>
+"@
+
+            if ($null -ne $byFlag) {
+                $flagHeaderRow = Build-HtmlTableHeader -Headers @('Risk Flag', 'Count')
+                $flagBodyRows = [System.Collections.Generic.List[string]]::new()
+                $flagIdx = 0
+
+                $flagKeys = @()
+                if ($byFlag -is [hashtable]) { $flagKeys = @($byFlag.Keys) }
+                elseif ($null -ne $byFlag.PSObject.Properties) { $flagKeys = @($byFlag.PSObject.Properties.Name) }
+
+                foreach ($flagName in ($flagKeys | Sort-Object)) {
+                    $flagIdx++
+                    $flagCount = 0
+                    if ($byFlag -is [hashtable]) { $flagCount = [int]$byFlag[$flagName] }
+                    else { $flagCount = [int]$byFlag.$flagName }
+
+                    $flagColor = switch ($flagName.ToUpperInvariant()) {
+                        'PRIVILEGED' { '#CC3333' }
+                        'TERMINATED' { '#CC3333' }
+                        'ORPHAN'     { '#CC3333' }
+                        'STALE'      { '#FF8800' }
+                        default      { '#777777' }
+                    }
+
+                    $cells = @(
+                        "<span style=""color:${flagColor}; font-weight:bold;"">$(ConvertTo-SafeHtml $flagName)</span>",
+                        [string]$flagCount
+                    )
+                    $flagBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($flagIdx % 2) -eq 0)))
+                }
+
+                $riskHtml += @"
+<table $tableStyle>
+${flagHeaderRow}
+<tbody>
+$($flagBodyRows -join "`n")
+</tbody>
+</table>
+"@
+            }
+        }
+        else {
+            # Fall back: count risk flags from decision items directly
+            $allDecisionItems = @()
+            foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
+                if ($null -ne $decisions[$cat]) { $allDecisionItems += @($decisions[$cat]) }
+            }
+
+            $flagCounts = @{}
+            foreach ($item in $allDecisionItems) {
+                $itemFlags = @()
+                if ($null -ne $item.RiskFlags) { $itemFlags = @($item.RiskFlags) }
+                elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['RiskFlags']) { $itemFlags = @($item.RiskFlags) }
+
+                foreach ($f in $itemFlags) {
+                    if ([string]::IsNullOrWhiteSpace($f)) { continue }
+                    $fName = [string]$f
+                    if ($flagCounts.ContainsKey($fName)) { $flagCounts[$fName]++ }
+                    else { $flagCounts[$fName] = 1 }
+                }
+            }
+
+            if ($flagCounts.Count -gt 0) {
+                $flagHeaderRow = Build-HtmlTableHeader -Headers @('Risk Flag', 'Count')
+                $flagBodyRows = [System.Collections.Generic.List[string]]::new()
+                $flagIdx = 0
+
+                foreach ($flagName in ($flagCounts.Keys | Sort-Object)) {
+                    $flagIdx++
+                    $flagColor = switch ($flagName.ToUpperInvariant()) {
+                        'PRIVILEGED' { '#CC3333' }
+                        'TERMINATED' { '#CC3333' }
+                        'ORPHAN'     { '#CC3333' }
+                        'STALE'      { '#FF8800' }
+                        default      { '#777777' }
+                    }
+                    $cells = @(
+                        "<span style=""color:${flagColor}; font-weight:bold;"">$(ConvertTo-SafeHtml $flagName)</span>",
+                        [string]$flagCounts[$flagName]
+                    )
+                    $flagBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($flagIdx % 2) -eq 0)))
+                }
+
+                $riskHtml += @"
+<table $tableStyle>
+${flagHeaderRow}
+<tbody>
+$($flagBodyRows -join "`n")
+</tbody>
+</table>
+"@
+            }
+            else {
+                $riskHtml += '<p style="font-size:13px; color:#888888; padding:12px; background:#f9f9f9; border-left:4px solid #dddddd;">No risk flags detected in this campaign.</p>'
+            }
+        }
+
+        # ===================================================================
+        # Assemble full HTML
+        # ===================================================================
+        $nameSlug = ($campaignName -replace '[^a-zA-Z0-9]+', '-').Trim('-').ToLower()
+        if ([string]::IsNullOrWhiteSpace($nameSlug)) { $nameSlug = 'campaign' }
+        $fileName = "completion-${nameSlug}-${dateStamp}.html"
+        $htmlFile = Join-Path $OutputPath $fileName
+
+        $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Campaign Completion Report - $(ConvertTo-SafeHtml $campaignName)</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Campaign Completion Report</h1>
+<p style="font-size:15px; color:#336699; margin-top:0; margin-bottom:4px;">$(ConvertTo-SafeHtml $campaignName)</p>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${headerHtml}
+${kpiHtml}
+${comparisonHtml}
+${reviewerHtml}
+${remediationHtml}
+${riskHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+        Write-SPLog -Message "Campaign completion report written: $htmlFile" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionReport' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data = @{
+                ReportPath       = $htmlFile
+                CampaignName     = $campaignName
+                KPIs = @{
+                    CompletionRate   = $completionRate
+                    ApprovalRate     = $approvalRate
+                    RevocationRate   = $revocationRate
+                    AvgResponseHours = $avgResponseHours
+                    OnTimeCompletion = $onTimeCompletion
+                }
+            }
+        }
+    }
+    catch {
+        $errMsg = "Export-SPCampaignCompletionReport failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+            -Action 'Export-SPCampaignCompletionReport' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Send-SPWebhook {
+    <#
+    .SYNOPSIS
+        Sends a JSON payload to an HTTP webhook endpoint.
+    .DESCRIPTION
+        Converts the payload hashtable to JSON and sends it via Invoke-RestMethod.
+        Returns a result hashtable with Success, StatusCode, Response, and Error fields.
+    .PARAMETER Url
+        The webhook endpoint URL.
+    .PARAMETER Payload
+        Hashtable to serialize as the JSON request body.
+    .PARAMETER Method
+        HTTP method. Defaults to POST.
+    .PARAMETER Headers
+        Optional hashtable of additional HTTP headers.
+    .PARAMETER TimeoutSeconds
+        Request timeout in seconds. Defaults to 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; StatusCode; Response; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Payload,
+
+        [Parameter()]
+        [string]$Method = 'POST',
+
+        [Parameter()]
+        [hashtable]$Headers,
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 30,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 10 -Compress
+
+        $restParams = @{
+            Method      = $Method
+            Uri         = $Url
+            Body        = $json
+            ContentType = 'application/json'
+            TimeoutSec  = $TimeoutSeconds
+            ErrorAction = 'Stop'
+        }
+        if ($null -ne $Headers -and $Headers.Count -gt 0) {
+            $restParams['Headers'] = $Headers
+        }
+
+        $response = Invoke-RestMethod @restParams
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Webhook sent to $Url ($Method)" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $true
+            StatusCode = 200
+            Response   = $response
+            Error      = $null
+        }
+    }
+    catch {
+        $statusCode = 0
+        if ($_.Exception.PSObject.Properties.Name -contains 'Response' -and
+            $null -ne $_.Exception.Response) {
+            try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+        }
+
+        $errMsg = "Webhook call to $Url failed: $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg `
+                -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $false
+            StatusCode = $statusCode
+            Response   = $null
+            Error      = $errMsg
+        }
+    }
+}
+
+function Send-SPNotification {
+    <#
+    .SYNOPSIS
+        Dispatches notifications via configured backends (Log, Smtp, Webhook).
+    .DESCRIPTION
+        Reads the Notification config section and delivers the message through
+        each active backend. The Log backend always runs. Smtp sends email via
+        Send-MailMessage. Webhook sends a JSON POST via Send-SPWebhook.
+
+        Missing or incomplete backend configuration produces a WARN log and
+        skips that backend (does not throw).
+    .PARAMETER Subject
+        Notification subject line.
+    .PARAMETER Body
+        Notification body content. For SMTP this is sent as HTML.
+    .PARAMETER Severity
+        Severity level: Info, Warning, or Critical. Maps to log severity and
+        is included in webhook payloads.
+    .PARAMETER Category
+        Notification category (e.g. HealthAlert, Escalation, Completion, Digest).
+    .PARAMETER Recipients
+        Email addresses for the SMTP backend.
+    .PARAMETER Attachments
+        File paths to attach (SMTP only). Non-existent files are skipped with WARN.
+    .PARAMETER Metadata
+        Extra fields included in the webhook JSON payload.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Backends=@(...) } }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Subject,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Body,
+
+        [Parameter()]
+        [ValidateSet('Info','Warning','Critical')]
+        [string]$Severity = 'Info',
+
+        [Parameter()]
+        [string]$Category,
+
+        [Parameter()]
+        [string[]]$Recipients,
+
+        [Parameter()]
+        [string[]]$Attachments,
+
+        [Parameter()]
+        [hashtable]$Metadata,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Load notification config
+    $notifConfig = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Notification') {
+            $notifConfig = $config.Notification
+        }
+    }
+    catch {
+        # Config unavailable -- fall back to Log only
+    }
+
+    # Determine active backends
+    $backends = @('Log')
+    if ($null -ne $notifConfig -and
+        $notifConfig.PSObject.Properties.Name -contains 'Backends') {
+        $configuredBackends = @($notifConfig.Backends)
+        if ($configuredBackends.Count -gt 0) {
+            $backends = $configuredBackends
+        }
+    }
+
+    # Ensure Log is always present
+    if ('Log' -notin $backends) {
+        $backends = @('Log') + $backends
+    }
+
+    $backendResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Map severity to Write-SPLog severity
+    $logSeverity = switch ($Severity) {
+        'Critical' { 'ERROR' }
+        'Warning'  { 'WARN'  }
+        default    { 'INFO'  }
+    }
+
+    # --- Log backend (always) ---
+    $logMsg = "[$Severity] $Subject -- $Body"
+    if (-not [string]::IsNullOrWhiteSpace($Category)) {
+        $logMsg = "[$Severity][$Category] $Subject -- $Body"
+    }
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message $logMsg `
+            -Severity $logSeverity -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+            -CorrelationID $CorrelationID
+    }
+    $backendResults.Add(@{ Backend = 'Log'; Status = 'Sent' })
+
+    # --- SMTP backend ---
+    if ('Smtp' -in $backends) {
+        $smtpResult = @{ Backend = 'Smtp'; Status = 'Skipped' }
+
+        # Read SMTP settings from Notification.Smtp config
+        $smtpConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Smtp') {
+            $smtpConf = $notifConfig.Smtp
+        }
+
+        $smtpServer = ''
+        $smtpPort   = 587
+        $smtpFrom   = ''
+        $smtpUseSsl = $true
+
+        if ($null -ne $smtpConf) {
+            if ($smtpConf.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConf.Server }
+            if ($smtpConf.PSObject.Properties.Name -contains 'Port')   { $smtpPort   = $smtpConf.Port }
+            if ($smtpConf.PSObject.Properties.Name -contains 'From')   { $smtpFrom   = $smtpConf.From }
+            if ($smtpConf.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConf.UseSsl -eq $true }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
+            $warnMsg = 'SMTP backend configured but Server or From is empty -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        elseif ($null -eq $Recipients -or $Recipients.Count -eq 0) {
+            $warnMsg = 'SMTP backend configured but no Recipients provided -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            # Validate attachments
+            $validAttachments = @()
+            if ($null -ne $Attachments -and $Attachments.Count -gt 0) {
+                foreach ($att in $Attachments) {
+                    if (Test-Path -Path $att -PathType Leaf) {
+                        $validAttachments += $att
+                    }
+                    else {
+                        $attWarn = "Attachment not found, skipping: $att"
+                        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                            Write-SPLog -Message $attWarn -Severity WARN -Component 'SP.AuditReport' `
+                                -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+                        }
+                    }
+                }
+            }
+
+            try {
+                $mailParams = @{
+                    SmtpServer = $smtpServer
+                    Port       = $smtpPort
+                    From       = $smtpFrom
+                    To         = $Recipients
+                    Subject    = $Subject
+                    Body       = $Body
+                    BodyAsHtml = $true
+                    UseSsl     = $smtpUseSsl
+                    ErrorAction = 'Stop'
+                    WarningAction = 'SilentlyContinue'
+                }
+                if ($validAttachments.Count -gt 0) {
+                    $mailParams['Attachments'] = $validAttachments
+                }
+
+                Send-MailMessage @mailParams
+                $smtpResult['Status'] = 'Sent'
+
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP notification sent to $($Recipients -join ', ')" `
+                        -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+            catch {
+                $smtpResult['Status'] = 'Failed'
+                $smtpResult['Error']  = $_.Exception.Message
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP send failed: $($_.Exception.Message)" `
+                        -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+        }
+
+        $backendResults.Add($smtpResult)
+    }
+
+    # --- Webhook backend ---
+    if ('Webhook' -in $backends) {
+        $webhookResult = @{ Backend = 'Webhook'; Status = 'Skipped' }
+
+        $webhookConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Webhook') {
+            $webhookConf = $notifConfig.Webhook
+        }
+
+        $webhookUrl     = ''
+        $webhookMethod  = 'POST'
+        $webhookHeaders = @{}
+        $includePayload = $true
+
+        if ($null -ne $webhookConf) {
+            if ($webhookConf.PSObject.Properties.Name -contains 'Url')            { $webhookUrl     = $webhookConf.Url }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Method')         { $webhookMethod  = $webhookConf.Method }
+            if ($webhookConf.PSObject.Properties.Name -contains 'IncludePayload') { $includePayload = $webhookConf.IncludePayload -eq $true }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Headers' -and
+                $null -ne $webhookConf.Headers) {
+                # Convert PSCustomObject headers to hashtable
+                $webhookHeaders = @{}
+                foreach ($prop in $webhookConf.Headers.PSObject.Properties) {
+                    $webhookHeaders[$prop.Name] = $prop.Value
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($webhookUrl)) {
+            $warnMsg = 'Webhook backend configured but Url is empty -- skipping webhook delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            $payload = @{
+                timestamp = (Get-Date).ToUniversalTime().ToString('o')
+                severity  = $Severity
+                subject   = $Subject
+            }
+            if (-not [string]::IsNullOrWhiteSpace($Category)) {
+                $payload['category'] = $Category
+            }
+            if ($includePayload) {
+                $payload['body'] = $Body
+            }
+            if ($null -ne $Metadata -and $Metadata.Count -gt 0) {
+                $payload['metadata'] = $Metadata
+            }
+
+            $whResult = Send-SPWebhook -Url $webhookUrl -Payload $payload `
+                -Method $webhookMethod -Headers $webhookHeaders -CorrelationID $CorrelationID
+
+            $webhookResult['Status']     = if ($whResult.Success) { 'Sent' } else { 'Failed' }
+            $webhookResult['StatusCode'] = $whResult.StatusCode
+            if (-not $whResult.Success) {
+                $webhookResult['Error'] = $whResult.Error
+            }
+        }
+
+        $backendResults.Add($webhookResult)
+    }
+
+    # Determine overall success -- true if at least one backend sent successfully
+    $overallSuccess = ($backendResults | Where-Object { $_.Status -eq 'Sent' }).Count -gt 0
+
+    return @{
+        Success = $overallSuccess
+        Data    = @{
+            Backends = @($backendResults)
+        }
+    }
+}
+
+#endregion
+
+#region Orchestrator Run History (P12-07)
+
+function Get-SPOrchestratorHistory {
+    <#
+    .SYNOPSIS
+        Parses orchestrator-audit.jsonl and produces operational run history metrics.
+    .DESCRIPTION
+        Reads the JSONL audit trail written by Invoke-SPDailyOrchestrator.ps1 and
+        calculates reliability, duration trends, step-level success rates, and
+        failure breakdowns for a configurable lookback window.
+    .PARAMETER JournalPath
+        Path to orchestrator-audit.jsonl. Defaults to {DeltaCert.OutputPath}/orchestrator-audit.jsonl.
+    .PARAMETER DaysBack
+        Number of days to include. Default 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] Runs array and Metrics summary.
+    .EXAMPLE
+        Get-SPOrchestratorHistory -DaysBack 7
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$JournalPath,
+        [Parameter()][int]$DaysBack = 30,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Parsing orchestrator run history (DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    # Resolve journal path from config if not provided
+    if ([string]::IsNullOrWhiteSpace($JournalPath)) {
+        try {
+            $cfg = Get-SPConfig
+            $dcOutput = $cfg.DeltaCert.OutputPath
+            if (-not [string]::IsNullOrWhiteSpace($dcOutput)) {
+                $JournalPath = Join-Path $dcOutput 'orchestrator-audit.jsonl'
+            }
+        }
+        catch {
+            # Config not available -- fall through to empty return
+        }
+    }
+
+    # Empty return structure
+    $emptyMetrics = @{
+        Runs    = @()
+        Metrics = @{
+            RunCount            = 0
+            SuccessRate         = 0.0
+            AvgDurationSeconds  = 0
+            DurationTrend       = 'N/A'
+            FailureBreakdown    = @{}
+            ConsecutiveFailures = 0
+            LastSuccessfulRun   = $null
+            StepReliability     = @{
+                Validation  = 0.0
+                Cleanup     = 0.0
+                DeltaCert   = 0.0
+                DeltaReport = 0.0
+                Escalation  = 0.0
+                HealthCheck = 0.0
+            }
+        }
+    }
+
+    # If no path or file missing, return empty
+    if ([string]::IsNullOrWhiteSpace($JournalPath) -or -not (Test-Path $JournalPath)) {
+        Write-SPLog -Message "Journal file not found: $JournalPath -- returning empty metrics" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Read and parse JSONL
+    $cutoffDate = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+    $runs = [System.Collections.ArrayList]::new()
+
+    try {
+        $lines = [System.IO.File]::ReadAllLines($JournalPath)
+    }
+    catch {
+        Write-SPLog -Message "Failed to read journal: $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+        try {
+            $parsed = $line | ConvertFrom-Json
+        }
+        catch {
+            Write-SPLog -Message "Malformed JSONL line: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Parse timestamp and apply date filter
+        $ts = $null
+        if ($null -ne $parsed.Timestamp) {
+            try { $ts = [datetime]::Parse([string]$parsed.Timestamp).ToUniversalTime() }
+            catch { $ts = $null }
+        }
+        if ($null -eq $ts) { continue }
+        if ($ts -lt $cutoffDate) { continue }
+
+        # Skip WhatIf runs -- they are not real executions
+        if ($null -ne $parsed.Data -and $parsed.Data.WhatIf -eq $true) { continue }
+
+        # Extract run data
+        $exitCode = 0
+        $duration = 0
+        $steps = @{}
+
+        if ($null -ne $parsed.Data) {
+            if ($null -ne $parsed.Data.ExitCode) { $exitCode = [int]$parsed.Data.ExitCode }
+            if ($null -ne $parsed.Data.DurationSeconds) { $duration = [double]$parsed.Data.DurationSeconds }
+
+            if ($null -ne $parsed.Data.Steps) {
+                $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+                foreach ($sn in $stepNames) {
+                    $stepData = $parsed.Data.Steps.$sn
+                    if ($null -ne $stepData) {
+                        $steps[$sn] = [string]$stepData.Status + ': ' + [string]$stepData.Detail
+                    }
+                    else {
+                        $steps[$sn] = 'Skipped'
+                    }
+                }
+            }
+        }
+
+        $runEntry = @{
+            Timestamp       = $ts.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            CorrelationID   = if ($null -ne $parsed.CorrelationID) { [string]$parsed.CorrelationID } else { '' }
+            ExitCode        = $exitCode
+            DurationSeconds = $duration
+            Steps           = $steps
+        }
+        [void]$runs.Add($runEntry)
+    }
+
+    # Sort by timestamp descending (most recent first)
+    $sortedRuns = @($runs | Sort-Object { $_.Timestamp } -Descending)
+
+    if ($sortedRuns.Count -eq 0) {
+        Write-SPLog -Message "No orchestrator runs found within $DaysBack days" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Calculate metrics
+    $runCount = $sortedRuns.Count
+    $successCount = @($sortedRuns | Where-Object { $_.ExitCode -eq 0 }).Count
+    $successRate = [math]::Round(($successCount / $runCount) * 100, 1)
+
+    $totalDuration = ($sortedRuns | Measure-Object -Property DurationSeconds -Sum).Sum
+    $avgDuration = [math]::Round($totalDuration / $runCount, 0)
+
+    # Duration trend: compare first half avg vs second half avg
+    $durationTrend = 'Stable'
+    if ($sortedRuns.Count -ge 4) {
+        $halfPoint = [math]::Floor($sortedRuns.Count / 2)
+        $recentHalf = $sortedRuns[0..($halfPoint - 1)]
+        $olderHalf = $sortedRuns[$halfPoint..($sortedRuns.Count - 1)]
+        $recentAvg = ($recentHalf | Measure-Object -Property DurationSeconds -Average).Average
+        $olderAvg = ($olderHalf | Measure-Object -Property DurationSeconds -Average).Average
+        if ($olderAvg -gt 0) {
+            $changePct = (($recentAvg - $olderAvg) / $olderAvg) * 100
+            if ($changePct -gt 15) { $durationTrend = 'Increasing' }
+            elseif ($changePct -lt -15) { $durationTrend = 'Decreasing' }
+        }
+    }
+
+    # Failure breakdown by exit code
+    $failureBreakdown = @{}
+    $failedRuns = @($sortedRuns | Where-Object { $_.ExitCode -ne 0 })
+    foreach ($fr in $failedRuns) {
+        $key = "ExitCode$($fr.ExitCode)"
+        if ($failureBreakdown.ContainsKey($key)) { $failureBreakdown[$key]++ }
+        else { $failureBreakdown[$key] = 1 }
+    }
+
+    # Consecutive failures from most recent
+    $consecutiveFailures = 0
+    foreach ($r in $sortedRuns) {
+        if ($r.ExitCode -ne 0) { $consecutiveFailures++ }
+        else { break }
+    }
+
+    # Last successful run
+    $lastSuccess = $sortedRuns | Where-Object { $_.ExitCode -eq 0 } | Select-Object -First 1
+    $lastSuccessfulRun = if ($null -ne $lastSuccess) { $lastSuccess.Timestamp } else { $null }
+
+    # Step reliability: per-step success rate
+    $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+    $stepReliability = @{}
+    foreach ($sn in $stepNames) {
+        $totalWithStep = 0
+        $successWithStep = 0
+        foreach ($r in $sortedRuns) {
+            if ($r.Steps.ContainsKey($sn)) {
+                $stepVal = $r.Steps[$sn]
+                if ($stepVal -ne 'Skipped') {
+                    $totalWithStep++
+                    if ($stepVal -like 'Success*') {
+                        $successWithStep++
+                    }
+                }
+            }
+        }
+        if ($totalWithStep -gt 0) {
+            $stepReliability[$sn] = [math]::Round(($successWithStep / $totalWithStep) * 100, 1)
+        }
+        else {
+            $stepReliability[$sn] = 0.0
+        }
+    }
+
+    Write-SPLog -Message "Parsed $runCount runs: SuccessRate=$successRate% AvgDuration=${avgDuration}s" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Runs    = $sortedRuns
+        Metrics = @{
+            RunCount            = $runCount
+            SuccessRate         = $successRate
+            AvgDurationSeconds  = $avgDuration
+            DurationTrend       = $durationTrend
+            FailureBreakdown    = $failureBreakdown
+            ConsecutiveFailures = $consecutiveFailures
+            LastSuccessfulRun   = $lastSuccessfulRun
+            StepReliability     = $stepReliability
+        }
+    }
+}
+
+function Export-SPOrchestratorHistoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML dashboard of orchestrator run history.
+    .DESCRIPTION
+        Takes the output of Get-SPOrchestratorHistory and produces a self-contained
+        HTML report with run timeline, metrics cards, step reliability bars, duration
+        trend, and failure details.
+    .PARAMETER HistoryData
+        Output from Get-SPOrchestratorHistory.
+    .PARAMETER OutputPath
+        Directory to write the HTML file.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] Success flag and report path.
+    .EXAMPLE
+        $history = Get-SPOrchestratorHistory -DaysBack 30
+        Export-SPOrchestratorHistoryHtml -HistoryData $history -OutputPath './Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][hashtable]$HistoryData,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Generating orchestrator history HTML report" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrchestratorHistoryHtml' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+    }
+
+    $m = $HistoryData.Metrics
+    $runs = $HistoryData.Runs
+    $reportDate = (Get-Date).ToString('yyyy-MM-dd')
+    $fileName = "orchestrator-history-$reportDate.html"
+    $filePath = Join-Path $OutputPath $fileName
+
+    # --- Exit code color helper ---
+    function Get-ExitCodeColor {
+        param([int]$Code)
+        switch ($Code) {
+            0 { return '#27ae60' }  # green
+            1 { return '#f39c12' }  # yellow/orange
+            4 { return '#e74c3c' }  # red
+            5 { return '#c0392b' }  # dark red
+            default { return '#e74c3c' }
+        }
+    }
+
+    function Get-ExitCodeLabel {
+        param([int]$Code)
+        switch ($Code) {
+            0 { return 'Success' }
+            1 { return 'Warnings' }
+            4 { return 'Config Error' }
+            5 { return 'Critical' }
+            default { return "Exit $Code" }
+        }
+    }
+
+    # --- Build HTML ---
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('<!DOCTYPE html>')
+    [void]$sb.AppendLine('<html lang="en"><head><meta charset="utf-8"/>')
+    [void]$sb.AppendLine('<meta name="viewport" content="width=device-width, initial-scale=1.0"/>')
+    [void]$sb.AppendLine("<title>Orchestrator Run History - $reportDate</title>")
+    [void]$sb.AppendLine('<style>')
+    [void]$sb.AppendLine('body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; margin: 20px; background: #f5f6fa; color: #2c3e50; }')
+    [void]$sb.AppendLine('h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }')
+    [void]$sb.AppendLine('h2 { color: #34495e; margin-top: 30px; }')
+    [void]$sb.AppendLine('.card-row { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }')
+    [void]$sb.AppendLine('.card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); min-width: 180px; flex: 1; }')
+    [void]$sb.AppendLine('.card .label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-bottom: 4px; }')
+    [void]$sb.AppendLine('.card .value { font-size: 28px; font-weight: bold; }')
+    [void]$sb.AppendLine('.card .sub { font-size: 12px; color: #95a5a6; margin-top: 4px; }')
+    [void]$sb.AppendLine('table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 16px 0; }')
+    [void]$sb.AppendLine('.bar-container { background: #ecf0f1; border-radius: 4px; height: 20px; width: 100%; }')
+    [void]$sb.AppendLine('.bar-fill { height: 20px; border-radius: 4px; text-align: center; color: #fff; font-size: 11px; line-height: 20px; }')
+    [void]$sb.AppendLine('.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-size: 12px; font-weight: bold; }')
+    [void]$sb.AppendLine('.failure-detail { background: #fdf0ed; border-left: 4px solid #e74c3c; padding: 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }')
+    [void]$sb.AppendLine('</style>')
+    [void]$sb.AppendLine('</head><body>')
+
+    # Title
+    [void]$sb.AppendLine("<h1>Orchestrator Run History</h1>")
+    [void]$sb.AppendLine("<p>Generated: $(ConvertTo-SafeHtml (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) | Runs analyzed: $(ConvertTo-SafeHtml $m.RunCount)</p>")
+
+    # --- Metrics cards ---
+    [void]$sb.AppendLine('<h2>Operational Metrics</h2>')
+    [void]$sb.AppendLine('<div class="card-row">')
+
+    # Success Rate card
+    $srColor = if ($m.SuccessRate -ge 90) { '#27ae60' } elseif ($m.SuccessRate -ge 70) { '#f39c12' } else { '#e74c3c' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Success Rate</div><div class=`"value`" style=`"color:$srColor`">$(ConvertTo-SafeHtml $m.SuccessRate)%</div><div class=`"sub`">$($m.RunCount) total runs</div></div>")
+
+    # Avg Duration card
+    $durationMin = [math]::Round($m.AvgDurationSeconds / 60, 1)
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Avg Duration</div><div class=`"value`">$(ConvertTo-SafeHtml $durationMin)m</div><div class=`"sub`">Trend: $(ConvertTo-SafeHtml $m.DurationTrend)</div></div>")
+
+    # Consecutive Failures card
+    $cfColor = if ($m.ConsecutiveFailures -eq 0) { '#27ae60' } elseif ($m.ConsecutiveFailures -le 2) { '#f39c12' } else { '#e74c3c' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Consecutive Failures</div><div class=`"value`" style=`"color:$cfColor`">$(ConvertTo-SafeHtml $m.ConsecutiveFailures)</div><div class=`"sub`">Current streak</div></div>")
+
+    # Last Success card
+    $lsDisplay = if ($null -ne $m.LastSuccessfulRun) { ConvertTo-SafeHtml $m.LastSuccessfulRun } else { 'Never' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Last Successful Run</div><div class=`"value`" style=`"font-size:16px`">$lsDisplay</div></div>")
+
+    [void]$sb.AppendLine('</div>')
+
+    # --- Step Reliability Bars ---
+    [void]$sb.AppendLine('<h2>Step Reliability</h2>')
+    [void]$sb.AppendLine('<table>')
+    [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Step', 'Reliability', '')))
+    [void]$sb.AppendLine('<tbody>')
+    $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+    $alt = $false
+    foreach ($sn in $stepNames) {
+        $pct = if ($m.StepReliability.ContainsKey($sn)) { $m.StepReliability[$sn] } else { 0.0 }
+        $barColor = if ($pct -ge 90) { '#27ae60' } elseif ($pct -ge 70) { '#f39c12' } else { '#e74c3c' }
+        $barHtml = "<div class=`"bar-container`"><div class=`"bar-fill`" style=`"width:${pct}%; background:$barColor`">$(ConvertTo-SafeHtml $pct)%</div></div>"
+        [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+            (ConvertTo-SafeHtml $sn),
+            $barHtml,
+            "$(ConvertTo-SafeHtml $pct)%"
+        ) -IsAlternate $alt))
+        $alt = -not $alt
+    }
+    [void]$sb.AppendLine('</tbody></table>')
+
+    # --- Run Timeline Table ---
+    [void]$sb.AppendLine('<h2>Run Timeline</h2>')
+    [void]$sb.AppendLine('<table>')
+    [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Timestamp', 'Exit Code', 'Duration', 'Correlation ID')))
+    [void]$sb.AppendLine('<tbody>')
+    $alt = $false
+    foreach ($r in $runs) {
+        $ecColor = Get-ExitCodeColor -Code $r.ExitCode
+        $ecLabel = Get-ExitCodeLabel -Code $r.ExitCode
+        $badge = "<span class=`"badge`" style=`"background:$ecColor`">$(ConvertTo-SafeHtml $ecLabel)</span>"
+        $durDisplay = "$([math]::Round($r.DurationSeconds, 1))s"
+        [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+            (ConvertTo-SafeHtml $r.Timestamp),
+            $badge,
+            (ConvertTo-SafeHtml $durDisplay),
+            (ConvertTo-SafeHtml $r.CorrelationID)
+        ) -IsAlternate $alt))
+        $alt = -not $alt
+    }
+    [void]$sb.AppendLine('</tbody></table>')
+
+    # --- Failure Details ---
+    $failedRuns = @($runs | Where-Object { $_.ExitCode -ne 0 })
+    if ($failedRuns.Count -gt 0) {
+        [void]$sb.AppendLine('<h2>Failure Details</h2>')
+        foreach ($fr in $failedRuns) {
+            $ecLabel = Get-ExitCodeLabel -Code $fr.ExitCode
+            [void]$sb.AppendLine('<div class="failure-detail">')
+            [void]$sb.AppendLine("<strong>$(ConvertTo-SafeHtml $fr.Timestamp)</strong> - $(ConvertTo-SafeHtml $ecLabel) (Exit Code $(ConvertTo-SafeHtml $fr.ExitCode))")
+            [void]$sb.AppendLine('<br/>Correlation: ' + (ConvertTo-SafeHtml $fr.CorrelationID))
+            if ($fr.Steps.Count -gt 0) {
+                [void]$sb.AppendLine('<br/>Steps:')
+                [void]$sb.AppendLine('<ul>')
+                foreach ($sk in $fr.Steps.Keys) {
+                    $sv = $fr.Steps[$sk]
+                    $stepColor = if ($sv -like 'Success*') { '#27ae60' } elseif ($sv -eq 'Skipped') { '#95a5a6' } else { '#e74c3c' }
+                    [void]$sb.AppendLine("<li style=`"color:$stepColor`">$(ConvertTo-SafeHtml $sk): $(ConvertTo-SafeHtml $sv)</li>")
+                }
+                [void]$sb.AppendLine('</ul>')
+            }
+            [void]$sb.AppendLine('</div>')
+        }
+    }
+
+    # --- Duration Trend Table ---
+    if ($runs.Count -ge 2) {
+        [void]$sb.AppendLine('<h2>Duration Trend</h2>')
+        [void]$sb.AppendLine('<table>')
+        [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Run Date', 'Duration (s)', 'Relative')))
+        [void]$sb.AppendLine('<tbody>')
+        $maxDur = ($runs | Measure-Object -Property DurationSeconds -Maximum).Maximum
+        if ($maxDur -le 0) { $maxDur = 1 }
+        $alt = $false
+        # Show chronological order for trend (oldest first)
+        $chronoRuns = @($runs | Sort-Object { $_.Timestamp })
+        foreach ($r in $chronoRuns) {
+            $relPct = [math]::Round(($r.DurationSeconds / $maxDur) * 100, 0)
+            $barColor = Get-ExitCodeColor -Code $r.ExitCode
+            $barHtml = "<div class=`"bar-container`"><div class=`"bar-fill`" style=`"width:${relPct}%; background:$barColor`">$([math]::Round($r.DurationSeconds, 1))s</div></div>"
+            [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+                (ConvertTo-SafeHtml $r.Timestamp),
+                (ConvertTo-SafeHtml ([math]::Round($r.DurationSeconds, 1))),
+                $barHtml
+            ) -IsAlternate $alt))
+            $alt = -not $alt
+        }
+        [void]$sb.AppendLine('</tbody></table>')
+    }
+
+    [void]$sb.AppendLine('</body></html>')
+
+    # Write file
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($filePath, $sb.ToString(), $utf8NoBom)
+
+    Write-SPLog -Message "Orchestrator history report written: $filePath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrchestratorHistoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ReportPath = $filePath
+            RunCount   = $m.RunCount
+        }
+    }
+}
+
+#endregion
+
+#region P12-09 Log Retention and Archival
+
+function Invoke-SPLogRetention {
+    <#
+    .SYNOPSIS
+        Enforces retention policies on toolkit output directories.
+    .DESCRIPTION
+        Archives old files to monthly ZIP archives and deletes files past their
+        retention period. Only processes known toolkit-generated file extensions.
+        Requires Retention.Enabled = true in config (opt-in safety default).
+    .PARAMETER ArchiveDays
+        Files older than this many days are archived. Minimum 7.
+    .PARAMETER DeleteDays
+        Archive ZIPs older than this many days are deleted. Minimum 30. Must be > ArchiveDays.
+    .PARAMETER ArchivePath
+        Directory for archive ZIPs. Created if it does not exist.
+    .PARAMETER Paths
+        Array of directory names (relative to toolkit root) to process.
+    .PARAMETER WhatIf
+        Lists all actions without performing them.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Result with Archived, Deleted, and Skipped counts.
+    .EXAMPLE
+        Invoke-SPLogRetention -WhatIf
+    .EXAMPLE
+        Invoke-SPLogRetention -ArchiveDays 30 -DeleteDays 90
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$ArchiveDays,
+        [Parameter()][int]$DeleteDays,
+        [Parameter()][string]$ArchivePath,
+        [Parameter()][string[]]$Paths,
+        [Parameter()][switch]$WhatIf,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Invoke-SPLogRetention'
+
+    Write-SPLog -Message 'Invoke-SPLogRetention: starting' `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Load config for defaults
+    $retentionEnabled = $false
+    $toolkitRoot = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Retention') {
+            $retCfg = $config.Retention
+            $retentionEnabled = if ($retCfg.PSObject.Properties.Name -contains 'Enabled') { $retCfg.Enabled } else { $false }
+            if ($ArchiveDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'ArchiveDays') {
+                $ArchiveDays = $retCfg.ArchiveDays
+            }
+            if ($DeleteDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'DeleteDays') {
+                $DeleteDays = $retCfg.DeleteDays
+            }
+            if ([string]::IsNullOrWhiteSpace($ArchivePath) -and $retCfg.PSObject.Properties.Name -contains 'ArchivePath') {
+                $ArchivePath = $retCfg.ArchivePath
+            }
+            if (($null -eq $Paths -or $Paths.Count -eq 0) -and $retCfg.PSObject.Properties.Name -contains 'Paths') {
+                $Paths = @($retCfg.Paths)
+            }
+        }
+    }
+    catch {
+        Write-SPLog -Message "Could not load config: $($_.Exception.Message)" `
+            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # Resolve toolkit root from module location
+    try {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..' ))
+    }
+    catch {
+        $toolkitRoot = (Get-Location).Path
+    }
+
+    # Apply defaults if still unset
+    if ($ArchiveDays -le 0) { $ArchiveDays = 30 }
+    if ($DeleteDays  -le 0) { $DeleteDays  = 90 }
+    if ([string]::IsNullOrWhiteSpace($ArchivePath)) { $ArchivePath = '.\Archive' }
+    if ($null -eq $Paths -or $Paths.Count -eq 0)    { $Paths = @('Audit', 'DeltaCert', 'Logs') }
+
+    # Check Retention.Enabled (unless parameters were provided explicitly, which implies intent)
+    if (-not $retentionEnabled -and -not $PSBoundParameters.ContainsKey('ArchiveDays') -and
+        -not $PSBoundParameters.ContainsKey('DeleteDays')) {
+        Write-SPLog -Message 'Retention.Enabled is false. No action taken. Set Retention.Enabled = true in config or pass explicit parameters.' `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                Archived = @{ FileCount = 0; TotalBytes = 0; Archives = @() }
+                Deleted  = @{ FileCount = 0; TotalBytes = 0; Files = @() }
+                Skipped  = @{ FileCount = 0; Reasons = @() }
+            }
+        }
+    }
+
+    # Validate constraints
+    if ($ArchiveDays -lt 7) {
+        Write-SPLog -Message "ArchiveDays ($ArchiveDays) is less than minimum 7. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "ArchiveDays must be at least 7 (got $ArchiveDays)" }
+        }
+    }
+    if ($DeleteDays -lt 30) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) is less than minimum 30. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays must be at least 30 (got $DeleteDays)" }
+        }
+    }
+    if ($DeleteDays -le $ArchiveDays) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays). Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays)" }
+        }
+    }
+
+    # Resolve archive path
+    if (-not [System.IO.Path]::IsPathRooted($ArchivePath)) {
+        $ArchivePath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $ArchivePath))
+    }
+
+    # Known safe extensions
+    $safeExtensions = @('.html', '.csv', '.jsonl', '.txt', '.log', '.json')
+
+    $now           = Get-Date
+    $archiveCutoff = $now.AddDays(-$ArchiveDays)
+    $deleteCutoff  = $now.AddDays(-$DeleteDays)
+
+    # Result accumulators
+    $archivedCount    = 0
+    $archivedBytes    = 0
+    $archiveFiles     = [System.Collections.Generic.List[string]]::new()
+    $deletedCount     = 0
+    $deletedBytes     = 0
+    $deletedFiles     = [System.Collections.Generic.List[string]]::new()
+    $skippedCount     = 0
+    $skippedReasons   = [System.Collections.Generic.List[string]]::new()
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    # Phase 1: Archive files older than ArchiveDays but younger than DeleteDays
+    foreach ($relPath in $Paths) {
+        $dirPath = $relPath
+        if (-not [System.IO.Path]::IsPathRooted($dirPath)) {
+            $dirPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $dirPath))
+        }
+        if (-not (Test-Path -Path $dirPath -PathType Container)) {
+            Write-SPLog -Message "Path not found, skipping: $dirPath" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Get files eligible for archival (older than archiveCutoff)
+        $files = Get-ChildItem -Path $dirPath -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $archiveCutoff }
+
+        if ($null -eq $files -or @($files).Count -eq 0) { continue }
+
+        # Group by month for monthly archives
+        $monthGroups = @($files) | Group-Object { $_.LastWriteTime.ToString('yyyy-MM') }
+        $dirName = Split-Path -Path $dirPath -Leaf
+
+        foreach ($group in $monthGroups) {
+            $monthLabel  = $group.Name
+            $zipName     = "${dirName}-${monthLabel}.zip"
+            $zipFullPath = Join-Path -Path $ArchivePath -ChildPath $zipName
+
+            $filesToArchive = @($group.Group | Where-Object {
+                $_.Extension -in $safeExtensions
+            })
+
+            $skippedInGroup = @($group.Group | Where-Object {
+                $_.Extension -notin $safeExtensions
+            })
+            foreach ($sf in $skippedInGroup) {
+                $skippedCount++
+                $skippedReasons.Add("Unknown extension: $($sf.Extension) ($($sf.Name))")
+            }
+
+            if ($filesToArchive.Count -eq 0) { continue }
+
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would archive $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $archivedCount++
+                    $archivedBytes += $f.Length
+                }
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+                continue
+            }
+
+            # Ensure archive directory exists
+            if (-not (Test-Path -Path $ArchivePath -PathType Container)) {
+                New-Item -Path $ArchivePath -ItemType Directory -Force | Out-Null
+            }
+
+            # Create or open the archive ZIP
+            try {
+                $zipMode = if (Test-Path -Path $zipFullPath) {
+                    [System.IO.Compression.ZipArchiveMode]::Update
+                } else {
+                    [System.IO.Compression.ZipArchiveMode]::Create
+                }
+                $zipStream  = [System.IO.File]::Open($zipFullPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite)
+                $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, $zipMode)
+
+                foreach ($f in $filesToArchive) {
+                    try {
+                        # Check if entry already exists (for Update mode)
+                        $entryName = $f.Name
+                        $existing  = $zipArchive.GetEntry($entryName)
+                        if ($null -ne $existing) {
+                            $entryName = "$($f.BaseName)_$(Get-Date -Format 'yyyyMMddHHmmss')$($f.Extension)"
+                        }
+
+                        $entry       = $zipArchive.CreateEntry($entryName)
+                        $entryStream = $entry.Open()
+                        try {
+                            $fileBytes = [System.IO.File]::ReadAllBytes($f.FullName)
+                            $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+                        } finally {
+                            $entryStream.Close()
+                        }
+
+                        # Remove the source file after successful archive
+                        try {
+                            Remove-Item -Path $f.FullName -Force -ErrorAction Stop
+                        }
+                        catch {
+                            $skippedCount++
+                            $skippedReasons.Add("File locked: $($f.Name)")
+                            continue
+                        }
+
+                        $archivedCount++
+                        $archivedBytes += $f.Length
+                    }
+                    catch {
+                        $skippedCount++
+                        $skippedReasons.Add("Archive error: $($f.Name) - $($_.Exception.Message)")
+                    }
+                }
+
+                $zipArchive.Dispose()
+                $zipStream.Close()
+
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+
+                Write-SPLog -Message "Archived $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                Write-SPLog -Message "Failed to create archive $zipName : $($_.Exception.Message)" `
+                    -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $skippedCount++
+                    $skippedReasons.Add("Archive creation failed: $($f.Name)")
+                }
+            }
+        }
+    }
+
+    # Phase 2: Delete expired archives older than DeleteDays
+    if (Test-Path -Path $ArchivePath -PathType Container) {
+        $oldArchives = Get-ChildItem -Path $ArchivePath -File -Filter '*.zip' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $deleteCutoff }
+
+        foreach ($arc in $oldArchives) {
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would delete expired archive $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                $deletedCount++
+                $deletedBytes += $arc.Length
+                $deletedFiles.Add($arc.FullName)
+                continue
+            }
+
+            try {
+                $arcSize = $arc.Length
+                Remove-Item -Path $arc.FullName -Force -ErrorAction Stop
+                $deletedCount++
+                $deletedBytes += $arcSize
+                $deletedFiles.Add($arc.FullName)
+                Write-SPLog -Message "Deleted expired archive: $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                $skippedCount++
+                $skippedReasons.Add("File locked: $($arc.Name)")
+                Write-SPLog -Message "Could not delete archive $($arc.Name): $($_.Exception.Message)" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+    }
+
+    $whatIfLabel = if ($WhatIf) { ' (WhatIf)' } else { '' }
+    Write-SPLog -Message "Invoke-SPLogRetention complete${whatIfLabel}: archived=$archivedCount, deleted=$deletedCount, skipped=$skippedCount" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            Archived = @{
+                FileCount  = $archivedCount
+                TotalBytes = $archivedBytes
+                Archives   = @($archiveFiles)
+            }
+            Deleted = @{
+                FileCount  = $deletedCount
+                TotalBytes = $deletedBytes
+                Files      = @($deletedFiles)
+            }
+            Skipped = @{
+                FileCount = $skippedCount
+                Reasons   = @($skippedReasons)
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -7759,5 +11362,17 @@ Export-ModuleMember -Function @(
     'Measure-SPCampaignTrends',
     'Export-SPCampaignTrendHtml',
     'Export-SPEntitlementInventoryHtml',
-    'Measure-SPReviewerReputation'
+    'Measure-SPReviewerReputation',
+    'Export-SPCompliancePackage',
+    'Measure-SPIdentityRisk',
+    'Export-SPIdentityRiskHtml',
+    'Measure-SPSourceGovernance',
+    'Export-SPSourceGovernanceHtml',
+    'Export-SPStaleAccessHtml',
+    'Export-SPCampaignCompletionReport',
+    'Send-SPNotification',
+    'Send-SPWebhook',
+    'Get-SPOrchestratorHistory',
+    'Export-SPOrchestratorHistoryHtml',
+    'Invoke-SPLogRetention'
 )
