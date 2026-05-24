@@ -10515,6 +10515,484 @@ function Send-SPNotification {
 
 #endregion
 
+#region Orchestrator Run History (P12-07)
+
+function Get-SPOrchestratorHistory {
+    <#
+    .SYNOPSIS
+        Parses orchestrator-audit.jsonl and produces operational run history metrics.
+    .DESCRIPTION
+        Reads the JSONL audit trail written by Invoke-SPDailyOrchestrator.ps1 and
+        calculates reliability, duration trends, step-level success rates, and
+        failure breakdowns for a configurable lookback window.
+    .PARAMETER JournalPath
+        Path to orchestrator-audit.jsonl. Defaults to {DeltaCert.OutputPath}/orchestrator-audit.jsonl.
+    .PARAMETER DaysBack
+        Number of days to include. Default 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] Runs array and Metrics summary.
+    .EXAMPLE
+        Get-SPOrchestratorHistory -DaysBack 7
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$JournalPath,
+        [Parameter()][int]$DaysBack = 30,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Parsing orchestrator run history (DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    # Resolve journal path from config if not provided
+    if ([string]::IsNullOrWhiteSpace($JournalPath)) {
+        try {
+            $cfg = Get-SPConfig
+            $dcOutput = $cfg.DeltaCert.OutputPath
+            if (-not [string]::IsNullOrWhiteSpace($dcOutput)) {
+                $JournalPath = Join-Path $dcOutput 'orchestrator-audit.jsonl'
+            }
+        }
+        catch {
+            # Config not available -- fall through to empty return
+        }
+    }
+
+    # Empty return structure
+    $emptyMetrics = @{
+        Runs    = @()
+        Metrics = @{
+            RunCount            = 0
+            SuccessRate         = 0.0
+            AvgDurationSeconds  = 0
+            DurationTrend       = 'N/A'
+            FailureBreakdown    = @{}
+            ConsecutiveFailures = 0
+            LastSuccessfulRun   = $null
+            StepReliability     = @{
+                Validation  = 0.0
+                Cleanup     = 0.0
+                DeltaCert   = 0.0
+                DeltaReport = 0.0
+                Escalation  = 0.0
+                HealthCheck = 0.0
+            }
+        }
+    }
+
+    # If no path or file missing, return empty
+    if ([string]::IsNullOrWhiteSpace($JournalPath) -or -not (Test-Path $JournalPath)) {
+        Write-SPLog -Message "Journal file not found: $JournalPath -- returning empty metrics" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Read and parse JSONL
+    $cutoffDate = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+    $runs = [System.Collections.ArrayList]::new()
+
+    try {
+        $lines = [System.IO.File]::ReadAllLines($JournalPath)
+    }
+    catch {
+        Write-SPLog -Message "Failed to read journal: $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+        try {
+            $parsed = $line | ConvertFrom-Json
+        }
+        catch {
+            Write-SPLog -Message "Malformed JSONL line: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Parse timestamp and apply date filter
+        $ts = $null
+        if ($null -ne $parsed.Timestamp) {
+            try { $ts = [datetime]::Parse([string]$parsed.Timestamp).ToUniversalTime() }
+            catch { $ts = $null }
+        }
+        if ($null -eq $ts) { continue }
+        if ($ts -lt $cutoffDate) { continue }
+
+        # Skip WhatIf runs -- they are not real executions
+        if ($null -ne $parsed.Data -and $parsed.Data.WhatIf -eq $true) { continue }
+
+        # Extract run data
+        $exitCode = 0
+        $duration = 0
+        $steps = @{}
+
+        if ($null -ne $parsed.Data) {
+            if ($null -ne $parsed.Data.ExitCode) { $exitCode = [int]$parsed.Data.ExitCode }
+            if ($null -ne $parsed.Data.DurationSeconds) { $duration = [double]$parsed.Data.DurationSeconds }
+
+            if ($null -ne $parsed.Data.Steps) {
+                $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+                foreach ($sn in $stepNames) {
+                    $stepData = $parsed.Data.Steps.$sn
+                    if ($null -ne $stepData) {
+                        $steps[$sn] = [string]$stepData.Status + ': ' + [string]$stepData.Detail
+                    }
+                    else {
+                        $steps[$sn] = 'Skipped'
+                    }
+                }
+            }
+        }
+
+        $runEntry = @{
+            Timestamp       = $ts.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            CorrelationID   = if ($null -ne $parsed.CorrelationID) { [string]$parsed.CorrelationID } else { '' }
+            ExitCode        = $exitCode
+            DurationSeconds = $duration
+            Steps           = $steps
+        }
+        [void]$runs.Add($runEntry)
+    }
+
+    # Sort by timestamp descending (most recent first)
+    $sortedRuns = @($runs | Sort-Object { $_.Timestamp } -Descending)
+
+    if ($sortedRuns.Count -eq 0) {
+        Write-SPLog -Message "No orchestrator runs found within $DaysBack days" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Calculate metrics
+    $runCount = $sortedRuns.Count
+    $successCount = @($sortedRuns | Where-Object { $_.ExitCode -eq 0 }).Count
+    $successRate = [math]::Round(($successCount / $runCount) * 100, 1)
+
+    $totalDuration = ($sortedRuns | Measure-Object -Property DurationSeconds -Sum).Sum
+    $avgDuration = [math]::Round($totalDuration / $runCount, 0)
+
+    # Duration trend: compare first half avg vs second half avg
+    $durationTrend = 'Stable'
+    if ($sortedRuns.Count -ge 4) {
+        $halfPoint = [math]::Floor($sortedRuns.Count / 2)
+        $recentHalf = $sortedRuns[0..($halfPoint - 1)]
+        $olderHalf = $sortedRuns[$halfPoint..($sortedRuns.Count - 1)]
+        $recentAvg = ($recentHalf | Measure-Object -Property DurationSeconds -Average).Average
+        $olderAvg = ($olderHalf | Measure-Object -Property DurationSeconds -Average).Average
+        if ($olderAvg -gt 0) {
+            $changePct = (($recentAvg - $olderAvg) / $olderAvg) * 100
+            if ($changePct -gt 15) { $durationTrend = 'Increasing' }
+            elseif ($changePct -lt -15) { $durationTrend = 'Decreasing' }
+        }
+    }
+
+    # Failure breakdown by exit code
+    $failureBreakdown = @{}
+    $failedRuns = @($sortedRuns | Where-Object { $_.ExitCode -ne 0 })
+    foreach ($fr in $failedRuns) {
+        $key = "ExitCode$($fr.ExitCode)"
+        if ($failureBreakdown.ContainsKey($key)) { $failureBreakdown[$key]++ }
+        else { $failureBreakdown[$key] = 1 }
+    }
+
+    # Consecutive failures from most recent
+    $consecutiveFailures = 0
+    foreach ($r in $sortedRuns) {
+        if ($r.ExitCode -ne 0) { $consecutiveFailures++ }
+        else { break }
+    }
+
+    # Last successful run
+    $lastSuccess = $sortedRuns | Where-Object { $_.ExitCode -eq 0 } | Select-Object -First 1
+    $lastSuccessfulRun = if ($null -ne $lastSuccess) { $lastSuccess.Timestamp } else { $null }
+
+    # Step reliability: per-step success rate
+    $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+    $stepReliability = @{}
+    foreach ($sn in $stepNames) {
+        $totalWithStep = 0
+        $successWithStep = 0
+        foreach ($r in $sortedRuns) {
+            if ($r.Steps.ContainsKey($sn)) {
+                $stepVal = $r.Steps[$sn]
+                if ($stepVal -ne 'Skipped') {
+                    $totalWithStep++
+                    if ($stepVal -like 'Success*') {
+                        $successWithStep++
+                    }
+                }
+            }
+        }
+        if ($totalWithStep -gt 0) {
+            $stepReliability[$sn] = [math]::Round(($successWithStep / $totalWithStep) * 100, 1)
+        }
+        else {
+            $stepReliability[$sn] = 0.0
+        }
+    }
+
+    Write-SPLog -Message "Parsed $runCount runs: SuccessRate=$successRate% AvgDuration=${avgDuration}s" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Runs    = $sortedRuns
+        Metrics = @{
+            RunCount            = $runCount
+            SuccessRate         = $successRate
+            AvgDurationSeconds  = $avgDuration
+            DurationTrend       = $durationTrend
+            FailureBreakdown    = $failureBreakdown
+            ConsecutiveFailures = $consecutiveFailures
+            LastSuccessfulRun   = $lastSuccessfulRun
+            StepReliability     = $stepReliability
+        }
+    }
+}
+
+function Export-SPOrchestratorHistoryHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML dashboard of orchestrator run history.
+    .DESCRIPTION
+        Takes the output of Get-SPOrchestratorHistory and produces a self-contained
+        HTML report with run timeline, metrics cards, step reliability bars, duration
+        trend, and failure details.
+    .PARAMETER HistoryData
+        Output from Get-SPOrchestratorHistory.
+    .PARAMETER OutputPath
+        Directory to write the HTML file.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] Success flag and report path.
+    .EXAMPLE
+        $history = Get-SPOrchestratorHistory -DaysBack 30
+        Export-SPOrchestratorHistoryHtml -HistoryData $history -OutputPath './Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][hashtable]$HistoryData,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Generating orchestrator history HTML report" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrchestratorHistoryHtml' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+    }
+
+    $m = $HistoryData.Metrics
+    $runs = $HistoryData.Runs
+    $reportDate = (Get-Date).ToString('yyyy-MM-dd')
+    $fileName = "orchestrator-history-$reportDate.html"
+    $filePath = Join-Path $OutputPath $fileName
+
+    # --- Exit code color helper ---
+    function Get-ExitCodeColor {
+        param([int]$Code)
+        switch ($Code) {
+            0 { return '#27ae60' }  # green
+            1 { return '#f39c12' }  # yellow/orange
+            4 { return '#e74c3c' }  # red
+            5 { return '#c0392b' }  # dark red
+            default { return '#e74c3c' }
+        }
+    }
+
+    function Get-ExitCodeLabel {
+        param([int]$Code)
+        switch ($Code) {
+            0 { return 'Success' }
+            1 { return 'Warnings' }
+            4 { return 'Config Error' }
+            5 { return 'Critical' }
+            default { return "Exit $Code" }
+        }
+    }
+
+    # --- Build HTML ---
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('<!DOCTYPE html>')
+    [void]$sb.AppendLine('<html lang="en"><head><meta charset="utf-8"/>')
+    [void]$sb.AppendLine('<meta name="viewport" content="width=device-width, initial-scale=1.0"/>')
+    [void]$sb.AppendLine("<title>Orchestrator Run History - $reportDate</title>")
+    [void]$sb.AppendLine('<style>')
+    [void]$sb.AppendLine('body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; margin: 20px; background: #f5f6fa; color: #2c3e50; }')
+    [void]$sb.AppendLine('h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }')
+    [void]$sb.AppendLine('h2 { color: #34495e; margin-top: 30px; }')
+    [void]$sb.AppendLine('.card-row { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }')
+    [void]$sb.AppendLine('.card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); min-width: 180px; flex: 1; }')
+    [void]$sb.AppendLine('.card .label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-bottom: 4px; }')
+    [void]$sb.AppendLine('.card .value { font-size: 28px; font-weight: bold; }')
+    [void]$sb.AppendLine('.card .sub { font-size: 12px; color: #95a5a6; margin-top: 4px; }')
+    [void]$sb.AppendLine('table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin: 16px 0; }')
+    [void]$sb.AppendLine('.bar-container { background: #ecf0f1; border-radius: 4px; height: 20px; width: 100%; }')
+    [void]$sb.AppendLine('.bar-fill { height: 20px; border-radius: 4px; text-align: center; color: #fff; font-size: 11px; line-height: 20px; }')
+    [void]$sb.AppendLine('.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-size: 12px; font-weight: bold; }')
+    [void]$sb.AppendLine('.failure-detail { background: #fdf0ed; border-left: 4px solid #e74c3c; padding: 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }')
+    [void]$sb.AppendLine('</style>')
+    [void]$sb.AppendLine('</head><body>')
+
+    # Title
+    [void]$sb.AppendLine("<h1>Orchestrator Run History</h1>")
+    [void]$sb.AppendLine("<p>Generated: $(ConvertTo-SafeHtml (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) | Runs analyzed: $(ConvertTo-SafeHtml $m.RunCount)</p>")
+
+    # --- Metrics cards ---
+    [void]$sb.AppendLine('<h2>Operational Metrics</h2>')
+    [void]$sb.AppendLine('<div class="card-row">')
+
+    # Success Rate card
+    $srColor = if ($m.SuccessRate -ge 90) { '#27ae60' } elseif ($m.SuccessRate -ge 70) { '#f39c12' } else { '#e74c3c' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Success Rate</div><div class=`"value`" style=`"color:$srColor`">$(ConvertTo-SafeHtml $m.SuccessRate)%</div><div class=`"sub`">$($m.RunCount) total runs</div></div>")
+
+    # Avg Duration card
+    $durationMin = [math]::Round($m.AvgDurationSeconds / 60, 1)
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Avg Duration</div><div class=`"value`">$(ConvertTo-SafeHtml $durationMin)m</div><div class=`"sub`">Trend: $(ConvertTo-SafeHtml $m.DurationTrend)</div></div>")
+
+    # Consecutive Failures card
+    $cfColor = if ($m.ConsecutiveFailures -eq 0) { '#27ae60' } elseif ($m.ConsecutiveFailures -le 2) { '#f39c12' } else { '#e74c3c' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Consecutive Failures</div><div class=`"value`" style=`"color:$cfColor`">$(ConvertTo-SafeHtml $m.ConsecutiveFailures)</div><div class=`"sub`">Current streak</div></div>")
+
+    # Last Success card
+    $lsDisplay = if ($null -ne $m.LastSuccessfulRun) { ConvertTo-SafeHtml $m.LastSuccessfulRun } else { 'Never' }
+    [void]$sb.AppendLine("<div class=`"card`"><div class=`"label`">Last Successful Run</div><div class=`"value`" style=`"font-size:16px`">$lsDisplay</div></div>")
+
+    [void]$sb.AppendLine('</div>')
+
+    # --- Step Reliability Bars ---
+    [void]$sb.AppendLine('<h2>Step Reliability</h2>')
+    [void]$sb.AppendLine('<table>')
+    [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Step', 'Reliability', '')))
+    [void]$sb.AppendLine('<tbody>')
+    $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+    $alt = $false
+    foreach ($sn in $stepNames) {
+        $pct = if ($m.StepReliability.ContainsKey($sn)) { $m.StepReliability[$sn] } else { 0.0 }
+        $barColor = if ($pct -ge 90) { '#27ae60' } elseif ($pct -ge 70) { '#f39c12' } else { '#e74c3c' }
+        $barHtml = "<div class=`"bar-container`"><div class=`"bar-fill`" style=`"width:${pct}%; background:$barColor`">$(ConvertTo-SafeHtml $pct)%</div></div>"
+        [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+            (ConvertTo-SafeHtml $sn),
+            $barHtml,
+            "$(ConvertTo-SafeHtml $pct)%"
+        ) -IsAlternate $alt))
+        $alt = -not $alt
+    }
+    [void]$sb.AppendLine('</tbody></table>')
+
+    # --- Run Timeline Table ---
+    [void]$sb.AppendLine('<h2>Run Timeline</h2>')
+    [void]$sb.AppendLine('<table>')
+    [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Timestamp', 'Exit Code', 'Duration', 'Correlation ID')))
+    [void]$sb.AppendLine('<tbody>')
+    $alt = $false
+    foreach ($r in $runs) {
+        $ecColor = Get-ExitCodeColor -Code $r.ExitCode
+        $ecLabel = Get-ExitCodeLabel -Code $r.ExitCode
+        $badge = "<span class=`"badge`" style=`"background:$ecColor`">$(ConvertTo-SafeHtml $ecLabel)</span>"
+        $durDisplay = "$([math]::Round($r.DurationSeconds, 1))s"
+        [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+            (ConvertTo-SafeHtml $r.Timestamp),
+            $badge,
+            (ConvertTo-SafeHtml $durDisplay),
+            (ConvertTo-SafeHtml $r.CorrelationID)
+        ) -IsAlternate $alt))
+        $alt = -not $alt
+    }
+    [void]$sb.AppendLine('</tbody></table>')
+
+    # --- Failure Details ---
+    $failedRuns = @($runs | Where-Object { $_.ExitCode -ne 0 })
+    if ($failedRuns.Count -gt 0) {
+        [void]$sb.AppendLine('<h2>Failure Details</h2>')
+        foreach ($fr in $failedRuns) {
+            $ecLabel = Get-ExitCodeLabel -Code $fr.ExitCode
+            [void]$sb.AppendLine('<div class="failure-detail">')
+            [void]$sb.AppendLine("<strong>$(ConvertTo-SafeHtml $fr.Timestamp)</strong> - $(ConvertTo-SafeHtml $ecLabel) (Exit Code $(ConvertTo-SafeHtml $fr.ExitCode))")
+            [void]$sb.AppendLine('<br/>Correlation: ' + (ConvertTo-SafeHtml $fr.CorrelationID))
+            if ($fr.Steps.Count -gt 0) {
+                [void]$sb.AppendLine('<br/>Steps:')
+                [void]$sb.AppendLine('<ul>')
+                foreach ($sk in $fr.Steps.Keys) {
+                    $sv = $fr.Steps[$sk]
+                    $stepColor = if ($sv -like 'Success*') { '#27ae60' } elseif ($sv -eq 'Skipped') { '#95a5a6' } else { '#e74c3c' }
+                    [void]$sb.AppendLine("<li style=`"color:$stepColor`">$(ConvertTo-SafeHtml $sk): $(ConvertTo-SafeHtml $sv)</li>")
+                }
+                [void]$sb.AppendLine('</ul>')
+            }
+            [void]$sb.AppendLine('</div>')
+        }
+    }
+
+    # --- Duration Trend Table ---
+    if ($runs.Count -ge 2) {
+        [void]$sb.AppendLine('<h2>Duration Trend</h2>')
+        [void]$sb.AppendLine('<table>')
+        [void]$sb.AppendLine((Build-HtmlTableHeader -Headers @('Run Date', 'Duration (s)', 'Relative')))
+        [void]$sb.AppendLine('<tbody>')
+        $maxDur = ($runs | Measure-Object -Property DurationSeconds -Maximum).Maximum
+        if ($maxDur -le 0) { $maxDur = 1 }
+        $alt = $false
+        # Show chronological order for trend (oldest first)
+        $chronoRuns = @($runs | Sort-Object { $_.Timestamp })
+        foreach ($r in $chronoRuns) {
+            $relPct = [math]::Round(($r.DurationSeconds / $maxDur) * 100, 0)
+            $barColor = Get-ExitCodeColor -Code $r.ExitCode
+            $barHtml = "<div class=`"bar-container`"><div class=`"bar-fill`" style=`"width:${relPct}%; background:$barColor`">$([math]::Round($r.DurationSeconds, 1))s</div></div>"
+            [void]$sb.AppendLine((Build-HtmlTableRow -Cells @(
+                (ConvertTo-SafeHtml $r.Timestamp),
+                (ConvertTo-SafeHtml ([math]::Round($r.DurationSeconds, 1))),
+                $barHtml
+            ) -IsAlternate $alt))
+            $alt = -not $alt
+        }
+        [void]$sb.AppendLine('</tbody></table>')
+    }
+
+    [void]$sb.AppendLine('</body></html>')
+
+    # Write file
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($filePath, $sb.ToString(), $utf8NoBom)
+
+    Write-SPLog -Message "Orchestrator history report written: $filePath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrchestratorHistoryHtml' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ReportPath = $filePath
+            RunCount   = $m.RunCount
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -10549,5 +11027,7 @@ Export-ModuleMember -Function @(
     'Export-SPStaleAccessHtml',
     'Export-SPCampaignCompletionReport',
     'Send-SPNotification',
-    'Send-SPWebhook'
+    'Send-SPWebhook',
+    'Get-SPOrchestratorHistory',
+    'Export-SPOrchestratorHistoryHtml'
 )

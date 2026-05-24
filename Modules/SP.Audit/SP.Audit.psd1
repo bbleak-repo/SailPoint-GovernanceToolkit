@@ -110,6 +110,10 @@
         # SP.AuditReport - Notification Dispatcher (P12-06)
         'Send-SPNotification'
         'Send-SPWebhook'
+
+        # SP.AuditReport - Orchestrator Run History (P12-07)
+        'Get-SPOrchestratorHistory'
+        'Export-SPOrchestratorHistoryHtml'
     )
 
     # Do not export variables or aliases from nested modules
