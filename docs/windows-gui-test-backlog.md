@@ -112,7 +112,7 @@ The window *will* be visible while the test runs; this is intentional.
 | W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | DONE |
 | W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | DONE |
 | W-05 | CLI: All scripts against remote mock | 8 | W-01 | DONE |
-| W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | PENDING |
+| W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | DONE |
 | W-07 | Report content deep validation | 15 | W-06 | PENDING |
 
 ---
@@ -377,9 +377,12 @@ WC-05-08: Invoke-SPCampaignAudit.ps1 -- WhatIf
 
 ## W-06: Playwright -- Screenshot + Visual Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-03, W-05
+- **Results:** PASS 10/10 -- harness `Tests\Harness\Test-W06-Playwright.ps1` drives a new capture helper `Tests\Tools\Playwright\capture.py` (headless Chromium via the Playwright Python SDK) to render audit-combined, executive-summary, director-AliceJohnson, and delta-2026-05-23 into `docs\windows-screenshots\` (9 PNGs total including 5 scroll frames). All 10 visual checks WV-06-01..10 PASS when read from the PNGs: donut chart renders with 16/4/5 segments, tables align with no overflow, Revoked section auto-expanded with 8 SOX-compliance columns, "Vice Presidents" column header in Executive Rollup (not "Directors"), Richard Sterling visible as the executive with 25 items / 80% completion, VP report has expandable `<details>` blocks with triangle icons + Manager Summary + Identity Decision Detail, delta report is single-page-compact with resolved identity names (Laura Bell, Craig Flores, ...) and ISO 8601 UTC dates, color coding (green=Approved / red=Revoked / orange=Pending) consistent across all four reports. See `docs\windows-test-rounds\round-09.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W06-Playwright.ps1` and `Tests\Tools\Playwright\capture.py`.
 
 **Prerequisites:** Playwright installed (`pip install playwright && playwright install chromium`)
 
