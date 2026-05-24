@@ -97,6 +97,12 @@
         # SP.AuditReport - Source Governance Scorecard (P12-03)
         'Measure-SPSourceGovernance'
         'Export-SPSourceGovernanceHtml'
+
+        # SP.AuditQueries - Stale Access Detector (P12-04)
+        'Get-SPStaleAccess'
+
+        # SP.AuditReport - Stale Access HTML (P12-04)
+        'Export-SPStaleAccessHtml'
     )
 
     # Do not export variables or aliases from nested modules

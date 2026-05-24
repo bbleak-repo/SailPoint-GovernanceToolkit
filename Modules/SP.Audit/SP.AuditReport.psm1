@@ -9248,6 +9248,257 @@ $($detailCards -join "`n")
 
 #endregion
 
+#region P12-04: Stale Access Detector HTML Report
+
+function Export-SPStaleAccessHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPStaleAccess output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with stale access items grouped by source,
+        sorted by classification (NeverReviewed first). Privileged entitlements are
+        highlighted in red. Includes a summary card with total stale count and source
+        breakdown. Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER StaleData
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $stale = Get-SPStaleAccess -CampaignAudits $audits -StaleDays 180
+        $path = Export-SPStaleAccessHtml -StaleData $stale -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$StaleData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "StaleAccess-${timestamp}.html"
+
+    $summary    = $StaleData['Summary']
+    $staleItems = @($StaleData['StaleItems'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Stale<br/><span style="font-size:22px;">$($summary['TotalStaleItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Never Reviewed<br/><span style="font-size:22px;">$($summary['NeverReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Expired<br/><span style="font-size:22px;">$($summary['Expired'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Partial Coverage<br/><span style="font-size:22px;">$($summary['PartialCoverage'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Privileged Stale<br/><span style="font-size:22px;">$($summary['PrivilegedStale'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Source breakdown ---
+    $sourceBreakdown = $summary['SourceBreakdown']
+    $breakdownRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $sourceBreakdown -and $sourceBreakdown.Count -gt 0) {
+        $sbIdx = 0
+        foreach ($sName in ($sourceBreakdown.Keys | Sort-Object)) {
+            $sbIdx++
+            $cells = @((ConvertTo-SafeHtml $sName), [string]$sourceBreakdown[$sName])
+            $breakdownRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sbIdx % 2) -eq 0)))
+        }
+    }
+
+    $breakdownHtml = ''
+    if ($breakdownRows.Count -gt 0) {
+        $bHeader = Build-HtmlTableHeader -Headers @('Source', 'Stale Items')
+        $breakdownHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Breakdown</h2>
+<table style="width:50%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${bHeader}
+<tbody>
+$($breakdownRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Main table grouped by source ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Entitlement', 'Privileged', 'Classification',
+        'Identity Count', 'Last Review', 'Days Since Review'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($item in $staleItems) {
+        $rowIdx++
+
+        # Classification badge
+        $classColor = switch ($item['Classification']) {
+            'NeverReviewed'   { 'color:#fff; background:#c0392b;' }
+            'Expired'         { 'color:#fff; background:#e67e22;' }
+            'PartialCoverage' { 'color:#fff; background:#f39c12;' }
+            default           { 'color:#fff; background:#777777;' }
+        }
+        $classBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $classColor"">$($item['Classification'])</span>"
+
+        # Privileged highlight
+        $privDisplay = if ($item['Privileged']) {
+            '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        # Last review date
+        $lastReview = if (-not [string]::IsNullOrWhiteSpace($item['LastReviewDate'])) {
+            ConvertTo-SafeHtml $item['LastReviewDate']
+        } else { 'Never' }
+
+        # Days since review with color coding
+        $daysSince = if ($null -ne $item['DaysSinceReview']) {
+            $days = [int]$item['DaysSinceReview']
+            $dayColor = if ($days -ge 365) { '#c0392b' } elseif ($days -ge 180) { '#e67e22' } else { '#27ae60' }
+            "<span style=""color:${dayColor}; font-weight:bold;"">$days</span>"
+        } else { '-' }
+
+        $identityCount = if ($null -ne $item['IdentityCount']) { [string]$item['IdentityCount'] } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $item['SourceName']),
+            (ConvertTo-SafeHtml $item['EntitlementName']),
+            $privDisplay,
+            $classBadge,
+            $identityCount,
+            $lastReview,
+            $daysSince
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail sections ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    # Group items by source
+    $sourceGroups = @{}
+    foreach ($item in $staleItems) {
+        $sName = $item['SourceName']
+        if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $item['SourceId'] }
+        if (-not $sourceGroups.ContainsKey($sName)) {
+            $sourceGroups[$sName] = [System.Collections.Generic.List[hashtable]]::new()
+        }
+        $sourceGroups[$sName].Add($item)
+    }
+
+    foreach ($sName in ($sourceGroups.Keys | Sort-Object)) {
+        $groupItems = $sourceGroups[$sName]
+        $sectionHtml = "<h2 style=""font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;"">$(ConvertTo-SafeHtml $sName) ($($groupItems.Count) stale)</h2>"
+
+        foreach ($item in $groupItems) {
+            $entHtml = ConvertTo-SafeHtml $item['EntitlementName']
+            $classLabel = $item['Classification']
+            $borderColor = switch ($classLabel) {
+                'NeverReviewed'   { '#c0392b' }
+                'Expired'         { '#e67e22' }
+                'PartialCoverage' { '#f39c12' }
+                default           { '#777777' }
+            }
+
+            $privTag = if ($item['Privileged']) { ' <span style="color:#c0392b; font-weight:bold;">[PRIVILEGED]</span>' } else { '' }
+
+            $lastReviewDetail = if (-not [string]::IsNullOrWhiteSpace($item['LastReviewDate'])) {
+                $item['LastReviewDate']
+            } else { 'Never' }
+
+            $daysDetail = if ($null -ne $item['DaysSinceReview']) { "$($item['DaysSinceReview']) days" } else { 'N/A' }
+
+            $sectionHtml += @"
+<div style="margin-bottom:8px; padding:6px 12px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>${entHtml}</strong>${privTag} - <em>${classLabel}</em><br/>
+<span style="font-size:12px; color:#666666;">
+Identities: $($item['IdentityCount']) | Last Review: ${lastReviewDetail} | Days Since: ${daysDetail}
+</span>
+</div>
+"@
+        }
+
+        $sourceSections.Add($sectionHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Stale Access Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Stale Access Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${breakdownHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Stale Access Items</h2>
+${tableHtml}
+
+$($sourceSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Stale access HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPStaleAccessHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -9278,5 +9529,6 @@ Export-ModuleMember -Function @(
     'Measure-SPIdentityRisk',
     'Export-SPIdentityRiskHtml',
     'Measure-SPSourceGovernance',
-    'Export-SPSourceGovernanceHtml'
+    'Export-SPSourceGovernanceHtml',
+    'Export-SPStaleAccessHtml'
 )
