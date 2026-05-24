@@ -125,6 +125,13 @@ function Get-SPConfigDefaults {
                 IncludePayload = $true
             }
         }
+        Retention = @{
+            Enabled     = $false
+            ArchiveDays = 30
+            DeleteDays  = 90
+            ArchivePath = '.\Archive'
+            Paths       = @('Audit', 'DeltaCert', 'Logs')
+        }
         DeltaCert = @{
             SourceIds                  = @()
             DefaultHoursBack           = 24
@@ -350,6 +357,13 @@ function Get-SPConfigTemplate {
                 Headers        = @{}
                 IncludePayload = $true
             }
+        }
+        Retention = [ordered]@{
+            Enabled     = $false
+            ArchiveDays = 30
+            DeleteDays  = 90
+            ArchivePath = '.\Archive'
+            Paths       = @('Audit', 'DeltaCert', 'Logs')
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()

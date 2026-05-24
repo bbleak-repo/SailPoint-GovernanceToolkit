@@ -52,7 +52,7 @@ Safe to modify:
 | P12-06 | Notification Dispatcher | none | DONE |
 | P12-07 | Orchestrator Run History | none | DONE |
 | P12-08 | Weekly Governance Digest Script | P12-02, P12-07 | DONE |
-| P12-09 | Log Retention and Archival | none | PENDING |
+| P12-09 | Log Retention and Archival | none | DONE |
 | P12-10 | Pester Tests | P12-09 | PENDING |
 
 ---
@@ -928,7 +928,7 @@ digest as body/attachment.
 
 ## P12-09: Log Retention and Archival
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

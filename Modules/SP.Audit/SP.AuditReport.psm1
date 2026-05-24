@@ -10993,6 +10993,350 @@ function Export-SPOrchestratorHistoryHtml {
 
 #endregion
 
+#region P12-09 Log Retention and Archival
+
+function Invoke-SPLogRetention {
+    <#
+    .SYNOPSIS
+        Enforces retention policies on toolkit output directories.
+    .DESCRIPTION
+        Archives old files to monthly ZIP archives and deletes files past their
+        retention period. Only processes known toolkit-generated file extensions.
+        Requires Retention.Enabled = true in config (opt-in safety default).
+    .PARAMETER ArchiveDays
+        Files older than this many days are archived. Minimum 7.
+    .PARAMETER DeleteDays
+        Archive ZIPs older than this many days are deleted. Minimum 30. Must be > ArchiveDays.
+    .PARAMETER ArchivePath
+        Directory for archive ZIPs. Created if it does not exist.
+    .PARAMETER Paths
+        Array of directory names (relative to toolkit root) to process.
+    .PARAMETER WhatIf
+        Lists all actions without performing them.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Result with Archived, Deleted, and Skipped counts.
+    .EXAMPLE
+        Invoke-SPLogRetention -WhatIf
+    .EXAMPLE
+        Invoke-SPLogRetention -ArchiveDays 30 -DeleteDays 90
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$ArchiveDays,
+        [Parameter()][int]$DeleteDays,
+        [Parameter()][string]$ArchivePath,
+        [Parameter()][string[]]$Paths,
+        [Parameter()][switch]$WhatIf,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Invoke-SPLogRetention'
+
+    Write-SPLog -Message 'Invoke-SPLogRetention: starting' `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Load config for defaults
+    $retentionEnabled = $false
+    $toolkitRoot = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Retention') {
+            $retCfg = $config.Retention
+            $retentionEnabled = if ($retCfg.PSObject.Properties.Name -contains 'Enabled') { $retCfg.Enabled } else { $false }
+            if ($ArchiveDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'ArchiveDays') {
+                $ArchiveDays = $retCfg.ArchiveDays
+            }
+            if ($DeleteDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'DeleteDays') {
+                $DeleteDays = $retCfg.DeleteDays
+            }
+            if ([string]::IsNullOrWhiteSpace($ArchivePath) -and $retCfg.PSObject.Properties.Name -contains 'ArchivePath') {
+                $ArchivePath = $retCfg.ArchivePath
+            }
+            if (($null -eq $Paths -or $Paths.Count -eq 0) -and $retCfg.PSObject.Properties.Name -contains 'Paths') {
+                $Paths = @($retCfg.Paths)
+            }
+        }
+    }
+    catch {
+        Write-SPLog -Message "Could not load config: $($_.Exception.Message)" `
+            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # Resolve toolkit root from module location
+    try {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..' ))
+    }
+    catch {
+        $toolkitRoot = (Get-Location).Path
+    }
+
+    # Apply defaults if still unset
+    if ($ArchiveDays -le 0) { $ArchiveDays = 30 }
+    if ($DeleteDays  -le 0) { $DeleteDays  = 90 }
+    if ([string]::IsNullOrWhiteSpace($ArchivePath)) { $ArchivePath = '.\Archive' }
+    if ($null -eq $Paths -or $Paths.Count -eq 0)    { $Paths = @('Audit', 'DeltaCert', 'Logs') }
+
+    # Check Retention.Enabled (unless parameters were provided explicitly, which implies intent)
+    if (-not $retentionEnabled -and -not $PSBoundParameters.ContainsKey('ArchiveDays') -and
+        -not $PSBoundParameters.ContainsKey('DeleteDays')) {
+        Write-SPLog -Message 'Retention.Enabled is false. No action taken. Set Retention.Enabled = true in config or pass explicit parameters.' `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                Archived = @{ FileCount = 0; TotalBytes = 0; Archives = @() }
+                Deleted  = @{ FileCount = 0; TotalBytes = 0; Files = @() }
+                Skipped  = @{ FileCount = 0; Reasons = @() }
+            }
+        }
+    }
+
+    # Validate constraints
+    if ($ArchiveDays -lt 7) {
+        Write-SPLog -Message "ArchiveDays ($ArchiveDays) is less than minimum 7. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "ArchiveDays must be at least 7 (got $ArchiveDays)" }
+        }
+    }
+    if ($DeleteDays -lt 30) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) is less than minimum 30. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays must be at least 30 (got $DeleteDays)" }
+        }
+    }
+    if ($DeleteDays -le $ArchiveDays) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays). Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays)" }
+        }
+    }
+
+    # Resolve archive path
+    if (-not [System.IO.Path]::IsPathRooted($ArchivePath)) {
+        $ArchivePath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $ArchivePath))
+    }
+
+    # Known safe extensions
+    $safeExtensions = @('.html', '.csv', '.jsonl', '.txt', '.log', '.json')
+
+    $now           = Get-Date
+    $archiveCutoff = $now.AddDays(-$ArchiveDays)
+    $deleteCutoff  = $now.AddDays(-$DeleteDays)
+
+    # Result accumulators
+    $archivedCount    = 0
+    $archivedBytes    = 0
+    $archiveFiles     = [System.Collections.Generic.List[string]]::new()
+    $deletedCount     = 0
+    $deletedBytes     = 0
+    $deletedFiles     = [System.Collections.Generic.List[string]]::new()
+    $skippedCount     = 0
+    $skippedReasons   = [System.Collections.Generic.List[string]]::new()
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    # Phase 1: Archive files older than ArchiveDays but younger than DeleteDays
+    foreach ($relPath in $Paths) {
+        $dirPath = $relPath
+        if (-not [System.IO.Path]::IsPathRooted($dirPath)) {
+            $dirPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $dirPath))
+        }
+        if (-not (Test-Path -Path $dirPath -PathType Container)) {
+            Write-SPLog -Message "Path not found, skipping: $dirPath" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Get files eligible for archival (older than archiveCutoff)
+        $files = Get-ChildItem -Path $dirPath -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $archiveCutoff }
+
+        if ($null -eq $files -or @($files).Count -eq 0) { continue }
+
+        # Group by month for monthly archives
+        $monthGroups = @($files) | Group-Object { $_.LastWriteTime.ToString('yyyy-MM') }
+        $dirName = Split-Path -Path $dirPath -Leaf
+
+        foreach ($group in $monthGroups) {
+            $monthLabel  = $group.Name
+            $zipName     = "${dirName}-${monthLabel}.zip"
+            $zipFullPath = Join-Path -Path $ArchivePath -ChildPath $zipName
+
+            $filesToArchive = @($group.Group | Where-Object {
+                $_.Extension -in $safeExtensions
+            })
+
+            $skippedInGroup = @($group.Group | Where-Object {
+                $_.Extension -notin $safeExtensions
+            })
+            foreach ($sf in $skippedInGroup) {
+                $skippedCount++
+                $skippedReasons.Add("Unknown extension: $($sf.Extension) ($($sf.Name))")
+            }
+
+            if ($filesToArchive.Count -eq 0) { continue }
+
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would archive $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $archivedCount++
+                    $archivedBytes += $f.Length
+                }
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+                continue
+            }
+
+            # Ensure archive directory exists
+            if (-not (Test-Path -Path $ArchivePath -PathType Container)) {
+                New-Item -Path $ArchivePath -ItemType Directory -Force | Out-Null
+            }
+
+            # Create or open the archive ZIP
+            try {
+                $zipMode = if (Test-Path -Path $zipFullPath) {
+                    [System.IO.Compression.ZipArchiveMode]::Update
+                } else {
+                    [System.IO.Compression.ZipArchiveMode]::Create
+                }
+                $zipStream  = [System.IO.File]::Open($zipFullPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite)
+                $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, $zipMode)
+
+                foreach ($f in $filesToArchive) {
+                    try {
+                        # Check if entry already exists (for Update mode)
+                        $entryName = $f.Name
+                        $existing  = $zipArchive.GetEntry($entryName)
+                        if ($null -ne $existing) {
+                            $entryName = "$($f.BaseName)_$(Get-Date -Format 'yyyyMMddHHmmss')$($f.Extension)"
+                        }
+
+                        $entry       = $zipArchive.CreateEntry($entryName)
+                        $entryStream = $entry.Open()
+                        try {
+                            $fileBytes = [System.IO.File]::ReadAllBytes($f.FullName)
+                            $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+                        } finally {
+                            $entryStream.Close()
+                        }
+
+                        # Remove the source file after successful archive
+                        try {
+                            Remove-Item -Path $f.FullName -Force -ErrorAction Stop
+                        }
+                        catch {
+                            $skippedCount++
+                            $skippedReasons.Add("File locked: $($f.Name)")
+                            continue
+                        }
+
+                        $archivedCount++
+                        $archivedBytes += $f.Length
+                    }
+                    catch {
+                        $skippedCount++
+                        $skippedReasons.Add("Archive error: $($f.Name) - $($_.Exception.Message)")
+                    }
+                }
+
+                $zipArchive.Dispose()
+                $zipStream.Close()
+
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+
+                Write-SPLog -Message "Archived $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                Write-SPLog -Message "Failed to create archive $zipName : $($_.Exception.Message)" `
+                    -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $skippedCount++
+                    $skippedReasons.Add("Archive creation failed: $($f.Name)")
+                }
+            }
+        }
+    }
+
+    # Phase 2: Delete expired archives older than DeleteDays
+    if (Test-Path -Path $ArchivePath -PathType Container) {
+        $oldArchives = Get-ChildItem -Path $ArchivePath -File -Filter '*.zip' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $deleteCutoff }
+
+        foreach ($arc in $oldArchives) {
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would delete expired archive $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                $deletedCount++
+                $deletedBytes += $arc.Length
+                $deletedFiles.Add($arc.FullName)
+                continue
+            }
+
+            try {
+                $arcSize = $arc.Length
+                Remove-Item -Path $arc.FullName -Force -ErrorAction Stop
+                $deletedCount++
+                $deletedBytes += $arcSize
+                $deletedFiles.Add($arc.FullName)
+                Write-SPLog -Message "Deleted expired archive: $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                $skippedCount++
+                $skippedReasons.Add("File locked: $($arc.Name)")
+                Write-SPLog -Message "Could not delete archive $($arc.Name): $($_.Exception.Message)" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+    }
+
+    $whatIfLabel = if ($WhatIf) { ' (WhatIf)' } else { '' }
+    Write-SPLog -Message "Invoke-SPLogRetention complete${whatIfLabel}: archived=$archivedCount, deleted=$deletedCount, skipped=$skippedCount" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            Archived = @{
+                FileCount  = $archivedCount
+                TotalBytes = $archivedBytes
+                Archives   = @($archiveFiles)
+            }
+            Deleted = @{
+                FileCount  = $deletedCount
+                TotalBytes = $deletedBytes
+                Files      = @($deletedFiles)
+            }
+            Skipped = @{
+                FileCount = $skippedCount
+                Reasons   = @($skippedReasons)
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -11029,5 +11373,6 @@ Export-ModuleMember -Function @(
     'Send-SPNotification',
     'Send-SPWebhook',
     'Get-SPOrchestratorHistory',
-    'Export-SPOrchestratorHistoryHtml'
+    'Export-SPOrchestratorHistoryHtml',
+    'Invoke-SPLogRetention'
 )

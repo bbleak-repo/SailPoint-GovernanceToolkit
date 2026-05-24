@@ -114,6 +114,9 @@
         # SP.AuditReport - Orchestrator Run History (P12-07)
         'Get-SPOrchestratorHistory'
         'Export-SPOrchestratorHistoryHtml'
+
+        # SP.AuditReport - Log Retention and Archival (P12-09)
+        'Invoke-SPLogRetention'
     )
 
     # Do not export variables or aliases from nested modules
