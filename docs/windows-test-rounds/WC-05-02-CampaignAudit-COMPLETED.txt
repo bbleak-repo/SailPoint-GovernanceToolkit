@@ -1,0 +1,60 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPCampaignAudit.ps1" -Status COMPLETED -DaysBack 365 -IncludeLeadershipRollup -LeadershipDepth 4 -DetailLevel Detailed
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  Campaign Audit Report
+  CorrelationID: b70b8a56-1e14-4785-ba5c-a7417388d30c
+
+  Querying campaigns (DaysBack=365)...
+  Found 1 campaign(s).
+
+  Processing: 2025 Annual Access Review (camp-completed-001)
+    Getting certifications...
+    Collected 25 review items across 5 certification(s).
+    Fetching campaign reports from API...
+    Fetching identity events for 4 revoked identit(ies)...
+    Resolving account attributes for 25 unique identit(ies)...
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\2025 Annual Access Review\campaign-audit-2025-Annual-Access-Review-20260523-165745.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\2025 Annual Access Review\campaign-audit-2025-Annual-Access-Review-20260523-165745.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\2025 Annual Access Review
+
+  Generating combined audit report...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-2025-Annual-Access-Review-20260523-165745.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-combined-20260523-165745.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\audit-20260523-165745.jsonl
+
+  Generating leadership rollup reports...
+    Building org tree for 25 unique identit(ies) (depth=4)...
+    Org tree: 25 leaves, 11 managers, 3 directors, 1 top leader(s)
+    Grouping decisions by leadership level...
+    Generating 1 Executive Leadership report(s) (level 3)...
+    Executive Leadership: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\executive-summary.html
+    Generating 3 Vice Presidents report(s) (level 2)...
+    Vice Presidents: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-AliceJohnson.html
+    Vice Presidents: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-CharlieWilliams.html
+    Vice Presidents: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-BobSmith.html
+    Generating executive summary (backward-compatible)...
+    Executive summary: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\executive-summary.html
+    Generating 3 director report(s) (backward-compatible)...
+    Director report: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-AliceJohnson.html
+    Director report: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-CharlieWilliams.html
+    Director report: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership\director-BobSmith.html
+    Leadership rollup complete (4 per-level + backward-compat reports). Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\leadership
+
+  Audit Complete
+  ============================================================
+  Campaigns audited: 1
+  Duration:          3.35 seconds
+  Output path:       C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit
+  Environment:       MOCK-SERVER
+  CorrelationID:     b70b8a56-1e14-4785-ba5c-a7417388d30c
+
+
+=== STDERR ===
+

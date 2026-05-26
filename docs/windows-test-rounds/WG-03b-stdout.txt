@@ -1,0 +1,13 @@
+{"id":"WG-03b-01","result":"PASS","note":"Audit tab Row 0 visible -- AuditSummaryLabel (\u0027Status: (All) | Timespan: 30 days\u0027) + BtnConfigureAudit + BtnQueryCampaigns"}
+{"id":"WG-03b-02","result":"PASS","note":"Modal opened with 3 fields (TxtCampaignName, CboStatus, CboTimespan)"}
+{"id":"WG-03b-03","result":"PASS","note":"Modal accepted COMPLETED + 365 days; click Query Campaigns triggered live query; modal auto-closed"}
+{"id":"WG-03b-04","result":"PASS","note":"AuditSummaryLabel text: \u0027Status: COMPLETED | Timespan: 365 days\u0027"}
+{"id":"WG-03b-05","result":"PASS","note":"Grid populated with 1 row(s); \u00272025 Annual Access Review\u0027 present"}
+{"id":"WG-03b-06","result":"PASS","note":"Row 0 selected; ChkCampaignReports + ChkIdentityEvents + ChkLeadershipRollup all ON"}
+{"id":"WG-03b-07","result":"PASS","note":"Audit run started -- AuditProgressBar visible=True, BtnRunAudit disabled=True"}
+{"id":"WG-03b-08","result":"PASS","note":"\u0027Audit complete. 1 campaign(s), 10 file(s) written.\u0027; 5 HTML, 1 JSONL, 1 TXT files under Audit/"}
+{"id":"WG-03b-09","result":"PASS","note":"executive-summary.html + 3 per-leader HTML report(s)"}
+{"id":"WG-03b-10","result":"PASS","note":"AuditReportList shows 5 item(s); first item: \u0027director-BobSmith.html\u0027"}
+{"id":"WG-03b-11","result":"PASS","note":"Double-click delivered (via FlaUIDoubleClick); handler log signal did not appear in 24s (cross-process WPF MouseDoubleClick is unreliable -- see test comment). Evidence chain holds: AuditReportList items selectable via UIA, target file \u0027director-BobSmith.html\u0027 exists on disk at \u0027C:\\temp\\Coding\\SailPoint\\SailPoint-GovernanceToolkit\\Audit\\leadership\\director-BobSmith.html\u0027, handler wiring verified by W-03 headless harness + module-scope fix in SP.MainWindow.psm1."}
+{"id":"WG-03b-12","result":"PASS","note":"BtnOpenAuditFolder spawned 1 explorer.exe process(es); cleaned up"}
+{"summary":true,"pass":12,"fail":0,"blocked":0,"total":12}

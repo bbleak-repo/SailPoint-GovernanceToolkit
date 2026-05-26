@@ -1,0 +1,122 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPCampaignAudit.ps1" -Status ACTIVE -DaysBack 365
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  Campaign Audit Report
+  CorrelationID: e7617729-26a5-4f69-9af7-06a48d904615
+
+  Querying campaigns (DaysBack=365)...
+  Found 8 campaign(s).
+
+  Processing: Q1 2026 Source Owner Review (camp-active-001)
+    Getting certifications...
+    Collected 25 review items across 5 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-active-001' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-active-001' report list. The campaign may not be completed, or this report type is unavailable.
+    Fetching identity events for 2 revoked identit(ies)...
+    Resolving account attributes for 25 unique identit(ies)...
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\Q1 2026 Source Owner Review\campaign-audit-Q1-2026-Source-Owner-Review-20260523-165749.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\Q1 2026 Source Owner Review\campaign-audit-Q1-2026-Source-Owner-Review-20260523-165749.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\Q1 2026 Source Owner Review
+  Processing: AD Delta Cert 2026-05-23 (camp-delta-001)
+    Getting certifications...
+    Collected 6 review items across 3 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-delta-001' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-delta-001' report list. The campaign may not be completed, or this report type is unavailable.
+    Resolving account attributes for 6 unique identit(ies)...
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\AD Delta Cert 2026-05-23\campaign-audit-AD-Delta-Cert-2026-05-23-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\AD Delta Cert 2026-05-23\campaign-audit-AD-Delta-Cert-2026-05-23-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\AD Delta Cert 2026-05-23
+  Processing: WinCLI-01 2026-05-23 - Lisa Taylor (camp-5cf02ff9)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-5cf02ff9' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-5cf02ff9' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Lisa Taylor\campaign-audit-WinCLI-01-2026-05-23---Lisa-Taylor-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Lisa Taylor\campaign-audit-WinCLI-01-2026-05-23---Lisa-Taylor-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Lisa Taylor
+  Processing: WinCLI-01 2026-05-23 - Fiona Garcia (camp-24bf3239)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-24bf3239' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-24bf3239' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Fiona Garcia\campaign-audit-WinCLI-01-2026-05-23---Fiona-Garcia-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Fiona Garcia\campaign-audit-WinCLI-01-2026-05-23---Fiona-Garcia-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Fiona Garcia
+  Processing: WinCLI-01 2026-05-23 - Marcus Thomas (camp-aff484ff)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-aff484ff' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-aff484ff' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Marcus Thomas\campaign-audit-WinCLI-01-2026-05-23---Marcus-Thomas-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Marcus Thomas\campaign-audit-WinCLI-01-2026-05-23---Marcus-Thomas-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Marcus Thomas
+  Processing: WinCLI-01 2026-05-23 - George Miller (camp-13f85b47)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-13f85b47' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-13f85b47' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - George Miller\campaign-audit-WinCLI-01-2026-05-23---George-Miller-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - George Miller\campaign-audit-WinCLI-01-2026-05-23---George-Miller-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - George Miller
+  Processing: WinCLI-01 2026-05-23 - Kevin Anderson (camp-94b06f4e)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-94b06f4e' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-94b06f4e' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Kevin Anderson\campaign-audit-WinCLI-01-2026-05-23---Kevin-Anderson-20260523-165750.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Kevin Anderson\campaign-audit-WinCLI-01-2026-05-23---Kevin-Anderson-20260523-165750.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-01 2026-05-23 - Kevin Anderson
+  Processing: WinCLI-02 2026-05-23 - Source src-ad-001 (camp-fafdd62b)
+    Getting certifications...
+    Collected 0 review items across 0 certification(s).
+    Fetching campaign reports from API...
+    WARN: CAMPAIGN_STATUS_REPORT unavailable: Report type 'CAMPAIGN_STATUS_REPORT' not found in campaign 'camp-fafdd62b' report list. The campaign may not be completed, or this report type is unavailable.
+    WARN: CERTIFICATION_SIGNOFF_REPORT unavailable: Report type 'CERTIFICATION_SIGNOFF_REPORT' not found in campaign 'camp-fafdd62b' report list. The campaign may not be completed, or this report type is unavailable.
+    Generating reports...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-02 2026-05-23 - Source src-ad-001\campaign-audit-WinCLI-02-2026-05-23---Source-src-ad-001-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-02 2026-05-23 - Source src-ad-001\campaign-audit-WinCLI-02-2026-05-23---Source-src-ad-001-20260523-165751.txt
+    Done. Output: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\WinCLI-02 2026-05-23 - Source src-ad-001
+
+  Generating combined audit report...
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-Q1-2026-Source-Owner-Review-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-AD-Delta-Cert-2026-05-23-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-01-2026-05-23---Lisa-Taylor-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-01-2026-05-23---Fiona-Garcia-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-01-2026-05-23---Marcus-Thomas-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-01-2026-05-23---George-Miller-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-01-2026-05-23---Kevin-Anderson-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-WinCLI-02-2026-05-23---Source-src-ad-001-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\campaign-audit-combined-20260523-165751.html
+C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit\audit-20260523-165751.jsonl
+
+  Audit Complete
+  ============================================================
+  Campaigns audited: 8
+  Duration:          3.48 seconds
+  Output path:       C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit
+  Environment:       MOCK-SERVER
+  CorrelationID:     e7617729-26a5-4f69-9af7-06a48d904615
+
+
+=== STDERR ===
+

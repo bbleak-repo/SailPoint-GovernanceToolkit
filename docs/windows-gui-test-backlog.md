@@ -71,25 +71,58 @@ Remove-Item Config\settings-real.json
 
 ---
 
+## FlaUI Interactive GUI Harness
+
+All `GUI:` phases (W-02 onward) must drive a real visible WPF window via the
+vendored FlaUI harness, not headless XAML parsing. Headless coverage was
+shipped first as a sanity layer; W-02b and W-03b backfill it with interactive
+tests, and W-04 builds on top of the same harness.
+
+- Helper module:  `Tests\Harness\SP.UiTest.psm1`
+- Vendored DLLs:  `Tests\Tools\FlaUI\` (FlaUI 4.0 net48, MIT)
+- Smoke proof:    `Tests\Harness\Test-FlaUiSmoke.ps1` (9/9 PASS as of harness build)
+
+Pattern each interactive harness must follow (run as `powershell.exe -STA -File ...`):
+
+```powershell
+Import-Module $PSScriptRoot\SP.UiTest.psm1 -Force
+$ui = Start-SPDashboardForTest -ConfigPath C:\...\Config\settings.json
+try {
+    $tab = Find-SPUiTab -Window $ui.Window -Header 'Settings'
+    $tab.Select()
+    $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSave'
+    $btn.Click()
+    Save-SPUiScreenshot -Element $ui.Window -Path docs\windows-test-rounds\WG-02b-after-save.png
+}
+finally { Stop-SPDashboardForTest -UiContext $ui }
+```
+
+The window *will* be visible while the test runs; this is intentional.
+
+---
+
 ## Phase Summary
 
 | ID | Phase | Tests | Depends On | Status |
 |----|-------|-------|------------|--------|
-| W-01 | Prerequisites + Pester | 3 | none | PENDING |
-| W-02 | GUI: Settings + Campaigns + Evidence tabs | 8 | W-01 | PENDING |
-| W-03 | GUI: Audit tab (query + audit + leadership) | 12 | W-01 | PENDING |
-| W-04 | GUI: Delta Cert tab (all 5 buttons + dialogs) | 14 | W-01 | PENDING |
-| W-05 | CLI: All scripts against remote mock | 8 | W-01 | PENDING |
-| W-06 | Playwright: Screenshot + visual validation | 10 | W-03, W-05 | PENDING |
-| W-07 | Report content deep validation | 15 | W-06 | PENDING |
+| W-01 | Prerequisites + Pester | 3 | none | DONE |
+| W-02 | GUI (headless): Settings + Campaigns + Evidence tabs | 8 | W-01 | DONE |
+| W-02b | GUI (interactive, FlaUI): backfill W-02 | 8 | W-02 | DONE |
+| W-03 | GUI (headless): Audit tab | 12 | W-01 | DONE |
+| W-03b | GUI (interactive, FlaUI): backfill W-03 | 12 | W-03 | DONE |
+| W-04 | GUI (interactive, FlaUI): Delta Cert tab (all 5 buttons + dialogs) | 14 | W-02b | DONE |
+| W-05 | CLI: All scripts against remote mock | 8 | W-01 | DONE |
+| W-06 | Playwright: Screenshot + visual validation | 10 | W-03b, W-05 | DONE |
+| W-07 | Report content deep validation | 15 | W-06 | DONE |
 
 ---
 
 ## W-01: Prerequisites + Pester
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** none
+- **Results:** PASS -- mock connectivity OK, OAuth OK, Pester 402/411 pass (9 pre-existing test/mock failures documented in docs\windows-test-rounds\round-02.md, down from 55 on PS 7)
 
 **Tests:**
 
@@ -118,9 +151,10 @@ WC-01-04: Pester test suite
 
 ## W-02: GUI -- Settings, Campaigns, Evidence Tabs
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 8/8 -- headless WPF harness `Tests\Harness\Test-W02-GuiStructure.ps1` (STA, no ShowDialog) verified XAML loads, 5 tabs in correct order, all 6 Settings section anchors, 6 Delta Cert fields, Quick Connect masked PasswordBox + buttons, Campaigns toolbar + DataGrid + ProgressBar, Evidence tree + detail grid, and a real settings.json round-trip (TxtDcHoursBack 24 -> 48 -> 24 verified via WriteAllText + re-read). See docs\windows-test-rounds\round-03.md.
 
 **Launch GUI:** `.\Scripts\Show-SPDashboard.ps1`
 
@@ -156,11 +190,32 @@ WG-02-08: All 5 tab headers visible and clickable
 
 ---
 
+## W-02b: GUI (interactive, FlaUI) -- backfill W-02
+
+- **Status:** `DONE`
+- **Commit:** (this round)
+- **Depends On:** W-02 (headless baseline) + FlaUI harness
+- **Results:** PASS 8/8 -- interactive harness `Tests\Harness\Test-W02b-GuiInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified main window + 5 tabs, all 6 Settings section headers (Environment, Authentication, API Configuration, Testing, Safety Controls, Delta Cert), 6 Delta Cert AutomationIds, Quick Connect masked PasswordBox + Apply/Clear, end-to-end Save round trip on TxtDcHoursBack (24->48->24 with disk verification, "Saved" MessageBox dismissed via desktop-wide UIA sweep, StatusBarText='Settings saved successfully.'), Campaigns toolbar + CampaignGrid + progress area (SuiteProgressBar is Visibility=Collapsed pre-run by design), Evidence tree + detail grid + Refresh/Open/Export buttons, and all 5 tabs Select() in spec order Campaigns->Evidence->Settings->Audit->Delta Cert with per-tab screenshots. Mock at 10.0.0.143:8080 reachable this round; `Config\settings.local.json` had to be overlaid with the same mock config as `settings.json` because path-less Get-SPConfig calls in background runspaces prefer the .local file (see round-05.md bugs section). See docs\windows-test-rounds\round-05.md.
+
+---
+
+## W-03b: GUI (interactive, FlaUI) -- backfill W-03
+
+- **Status:** `DONE`
+- **Commit:** (this round)
+- **Depends On:** W-03 (headless baseline) + FlaUI harness
+- **Results:** PASS 12/12 -- interactive harness `Tests\Harness\Test-W03b-AuditTabInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified the Audit tab Row 0 (summary + Configure + Query Campaigns), the AuditQueryDialog modal opening with TxtCampaignName/CboStatus/CboTimespan, the live mock query for `COMPLETED + 365 days` populating AuditCampaignGrid with "2025 Annual Access Review", the summary-label refresh, selecting the row checkbox + checking all three audit options (Reports/Events/Leadership), the live Run Audit run (AuditProgressBar visible, BtnRunAudit disabled, dispatcher-timer driven), audit completion in <30s (`Audit complete. 1 campaign(s), 10 file(s) written.`), generation of Audit\*.html + Audit\leadership\executive-summary.html + 3 per-leader HTML reports, AuditReportList populating with 5 items + a double-click delivery (evidence chain), and BtnOpenAuditFolder spawning Explorer. **Bug fix shipped this round:** the AuditReportList MouseDoubleClick handler hit the WPF+PS5.1 module-scope gotcha (`.GetNewClosure()` drops module SessionState, so `$auditReportList` resolved to `$null` and `Start-Process` was never reached); fixed in `Modules\SP.Gui\SP.MainWindow.psm1` by wrapping the handler body in `& $module { param($lb) ... } $auditReportList` plus an INFO `Write-SPLog "Opening audit report:"` observability line. See `docs\windows-test-rounds\round-06.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W03b-AuditTabInteractive.ps1`.
+
+---
+
 ## W-03: GUI -- Audit Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 10/10 testable, BLOCKED 2 (mock down) -- headless WPF harness `Tests\Harness\Test-W03-AuditTabStructure.ps1` (STA, no ShowDialog) verified Audit tab Row 0 layout, AuditQueryDialog 3 fields + new 365-day timespan option, Update-AuditSummaryLabel formatter ("Status: COMPLETED | Timespan: 365 days"), AuditCampaignGrid 6-column schema, checkbox defaults (Reports/Events checked, Leadership unchecked), BtnRunAudit disabled-at-startup, AuditReportList green-brush color coding via Load-AuditReportList, MouseDoubleClick handler wired on list, Click handler wired on Open Reports Folder + absolute path from Resolve-AuditOutputPath. WG-03-08 (full audit run via Invoke-SPCampaignAudit.ps1) + WG-03-09 (Audit\leadership\ HTMLs) BLOCKED -- mock Pode server at 10.0.0.143:8080 unreachable this round. Fix shipped: added "180 days" + "365 days" options to AuditQueryDialog timespan. See docs\windows-test-rounds\round-04.md.
 
 **Tests:**
 
@@ -212,9 +267,12 @@ WG-03-12: [Open Reports Folder] button
 
 ## W-04: GUI -- Delta Cert Tab
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 14/14 -- interactive harness `Tests\Harness\Test-W04-DeltaCertInteractive.ps1` drives the real visible WPF dashboard via SP.UiTest.psm1 (FlaUI 4.0 UIA3). Verified Delta Cert tab Row 0 (`DeltaCertSummaryLabel` + Configure + Run Delta Cert), `Delta Cert Run Parameters` modal with 4 fields, dialog pre-population from `Config\settings.json` defaults (src-ad-001 / 24h / 2d / Manager), end-to-end Run (`src-ad-001 / 48h / 2d / Manager` -> `Delta cert complete. Campaigns: 0, Reason: DuplicatesExist`, DataGrid populated), session persistence (re-open shows LAST USED), summary label update, Cleanup (`0 completed, 1 still active`), `Escalation Parameters` modal + Run Escalation (`1 stale, 0 escalated, 1 skipped`), `BtnOpenDeltaCertFolder` spawning Explorer, `Generate Delta Report` writing `DeltaCert\reports\delta-*.html` (8 grants / 2 revocations), `DeltaCertHistoryList` populated from `deltacert-audit.jsonl`, and Refresh. **Two bugs shipped this round:** (1) `Invoke-SPGuiDeltaReport` was missing from `SP.Gui.psd1`'s `FunctionsToExport` so the background runspace couldn't find it (now exported); (2) `Invoke-SPDeltaCertEscalate` crashed on stale certs with no `EffectiveReviewer` because it forwarded an empty string to `Get-SPDeltaIdentityDetail`'s `[ValidateNotNullOrEmpty()]` parameter (now guarded with an `IsNullOrWhiteSpace` skip, matching the existing ManagerId-empty pattern). See `docs\windows-test-rounds\round-07.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W04-DeltaCertInteractive.ps1`.
 
 **Tests:**
 
@@ -270,9 +328,12 @@ WG-04-14: Click [Refresh] on history
 
 ## W-05: CLI -- All Scripts Against Remote Mock
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-01
+- **Results:** PASS 8/8 -- harness `Tests\Harness\Test-W05-CliScripts.ps1` ran each CLI entry point as a child `powershell.exe -NoProfile -ExecutionPolicy Bypass -File` process and validated exit codes + key stdout markers. `Test-SPConnectivity.ps1` exit 0; `Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 365 -IncludeLeadershipRollup -LeadershipDepth 4 -DetailLevel Detailed` produced `Audit\leadership\executive-summary.html` + 3 per-leader HTMLs; `-Status ACTIVE -DaysBack 365` found 8 campaigns; `Invoke-SPADDeltaCert.ps1` Manager + SourceOwner variants both exit 0 (mock returned DuplicatesExist on the second run because mock state carries between requests); `Invoke-SPDeltaReport.ps1 -SourceId src-ad-001 -HoursBack 48` wrote `DeltaCert\reports\delta-2026-05-23.html`; `-WhatIf` variants on Escalate and CampaignAudit both emit the expected `[WhatIf] Dry-run mode` marker and exit 0. Per-script stdout transcripts are saved under `docs\windows-test-rounds\WC-05-*.txt`. See `docs\windows-test-rounds\round-08.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W05-CliScripts.ps1`.
 
 **Tests:**
 
@@ -316,9 +377,12 @@ WC-05-08: Invoke-SPCampaignAudit.ps1 -- WhatIf
 
 ## W-06: Playwright -- Screenshot + Visual Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-03, W-05
+- **Results:** PASS 10/10 -- harness `Tests\Harness\Test-W06-Playwright.ps1` drives a new capture helper `Tests\Tools\Playwright\capture.py` (headless Chromium via the Playwright Python SDK) to render audit-combined, executive-summary, director-AliceJohnson, and delta-2026-05-23 into `docs\windows-screenshots\` (9 PNGs total including 5 scroll frames). All 10 visual checks WV-06-01..10 PASS when read from the PNGs: donut chart renders with 16/4/5 segments, tables align with no overflow, Revoked section auto-expanded with 8 SOX-compliance columns, "Vice Presidents" column header in Executive Rollup (not "Directors"), Richard Sterling visible as the executive with 25 items / 80% completion, VP report has expandable `<details>` blocks with triangle icons + Manager Summary + Identity Decision Detail, delta report is single-page-compact with resolved identity names (Laura Bell, Craig Flores, ...) and ISO 8601 UTC dates, color coding (green=Approved / red=Revoked / orange=Pending) consistent across all four reports. See `docs\windows-test-rounds\round-09.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W06-Playwright.ps1` and `Tests\Tools\Playwright\capture.py`.
 
 **Prerequisites:** Playwright installed (`pip install playwright && playwright install chromium`)
 
@@ -364,9 +428,12 @@ WV-06-10: Color coding consistent: green=#339933, red=#CC3333, orange=#FF8800
 
 ## W-07: Report Content Deep Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (this round)
 - **Depends On:** W-06
+- **Results:** PASS 15/15 -- harness `Tests\Harness\Test-W07-ReportContent.ps1` loads `Audit\campaign-audit-combined-*.html` with `Get-Content -Raw` and runs 15 precise regex assertions against the HTML structure emitted by `Build-SPCampaignAuditHtml`. COMPLETED status badge (green `#339933` + `<span>`); donut counts 16/4/5 with 64%/16%/20% percentages; Remediation Completion bar at 0%; Risk Indicators -> Pending Items = 5; Reviewer Response Time block lists 4 reviewers (Diana Brown, Edward Jones, Fiona Garcia, George Miller); Campaign Summary with name + status + Total Certifications; Reviewer Accountability with Primary (4) + Reassigned (1) expandable blocks; Reviewer Performance with Fastest/Slowest/Average/Median rows; Decision Summary with Approved (16) collapsed + `<details open>` Revoked (4) + Pending (5) collapsed; Revoked items table has 6 columns (Identity/Account/Access/Decision Date/Justification/Remediation) with UPN data; Campaign Reports `<details>` for CERTIFICATION_SIGNOFF_REPORT + CAMPAIGN_STATUS_REPORT; Remediation Summary shows 4 revoked items + per-item status table; Reassignment Chain table with 1 data record; Audit Metadata has Correlation ID + Report Generated; Footer has `SailPoint ISC Governance Toolkit v1.0.0`, ISO date, 36-char correlation GUID. No production bugs found in the HTML template. See `docs\windows-test-rounds\round-10.md`.
+
+- **Required artifact:** `Tests\Harness\Test-W07-ReportContent.ps1`.
 
 **Open each HTML report in Edge/Chrome. Verify every section:**
 

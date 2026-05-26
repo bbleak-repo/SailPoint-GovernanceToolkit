@@ -1,0 +1,60 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPDeltaCertEscalate.ps1" -StaleHours 1 -WhatIf
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  Delta Cert Escalation
+  CorrelationID: 2756046b-06dd-42e9-a814-9454f715a58e
+
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+  [WhatIf] Dry-run mode. No write API calls will be made.
+
+  Would run escalation with:
+    CampaignPrefix:      AD Delta Cert
+    StaleHours:          1
+    MaxEscalationLevels: 2
+
+  Detecting stale certifications (threshold: 1 hours)...
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+  Found 3 stale certification(s). Escalating...
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+
+  Escalation WhatIf Summary
+  ============================================================
+  Stale certs found: 3
+  Escalated:         3
+  Skipped:           0
+  Duration:          0.8 seconds
+  Environment:       MOCK-SERVER
+  CorrelationID:     2756046b-06dd-42e9-a814-9454f715a58e
+
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+
+=== STDERR ===
+

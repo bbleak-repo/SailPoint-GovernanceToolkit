@@ -1,0 +1,29 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPCampaignAudit.ps1" -Status COMPLETED -WhatIf
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  Campaign Audit Report
+  CorrelationID: df56b953-468a-463a-b380-447f01900c4e
+
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+
+  [WhatIf] Dry-run mode enabled. No API calls will be made.
+
+  Would query campaigns with the following filters:
+    DaysBack:            365
+    Status:              COMPLETED
+    DetailLevel:         Verbose
+
+  Would write output to: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Audit
+  CorrelationID:         df56b953-468a-463a-b380-447f01900c4e
+
+  [WhatIf] Validation complete. Re-run without -WhatIf to execute the audit.
+What if: Performing the operation "Add Content" on target "Path: C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Logs\GovernanceToolkit_2026-05-23.json".
+
+=== STDERR ===
+

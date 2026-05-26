@@ -1,0 +1,32 @@
+﻿=== Command ===
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\Scripts\Invoke-SPDeltaReport.ps1" -SourceId src-ad-001 -HoursBack 48
+
+=== STDOUT ===
+WARNING: The names of some imported commands from the module 'SP.DeltaCert' include unapproved verbs that might make 
+them less discoverable. To find the commands with unapproved verbs, run the Import-Module command again with the 
+Verbose parameter. For a list of approved verbs, type Get-Verb.
+
+  SailPoint ISC Governance Toolkit
+  Delta Certification Report
+  CorrelationID: 64ee8c44-4098-4fb1-807e-1f9a2a7acfee
+
+  Gathering delta data (last 48 hours)...
+  Generating HTML report...
+
+  Delta Report Complete
+  ============================================================
+  New Grants:        8
+  Revocations:       2
+  Campaigns Created: 1
+  Pending Reviews:   0
+  Anomalies:         0
+
+  HTML:    C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\DeltaCert\reports\delta-2026-05-23.html
+  JSONL:   C:\temp\Coding\SailPoint\SailPoint-GovernanceToolkit\DeltaCert\reports\delta-2026-05-23.jsonl
+  Duration:      1.07 seconds
+  Environment:   MOCK-SERVER
+  CorrelationID: 64ee8c44-4098-4fb1-807e-1f9a2a7acfee
+
+
+=== STDERR ===
+
