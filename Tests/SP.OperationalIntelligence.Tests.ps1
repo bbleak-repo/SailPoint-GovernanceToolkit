@@ -277,12 +277,17 @@ Describe "P12-T05: Measure-SPSourceGovernance assigns Grade A to source with 100
                 }
             }
 
+            # Inventory shape must match what Get-SPEntitlementInventory actually emits:
+            # both the integer counts (TotalEntitlements, Privileged) and the detail array.
+            # Measure-SPSourceGovernance reads the counts, not the array.
             $inventory = @{
                 Sources = @{
                     'src-gradeA' = @{
-                        SourceId     = 'src-gradeA'
-                        SourceName   = 'Perfect Source'
-                        Entitlements = @(
+                        SourceId          = 'src-gradeA'
+                        SourceName        = 'Perfect Source'
+                        TotalEntitlements = 2
+                        Privileged        = 1
+                        Entitlements      = @(
                             @{ Name = 'Ent-A'; Privileged = $false }
                             @{ Name = 'Ent-B'; Privileged = $true }
                         )
@@ -474,16 +479,20 @@ Describe "P12-T09: Export-SPCampaignCompletionReport generates HTML with all 6 s
                     )
                     Pending = @()
                 }
+                # Shape must match what Measure-SPAuditReviewerMetrics emits:
+                # outer key is ReviewerMetrics (not Reviewers); inner fields are
+                # Name / TotalItems / DecisionsMade / AvgHours.
                 ReviewerMetrics = @{
                     CampaignAvgHours = 18.5
-                    Reviewers = @(
-                        @{ ReviewerName = 'Manager1'; ItemsAssigned = 2; ItemsDecided = 2; AvgResponseHours = 12.0 }
-                        @{ ReviewerName = 'Manager2'; ItemsAssigned = 1; ItemsDecided = 1; AvgResponseHours = 24.0 }
+                    ReviewerMetrics  = @(
+                        @{ Name = 'Manager1'; TotalItems = 2; DecisionsMade = 2; AvgHours = 12.0 }
+                        @{ Name = 'Manager2'; TotalItems = 1; DecisionsMade = 1; AvgHours = 24.0 }
                     )
                 }
+                # Rubber-stamp outer key is ReviewerRisks (not Reviewers).
                 RubberStampRisk = @{
-                    Reviewers = @(
-                        @{ ReviewerName = 'Manager1'; Severity = 'Low'; Score = 0.2 }
+                    ReviewerRisks = @(
+                        @{ Name = 'Manager1'; Severity = 'Low'; Score = 0.2 }
                     )
                 }
                 RiskFlags = @{
