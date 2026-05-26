@@ -187,13 +187,17 @@ function Merge-SPConfigWithDefaults {
         $currentPath = if ($ParentPath) { "$ParentPath.$key" } else { $key }
 
         if ($null -eq $LoadedConfig -or -not ($LoadedConfig.PSObject.Properties.Name -contains $key)) {
-            # Key missing from loaded config - use default and warn
+            # Key missing from loaded config - use default and warn (once per key per session)
             $result[$key] = $Defaults[$key]
-            $warningMsg = "Configuration key '$currentPath' not found. Using default value."
-            Write-Warning $warningMsg
-
-            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
-                Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+            if ($null -eq $script:SPConfigWarnedKeys) {
+                $script:SPConfigWarnedKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+            }
+            if ($script:SPConfigWarnedKeys.Add($currentPath)) {
+                $warningMsg = "Configuration key '$currentPath' not found. Using default value."
+                Write-Warning $warningMsg
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                }
             }
         }
         elseif ($Defaults[$key] -is [hashtable]) {
@@ -211,13 +215,17 @@ function Merge-SPConfigWithDefaults {
         foreach ($prop in $LoadedConfig.PSObject.Properties) {
             if (-not $Defaults.ContainsKey($prop.Name)) {
                 $currentPath = if ($ParentPath) { "$ParentPath.$($prop.Name)" } else { $prop.Name }
-                $warningMsg = "Unknown configuration key '$currentPath' found. This key is not recognized."
-                Write-Warning $warningMsg
-
-                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
-                    Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                if ($null -eq $script:SPConfigWarnedKeys) {
+                    $script:SPConfigWarnedKeys = New-Object 'System.Collections.Generic.HashSet[string]'
                 }
-
+                $sentinel = "UNKNOWN:$currentPath"
+                if ($script:SPConfigWarnedKeys.Add($sentinel)) {
+                    $warningMsg = "Unknown configuration key '$currentPath' found. This key is not recognized."
+                    Write-Warning $warningMsg
+                    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                        Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                    }
+                }
                 # Still include unknown keys in result
                 $result[$prop.Name] = $prop.Value
             }

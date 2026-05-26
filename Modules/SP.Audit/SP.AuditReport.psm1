@@ -11135,7 +11135,11 @@ function Get-SPOrchestratorHistory {
             }
         }
 
-        $runEntry = @{
+        # PSCustomObject (not hashtable): later code uses
+        # `Measure-Object -Property DurationSeconds`, which requires
+        # reflection-accessible properties. Hashtable keys aren't visible
+        # through that path and caused AvgDuration to silently be 0.
+        $runEntry = [PSCustomObject]@{
             Timestamp       = $ts.ToString('yyyy-MM-ddTHH:mm:ssZ')
             CorrelationID   = if ($null -ne $parsed.CorrelationID) { [string]$parsed.CorrelationID } else { '' }
             ExitCode        = $exitCode

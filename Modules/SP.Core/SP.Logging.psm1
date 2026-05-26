@@ -269,13 +269,60 @@ function Write-SPLog {
     # Convert to single-line JSON
     $jsonLine = $logEntry | ConvertTo-Json -Compress -Depth 10
 
-    # Write to log file
+    # Write to log file. Add-Content takes an exclusive write lock that
+    # collides when the GUI, a CLI script, and a Pester suite all log
+    # to the same daily file. Use a named Mutex keyed off the file path
+    # for cross-process serialization, plus FileStream with FileShare.ReadWrite
+    # so readers (tailers, editors) aren't blocked while we write.
     $logFile = Get-SPLogPath
+    $payload = [System.Text.Encoding]::UTF8.GetBytes($jsonLine + "`r`n")
+
+    # Mutex name: stable hash of the absolute log file path. Local session
+    # scope is sufficient (toolkit users run as themselves, not as services).
+    $mutexName = 'SP.Logging.' + ([System.BitConverter]::ToString(
+        [System.Security.Cryptography.SHA1]::Create().ComputeHash(
+            [System.Text.Encoding]::UTF8.GetBytes($logFile.ToLowerInvariant()))) -replace '-')
+
+    $mutex = $null
+    $acquired = $false
+    $lastError = $null
     try {
-        Add-Content -Path $logFile -Value $jsonLine -Encoding UTF8 -ErrorAction Stop
+        $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+        try {
+            $acquired = $mutex.WaitOne(5000)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            # Previous holder died without releasing -- mutex is now ours.
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw [System.IO.IOException]::new("Could not acquire log mutex within 5s")
+        }
+        $fs = [System.IO.File]::Open(
+            $logFile,
+            [System.IO.FileMode]::Append,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        try {
+            $fs.Write($payload, 0, $payload.Length)
+            $fs.Flush()
+        }
+        finally {
+            $fs.Dispose()
+        }
     }
     catch {
-        Write-Warning "Failed to write to log file: $logFile. Error: $($_.Exception.Message)"
+        $lastError = $_
+    }
+    finally {
+        if ($null -ne $mutex) {
+            if ($acquired) { try { $mutex.ReleaseMutex() } catch { } }
+            $mutex.Dispose()
+        }
+    }
+
+    if ($null -ne $lastError) {
+        Write-Warning "Failed to write to log file: $logFile. Error: $($lastError.Exception.Message)"
         Write-Warning "Log entry: $jsonLine"
     }
 }
