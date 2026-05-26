@@ -333,12 +333,17 @@ Describe "P12-T06: Measure-SPSourceGovernance assigns Grade F to source with 0 c
                 }
             )
 
+            # Same canonical shape as P12-T05: include integer counts that
+            # Measure-SPSourceGovernance actually reads (test passes today by
+            # luck because Grade F is the all-zeros fallback either way).
             $inventory = @{
                 Sources = @{
                     'src-never' = @{
-                        SourceId     = 'src-never'
-                        SourceName   = 'Never Reviewed Source'
-                        Entitlements = @(
+                        SourceId          = 'src-never'
+                        SourceName        = 'Never Reviewed Source'
+                        TotalEntitlements = 2
+                        Privileged        = 1
+                        Entitlements      = @(
                             @{ Name = 'Ent-1'; Privileged = $false }
                             @{ Name = 'Ent-2'; Privileged = $true }
                         )
