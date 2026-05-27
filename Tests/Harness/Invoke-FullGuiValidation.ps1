@@ -271,9 +271,19 @@ function Test-MockOAuth {
     catch { return $false }
 }
 
-# ---------- Test config ----------
+# ---------- Test config (settings.local.json overlay) ----------
+#
+# The toolkit's config resolution picks Config\settings.local.json over
+# Config\settings.json when present (the standard "local override"
+# convention). All consumers honour this -- the dashboard, the CLI
+# scripts, the harnesses -- so the cleanest way to point every phase
+# at the mock is to overlay settings.local.json itself for the duration
+# of the run. We back up the operator's real file first, write a mock-
+# targeted file, and restore the backup in a finally on the way out.
 
-$testConfigPath = Join-Path $script:ToolkitRoot 'Config\settings.testrun.json'
+$settingsLocalPath  = Join-Path $script:ToolkitRoot 'Config\settings.local.json'
+$settingsLocalBackup = $settingsLocalPath + '.orchestrator-backup'
+$script:RestoreLocalSettings = $false  # set to $true after we successfully overlay
 
 function Write-TestConfig {
     # Take the committed Config\settings.json as a base (it has every section
@@ -281,7 +291,7 @@ function Write-TestConfig {
     # can run CompleteCampaign / WhatIf=false flows against the mock.
     $base = Get-Content (Join-Path $script:ToolkitRoot 'Config\settings.json') -Raw | ConvertFrom-Json
 
-    $base.Global.EnvironmentName              = 'MOCK-TESTRUN'
+    $base.Global.EnvironmentName              = 'MOCK-ORCHESTRATOR'
     $base.Authentication.ConfigFile.TenantUrl       = $MockBaseUrl
     $base.Authentication.ConfigFile.OAuthTokenUrl   = "$MockBaseUrl/oauth/token"
     $base.Authentication.ConfigFile.ClientId        = 'mock-test-client'
@@ -295,15 +305,40 @@ function Write-TestConfig {
     $base.DeltaCert.SourceIds                       = @('src-ad-001')
     $base.DeltaCert.FallbackReviewerIdentityId      = 'id-orphan-1'
 
-    ($base | ConvertTo-Json -Depth 20) | Set-Content -Path $testConfigPath -Encoding utf8
-    Log "Test config written: $testConfigPath" 'Green'
+    # Backup operator's real settings.local.json (if any) before overlay.
+    if (Test-Path $settingsLocalPath) {
+        if (Test-Path $settingsLocalBackup) {
+            # Stale backup from a prior crashed run -- refuse to overwrite it
+            # silently because it likely IS the operator's real config.
+            throw "Stale backup file already exists: $settingsLocalBackup. Inspect it -- it may contain the operator's real settings.local.json from a prior aborted orchestrator run. Restore it manually, then delete it, before re-running."
+        }
+        Move-Item -Path $settingsLocalPath -Destination $settingsLocalBackup -Force
+        Log "Backed up operator settings.local.json -> $(Split-Path -Leaf $settingsLocalBackup)" 'Yellow'
+    }
+
+    ($base | ConvertTo-Json -Depth 20) | Set-Content -Path $settingsLocalPath -Encoding utf8
+    $script:RestoreLocalSettings = $true
+    Log "Mock-targeted settings.local.json written for $MockBaseUrl" 'Green'
 }
 
 function Remove-TestConfig {
-    if (Test-Path $testConfigPath) {
-        Remove-Item $testConfigPath -Force -ErrorAction SilentlyContinue
-        Log "Test config removed." 'Gray'
+    if (-not $script:RestoreLocalSettings) {
+        # Never overlaid -- nothing to restore. (Either pre-validation failed
+        # before Write-TestConfig ran, or we got here via a code path that
+        # bypassed it.)
+        return
     }
+    try {
+        Remove-Item $settingsLocalPath -Force -ErrorAction SilentlyContinue
+    } catch { }
+    if (Test-Path $settingsLocalBackup) {
+        Move-Item -Path $settingsLocalBackup -Destination $settingsLocalPath -Force
+        Log "Restored operator settings.local.json from backup." 'Green'
+    }
+    else {
+        Log "No backup to restore -- operator had no settings.local.json before run." 'Gray'
+    }
+    $script:RestoreLocalSettings = $false
 }
 
 # ---------- Harness runner ----------
@@ -328,14 +363,21 @@ function Invoke-Harness {
     if ($Spec.NeedsSta) { $psArgs = @('-STA') + $psArgs }
     $psArgs += @('-File', $scriptPath)
 
-    # Per-script parameter mapping. Each harness's param block has been
-    # surveyed; the orchestrator passes what each script actually accepts.
+    # Per-script parameter mapping. CRITICAL: each harness defaults its
+    # $ConfigPath to Config\settings.json (the committed template) rather
+    # than Config\settings.local.json. Without an explicit -ConfigPath the
+    # dashboard/CLI scripts would read the template -- ignoring the
+    # mock-targeted overlay this orchestrator just wrote to
+    # settings.local.json. Pass -ConfigPath explicitly so the overlay
+    # actually takes effect, and so any in-test Save-SettingsForm round-trip
+    # writes back to settings.local.json (which we restore on exit) instead
+    # of settings.json (which would leak into the next commit).
     switch ($Name) {
-        'smoke'  { $psArgs += @('-JsonlPath', $jsonl, '-ScreenshotPath', (Join-Path $shots 'smoke.png')) }
-        'W-02b'  { $psArgs += @('-ConfigPath', $testConfigPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
-        'W-03b'  { $psArgs += @('-ConfigPath', $testConfigPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
-        'W-04'   { $psArgs += @('-ConfigPath', $testConfigPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
-        'W-05'   { $psArgs += @('-JsonlPath', $jsonl, '-LogDir', $phaseDir) }
+        'smoke'  { $psArgs += @('-ConfigPath', $settingsLocalPath, '-JsonlPath', $jsonl, '-ScreenshotPath', (Join-Path $shots 'smoke.png')) }
+        'W-02b'  { $psArgs += @('-ConfigPath', $settingsLocalPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
+        'W-03b'  { $psArgs += @('-ConfigPath', $settingsLocalPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots, '-MockBaseUrl', $MockBaseUrl) }
+        'W-04'   { $psArgs += @('-ConfigPath', $settingsLocalPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots, '-MockBaseUrl', $MockBaseUrl) }
+        'W-05'   { $psArgs += @('-JsonlPath', $jsonl, '-LogDir', $phaseDir,    '-MockBaseUrl', $MockBaseUrl) }
         'W-06'   { $psArgs += @('-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
         'W-07'   { $psArgs += @('-JsonlPath', $jsonl) }
     }
