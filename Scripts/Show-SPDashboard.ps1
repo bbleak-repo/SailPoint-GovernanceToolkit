@@ -33,7 +33,15 @@ param(
 
     [Parameter()]
     [Alias('?')]
-    [switch]$Help
+    [switch]$Help,
+
+    # Internal switch -- set automatically by the parent launcher when it
+    # spawns the isolated child process. End-users should NOT pass this
+    # manually. Advanced users debugging inside PowerShell ISE may pass it
+    # to run in-process, but that re-introduces WPF's once-per-AppDomain
+    # Application-singleton trap after the first window close.
+    [Parameter()]
+    [switch]$NoIsolation
 )
 
 Set-StrictMode -Version 1
@@ -44,25 +52,58 @@ if ($Help) {
     return
 }
 
-#region STA Thread Check
+#region Process Isolation
 
-# WPF requires STA. PowerShell ISE runs STA by default; console host is MTA.
-if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
-    Write-Host "  INFO: Relaunching in STA thread for WPF compatibility..." -ForegroundColor Cyan
+# WPF requires STA, AND [System.Windows.Application] is a once-per-AppDomain
+# singleton for the entire life of the host process: once you close the
+# dashboard window in a given PowerShell session, you cannot launch it
+# again in that same session (the Application instance stays registered
+# in a shutdown state and cannot be recreated).
+#
+# The robust fix is to always run the dashboard in a brand-new child
+# powershell.exe so every launch starts from a clean AppDomain regardless
+# of whether the caller's shell is MTA (regular powershell.exe), STA
+# (PowerShell ISE, -STA-flagged terminal), or has previously launched the
+# dashboard. The parent acts purely as a fire-and-forget wrapper that
+# waits for the child to exit and forwards its exit code.
+#
+# The -NoIsolation switch is the recursion sentinel: parent invocations
+# omit it; child invocations carry it (set automatically below) and skip
+# this block to do the actual work.
 
+if (-not $NoIsolation) {
     $scriptPath = $MyInvocation.MyCommand.Path
     if (-not $scriptPath) {
-        Write-Host "ERROR: Cannot determine script path for STA relaunch." -ForegroundColor Red
+        Write-Host "ERROR: Cannot determine script path for child-process launch." -ForegroundColor Red
         exit 1
     }
 
-    $relaunchArgs = @('-STA', '-NonInteractive', '-File', "`"$scriptPath`"")
+    Write-Host "  INFO: Launching dashboard in isolated STA child process..." -ForegroundColor Cyan
+
+    $relaunchArgs = @(
+        '-STA',
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', "`"$scriptPath`"",
+        '-NoIsolation'
+    )
     if ($ConfigPath) {
         $relaunchArgs += @('-ConfigPath', "`"$ConfigPath`"")
     }
 
     Start-Process powershell.exe -ArgumentList $relaunchArgs -Wait -NoNewWindow
     exit $LASTEXITCODE
+}
+
+# Past this point we are the isolated child (or someone bypassed
+# isolation manually). WPF still requires STA; verify and fail clearly
+# if the caller passed -NoIsolation from a non-STA shell.
+if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
+    Write-Host ("ERROR: Show-SPDashboard requires STA apartment state. " +
+                "Remove the -NoIsolation switch (recommended -- the launcher " +
+                "will spawn an STA child for you), or launch powershell.exe " +
+                "with -STA before re-running.") -ForegroundColor Red
+    exit 1
 }
 
 #endregion
