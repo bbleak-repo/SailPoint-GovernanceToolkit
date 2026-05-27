@@ -29,7 +29,11 @@ param(
     [Parameter()][int]$RunTimeoutSec = 120,
     [Parameter()][int]$CleanupTimeoutSec = 60,
     [Parameter()][int]$EscalationTimeoutSec = 60,
-    [Parameter()][int]$DeltaReportTimeoutSec = 60
+    [Parameter()][int]$DeltaReportTimeoutSec = 60,
+    # URL where the mock Pode server is reachable. Default preserves
+    # standalone behaviour against the original macOS host. The orchestrator
+    # overrides this to the locally-running mock.
+    [Parameter()][string]$MockBaseUrl = 'http://10.0.0.143:8080'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -213,7 +217,7 @@ function Wait-DcRunIdle {
 $mockUp = $false
 $mockProbeError = $null
 try {
-    $h = Invoke-RestMethod -Uri 'http://10.0.0.143:8080/health' -TimeoutSec 5 -ErrorAction Stop
+    $h = Invoke-RestMethod -Uri "$MockBaseUrl/health" -TimeoutSec 5 -ErrorAction Stop
     if ($h -and $h.status -eq 'ok') { $mockUp = $true }
 } catch { $mockProbeError = $_.Exception.Message; $mockUp = $false }
 
@@ -313,7 +317,7 @@ try {
     $runCompleted = $false
     $createdSomething = $false
     if (-not $mockUp) {
-        Add-Result 'WG-04-04' 'BLOCKED' "Mock at http://10.0.0.143:8080 unreachable; skipping live run ($mockProbeError)"
+        Add-Result 'WG-04-04' 'BLOCKED' "Mock at $MockBaseUrl unreachable; skipping live run ($mockProbeError)"
         Add-Result 'WG-04-05' 'BLOCKED' "Mock unreachable; cannot complete delta cert run"
     } else {
         try {

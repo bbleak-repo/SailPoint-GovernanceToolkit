@@ -24,7 +24,14 @@
 param(
     [Parameter()][string]$JsonlPath,
     [Parameter()][string]$LogDir,
-    [Parameter()][int]$PerScriptTimeoutSec = 240
+    [Parameter()][int]$PerScriptTimeoutSec = 240,
+    # URL where the mock Pode server is reachable. Default preserves
+    # standalone behaviour against the original macOS host. The orchestrator
+    # overrides this to the locally-running mock. NOTE: this only controls
+    # the harness's reachability check -- the CLI scripts themselves read
+    # the URL from Config\settings.json / settings.local.json, which the
+    # orchestrator overlays separately.
+    [Parameter()][string]$MockBaseUrl = 'http://10.0.0.143:8080'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,7 +119,7 @@ function Invoke-CliScript {
 
 $mockUp = $false
 try {
-    $h = Invoke-RestMethod -Uri 'http://10.0.0.143:8080/health' -TimeoutSec 5 -ErrorAction Stop
+    $h = Invoke-RestMethod -Uri "$MockBaseUrl/health" -TimeoutSec 5 -ErrorAction Stop
     if ($h -and $h.status -eq 'ok') { $mockUp = $true }
 } catch { }
 
