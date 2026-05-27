@@ -2854,10 +2854,60 @@ function Show-SPDashboard {
     # Other entry-point scripts do this; the dashboard was the only one that did not.
     try { Initialize-SPLogging -Force -ErrorAction SilentlyContinue } catch { }
 
-    # Create WPF Application if not already running
-    if ($null -eq [System.Windows.Application]::Current) {
-        $app = [System.Windows.Application]::new()
+    # --- Defensive WPF Application lifecycle handling ---
+    # The launcher's STA-relaunch path spawns a fresh powershell.exe child
+    # process for each run, which gets a clean AppDomain. But when invoked
+    # from a session that is already STA (PowerShell ISE, a terminal launched
+    # with -STA, a re-run inside an STA child), we run in-process and
+    # [Application] state from a prior dashboard run persists:
+    #   1. [Application]::Current is null but a prior instance existed -> new()
+    #      fails with "Cannot create more than one System.Windows.Application
+    #      instance in the same AppDomain".
+    #   2. [Application]::Current is non-null but Dispatcher has shut down
+    #      (default ShutdownMode = OnLastWindowClose) -> ShowDialog() on a
+    #      fresh window fails with "Cannot set Visibility ... after a Window
+    #      has closed" because WPF treats the application as terminating.
+    # Guard for both, set ShutdownMode = OnExplicitShutdown so closing a
+    # window does not kill the Application singleton, and surface a clear
+    # operator-facing error when the AppDomain is unrecoverable.
+    $existingApp = [System.Windows.Application]::Current
+    if ($null -eq $existingApp) {
+        try {
+            $app = [System.Windows.Application]::new()
+            $app.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+        }
+        catch [System.InvalidOperationException] {
+            throw [System.InvalidOperationException]::new(
+                ("WPF Application cannot be created in this PowerShell session because one " +
+                 "was already created in this AppDomain and is no longer usable. This " +
+                 "happens when a prior Show-SPDashboard run in the same STA session left " +
+                 "state behind (e.g. you closed the previous dashboard window and are now " +
+                 "re-launching from the same PowerShell prompt). WPF does not permit " +
+                 "Application to be re-initialised in a single AppDomain. " +
+                 "RESOLUTION: close this PowerShell window and open a fresh one before " +
+                 "launching the dashboard again. (Inner: $($_.Exception.Message))"),
+                $_.Exception)
+        }
     }
+    else {
+        $dispatcher = $existingApp.Dispatcher
+        if ($null -ne $dispatcher -and
+            ($dispatcher.HasShutdownStarted -or $dispatcher.HasShutdownFinished)) {
+            throw [System.InvalidOperationException]::new(
+                ("The WPF Application in this PowerShell session has already shut down " +
+                 "(HasShutdownStarted=$($dispatcher.HasShutdownStarted), " +
+                 "HasShutdownFinished=$($dispatcher.HasShutdownFinished)) and cannot host " +
+                 "another window. WPF Application state is per-AppDomain and is " +
+                 "not recoverable once the dispatcher has stopped. " +
+                 "RESOLUTION: close this PowerShell window and open a fresh one before " +
+                 "launching the dashboard again."))
+        }
+        $existingApp.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+    }
+
+    # Drop any stale window reference from a prior run in this session so
+    # Find-Control / status-bar helpers don't walk a closed visual tree.
+    $script:MainWindow = $null
 
     # Load main window XAML
     $mainXamlPath = Get-XamlPath -FileName 'MainWindow.xaml'
@@ -2956,8 +3006,34 @@ function Show-SPDashboard {
         }
     })
 
-    # Show window
-    $window.ShowDialog() | Out-Null
+    # Show window. ShowDialog blocks until the user closes the window.
+    # Defensive try/finally:
+    #   - Translate the cryptic "Cannot set Visibility ... after a Window has
+    #     closed" InvalidOperationException into an actionable message.
+    #   - Always clear $script:MainWindow on exit so a subsequent in-process
+    #     Show-SPDashboard call in the same session starts without stale
+    #     references to a closed window.
+    try {
+        $window.ShowDialog() | Out-Null
+    }
+    catch [System.InvalidOperationException] {
+        $msg = $_.Exception.Message
+        if ($msg -match 'Cannot set Visibility|after a Window has closed|EnsureHandle') {
+            throw [System.InvalidOperationException]::new(
+                ("Failed to show the dashboard window: the WPF Application in this " +
+                 "PowerShell session is in a shutdown state, usually because the " +
+                 "previous dashboard window in this same STA session was closed. WPF " +
+                 "does not allow a new window to be shown after Application has begun " +
+                 "shutting down. " +
+                 "RESOLUTION: close this PowerShell window and open a fresh one before " +
+                 "launching the dashboard again. (Inner: $msg)"),
+                $_.Exception)
+        }
+        throw
+    }
+    finally {
+        $script:MainWindow = $null
+    }
 }
 
 #endregion
