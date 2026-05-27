@@ -95,7 +95,15 @@ function Start-SPDashboardForTest {
         throw "Dashboard launcher not found: $launcher"
     }
 
-    $psArgs = @('-STA', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$launcher`"")
+    # IMPORTANT: pass -NoIsolation. The launcher's default behaviour is to
+    # spawn a fresh STA child process for the dashboard, but we are the
+    # test harness: we already spawn a fresh STA child ourselves (below)
+    # and we need FlaUI to attach to *that* child (the one hosting the
+    # window). Without -NoIsolation we end up with a launcher process that
+    # forks a grandchild for the WPF window; FlaUI attaches to the
+    # launcher's empty PID and times out waiting for a window that never
+    # appears in that process.
+    $psArgs = @('-STA', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$launcher`"", '-NoIsolation')
     if ($ConfigPath) {
         $psArgs += @('-ConfigPath', "`"$ConfigPath`"")
     }
