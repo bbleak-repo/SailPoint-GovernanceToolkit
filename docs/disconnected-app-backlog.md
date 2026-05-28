@@ -80,7 +80,7 @@ DisconnectedApps/
 | D-06 | Delta Campaign Creator | D-04, D-05 | DONE |
 | D-07 | Delta Summary Report (HTML) | D-04 | DONE |
 | D-08 | CLI Script | D-06, D-07 | DONE |
-| D-09 | Config Section + Mock Test Data | D-02 | PENDING |
+| D-09 | Config Section + Mock Test Data | D-02 | DONE |
 | D-10 | Pester Tests | D-08 | PENDING |
 
 ---
@@ -438,8 +438,8 @@ validate -> snapshot -> delta -> resolve -> campaign -> report
 
 ## D-09: Config Section + Mock Test Data
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-02
 
 **Description:**

@@ -132,6 +132,18 @@ function Get-SPConfigDefaults {
             ArchivePath = '.\Archive'
             Paths       = @('Audit', 'DeltaCert', 'Logs')
         }
+        DisconnectedApps = @{
+            ImportBasePath             = '.\DisconnectedApps\Imports'
+            SnapshotPath               = '.\DisconnectedApps\Snapshots'
+            ReportPath                 = '.\DisconnectedApps\Reports'
+            SnapshotRetentionDays      = 30
+            DefaultCampaignNamePrefix  = 'Disconnected App Cert'
+            DefaultDeadlineDays        = 2
+            CorrelationAttribute       = 'e-mail'
+            AccountDeletionThresholdPct = 20
+            RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
+            RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
+        }
         DeltaCert = @{
             SourceIds                  = @()
             DefaultHoursBack           = 24
@@ -372,6 +384,18 @@ function Get-SPConfigTemplate {
             DeleteDays  = 90
             ArchivePath = '.\Archive'
             Paths       = @('Audit', 'DeltaCert', 'Logs')
+        }
+        DisconnectedApps = [ordered]@{
+            ImportBasePath             = '.\DisconnectedApps\Imports'
+            SnapshotPath               = '.\DisconnectedApps\Snapshots'
+            ReportPath                 = '.\DisconnectedApps\Reports'
+            SnapshotRetentionDays      = 30
+            DefaultCampaignNamePrefix  = 'Disconnected App Cert'
+            DefaultDeadlineDays        = 2
+            CorrelationAttribute       = 'e-mail'
+            AccountDeletionThresholdPct = 20
+            RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
+            RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()

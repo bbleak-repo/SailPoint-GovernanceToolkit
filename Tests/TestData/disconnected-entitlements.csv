@@ -1,0 +1,5 @@
+id,name,displayName,description
+APP-ADMIN,APP-ADMIN,Application Administrator,Full administrative access to all application features and settings
+APP-POWERUSER,APP-POWERUSER,Power User,Elevated access for advanced operations and bulk data management
+APP-READONLY,APP-READONLY,Read Only,View-only access to application data and reports
+APP-REPORTS,APP-REPORTS,Report Viewer,Access to generate and view application reports and dashboards

@@ -1,0 +1,5 @@
+id,name,givenName,familyName,department,groups,IIQDisabled
+EMP20001,baduser1,Bad,User1,IT,APP-ADMIN,false
+EMP20001,duplicate,Dup,User,Finance,APP-READONLY,false
+EMP20003,noemail,No,Email,HR,APP-READONLY,maybe
+EMP20004,badstatus,Bad,Status,Treasury,APP-GHOST,true
