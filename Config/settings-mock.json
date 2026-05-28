@@ -1,0 +1,61 @@
+{
+    "Global": {
+        "EnvironmentName": "MOCK-SERVER",
+        "DebugMode": true,
+        "ToolkitVersion": "1.0.0"
+    },
+    "Authentication": {
+        "Mode": "ConfigFile",
+        "ConfigFile": {
+            "TenantUrl": "http://localhost:8080",
+            "OAuthTokenUrl": "http://localhost:8080/oauth/token",
+            "ClientId": "mock",
+            "ClientSecret": "mock"
+        }
+    },
+    "Logging": {
+        "Path": ".\\Logs",
+        "FilePrefix": "GovernanceToolkit",
+        "MinimumSeverity": "INFO",
+        "RetentionDays": 30
+    },
+    "Api": {
+        "BaseUrl": "http://localhost:8080/v3",
+        "TimeoutSeconds": 60,
+        "RetryCount": 3,
+        "RetryDelaySeconds": 5,
+        "MaxRetryDelaySeconds": 60,
+        "RateLimitRequestsPerWindow": 95,
+        "RateLimitWindowSeconds": 10,
+        "MaxPaginationPages": 200
+    },
+    "Audit": {
+        "OutputPath": ".\\Audit",
+        "DefaultDaysBack": 365,
+        "DefaultStatuses": ["COMPLETED", "ACTIVE"],
+        "DefaultIdentityEventDays": 2,
+        "IncludeCampaignReports": false,
+        "IncludeIdentityEvents": false,
+        "IncludeLeadershipRollup": false,
+        "LeadershipDepth": 3
+    },
+    "DeltaCert": {
+        "SourceIds": ["src-ad-001"],
+        "DefaultHoursBack": 24,
+        "DefaultDeadlineDays": 2,
+        "CampaignNamePrefix": "AD Delta Cert",
+        "MaxCampaignsPerRun": 50,
+        "DefaultReviewerMode": "Manager",
+        "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+        "CleanupDaysStale": 3,
+        "Escalation": {
+            "DefaultStaleHours": 24,
+            "MaxEscalationLevels": 2
+        }
+    },
+    "Safety": {
+        "MaxCampaignsPerRun": 10,
+        "RequireWhatIfOnProd": false,
+        "AllowCompleteCampaign": false
+    }
+}
