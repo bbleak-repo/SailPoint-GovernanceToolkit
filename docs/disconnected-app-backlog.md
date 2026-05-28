@@ -79,7 +79,7 @@ DisconnectedApps/
 | D-05 | Identity Resolver (file accounts to ISC) | none | DONE |
 | D-06 | Delta Campaign Creator | D-04, D-05 | DONE |
 | D-07 | Delta Summary Report (HTML) | D-04 | DONE |
-| D-08 | CLI Script | D-06, D-07 | PENDING |
+| D-08 | CLI Script | D-06, D-07 | DONE |
 | D-09 | Config Section + Mock Test Data | D-02 | PENDING |
 | D-10 | Pester Tests | D-08 | PENDING |
 
@@ -387,8 +387,8 @@ app team validation and audit evidence.
 
 ## D-08: CLI Script (Invoke-SPDisconnectedAppCert.ps1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-06, D-07
 
 **Description:**
