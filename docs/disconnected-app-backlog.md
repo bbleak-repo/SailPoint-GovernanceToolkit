@@ -74,7 +74,7 @@ DisconnectedApps/
 |----|---------|------------|--------|
 | D-01 | CSV Templates + Onboarding Guide | none | DONE |
 | D-02 | CSV Validator | D-01 | DONE |
-| D-03 | File Snapshot Manager | none | PENDING |
+| D-03 | File Snapshot Manager | none | DONE |
 | D-04 | Delta Detection Engine | D-03 | PENDING |
 | D-05 | Identity Resolver (file accounts to ISC) | none | PENDING |
 | D-06 | Delta Campaign Creator | D-04, D-05 | PENDING |
@@ -174,8 +174,8 @@ before processing.
 
 ## D-03: File Snapshot Manager
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
