@@ -40,6 +40,9 @@ function Import-SPTestModules {
         Imports SP.TestLoader, SP.Assertions, SP.Evidence, SP.BatchRunner.
     .PARAMETER DeltaCert
         Imports SP.DeltaCertQueries, SP.DeltaCertRunner.
+    .PARAMETER DisconnectedApps
+        Imports SP.DisconnectedAppValidator, SP.DisconnectedAppSnapshot,
+        SP.DisconnectedAppDelta, SP.DisconnectedAppRunner.
     #>
     [CmdletBinding()]
     param(
@@ -47,7 +50,8 @@ function Import-SPTestModules {
         [switch]$Api,
         [switch]$Audit,
         [switch]$Testing,
-        [switch]$DeltaCert
+        [switch]$DeltaCert,
+        [switch]$DisconnectedApps
     )
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
@@ -78,5 +82,11 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertQueries.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertRunner.psm1')  -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCertReport.psm1')  -Force -DisableNameChecking
+    }
+    if ($DisconnectedApps) {
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppValidator.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppSnapshot.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppDelta.psm1')     -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppRunner.psm1')    -Force -DisableNameChecking
     }
 }

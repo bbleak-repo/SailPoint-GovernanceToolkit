@@ -1,0 +1,6 @@
+id,name,givenName,familyName,e-mail,department,groups,IIQDisabled
+EMP10001,jsmith,John,Smith,john.smith@corp.com,Treasury,"APP-ADMIN,APP-REPORTS",false
+EMP10003,mjones,Mike,Jones,mike.jones@corp.com,Finance,"APP-ADMIN,APP-POWERUSER,APP-REPORTS",false
+EMP10004,alee,Alice,Lee,alice.lee@corp.com,IT,APP-READONLY,false
+EMP10005,tresigned,Tom,Resigned,tom.resigned@corp.com,Treasury,,true
+EMP10006,bwilson,Bob,Wilson,bob.wilson@corp.com,HR,"APP-READONLY,APP-REPORTS",false

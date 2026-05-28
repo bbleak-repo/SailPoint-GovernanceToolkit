@@ -72,23 +72,23 @@ DisconnectedApps/
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| D-01 | CSV Templates + Onboarding Guide | none | PENDING |
-| D-02 | CSV Validator | D-01 | PENDING |
-| D-03 | File Snapshot Manager | none | PENDING |
-| D-04 | Delta Detection Engine | D-03 | PENDING |
-| D-05 | Identity Resolver (file accounts to ISC) | none | PENDING |
-| D-06 | Delta Campaign Creator | D-04, D-05 | PENDING |
-| D-07 | Delta Summary Report (HTML) | D-04 | PENDING |
-| D-08 | CLI Script | D-06, D-07 | PENDING |
-| D-09 | Config Section + Mock Test Data | D-02 | PENDING |
-| D-10 | Pester Tests | D-08 | PENDING |
+| D-01 | CSV Templates + Onboarding Guide | none | DONE |
+| D-02 | CSV Validator | D-01 | DONE |
+| D-03 | File Snapshot Manager | none | DONE |
+| D-04 | Delta Detection Engine | D-03 | DONE |
+| D-05 | Identity Resolver (file accounts to ISC) | none | DONE |
+| D-06 | Delta Campaign Creator | D-04, D-05 | DONE |
+| D-07 | Delta Summary Report (HTML) | D-04 | DONE |
+| D-08 | CLI Script | D-06, D-07 | DONE |
+| D-09 | Config Section + Mock Test Data | D-02 | DONE |
+| D-10 | Pester Tests | D-08 | DONE |
 
 ---
 
 ## D-01: CSV Templates + Onboarding Guide
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -131,8 +131,8 @@ EMP10005,tresigned,Tom,Resigned,tom.resigned@corp.com,Treasury,,true
 
 ## D-02: CSV Validator (SP.DisconnectedAppValidator.psm1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-01
 
 **Description:**
@@ -174,8 +174,8 @@ before processing.
 
 ## D-03: File Snapshot Manager
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -211,8 +211,8 @@ previous snapshot for delta comparison.
 
 ## D-04: Delta Detection Engine
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-03
 
 **Description:**
@@ -274,8 +274,8 @@ identifies all changes at the account AND entitlement level.
 
 ## D-05: Identity Resolver (File Accounts to ISC Identities)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -315,8 +315,8 @@ Requires scope: `sp:search:read`
 
 ## D-06: Delta Campaign Creator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-04, D-05
 
 **Description:**
@@ -357,8 +357,8 @@ infrastructure from SP.DeltaCert.
 
 ## D-07: Delta Summary Report (HTML)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-04
 
 **Description:**
@@ -387,8 +387,8 @@ app team validation and audit evidence.
 
 ## D-08: CLI Script (Invoke-SPDisconnectedAppCert.ps1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-06, D-07
 
 **Description:**
@@ -438,8 +438,8 @@ validate -> snapshot -> delta -> resolve -> campaign -> report
 
 ## D-09: Config Section + Mock Test Data
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-02
 
 **Description:**
@@ -479,8 +479,8 @@ for Pester testing.
 
 ## D-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-08
 
 **Description:**
