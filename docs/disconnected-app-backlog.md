@@ -72,7 +72,7 @@ DisconnectedApps/
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| D-01 | CSV Templates + Onboarding Guide | none | PENDING |
+| D-01 | CSV Templates + Onboarding Guide | none | DONE |
 | D-02 | CSV Validator | D-01 | PENDING |
 | D-03 | File Snapshot Manager | none | PENDING |
 | D-04 | Delta Detection Engine | D-03 | PENDING |
@@ -87,8 +87,8 @@ DisconnectedApps/
 
 ## D-01: CSV Templates + Onboarding Guide
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
