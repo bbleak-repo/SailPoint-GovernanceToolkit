@@ -77,7 +77,7 @@ DisconnectedApps/
 | D-03 | File Snapshot Manager | none | DONE |
 | D-04 | Delta Detection Engine | D-03 | DONE |
 | D-05 | Identity Resolver (file accounts to ISC) | none | DONE |
-| D-06 | Delta Campaign Creator | D-04, D-05 | PENDING |
+| D-06 | Delta Campaign Creator | D-04, D-05 | DONE |
 | D-07 | Delta Summary Report (HTML) | D-04 | PENDING |
 | D-08 | CLI Script | D-06, D-07 | PENDING |
 | D-09 | Config Section + Mock Test Data | D-02 | PENDING |
@@ -315,8 +315,8 @@ Requires scope: `sp:search:read`
 
 ## D-06: Delta Campaign Creator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-04, D-05
 
 **Description:**

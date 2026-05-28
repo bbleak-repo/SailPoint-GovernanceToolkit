@@ -6,18 +6,22 @@
     Orchestration functions for the disconnected app onboarding kit.
     Resolves file-based account records to ISC identities using email
     (primary) or username (fallback) correlation via POST /v3/search.
+    Creates targeted SEARCH campaigns per manager group for delta changes.
 
     Functions:
         1. Resolve-SPDisconnectedAppIdentities - correlates delta accounts to ISC identities
+        2. Invoke-SPDisconnectedAppCertRun - creates SEARCH campaigns per manager group
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
-        - SP.DeltaCertQueries (Get-SPDeltaIdentityDetail for manager resolution)
-        - SP.Core (Write-SPLog)
+        - SP.Campaigns (New-SPCampaign, Start-SPCampaign, Search-SPCampaigns)
+        - SP.DeltaCertRunner (Build-SPDeltaSearchFilter)
+        - SP.DeltaCertQueries (Get-SPDeltaIdentityDetail, Group-SPDeltaByManager)
+        - SP.Core (Write-SPLog, Get-SPConfig)
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.0.0
+    Version: 1.1.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -139,6 +143,66 @@ function Search-SPIdentityByAttribute {
             -CorrelationID $CorrelationID
         $script:EmailToIdentityCache[$cacheKey] = $emptyResult
         return $emptyResult
+    }
+}
+
+function Write-SPDisconnectedAppAuditEvent {
+    <#
+    .SYNOPSIS
+        Appends a JSONL audit event for a disconnected app cert run.
+    .DESCRIPTION
+        Writes a single JSON line to {OutputPath}/{AppName}/disconnected-app-audit.jsonl
+        following the Export-SPAuditJsonl pattern (UTF-8 no BOM, AppendAllText).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$CorrelationID,
+        [Parameter(Mandatory)][string]$AppName,
+        [Parameter(Mandatory)][int]$IdentitiesProcessed,
+        [Parameter(Mandatory)][int]$ManagerGroups,
+        [Parameter(Mandatory)][int]$CampaignsCreated,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CampaignIds,
+        [Parameter(Mandatory)][int]$UnresolvedCount,
+        [Parameter(Mandatory)][string]$Reason,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Errors,
+        [Parameter(Mandatory)][double]$DurationSeconds,
+        [Parameter()][string]$OutputPath = '.\DisconnectedApps\Reports'
+    )
+
+    try {
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+            New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $event = [ordered]@{
+            Timestamp           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            CorrelationID       = $CorrelationID
+            Action              = 'DisconnectedAppCertRun'
+            AppName             = $AppName
+            IdentitiesProcessed = $IdentitiesProcessed
+            ManagerGroups       = $ManagerGroups
+            CampaignsCreated    = $CampaignsCreated
+            CampaignIds         = $CampaignIds
+            UnresolvedCount     = $UnresolvedCount
+            Reason              = $Reason
+            Errors              = $Errors
+            DurationSeconds     = [math]::Round($DurationSeconds, 2)
+        }
+
+        $jsonLine = $event | ConvertTo-Json -Depth 5 -Compress
+        $filePath = Join-Path -Path $appOutputPath -ChildPath 'disconnected-app-audit.jsonl'
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($filePath, "$jsonLine`n", $utf8NoBom)
+
+        Write-SPLog -Message "Audit event written to $filePath" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Write-SPDisconnectedAppAuditEvent' `
+            -CorrelationID $CorrelationID
+    }
+    catch {
+        Write-SPLog -Message "Failed to write audit JSONL event: $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Write-SPDisconnectedAppAuditEvent' `
+            -CorrelationID $CorrelationID
     }
 }
 
@@ -437,6 +501,508 @@ function Resolve-SPDisconnectedAppIdentities {
 
 #endregion
 
+function Invoke-SPDisconnectedAppCertRun {
+    <#
+    .SYNOPSIS
+        Creates targeted SEARCH campaigns for disconnected app delta changes.
+    .DESCRIPTION
+        Takes resolved delta identities (from Resolve-SPDisconnectedAppIdentities)
+        and creates one SEARCH-type certification campaign per manager group.
+        Only campaign-triggering changes are included: AccountAdded, AccountEnabled,
+        and EntitlementGranted.
+
+        Reuses the existing campaign infrastructure:
+        - Group-SPDeltaByManager for manager grouping
+        - Build-SPDeltaSearchFilter for identity filter queries
+        - New-SPCampaign / Start-SPCampaign for campaign lifecycle
+
+        Campaign naming: "{AppName} Delta Cert {YYYY-MM-DD} - {ManagerName}"
+
+        Safety guards:
+        - Duplicate guard: skips if today's campaigns already exist (bypass with -Force)
+        - Max campaigns per run: aborts if manager group count exceeds limit
+        - WhatIf: describes what would be created without making API calls
+
+    .PARAMETER AppName
+        Application name used for campaign naming and directory paths.
+    .PARAMETER DeltaResult
+        The .Data hashtable from Compare-SPDisconnectedAppFiles.
+    .PARAMETER ResolvedIdentities
+        The .Data hashtable from Resolve-SPDisconnectedAppIdentities containing
+        Resolved and Unresolved arrays.
+    .PARAMETER CampaignNamePrefix
+        Optional override for the campaign name prefix. Default uses AppName.
+    .PARAMETER DeadlineDays
+        Days from today until the campaign deadline. Default: 2.
+    .PARAMETER FallbackManagerId
+        Identity ID used as reviewer for identities who have no manager in ISC.
+        If omitted, manager-less identities are skipped.
+    .PARAMETER MaxCampaignsPerRun
+        Abort before creating any campaigns if manager group count exceeds this.
+        Default: 20.
+    .PARAMETER OutputPath
+        Directory for JSONL audit trail. Default: '.\DisconnectedApps\Reports'.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER Force
+        Bypass the duplicate campaign guard.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                CampaignsCreated = [int]
+                CampaignIds      = [string[]]
+                IdentityCount    = [int]
+                ManagerGroups    = [int]
+                UnresolvedCount  = [int]
+                Reason           = [string]  # NoChanges | NoCampaignTriggers |
+                                             # NoManagerGroups | DuplicatesExist |
+                                             # WhatIf | Created
+                Errors           = [string[]]
+                WhatIfGroups     = [hashtable]  # only present when WhatIf
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        $delta = (Compare-SPDisconnectedAppFiles -CurrentFilePath $today -PreviousFilePath $yesterday).Data
+        $resolved = (Resolve-SPDisconnectedAppIdentities -DeltaResult $delta).Data
+        $result = Invoke-SPDisconnectedAppCertRun -AppName 'PEP-Plus' -DeltaResult $delta `
+                    -ResolvedIdentities $resolved -DeadlineDays 2
+    .EXAMPLE
+        Invoke-SPDisconnectedAppCertRun -AppName 'PEP-Plus' -DeltaResult $delta `
+            -ResolvedIdentities $resolved -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [hashtable]$DeltaResult,
+
+        [Parameter(Mandatory)]
+        [hashtable]$ResolvedIdentities,
+
+        [Parameter()]
+        [string]$CampaignNamePrefix,
+
+        [Parameter()]
+        [int]$DeadlineDays = 2,
+
+        [Parameter()]
+        [string]$FallbackManagerId,
+
+        [Parameter()]
+        [int]$MaxCampaignsPerRun = 20,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [switch]$Force
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CampaignNamePrefix)) {
+        $CampaignNamePrefix = "$AppName Delta Cert"
+    }
+
+    $runStartTime = [System.Diagnostics.Stopwatch]::StartNew()
+    $dateStamp    = Get-Date -Format 'yyyy-MM-dd'
+
+    Write-SPLog -Message "Invoke-SPDisconnectedAppCertRun: AppName='$AppName' DeadlineDays=$DeadlineDays WhatIf=$(($WhatIfPreference -eq $true))" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # ---------------------------------------------------------------
+        # Step 1: Validate inputs -- check for campaign-triggering changes
+        # ---------------------------------------------------------------
+        $resolvedList = @()
+        if ($null -ne $ResolvedIdentities -and $null -ne $ResolvedIdentities['Resolved']) {
+            $resolvedList = @($ResolvedIdentities['Resolved'])
+        }
+
+        $unresolvedCount = 0
+        if ($null -ne $ResolvedIdentities -and $null -ne $ResolvedIdentities['Unresolved']) {
+            $unresolvedCount = @($ResolvedIdentities['Unresolved']).Count
+        }
+
+        if ($resolvedList.Count -eq 0) {
+            Write-SPLog -Message "No resolved identities with campaign-triggering changes -- no campaigns created" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed 0 -ManagerGroups 0 -CampaignsCreated 0 `
+                -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'NoCampaignTriggers' -Errors @() `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = 0
+                    ManagerGroups    = 0
+                    UnresolvedCount  = $unresolvedCount
+                    Reason           = 'NoCampaignTriggers'
+                    Errors           = @()
+                }
+                Error   = $null
+            }
+        }
+
+        Write-SPLog -Message "Step 1: $($resolvedList.Count) resolved identit(ies), $unresolvedCount unresolved" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+            -CorrelationID $CorrelationID
+
+        # ---------------------------------------------------------------
+        # Step 2: Duplicate campaign guard
+        # ---------------------------------------------------------------
+        if (-not $Force) {
+            Write-SPLog -Message "Step 2: Checking for existing campaigns matching '$CampaignNamePrefix $dateStamp'" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+
+            $searchResult = Search-SPCampaigns -Keyword "$CampaignNamePrefix $dateStamp" `
+                -CorrelationID $CorrelationID
+
+            if ($searchResult.Success -and @($searchResult.Data).Count -gt 0) {
+                $existingCount = @($searchResult.Data).Count
+                Write-SPLog -Message "Duplicate guard: Found $existingCount existing campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                    -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                    -IdentitiesProcessed $resolvedList.Count -ManagerGroups 0 `
+                    -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                    -Reason 'DuplicatesExist' -Errors @() `
+                    -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+                return @{
+                    Success = $true
+                    Data    = @{
+                        CampaignsCreated = 0
+                        CampaignIds      = @()
+                        IdentityCount    = $resolvedList.Count
+                        ManagerGroups    = 0
+                        UnresolvedCount  = $unresolvedCount
+                        Reason           = 'DuplicatesExist'
+                        Errors           = @()
+                    }
+                    Error   = $null
+                }
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Step 3: Convert resolved identities to PSCustomObjects for
+        #         Group-SPDeltaByManager compatibility
+        # ---------------------------------------------------------------
+        Write-SPLog -Message "Step 3: Grouping $($resolvedList.Count) identit(ies) by manager" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+            -CorrelationID $CorrelationID
+
+        $identityObjects = [System.Collections.Generic.List[object]]::new()
+        foreach ($resolved in $resolvedList) {
+            $managerId = $resolved['ManagerId']
+
+            # Apply fallback manager if needed
+            if ([string]::IsNullOrWhiteSpace($managerId)) {
+                if (-not [string]::IsNullOrWhiteSpace($FallbackManagerId)) {
+                    $managerId = $FallbackManagerId
+                    Write-SPLog -Message "Identity '$($resolved['IdentityId'])' has no manager -- using fallback '$FallbackManagerId'" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                        -CorrelationID $CorrelationID
+                }
+                else {
+                    Write-SPLog -Message "Identity '$($resolved['IdentityId'])' has no manager and no fallback -- skipping" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                        -CorrelationID $CorrelationID
+                    continue
+                }
+            }
+
+            $identityObjects.Add([PSCustomObject]@{
+                IdentityId  = $resolved['IdentityId']
+                DisplayName = $resolved['DisplayName']
+                ManagerId   = $managerId
+                ManagerName = if (-not [string]::IsNullOrWhiteSpace($resolved['ManagerName'])) {
+                                  $resolved['ManagerName']
+                              }
+                              elseif (-not [string]::IsNullOrWhiteSpace($FallbackManagerId) -and
+                                      $managerId -eq $FallbackManagerId) {
+                                  '(fallback)'
+                              }
+                              else { $managerId }
+                IsActive    = $resolved['IsActive']
+            })
+        }
+
+        if ($identityObjects.Count -eq 0) {
+            Write-SPLog -Message "No identities with managers after filtering -- no campaigns created" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed $resolvedList.Count -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'NoManagerGroups' -Errors @() `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = $resolvedList.Count
+                    ManagerGroups    = 0
+                    UnresolvedCount  = $unresolvedCount
+                    Reason           = 'NoManagerGroups'
+                    Errors           = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # Group by manager using shared function
+        $groupResult = Group-SPDeltaByManager -AffectedIdentities $identityObjects.ToArray() `
+            -CorrelationID $CorrelationID
+
+        if (-not $groupResult.Success) {
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed $resolvedList.Count -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'Error' -Errors @("Manager grouping failed: $($groupResult.Error)") `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Manager grouping failed: $($groupResult.Error)"
+            }
+        }
+
+        $managerGroups = $groupResult.Data
+
+        if ($managerGroups.Count -eq 0) {
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed $identityObjects.Count -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'NoManagerGroups' -Errors @() `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = $identityObjects.Count
+                    ManagerGroups    = 0
+                    UnresolvedCount  = $unresolvedCount
+                    Reason           = 'NoManagerGroups'
+                    Errors           = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Step 4: Safety guard -- max campaigns per run
+        # ---------------------------------------------------------------
+        if ($managerGroups.Count -gt $MaxCampaignsPerRun) {
+            $errMsg = "Manager group count ($($managerGroups.Count)) exceeds MaxCampaignsPerRun ($MaxCampaignsPerRun). " +
+                      "Increase -MaxCampaignsPerRun if expected."
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Invoke-SPDisconnectedAppCertRun' -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed $identityObjects.Count -ManagerGroups $managerGroups.Count `
+                -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'Error' -Errors @($errMsg) `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        # ---------------------------------------------------------------
+        # Step 5: WhatIf -- describe without writing
+        # ---------------------------------------------------------------
+        if (($WhatIfPreference -eq $true)) {
+            $whatIfGroups = @{}
+            foreach ($managerId in $managerGroups.Keys) {
+                $identities  = $managerGroups[$managerId]
+                $managerName = if ($identities.Count -gt 0 -and
+                                   -not [string]::IsNullOrWhiteSpace($identities[0].ManagerName)) {
+                                   $identities[0].ManagerName
+                               } else { $managerId }
+                $whatIfGroups[$managerId] = @{
+                    ManagerName   = $managerName
+                    IdentityCount = $identities.Count
+                    IdentityIds   = @($identities | Select-Object -ExpandProperty IdentityId)
+                    CampaignName  = "$CampaignNamePrefix $dateStamp - $managerName"
+                    Deadline      = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-dd')
+                }
+            }
+
+            Write-SPLog -Message "WhatIf: Would create $($managerGroups.Count) campaign(s) for $($identityObjects.Count) identit(ies)" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+                -IdentitiesProcessed $identityObjects.Count -ManagerGroups $managerGroups.Count `
+                -CampaignsCreated 0 -CampaignIds @() -UnresolvedCount $unresolvedCount `
+                -Reason 'WhatIf' -Errors @() `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = $identityObjects.Count
+                    ManagerGroups    = $managerGroups.Count
+                    UnresolvedCount  = $unresolvedCount
+                    Reason           = 'WhatIf'
+                    Errors           = @()
+                    WhatIfGroups     = $whatIfGroups
+                }
+                Error   = $null
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Step 6: Create and activate one SEARCH campaign per manager group
+        # ---------------------------------------------------------------
+        Write-SPLog -Message "Step 6: Creating $($managerGroups.Count) campaign(s) (deadline +$DeadlineDays day(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+            -CorrelationID $CorrelationID
+
+        $campaignIds    = [System.Collections.Generic.List[string]]::new()
+        $campaignErrors = [System.Collections.Generic.List[string]]::new()
+        $deadlineStr    = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+        foreach ($managerId in $managerGroups.Keys) {
+            $identities  = $managerGroups[$managerId]
+            $managerName = if ($identities.Count -gt 0 -and
+                               -not [string]::IsNullOrWhiteSpace($identities[0].ManagerName)) {
+                               $identities[0].ManagerName
+                           } else { $managerId }
+
+            $campaignName = "$CampaignNamePrefix $dateStamp - $managerName"
+            $identityIds  = @($identities | Select-Object -ExpandProperty IdentityId)
+            $searchFilter = Build-SPDeltaSearchFilter -IdentityIds $identityIds
+
+            Write-SPLog -Message "Creating campaign '$campaignName' ($($identityIds.Count) identit(ies), manager='$managerId')" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+
+            $createResult = New-SPCampaign `
+                -Name                $campaignName `
+                -Type                'SEARCH' `
+                -SearchFilter        $searchFilter `
+                -CertifierIdentityId $managerId `
+                -Description         "$AppName delta certification: $($identityIds.Count) identit(ies) with new or changed access, $dateStamp." `
+                -Deadline            $deadlineStr `
+                -CorrelationID       $CorrelationID
+
+            if (-not $createResult.Success) {
+                $errMsg = "Campaign '$campaignName' create failed: $($createResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Invoke-SPDisconnectedAppCertRun' -CorrelationID $CorrelationID
+                $campaignErrors.Add($errMsg)
+                continue
+            }
+
+            $campaignId = $createResult.Data.id
+
+            $activateResult = Start-SPCampaign -CampaignId $campaignId -CorrelationID $CorrelationID
+
+            if (-not $activateResult.Success) {
+                $errMsg = "Campaign '$campaignName' ($campaignId) created but activation failed: $($activateResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Invoke-SPDisconnectedAppCertRun' -CorrelationID $CorrelationID
+                $campaignErrors.Add($errMsg)
+                $campaignIds.Add($campaignId)
+                continue
+            }
+
+            Write-SPLog -Message "Campaign '$campaignName' ($campaignId) created and activation requested" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+            $campaignIds.Add($campaignId)
+        }
+
+        $overallSuccess = ($campaignErrors.Count -eq 0)
+
+        if ($campaignErrors.Count -gt 0) {
+            Write-SPLog -Message "$($campaignErrors.Count) campaign(s) had creation/activation errors" `
+                -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+                -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Invoke-SPDisconnectedAppCertRun complete: $($campaignIds.Count) campaign(s) for $($identityObjects.Count) identit(ies) across $($managerGroups.Count) manager group(s)" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Invoke-SPDisconnectedAppCertRun' `
+            -CorrelationID $CorrelationID
+
+        $runStartTime.Stop()
+        Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+            -IdentitiesProcessed $identityObjects.Count -ManagerGroups $managerGroups.Count `
+            -CampaignsCreated $campaignIds.Count -CampaignIds $campaignIds.ToArray() `
+            -UnresolvedCount $unresolvedCount `
+            -Reason 'Created' -Errors $campaignErrors.ToArray() `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+        return @{
+            Success = $overallSuccess
+            Data    = @{
+                CampaignsCreated = $campaignIds.Count
+                CampaignIds      = $campaignIds.ToArray()
+                IdentityCount    = $identityObjects.Count
+                ManagerGroups    = $managerGroups.Count
+                UnresolvedCount  = $unresolvedCount
+                Reason           = 'Created'
+                Errors           = $campaignErrors.ToArray()
+            }
+            Error   = if ($campaignErrors.Count -gt 0) { $campaignErrors -join '; ' } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDisconnectedAppCertRun failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Invoke-SPDisconnectedAppCertRun' -CorrelationID $CorrelationID
+
+        $runStartTime.Stop()
+        Write-SPDisconnectedAppAuditEvent -CorrelationID $CorrelationID -AppName $AppName `
+            -IdentitiesProcessed 0 -ManagerGroups 0 -CampaignsCreated 0 `
+            -CampaignIds @() -UnresolvedCount 0 `
+            -Reason 'Error' -Errors @($errMsg) `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds -OutputPath $OutputPath
+
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
-    'Resolve-SPDisconnectedAppIdentities'
+    'Resolve-SPDisconnectedAppIdentities',
+    'Invoke-SPDisconnectedAppCertRun'
 )
