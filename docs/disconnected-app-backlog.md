@@ -73,7 +73,7 @@ DisconnectedApps/
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | D-01 | CSV Templates + Onboarding Guide | none | DONE |
-| D-02 | CSV Validator | D-01 | PENDING |
+| D-02 | CSV Validator | D-01 | DONE |
 | D-03 | File Snapshot Manager | none | PENDING |
 | D-04 | Delta Detection Engine | D-03 | PENDING |
 | D-05 | Identity Resolver (file accounts to ISC) | none | PENDING |
@@ -131,8 +131,8 @@ EMP10005,tresigned,Tom,Resigned,tom.resigned@corp.com,Treasury,,true
 
 ## D-02: CSV Validator (SP.DisconnectedAppValidator.psm1)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** D-01
 
 **Description:**
