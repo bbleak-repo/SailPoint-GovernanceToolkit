@@ -11,6 +11,7 @@
     Functions:
         1. Resolve-SPDisconnectedAppIdentities - correlates delta accounts to ISC identities
         2. Invoke-SPDisconnectedAppCertRun - creates SEARCH campaigns per manager group
+        3. Export-SPDisconnectedAppDeltaHtml - generates delta summary HTML report
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -21,7 +22,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.1.0
+    Version: 1.2.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -204,6 +205,64 @@ function Write-SPDisconnectedAppAuditEvent {
             -Severity WARN -Component 'SP.DisconnectedAppRunner' -Action 'Write-SPDisconnectedAppAuditEvent' `
             -CorrelationID $CorrelationID
     }
+}
+
+function ConvertTo-DisconnectedHtmlSafe {
+    <#
+    .SYNOPSIS
+        HTML-encodes a value for safe embedding in report output.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        $Value
+    )
+
+    if ($null -eq $Value) { return '' }
+    $str = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($str)) { return '' }
+    return [System.Net.WebUtility]::HtmlEncode($str)
+}
+
+function Build-DisconnectedHtmlRow {
+    <#
+    .SYNOPSIS
+        Builds a single HTML table row with inline styling.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string[]]$Cells,
+
+        [Parameter()]
+        [bool]$IsAlternate = $false
+    )
+
+    $rowStyle  = if ($IsAlternate) { ' style="background:#f9f9f9;"' } else { '' }
+    $tdPadding = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+
+    $tds = ($Cells | ForEach-Object { "<td $tdPadding>$_</td>" }) -join ''
+    return "<tr$rowStyle>$tds</tr>"
+}
+
+function Build-DisconnectedHtmlHeader {
+    <#
+    .SYNOPSIS
+        Builds an HTML table header row with inline styling.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Headers
+    )
+
+    $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px;"'
+    $ths = ($Headers | ForEach-Object { "<th $thStyle>$(ConvertTo-DisconnectedHtmlSafe $_)</th>" }) -join ''
+    return "<tr>$ths</tr>"
 }
 
 #endregion
@@ -1000,9 +1059,353 @@ function Invoke-SPDisconnectedAppCertRun {
     }
 }
 
+function Export-SPDisconnectedAppDeltaHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML delta summary report for a disconnected app file comparison.
+    .DESCRIPTION
+        Takes the delta result from Compare-SPDisconnectedAppFiles and produces a
+        self-contained HTML report with sections for added accounts, removed accounts,
+        entitlement changes, disabled/enabled accounts, and attribute changes.
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources, no flexbox, no grid.
+
+        Color coding:
+        - Green (#339933): added accounts, granted entitlements
+        - Red (#CC3333): removed accounts, revoked entitlements, disabled
+        - Orange (#FF8800): attribute changes, enabled (re-activated)
+
+    .PARAMETER DeltaResult
+        The .Data hashtable from Compare-SPDisconnectedAppFiles.
+    .PARAMETER AppName
+        Application name shown in the report title.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/{AppName}/delta-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        $delta = (Compare-SPDisconnectedAppFiles -CurrentFilePath $today -PreviousFilePath $yesterday).Data
+        Export-SPDisconnectedAppDeltaHtml -DeltaResult $delta -AppName 'PEP-Plus' -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DeltaResult,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # ---------------------------------------------------------------
+        # Ensure output directory exists
+        # ---------------------------------------------------------------
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+            New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $appOutputPath -ChildPath "delta-${ReportDate}.html"
+
+        # ---------------------------------------------------------------
+        # Extract data arrays safely
+        # ---------------------------------------------------------------
+        $summary  = if ($null -ne $DeltaResult['Summary']) { $DeltaResult['Summary'] } else { @{} }
+        $added    = @(); if ($null -ne $DeltaResult['Added'])    { $added    = @($DeltaResult['Added']) }
+        $removed  = @(); if ($null -ne $DeltaResult['Removed'])  { $removed  = @($DeltaResult['Removed']) }
+        $disabled = @(); if ($null -ne $DeltaResult['Disabled']) { $disabled = @($DeltaResult['Disabled']) }
+        $enabled  = @(); if ($null -ne $DeltaResult['Enabled'])  { $enabled  = @($DeltaResult['Enabled']) }
+        $granted  = @(); if ($null -ne $DeltaResult['GrantedEntitlements']) { $granted = @($DeltaResult['GrantedEntitlements']) }
+        $revoked  = @(); if ($null -ne $DeltaResult['RevokedEntitlements']) { $revoked = @($DeltaResult['RevokedEntitlements']) }
+        $attrChg  = @(); if ($null -ne $DeltaResult['AttributeChanges'])   { $attrChg = @($DeltaResult['AttributeChanges']) }
+        $unchanged = if ($null -ne $DeltaResult['Unchanged']) { $DeltaResult['Unchanged'] } else { 0 }
+
+        # ---------------------------------------------------------------
+        # Reusable style constants
+        # ---------------------------------------------------------------
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+
+        # ---------------------------------------------------------------
+        # Build HTML
+        # ---------------------------------------------------------------
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>$(ConvertTo-DisconnectedHtmlSafe $AppName) - Delta Summary $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Report title
+        $safeAppName = ConvertTo-DisconnectedHtmlSafe $AppName
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">$safeAppName - Delta Summary</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # ---------------------------------------------------------------
+        # Section 1: Summary
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $totalCurrent  = if ($null -ne $summary['TotalCurrent'])  { $summary['TotalCurrent'] }  else { 0 }
+        $totalPrevious = if ($null -ne $summary['TotalPrevious']) { $summary['TotalPrevious'] } else { 0 }
+
+        $summaryRows = @(
+            @('Total Current Accounts',  $totalCurrent)
+            @('Total Previous Accounts', $totalPrevious)
+            @('Accounts Added',          $added.Count)
+            @('Accounts Removed',        $removed.Count)
+            @('Accounts Disabled',       $disabled.Count)
+            @('Accounts Enabled',        $enabled.Count)
+            @('Entitlements Granted',    $granted.Count)
+            @('Entitlements Revoked',    $revoked.Count)
+            @('Attribute Changes',       $attrChg.Count)
+            @('Unchanged',              $unchanged)
+        )
+
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 2: Added Accounts
+        # ---------------------------------------------------------------
+        if ($added.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`"><span style=`"$badgeGreen`">ADDED</span> Accounts ($($added.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Name', 'Email', 'Department', 'Groups')))
+
+            $rowIdx = 0
+            foreach ($entry in $added) {
+                $acct = $entry['Account']
+                if ($null -eq $acct) { continue }
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $acct.id),
+                    (ConvertTo-DisconnectedHtmlSafe "$($acct.givenName) $($acct.familyName)"),
+                    (ConvertTo-DisconnectedHtmlSafe $acct.'e-mail'),
+                    (ConvertTo-DisconnectedHtmlSafe $acct.department),
+                    (ConvertTo-DisconnectedHtmlSafe ($entry['NewGroups'] -join ', '))
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # ---------------------------------------------------------------
+        # Section 3: Removed Accounts
+        # ---------------------------------------------------------------
+        if ($removed.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`"><span style=`"$badgeRed`">REMOVED</span> Accounts ($($removed.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Name', 'Email', 'Department')))
+
+            $rowIdx = 0
+            foreach ($entry in $removed) {
+                $acct = $entry['Account']
+                if ($null -eq $acct) { continue }
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $acct.id),
+                    (ConvertTo-DisconnectedHtmlSafe "$($acct.givenName) $($acct.familyName)"),
+                    (ConvertTo-DisconnectedHtmlSafe $acct.'e-mail'),
+                    (ConvertTo-DisconnectedHtmlSafe $acct.department)
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # ---------------------------------------------------------------
+        # Section 4: Entitlement Changes
+        # ---------------------------------------------------------------
+        if ($granted.Count -gt 0 -or $revoked.Count -gt 0) {
+            $entTotal = $granted.Count + $revoked.Count
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Entitlement Changes ($entTotal)</h2>")
+
+            if ($granted.Count -gt 0) {
+                [void]$html.AppendLine("<h3 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#339933; margin-top:16px; margin-bottom:8px; font-size:14px;`"><span style=`"$badgeGreen`">GRANTED</span> ($($granted.Count))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Email', 'Entitlements Granted')))
+
+                $rowIdx = 0
+                foreach ($entry in $granted) {
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $entry['AccountId']),
+                        (ConvertTo-DisconnectedHtmlSafe $entry['AccountEmail']),
+                        (ConvertTo-DisconnectedHtmlSafe ($entry['Entitlements'] -join ', '))
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+
+            if ($revoked.Count -gt 0) {
+                [void]$html.AppendLine("<h3 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#CC3333; margin-top:16px; margin-bottom:8px; font-size:14px;`"><span style=`"$badgeRed`">REVOKED</span> ($($revoked.Count))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Email', 'Entitlements Revoked')))
+
+                $rowIdx = 0
+                foreach ($entry in $revoked) {
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $entry['AccountId']),
+                        (ConvertTo-DisconnectedHtmlSafe $entry['AccountEmail']),
+                        (ConvertTo-DisconnectedHtmlSafe ($entry['Entitlements'] -join ', '))
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Section 5: Disabled / Enabled Accounts
+        # ---------------------------------------------------------------
+        if ($disabled.Count -gt 0 -or $enabled.Count -gt 0) {
+            $statusTotal = $disabled.Count + $enabled.Count
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Status Changes ($statusTotal)</h2>")
+
+            if ($disabled.Count -gt 0) {
+                [void]$html.AppendLine("<h3 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#CC3333; margin-top:16px; margin-bottom:8px; font-size:14px;`"><span style=`"$badgeRed`">DISABLED</span> ($($disabled.Count))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Name', 'Email')))
+
+                $rowIdx = 0
+                foreach ($entry in $disabled) {
+                    $acct = $entry['Account']
+                    if ($null -eq $acct) { continue }
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $acct.id),
+                        (ConvertTo-DisconnectedHtmlSafe "$($acct.givenName) $($acct.familyName)"),
+                        (ConvertTo-DisconnectedHtmlSafe $acct.'e-mail')
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+
+            if ($enabled.Count -gt 0) {
+                [void]$html.AppendLine("<h3 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#FF8800; margin-top:16px; margin-bottom:8px; font-size:14px;`"><span style=`"$badgeOrange`">ENABLED</span> ($($enabled.Count))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Name', 'Email')))
+
+                $rowIdx = 0
+                foreach ($entry in $enabled) {
+                    $acct = $entry['Account']
+                    if ($null -eq $acct) { continue }
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $acct.id),
+                        (ConvertTo-DisconnectedHtmlSafe "$($acct.givenName) $($acct.familyName)"),
+                        (ConvertTo-DisconnectedHtmlSafe $acct.'e-mail')
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Section 6: Attribute Changes
+        # ---------------------------------------------------------------
+        if ($attrChg.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`"><span style=`"$badgeOrange`">CHANGED</span> Attributes ($($attrChg.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Account ID', 'Field', 'Old Value', 'New Value')))
+
+            $rowIdx = 0
+            foreach ($entry in $attrChg) {
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $entry['AccountId']),
+                    (ConvertTo-DisconnectedHtmlSafe $entry['Field']),
+                    (ConvertTo-DisconnectedHtmlSafe $entry['OldValue']),
+                    (ConvertTo-DisconnectedHtmlSafe $entry['NewValue'])
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # ---------------------------------------------------------------
+        # No changes notice
+        # ---------------------------------------------------------------
+        $totalChanges = $added.Count + $removed.Count + $disabled.Count + $enabled.Count + $granted.Count + $revoked.Count + $attrChg.Count
+        if ($totalChanges -eq 0) {
+            [void]$html.AppendLine("<p style=`"color:#339933; font-size:14px; font-weight:bold; margin-top:24px;`">No changes detected between snapshots.</p>")
+        }
+
+        # ---------------------------------------------------------------
+        # Footer
+        # ---------------------------------------------------------------
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Disconnected App Onboarding Kit | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # ---------------------------------------------------------------
+        # Write file (UTF-8 no BOM)
+        # ---------------------------------------------------------------
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Delta HTML report saved to $filePath ($totalChanges change(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppDeltaHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppDeltaHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppDeltaHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
-    'Invoke-SPDisconnectedAppCertRun'
+    'Invoke-SPDisconnectedAppCertRun',
+    'Export-SPDisconnectedAppDeltaHtml'
 )
