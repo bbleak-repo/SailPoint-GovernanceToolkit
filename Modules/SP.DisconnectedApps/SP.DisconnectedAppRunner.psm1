@@ -17,6 +17,8 @@
         6. Get-SPDisconnectedAppDeliveryStatus - checks file delivery freshness per app
         7. Get-SPDisconnectedAppIdentityRisk - cross-app identity risk analysis
         8. Export-SPDisconnectedAppIdentityRiskHtml - identity risk HTML report
+        9. Get-SPDisconnectedAppEntitlementCatalog - unified entitlement catalog across apps
+       10. Export-SPDisconnectedAppEntitlementCatalogHtml - entitlement catalog HTML report
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -27,7 +29,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.3.0
+    Version: 1.4.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -2284,6 +2286,448 @@ function Export-SPDisconnectedAppIdentityRiskHtml {
     }
 }
 
+function Get-SPDisconnectedAppEntitlementCatalog {
+    <#
+    .SYNOPSIS
+        Aggregates entitlements from all registered apps into a unified catalog.
+    .DESCRIPTION
+        Reads the latest entitlement snapshot from each registered app and builds
+        a unified searchable catalog. For each entitlement, calculates AssignedCount
+        by counting how many accounts in the latest account snapshot reference it
+        via the groups column.
+
+        Only reads local snapshot files -- no ISC API calls.
+        Apps with no entitlement snapshot are skipped gracefully.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to config SnapshotPath.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Catalog = @(
+                    @{ AppName; EntitlementId; DisplayName; Description; AssignedCount }
+                )
+                Summary = @{ TotalEntitlements; TotalApps; AppsSkipped }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $catalog = Get-SPDisconnectedAppEntitlementCatalog
+        $catalog.Data.Catalog | Format-Table AppName, EntitlementId, DisplayName, AssignedCount
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$SnapshotDir,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppEntitlementCatalog: Starting unified entitlement catalog build" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppEntitlementCatalog' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load config for snapshot path if not provided
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) {
+            $configParams = @{}
+            if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+            $config = Get-SPConfig @configParams
+            $SnapshotDir = $config.DisconnectedApps.SnapshotPath
+        }
+
+        # Get registered apps
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Catalog = @()
+                    Summary = @{ TotalEntitlements = 0; TotalApps = 0; AppsSkipped = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        $catalog     = [System.Collections.Generic.List[hashtable]]::new()
+        $totalApps   = 0
+        $appsSkipped = 0
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                Write-SPLog -Message "App '$appName': no snapshot directory at '$appDir' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            # Find latest entitlements snapshot
+            $entSnapshots = @(Get-ChildItem -Path $appDir -Filter '*-entitlements.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-entitlements\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($entSnapshots.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': no entitlement snapshots found -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            $latestEntPath = $entSnapshots[0].FullName
+
+            Write-SPLog -Message "App '$appName': loading entitlement snapshot '$($entSnapshots[0].Name)'" `
+                -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+
+            try {
+                $entRows = @(Import-Csv -Path $latestEntPath -ErrorAction Stop)
+            }
+            catch {
+                Write-SPLog -Message "App '$appName': failed to parse entitlement snapshot: $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            if ($entRows.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': entitlement snapshot is empty -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            # Build assignment count map from the latest accounts snapshot
+            $assignmentCounts = @{}
+
+            $acctSnapshots = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-accounts\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($acctSnapshots.Count -gt 0) {
+                try {
+                    $acctRows = @(Import-Csv -Path $acctSnapshots[0].FullName -ErrorAction Stop)
+
+                    foreach ($acct in $acctRows) {
+                        $groupsRaw = $acct.groups
+                        if ([string]::IsNullOrWhiteSpace($groupsRaw)) { continue }
+
+                        $groupList = @($groupsRaw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+                        foreach ($g in $groupList) {
+                            if ($assignmentCounts.ContainsKey($g)) {
+                                $assignmentCounts[$g]++
+                            }
+                            else {
+                                $assignmentCounts[$g] = 1
+                            }
+                        }
+                    }
+
+                    Write-SPLog -Message "App '$appName': built assignment counts from $($acctRows.Count) account(s)" `
+                        -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                }
+                catch {
+                    Write-SPLog -Message "App '$appName': failed to parse account snapshot for assignment counts: $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                    # Continue without assignment counts -- they'll all be 0
+                }
+            }
+
+            # Build catalog entries from entitlement rows
+            foreach ($ent in $entRows) {
+                $entId = ''
+                if ($null -ne $ent.PSObject.Properties['id']) {
+                    $entId = [string]$ent.id
+                }
+                if ([string]::IsNullOrWhiteSpace($entId)) { continue }
+
+                $displayName = ''
+                if ($null -ne $ent.PSObject.Properties['displayName']) {
+                    $displayName = [string]$ent.displayName
+                }
+
+                $description = ''
+                if ($null -ne $ent.PSObject.Properties['description']) {
+                    $description = [string]$ent.description
+                }
+
+                $name = ''
+                if ($null -ne $ent.PSObject.Properties['name']) {
+                    $name = [string]$ent.name
+                }
+
+                $assignedCount = 0
+                if ($assignmentCounts.ContainsKey($entId)) {
+                    $assignedCount = $assignmentCounts[$entId]
+                }
+                # Also check by name if id didn't match (groups column may use name)
+                if ($assignedCount -eq 0 -and -not [string]::IsNullOrWhiteSpace($name) -and
+                    $name -ne $entId -and $assignmentCounts.ContainsKey($name)) {
+                    $assignedCount = $assignmentCounts[$name]
+                }
+
+                $catalog.Add(@{
+                    AppName       = $appName
+                    EntitlementId = $entId
+                    Name          = $name
+                    DisplayName   = $displayName
+                    Description   = $description
+                    AssignedCount = $assignedCount
+                })
+            }
+
+            $totalApps++
+            Write-SPLog -Message "App '$appName': added $($entRows.Count) entitlement(s) to catalog" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Entitlement catalog: $($catalog.Count) entitlement(s) from $totalApps app(s), $appsSkipped skipped" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppEntitlementCatalog' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Catalog = $catalog.ToArray()
+                Summary = @{
+                    TotalEntitlements = $catalog.Count
+                    TotalApps         = $totalApps
+                    AppsSkipped       = $appsSkipped
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppEntitlementCatalog failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppEntitlementCatalogHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report of the unified entitlement catalog.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppEntitlementCatalog and produces a
+        self-contained HTML report with:
+        - Executive summary with total entitlements and app counts
+        - Per-app entitlement tables grouped by application
+        - Assignment count color coding (high=red, medium=orange, low=green)
+
+        Uses 100% inline CSS for Word paste compatibility.
+    .PARAMETER CatalogResult
+        The .Data hashtable from Get-SPDisconnectedAppEntitlementCatalog.
+    .PARAMETER OutputPath
+        Directory where the report is saved. File: entitlement-catalog-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath}; Error}
+    .EXAMPLE
+        $catalog = Get-SPDisconnectedAppEntitlementCatalog
+        Export-SPDisconnectedAppEntitlementCatalogHtml -CatalogResult $catalog.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$CatalogResult,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "entitlement-catalog-${ReportDate}.html"
+
+        $catalogEntries = @()
+        if ($null -ne $CatalogResult['Catalog']) { $catalogEntries = @($CatalogResult['Catalog']) }
+        $summary = if ($null -ne $CatalogResult['Summary']) { $CatalogResult['Summary'] } else { @{} }
+
+        $totalEntitlements = if ($null -ne $summary['TotalEntitlements']) { $summary['TotalEntitlements'] } else { 0 }
+        $totalApps         = if ($null -ne $summary['TotalApps'])         { $summary['TotalApps'] }         else { 0 }
+        $appsSkipped       = if ($null -ne $summary['AppsSkipped'])       { $summary['AppsSkipped'] }       else { 0 }
+
+        # Style constants
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $appHeadingStyle     = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#336699; margin-top:20px; margin-bottom:8px; font-size:15px;'
+
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Unified Entitlement Catalog - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Unified Entitlement Catalog</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # Section 1: Executive Summary
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $summaryRows = @(
+            @('Total Entitlements',      $totalEntitlements),
+            @('Applications Included',   $totalApps),
+            @('Applications Skipped',    $appsSkipped)
+        )
+
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # Section 2: Entitlement tables grouped by app
+        if ($catalogEntries.Count -gt 0) {
+            # Group entries by AppName
+            $appGroups = [ordered]@{}
+            foreach ($entry in $catalogEntries) {
+                $aName = $entry.AppName
+                if (-not $appGroups.Contains($aName)) {
+                    $appGroups[$aName] = [System.Collections.Generic.List[hashtable]]::new()
+                }
+                $appGroups[$aName].Add($entry)
+            }
+
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Entitlements by Application</h2>")
+
+            foreach ($aName in $appGroups.Keys) {
+                $entries = $appGroups[$aName]
+                $safeAppName = ConvertTo-DisconnectedHtmlSafe $aName
+
+                [void]$html.AppendLine("<h3 style=`"$appHeadingStyle`">$safeAppName ($($entries.Count) entitlement(s))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Entitlement ID', 'Display Name', 'Description', 'Assigned')))
+
+                $rowIdx = 0
+                foreach ($entry in $entries) {
+                    # Color-code assignment count: 20+ = red, 10-19 = orange, 0-9 = green
+                    $count = $entry.AssignedCount
+                    $countBadge = if ($count -ge 20) {
+                        "<span style=`"$badgeRed`">$count</span>"
+                    }
+                    elseif ($count -ge 10) {
+                        "<span style=`"$badgeOrange`">$count</span>"
+                    }
+                    else {
+                        "<span style=`"$badgeGreen`">$count</span>"
+                    }
+
+                    # Truncate long descriptions for display
+                    $descDisplay = $entry.Description
+                    if (-not [string]::IsNullOrWhiteSpace($descDisplay) -and $descDisplay.Length -gt 200) {
+                        $descDisplay = $descDisplay.Substring(0, 197) + '...'
+                    }
+
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $entry.EntitlementId),
+                        (ConvertTo-DisconnectedHtmlSafe $entry.DisplayName),
+                        (ConvertTo-DisconnectedHtmlSafe $descDisplay),
+                        $countBadge
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#777; font-size:14px; margin-top:24px;`">No entitlements found across registered applications.</p>")
+        }
+
+        # Footer
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Unified Entitlement Catalog | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Entitlement catalog HTML report saved to $filePath ($($catalogEntries.Count) entitlement(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppEntitlementCatalogHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppEntitlementCatalogHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppEntitlementCatalogHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2294,5 +2738,7 @@ Export-ModuleMember -Function @(
     'Initialize-SPDisconnectedAppDirectories',
     'Get-SPDisconnectedAppDeliveryStatus',
     'Get-SPDisconnectedAppIdentityRisk',
-    'Export-SPDisconnectedAppIdentityRiskHtml'
+    'Export-SPDisconnectedAppIdentityRiskHtml',
+    'Get-SPDisconnectedAppEntitlementCatalog',
+    'Export-SPDisconnectedAppEntitlementCatalogHtml'
 )
