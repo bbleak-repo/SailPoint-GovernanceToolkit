@@ -20,6 +20,8 @@
         9. Get-SPDisconnectedAppEntitlementCatalog - unified entitlement catalog across apps
        10. Export-SPDisconnectedAppEntitlementCatalogHtml - entitlement catalog HTML report
        11. Export-SPDisconnectedAppBatchHtml - batch orchestrator summary HTML report
+       12. Get-SPDisconnectedAppSlaStatus - 30-day SLA tracking from snapshot history
+       13. Export-SPDisconnectedAppSlaHtml - SLA compliance HTML report with delivery grid
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -30,7 +32,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.5.0
+    Version: 1.6.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -3142,6 +3144,551 @@ function Export-SPDisconnectedAppBatchHtml {
     }
 }
 
+function Get-SPDisconnectedAppSlaStatus {
+    <#
+    .SYNOPSIS
+        Tracks 30-day file delivery history and SLA compliance per app.
+    .DESCRIPTION
+        Scans the Snapshots/{AppName}/ directory for each registered app, parses
+        date-stamped filenames ({YYYY-MM-DD}-accounts.csv), and builds a 30-day
+        delivery calendar. Calculates delivery rate, longest gap, consecutive
+        misses, and SLA compliance based on each app's configured SlaDays.
+
+        New apps with less than 30 days of history are handled gracefully --
+        delivery rate is calculated against only the days since the first snapshot.
+    .PARAMETER DaysBack
+        Number of days of history to analyze. Default: 30.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to .\DisconnectedApps\Snapshots.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Apps = @(
+                    @{
+                        AppName; DeliveryRate; LongestGapDays; ConsecutiveMisses;
+                        SlaDays; SlaCompliant; DaysMissing; DaysDelivered; TotalDaysTracked;
+                        FirstSnapshotDate; LatestSnapshotDate
+                    }
+                )
+                Summary = @{ TotalApps; Compliant; NonCompliant; AvgDeliveryRate }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $sla = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+        $sla.Data.Apps | Format-Table AppName, DeliveryRate, SlaCompliant
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [ValidateRange(1, 365)]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$SnapshotDir = '.\DisconnectedApps\Snapshots',
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppSlaStatus: Analyzing $DaysBack day delivery history" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Get registered apps (enabled only)
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        $today = (Get-Date).Date
+        $windowStart = $today.AddDays(-($DaysBack - 1))
+
+        # Build the full date window as strings for comparison
+        $windowDates = [System.Collections.Generic.HashSet[string]]::new()
+        for ($d = 0; $d -lt $DaysBack; $d++) {
+            [void]$windowDates.Add($windowStart.AddDays($d).ToString('yyyy-MM-dd'))
+        }
+
+        $appResults = [System.Collections.Generic.List[hashtable]]::new()
+        $compliantCount    = 0
+        $nonCompliantCount = 0
+        $rateSum           = 0.0
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $slaDays = if ($null -ne $app.SlaDays) { [int]$app.SlaDays } else { 1 }
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            # No snapshot directory -- new app, no history
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                $appResults.Add(@{
+                    AppName            = $appName
+                    DeliveryRate       = 0.0
+                    LongestGapDays     = $DaysBack
+                    ConsecutiveMisses  = $DaysBack
+                    SlaDays            = $slaDays
+                    SlaCompliant       = $false
+                    DaysMissing        = @($windowDates | Sort-Object)
+                    DaysDelivered      = @()
+                    TotalDaysTracked   = 0
+                    FirstSnapshotDate  = $null
+                    LatestSnapshotDate = $null
+                })
+                $nonCompliantCount++
+                continue
+            }
+
+            # Scan snapshot files for account snapshots
+            $snapshotFiles = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File -ErrorAction SilentlyContinue)
+
+            # Parse dates from filenames
+            $allSnapshotDates = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($sf in $snapshotFiles) {
+                $datePart = $sf.Name.Substring(0, 10)
+                if ($datePart -match '^\d{4}-\d{2}-\d{2}$') {
+                    [void]$allSnapshotDates.Add($datePart)
+                }
+            }
+
+            if ($allSnapshotDates.Count -eq 0) {
+                $appResults.Add(@{
+                    AppName            = $appName
+                    DeliveryRate       = 0.0
+                    LongestGapDays     = $DaysBack
+                    ConsecutiveMisses  = $DaysBack
+                    SlaDays            = $slaDays
+                    SlaCompliant       = $false
+                    DaysMissing        = @($windowDates | Sort-Object)
+                    DaysDelivered      = @()
+                    TotalDaysTracked   = 0
+                    FirstSnapshotDate  = $null
+                    LatestSnapshotDate = $null
+                })
+                $nonCompliantCount++
+                continue
+            }
+
+            # Filter to dates within our window
+            $deliveredDates = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($sd in $allSnapshotDates) {
+                if ($windowDates.Contains($sd)) {
+                    [void]$deliveredDates.Add($sd)
+                }
+            }
+
+            # Determine the effective tracking window for new apps
+            $sortedAllDates = @($allSnapshotDates | Sort-Object)
+            $firstSnapshotDate  = $sortedAllDates[0]
+            $latestSnapshotDate = $sortedAllDates[$sortedAllDates.Count - 1]
+
+            # For delivery rate, only count days from first snapshot (or window start, whichever is later)
+            $effectiveStart = $windowStart.ToString('yyyy-MM-dd')
+            if ($firstSnapshotDate -gt $effectiveStart) {
+                $effectiveStart = $firstSnapshotDate
+            }
+
+            # Count trackable days (from effective start to today)
+            $effectiveStartDate = [datetime]::ParseExact($effectiveStart, 'yyyy-MM-dd', $null)
+            $totalDaysTracked = [math]::Max(1, ($today - $effectiveStartDate).Days + 1)
+
+            # Build missing days list (within window only)
+            $missingDays = [System.Collections.Generic.List[string]]::new()
+            foreach ($wd in ($windowDates | Sort-Object)) {
+                if (-not $deliveredDates.Contains($wd) -and $wd -ge $effectiveStart) {
+                    $missingDays.Add($wd)
+                }
+            }
+
+            # Delivery rate
+            $deliveredInWindow = @($deliveredDates | Where-Object { $_ -ge $effectiveStart }).Count
+            $deliveryRate = if ($totalDaysTracked -gt 0) {
+                [math]::Round(($deliveredInWindow / $totalDaysTracked) * 100, 1)
+            } else { 0.0 }
+
+            # Longest gap and consecutive misses (within trackable window)
+            $longestGap       = 0
+            $currentGap       = 0
+            $consecutiveMisses = 0
+
+            $trackableDates = @($windowDates | Sort-Object | Where-Object { $_ -ge $effectiveStart })
+            foreach ($td in $trackableDates) {
+                if ($deliveredDates.Contains($td)) {
+                    if ($currentGap -gt $longestGap) { $longestGap = $currentGap }
+                    $currentGap = 0
+                } else {
+                    $currentGap++
+                }
+            }
+            # Check if final streak of misses is the longest
+            if ($currentGap -gt $longestGap) { $longestGap = $currentGap }
+            # Consecutive misses = trailing gap (from most recent date backward)
+            $consecutiveMisses = $currentGap
+
+            # SLA compliance: no gap exceeds SlaDays
+            $slaCompliant = ($longestGap -le $slaDays)
+
+            $appResults.Add(@{
+                AppName            = $appName
+                DeliveryRate       = $deliveryRate
+                LongestGapDays     = $longestGap
+                ConsecutiveMisses  = $consecutiveMisses
+                SlaDays            = $slaDays
+                SlaCompliant       = $slaCompliant
+                DaysMissing        = $missingDays.ToArray()
+                DaysDelivered      = @($deliveredDates | Sort-Object)
+                TotalDaysTracked   = $totalDaysTracked
+                FirstSnapshotDate  = $firstSnapshotDate
+                LatestSnapshotDate = $latestSnapshotDate
+            })
+
+            $rateSum += $deliveryRate
+            if ($slaCompliant) { $compliantCount++ } else { $nonCompliantCount++ }
+
+            Write-SPLog -Message "App '$appName': $deliveryRate% delivery rate, SLA $(if ($slaCompliant) { 'COMPLIANT' } else { 'NON-COMPLIANT' }) (longest gap: ${longestGap}d, SLA: ${slaDays}d)" `
+                -Severity $(if ($slaCompliant) { 'INFO' } else { 'WARN' }) `
+                -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+                -CorrelationID $CorrelationID
+        }
+
+        $avgRate = if ($apps.Count -gt 0) { [math]::Round($rateSum / $apps.Count, 1) } else { 0.0 }
+
+        Write-SPLog -Message "SLA status: $compliantCount compliant, $nonCompliantCount non-compliant, avg delivery rate ${avgRate}% (of $($apps.Count) apps)" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Apps    = $appResults.ToArray()
+                Summary = @{
+                    TotalApps       = $apps.Count
+                    Compliant       = $compliantCount
+                    NonCompliant    = $nonCompliantCount
+                    AvgDeliveryRate = $avgRate
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppSlaStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppSlaStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppSlaHtml {
+    <#
+    .SYNOPSIS
+        Generates an SLA compliance HTML report with 30-day delivery grids.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppSlaStatus and produces a self-contained
+        HTML report with per-app 30-day delivery calendars, SLA compliance badges, and
+        an overall delivery health score.
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources.
+
+        Color coding:
+        - Green (#339933): delivered / compliant
+        - Red (#CC3333): missing / non-compliant
+        - Gray (#999999): before tracking period
+        - Orange (#FF8800): warning (high miss rate)
+    .PARAMETER SlaData
+        Output from Get-SPDisconnectedAppSlaStatus (the .Data property).
+    .PARAMETER DaysBack
+        Number of days in the delivery window. Default: 30.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/sla-report-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .PARAMETER CorrelationID
+        Correlation ID for log entries.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        $sla = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+        Export-SPDisconnectedAppSlaHtml -SlaData $sla.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$SlaData,
+
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # Ensure output directory exists
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "sla-report-${ReportDate}.html"
+
+        # Style constants (matching toolkit conventions)
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeGray           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#999999;'
+
+        # Grid cell styles for the 30-day calendar
+        $cellDelivered = 'display:inline-block; width:16px; height:16px; margin:1px; background:#339933; border-radius:2px; vertical-align:middle;'
+        $cellMissing   = 'display:inline-block; width:16px; height:16px; margin:1px; background:#CC3333; border-radius:2px; vertical-align:middle;'
+        $cellPreTrack  = 'display:inline-block; width:16px; height:16px; margin:1px; background:#e0e0e0; border-radius:2px; vertical-align:middle;'
+
+        $apps    = @($SlaData.Apps)
+        $summary = $SlaData.Summary
+
+        # Build the date window
+        $today       = (Get-Date).Date
+        $windowStart = $today.AddDays(-($DaysBack - 1))
+        $windowDates = [System.Collections.Generic.List[string]]::new()
+        for ($d = 0; $d -lt $DaysBack; $d++) {
+            $windowDates.Add($windowStart.AddDays($d).ToString('yyyy-MM-dd'))
+        }
+
+        # Build HTML
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>SLA Delivery Report - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Disconnected App SLA Delivery Report</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate | Window: $DaysBack days</p>")
+
+        # -----------------------------------------------------------
+        # Section 1: Overall Health Score
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Delivery Health Summary</h2>")
+
+        # Overall health badge
+        $avgRate = $summary.AvgDeliveryRate
+        $healthBadge = $badgeGreen
+        $healthLabel = 'HEALTHY'
+        if ($avgRate -lt 80) {
+            $healthBadge = $badgeRed
+            $healthLabel = 'AT RISK'
+        } elseif ($avgRate -lt 95) {
+            $healthBadge = $badgeOrange
+            $healthLabel = 'WARNING'
+        }
+        [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$healthBadge`">$healthLabel</span></p>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+        $summaryRows = @(
+            @('Total Apps',         $summary.TotalApps)
+            @('SLA Compliant',      $summary.Compliant)
+            @('SLA Non-Compliant',  $summary.NonCompliant)
+            @('Avg Delivery Rate',  "${avgRate}%")
+        )
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 2: Per-App SLA Table
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Per-App SLA Status</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'SLA', 'Delivery Rate', 'Longest Gap', 'Trailing Misses', 'SLA Days', 'Tracked Days')))
+
+        $rowIdx = 0
+        foreach ($app in $apps) {
+            $rowBg = if (($rowIdx % 2) -eq 1) { 'background:#f9f9f9;' } else { '' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $rowBg"
+
+            # SLA compliance badge
+            $slaBadge = if ($app.SlaCompliant) {
+                "<span style=`"$badgeGreen`">COMPLIANT</span>"
+            } else {
+                "<span style=`"$badgeRed`">NON-COMPLIANT</span>"
+            }
+
+            # Delivery rate with color coding
+            $rateColor = '#339933'
+            if ($app.DeliveryRate -lt 80) { $rateColor = '#CC3333' }
+            elseif ($app.DeliveryRate -lt 95) { $rateColor = '#FF8800' }
+            $rateDisplay = "<span style=`"font-weight:bold; color:${rateColor};`">$($app.DeliveryRate)%</span>"
+
+            [void]$html.AppendLine('<tr>')
+            [void]$html.AppendLine("  <td style=`"$tdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $app.AppName)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$slaBadge</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$rateDisplay</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.LongestGapDays)d</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.ConsecutiveMisses)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.SlaDays)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.TotalDaysTracked)</td>")
+            [void]$html.AppendLine('</tr>')
+            $rowIdx++
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 3: 30-Day Delivery Grids
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">30-Day Delivery Calendar</h2>")
+
+        # Legend
+        [void]$html.AppendLine('<p style="font-size:12px; margin-bottom:16px;">')
+        [void]$html.AppendLine("  <span style=`"$cellDelivered`"></span> Delivered")
+        [void]$html.AppendLine("  <span style=`"margin-left:12px; $cellMissing`"></span> Missing")
+        [void]$html.AppendLine("  <span style=`"margin-left:12px; $cellPreTrack`"></span> Before tracking")
+        [void]$html.AppendLine('</p>')
+
+        foreach ($app in $apps) {
+            # Build a set of delivered dates for quick lookup
+            $deliveredSet = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($dd in $app.DaysDelivered) {
+                [void]$deliveredSet.Add($dd)
+            }
+
+            # App header with compliance badge
+            $appSlaBadge = if ($app.SlaCompliant) {
+                "<span style=`"$badgeGreen`">COMPLIANT</span>"
+            } else {
+                "<span style=`"$badgeRed`">NON-COMPLIANT</span>"
+            }
+
+            [void]$html.AppendLine("<div style=`"margin-bottom:20px; padding:12px 16px; border:1px solid #dee2e6; border-radius:4px;`">")
+            [void]$html.AppendLine("  <p style=`"font-weight:bold; font-size:14px; margin:0 0 8px 0;`">$(ConvertTo-DisconnectedHtmlSafe $app.AppName) $appSlaBadge <span style=`"font-weight:normal; color:#777; font-size:12px; margin-left:8px;`">$($app.DeliveryRate)% delivery rate</span></p>")
+
+            # Grid of day cells
+            [void]$html.AppendLine('  <div style="line-height:0;">')
+            foreach ($dateStr in $windowDates) {
+                $cellTitle = $dateStr
+                if ($null -ne $app.FirstSnapshotDate -and $dateStr -lt $app.FirstSnapshotDate) {
+                    # Before this app started tracking
+                    $cellStyle = $cellPreTrack
+                    $cellTitle = "$dateStr (before tracking)"
+                } elseif ($deliveredSet.Contains($dateStr)) {
+                    $cellStyle = $cellDelivered
+                    $cellTitle = "$dateStr (delivered)"
+                } else {
+                    $cellStyle = $cellMissing
+                    $cellTitle = "$dateStr (missing)"
+                }
+                [void]$html.Append("<span style=`"$cellStyle`" title=`"$cellTitle`"></span>")
+            }
+            [void]$html.AppendLine('')
+            [void]$html.AppendLine('  </div>')
+
+            # Date labels (first and last)
+            $firstDate = $windowDates[0]
+            $lastDate  = $windowDates[$windowDates.Count - 1]
+            [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:10px; color:#999;`">$firstDate to $lastDate</p>")
+
+            # Missing days detail (if any)
+            if ($app.DaysMissing.Count -gt 0 -and $app.DaysMissing.Count -le 10) {
+                $missingList = ($app.DaysMissing | ForEach-Object { ConvertTo-DisconnectedHtmlSafe $_ }) -join ', '
+                [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:11px; color:#CC3333;`">Missing: $missingList</p>")
+            } elseif ($app.DaysMissing.Count -gt 10) {
+                [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:11px; color:#CC3333;`">$($app.DaysMissing.Count) days missing</p>")
+            }
+
+            [void]$html.AppendLine('</div>')
+        }
+
+        # -----------------------------------------------------------
+        # Footer
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
+
+        $footerRows = @(
+            @('Window',        "${DaysBack} days")
+            @('Correlation ID', $(if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID } else { '-' }))
+        )
+        foreach ($fRow in $footerRows) {
+            $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]
+            $fValue = ConvertTo-DisconnectedHtmlSafe $fRow[1]
+            [void]$html.AppendLine("<tr><td style=`"padding:4px 10px; color:#999; font-size:11px; font-weight:bold; vertical-align:top;`">$fLabel</td><td style=`"padding:4px 10px; color:#999; font-size:11px; vertical-align:top;`">$fValue</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - SLA Monitor | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "SLA HTML report saved to $filePath ($($apps.Count) app(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppSlaHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppSlaHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppSlaHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -3155,5 +3702,7 @@ Export-ModuleMember -Function @(
     'Export-SPDisconnectedAppIdentityRiskHtml',
     'Get-SPDisconnectedAppEntitlementCatalog',
     'Export-SPDisconnectedAppEntitlementCatalogHtml',
-    'Export-SPDisconnectedAppBatchHtml'
+    'Export-SPDisconnectedAppBatchHtml',
+    'Get-SPDisconnectedAppSlaStatus',
+    'Export-SPDisconnectedAppSlaHtml'
 )
