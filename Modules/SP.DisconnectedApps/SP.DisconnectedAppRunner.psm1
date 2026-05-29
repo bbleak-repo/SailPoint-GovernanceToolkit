@@ -19,6 +19,7 @@
         8. Export-SPDisconnectedAppIdentityRiskHtml - identity risk HTML report
         9. Get-SPDisconnectedAppEntitlementCatalog - unified entitlement catalog across apps
        10. Export-SPDisconnectedAppEntitlementCatalogHtml - entitlement catalog HTML report
+       11. Export-SPDisconnectedAppBatchHtml - batch orchestrator summary HTML report
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -29,7 +30,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.4.0
+    Version: 1.5.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -2728,6 +2729,419 @@ function Export-SPDisconnectedAppEntitlementCatalogHtml {
     }
 }
 
+function Export-SPDisconnectedAppBatchHtml {
+    <#
+    .SYNOPSIS
+        Generates a consolidated HTML report for a batch orchestrator run.
+    .DESCRIPTION
+        Takes the per-app results from Invoke-SPDisconnectedAppBatch and produces
+        a self-contained HTML report with executive summary, per-app status table,
+        error details, delivery status, and batch timing footer.
+
+        Designed for operations team review after a batch certification run.
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources, no flexbox, no grid.
+
+        Color coding:
+        - Green (#339933): success
+        - Red (#CC3333): error
+        - Orange (#FF8800): threshold blocked
+        - Gray (#999999): no changes
+
+    .PARAMETER BatchResults
+        Array of hashtables from the batch orchestrator, each containing:
+        App, Status, CorrelationID, StartedAt, CompletedAt, DurationSeconds,
+        CampaignsCreated, CampaignIds, IdentityCount, DeltaSummary, ReportPath,
+        Error, Reason.
+    .PARAMETER CorrelationID
+        Batch-level correlation ID for the overall run.
+    .PARAMETER StartedAt
+        UTC timestamp string for batch start time.
+    .PARAMETER CompletedAt
+        UTC timestamp string for batch end time.
+    .PARAMETER DurationSeconds
+        Total batch duration in seconds.
+    .PARAMETER DeliveryStatus
+        Optional output from Get-SPDisconnectedAppDeliveryStatus. If provided,
+        a delivery status section is included in the report.
+    .PARAMETER Environment
+        Environment name from config (e.g., 'Production', 'Sandbox').
+    .PARAMETER WhatIfRun
+        If true, the report header indicates this was a dry-run.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/batch-summary-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        Export-SPDisconnectedAppBatchHtml -BatchResults $batchResults `
+            -CorrelationID $batchCorrelationID -StartedAt $start -CompletedAt $end `
+            -DurationSeconds 45.2 -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable[]]$BatchResults,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$StartedAt,
+
+        [Parameter()]
+        [string]$CompletedAt,
+
+        [Parameter()]
+        [double]$DurationSeconds = 0,
+
+        [Parameter()]
+        [hashtable]$DeliveryStatus,
+
+        [Parameter()]
+        [string]$Environment,
+
+        [Parameter()]
+        [switch]$WhatIfRun,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # ---------------------------------------------------------------
+        # Ensure output directory exists
+        # ---------------------------------------------------------------
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "batch-summary-${ReportDate}.html"
+
+        # ---------------------------------------------------------------
+        # Compute summary metrics
+        # ---------------------------------------------------------------
+        $totalApps      = $BatchResults.Count
+        $successCount   = @($BatchResults | Where-Object { $_.Status -eq 'Success' }).Count
+        $noChangesCount = @($BatchResults | Where-Object { $_.Status -eq 'NoChanges' }).Count
+        $blockedCount   = @($BatchResults | Where-Object { $_.Status -eq 'ThresholdBlocked' }).Count
+        $errorCount     = @($BatchResults | Where-Object { $_.Status -eq 'Error' }).Count
+        $totalCampaigns = 0
+        $totalIdentities = 0
+        foreach ($r in $BatchResults) {
+            $totalCampaigns  += $r.CampaignsCreated
+            $totalIdentities += $r.IdentityCount
+        }
+
+        # ---------------------------------------------------------------
+        # Reusable style constants (matching toolkit conventions)
+        # ---------------------------------------------------------------
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeGray           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#999999;'
+
+        # ---------------------------------------------------------------
+        # Build HTML
+        # ---------------------------------------------------------------
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Batch Summary - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Report title
+        $titleSuffix = ''
+        if ($WhatIfRun) { $titleSuffix = ' <span style="' + $badgeOrange + '">DRY RUN</span>' }
+        $envLabel = ''
+        if (-not [string]::IsNullOrWhiteSpace($Environment)) {
+            $envLabel = " - $(ConvertTo-DisconnectedHtmlSafe $Environment)"
+        }
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Disconnected App Batch Summary${envLabel}${titleSuffix}</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # ---------------------------------------------------------------
+        # Section 1: Executive Summary
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+
+        # Overall status badge
+        $overallBadge = $badgeGreen
+        $overallLabel = 'ALL SUCCEEDED'
+        if ($errorCount -gt 0 -and $errorCount -eq $totalApps) {
+            $overallBadge = $badgeRed
+            $overallLabel = 'ALL FAILED'
+        }
+        elseif ($errorCount -gt 0 -or $blockedCount -gt 0) {
+            $overallBadge = $badgeOrange
+            $overallLabel = 'PARTIAL'
+        }
+        elseif ($totalApps -eq 0) {
+            $overallBadge = $badgeGray
+            $overallLabel = 'NO APPS'
+        }
+        [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$overallBadge`">$overallLabel</span></p>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        $summaryRows = @(
+            @('Apps Processed',     $totalApps)
+            @('Succeeded',          $successCount)
+            @('No Changes',         $noChangesCount)
+            @('Threshold Blocked',  $blockedCount)
+            @('Errors',             $errorCount)
+            @('Campaigns Created',  $totalCampaigns)
+            @('Identities Affected', $totalIdentities)
+        )
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 2: Per-App Status Table
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Per-App Results</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'Status', 'Accounts (Delta)', 'Changes', 'Campaigns', 'Duration', 'Errors')))
+
+        $rowIdx = 0
+        foreach ($r in $BatchResults) {
+            # Row background color by status
+            $rowBg = ''
+            switch ($r.Status) {
+                'Success'          { $rowBg = 'background:#f0fff0;' }
+                'NoChanges'        { $rowBg = 'background:#f9f9f9;' }
+                'ThresholdBlocked' { $rowBg = 'background:#fff8f0;' }
+                'Error'            { $rowBg = 'background:#fff0f0;' }
+            }
+
+            # Status badge
+            $statusBadge = switch ($r.Status) {
+                'Success'          { "<span style=`"$badgeGreen`">SUCCESS</span>" }
+                'NoChanges'        { "<span style=`"$badgeGray`">NO CHANGES</span>" }
+                'ThresholdBlocked' { "<span style=`"$badgeOrange`">BLOCKED</span>" }
+                'Error'            { "<span style=`"$badgeRed`">ERROR</span>" }
+                default            { "<span style=`"$badgeGray`">$($r.Status)</span>" }
+            }
+
+            # Delta summary
+            $deltaInfo = '-'
+            if ($null -ne $r.DeltaSummary -and $r.DeltaSummary.Count -gt 0) {
+                $parts = @()
+                if ($r.DeltaSummary.Added -gt 0)   { $parts += "+$($r.DeltaSummary.Added)" }
+                if ($r.DeltaSummary.Removed -gt 0)  { $parts += "-$($r.DeltaSummary.Removed)" }
+                if ($r.DeltaSummary.Enabled -gt 0)  { $parts += "~$($r.DeltaSummary.Enabled)en" }
+                if ($r.DeltaSummary.Granted -gt 0)  { $parts += "~$($r.DeltaSummary.Granted)ent" }
+                if ($parts.Count -gt 0) { $deltaInfo = $parts -join ' / ' }
+            }
+
+            # Changes count (campaign triggers)
+            $changesCount = 0
+            if ($null -ne $r.DeltaSummary) {
+                $changesCount = ($r.DeltaSummary.Added + $r.DeltaSummary.Enabled + $r.DeltaSummary.Granted)
+            }
+
+            # Error text (truncated for table)
+            $errorCell = '-'
+            if (-not [string]::IsNullOrWhiteSpace($r.Error)) {
+                $truncErr = $r.Error
+                if ($truncErr.Length -gt 60) { $truncErr = $truncErr.Substring(0, 57) + '...' }
+                $errorCell = ConvertTo-DisconnectedHtmlSafe $truncErr
+            }
+
+            # Duration
+            $durationCell = if ($r.DurationSeconds -gt 0) { "$($r.DurationSeconds)s" } else { '-' }
+
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $rowBg"
+            [void]$html.AppendLine("<tr>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $r.App)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$statusBadge</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$(ConvertTo-DisconnectedHtmlSafe $deltaInfo)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $changesCount)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $r.CampaignsCreated)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$(ConvertTo-DisconnectedHtmlSafe $durationCell)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$errorCell</td>")
+            [void]$html.AppendLine('</tr>')
+            $rowIdx++
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 3: Error Details (expandable)
+        # ---------------------------------------------------------------
+        $errorApps = @($BatchResults | Where-Object { $_.Status -eq 'Error' -or $_.Status -eq 'ThresholdBlocked' })
+
+        if ($errorApps.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Error Details ($($errorApps.Count))</h2>")
+
+            foreach ($errApp in $errorApps) {
+                $detailBadge = if ($errApp.Status -eq 'Error') { "<span style=`"$badgeRed`">ERROR</span>" } else { "<span style=`"$badgeOrange`">THRESHOLD BLOCKED</span>" }
+                $safeAppName = ConvertTo-DisconnectedHtmlSafe $errApp.App
+                $safeError   = ConvertTo-DisconnectedHtmlSafe $errApp.Error
+
+                [void]$html.AppendLine("<details style=`"margin-bottom:12px; border:1px solid #dee2e6; border-radius:4px; padding:0;`">")
+                [void]$html.AppendLine("  <summary style=`"padding:10px 14px; cursor:pointer; font-weight:bold; font-size:14px; background:#f8f9fa;`">$detailBadge $safeAppName</summary>")
+                [void]$html.AppendLine("  <div style=`"padding:12px 14px; font-size:13px;`">")
+                [void]$html.AppendLine("    <table style=`"$tableStyle`">")
+
+                $detailRows = @(
+                    @('App Name', $errApp.App)
+                    @('Status', $errApp.Status)
+                    @('Reason', $errApp.Reason)
+                    @('Error Message', $errApp.Error)
+                    @('Correlation ID', $errApp.CorrelationID)
+                    @('Started At', $errApp.StartedAt)
+                    @('Completed At', $errApp.CompletedAt)
+                    @('Duration', "$($errApp.DurationSeconds)s")
+                )
+
+                foreach ($dRow in $detailRows) {
+                    $dLabel = ConvertTo-DisconnectedHtmlSafe $dRow[0]
+                    $dValue = ConvertTo-DisconnectedHtmlSafe $dRow[1]
+                    [void]$html.AppendLine("      <tr><td style=`"$labelTdStyle`">$dLabel</td><td style=`"$valueTdStyle`">$dValue</td></tr>")
+                }
+
+                [void]$html.AppendLine('    </table>')
+                [void]$html.AppendLine('  </div>')
+                [void]$html.AppendLine('</details>')
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Section 4: Delivery Status (optional)
+        # ---------------------------------------------------------------
+        if ($null -ne $DeliveryStatus -and $DeliveryStatus.Success -eq $true -and
+            $null -ne $DeliveryStatus.Data -and $null -ne $DeliveryStatus.Data.Apps) {
+
+            $deliveryApps = @($DeliveryStatus.Data.Apps)
+            $deliverySummary = $DeliveryStatus.Data.Summary
+
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">File Delivery Status</h2>")
+
+            # Delivery summary
+            if ($null -ne $deliverySummary) {
+                [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+                $dSummaryRows = @(
+                    @('Total Apps',  $deliverySummary.Total)
+                    @('Delivered',   $deliverySummary.Delivered)
+                    @('Stale',       $deliverySummary.Stale)
+                    @('Missing',     $deliverySummary.Missing)
+                    @('Disabled',    $deliverySummary.Disabled)
+                )
+                foreach ($ds in $dSummaryRows) {
+                    $dsLabel = ConvertTo-DisconnectedHtmlSafe $ds[0]
+                    $dsValue = ConvertTo-DisconnectedHtmlSafe $ds[1]
+                    [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$dsLabel</td><td style=`"$valueTdStyle`">$dsValue</td></tr>")
+                }
+                [void]$html.AppendLine('</table>')
+            }
+
+            # Per-app delivery table
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'Delivery Status', 'Last Modified', 'File Size', 'Row Count')))
+
+            $dRowIdx = 0
+            foreach ($dApp in $deliveryApps) {
+                $dStatusBadge = switch ($dApp.Status) {
+                    'Delivered' { "<span style=`"$badgeGreen`">DELIVERED</span>" }
+                    'Stale'     { "<span style=`"$badgeOrange`">STALE</span>" }
+                    'Missing'   { "<span style=`"$badgeRed`">MISSING</span>" }
+                    'Disabled'  { "<span style=`"$badgeGray`">DISABLED</span>" }
+                    'Error'     { "<span style=`"$badgeRed`">ERROR</span>" }
+                    default     { "<span style=`"$badgeGray`">$($dApp.Status)</span>" }
+                }
+
+                $lastMod  = if ($null -ne $dApp.LastModified) { ConvertTo-DisconnectedHtmlSafe $dApp.LastModified } else { '-' }
+                $fileSize = if ($null -ne $dApp.FileSize) { ConvertTo-DisconnectedHtmlSafe "$([math]::Round($dApp.FileSize / 1KB, 1)) KB" } else { '-' }
+                $rowCount = if ($null -ne $dApp.RowCount) { ConvertTo-DisconnectedHtmlSafe $dApp.RowCount } else { '-' }
+
+                $dBg = if (($dRowIdx % 2) -eq 1) { 'background:#f9f9f9;' } else { '' }
+                $dTdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $dBg"
+
+                [void]$html.AppendLine("<tr>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $dApp.Name)</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$dStatusBadge</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$lastMod</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$fileSize</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle text-align:center;`">$rowCount</td>")
+                [void]$html.AppendLine('</tr>')
+                $dRowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # ---------------------------------------------------------------
+        # Section 5: Footer
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
+
+        $footerRows = @(
+            @('Batch Start',    $(if (-not [string]::IsNullOrWhiteSpace($StartedAt)) { $StartedAt } else { '-' }))
+            @('Batch End',      $(if (-not [string]::IsNullOrWhiteSpace($CompletedAt)) { $CompletedAt } else { '-' }))
+            @('Duration',       $(if ($DurationSeconds -gt 0) { "${DurationSeconds}s" } else { '-' }))
+            @('Correlation ID', $(if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID } else { '-' }))
+        )
+
+        foreach ($fRow in $footerRows) {
+            $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]
+            $fValue = ConvertTo-DisconnectedHtmlSafe $fRow[1]
+            [void]$html.AppendLine("<tr><td style=`"padding:4px 10px; color:#999; font-size:11px; font-weight:bold; vertical-align:top;`">$fLabel</td><td style=`"padding:4px 10px; color:#999; font-size:11px; vertical-align:top;`">$fValue</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Batch Orchestrator | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Batch summary HTML report saved to $filePath ($totalApps app(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppBatchHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppBatchHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppBatchHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2740,5 +3154,6 @@ Export-ModuleMember -Function @(
     'Get-SPDisconnectedAppIdentityRisk',
     'Export-SPDisconnectedAppIdentityRiskHtml',
     'Get-SPDisconnectedAppEntitlementCatalog',
-    'Export-SPDisconnectedAppEntitlementCatalogHtml'
+    'Export-SPDisconnectedAppEntitlementCatalogHtml',
+    'Export-SPDisconnectedAppBatchHtml'
 )

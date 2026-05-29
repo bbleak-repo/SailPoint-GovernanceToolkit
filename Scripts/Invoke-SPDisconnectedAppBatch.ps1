@@ -634,6 +634,57 @@ catch {
         -CorrelationID $batchCorrelationID
 }
 
+# --- Batch Summary HTML Report ---
+try {
+    Write-Host '  Generating batch summary HTML report...' -ForegroundColor Cyan
+
+    # Get delivery status for the report (optional section)
+    $deliveryStatusData = $null
+    try {
+        $dsParams = @{ CorrelationID = $batchCorrelationID }
+        if ($ConfigPath) { $dsParams['ConfigPath'] = $ConfigPath }
+        $deliveryStatusData = Get-SPDisconnectedAppDeliveryStatus @dsParams
+    }
+    catch {
+        Write-SPLog -Message "Failed to get delivery status for batch report: $($_.Exception.Message)" `
+            -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'BatchReport' `
+            -CorrelationID $batchCorrelationID
+    }
+
+    $batchHtmlParams = @{
+        BatchResults    = @($batchResults)
+        CorrelationID   = $batchCorrelationID
+        StartedAt       = $batchStartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        CompletedAt     = $batchEndTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        DurationSeconds = $batchDuration
+        OutputPath      = $effectiveOutputPath
+    }
+    if ($null -ne $deliveryStatusData -and $deliveryStatusData.Success) {
+        $batchHtmlParams['DeliveryStatus'] = $deliveryStatusData
+    }
+    if ($null -ne $config.Global -and $null -ne $config.Global.PSObject.Properties['EnvironmentName']) {
+        $batchHtmlParams['Environment'] = $config.Global.EnvironmentName
+    }
+    if ($WhatIfPreference -eq $true) {
+        $batchHtmlParams['WhatIfRun'] = $true
+    }
+
+    $batchHtmlResult = Export-SPDisconnectedAppBatchHtml @batchHtmlParams
+
+    if ($batchHtmlResult.Success) {
+        Write-Host "    $($batchHtmlResult.Data.FilePath)" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "    Warning: Batch HTML report failed: $($batchHtmlResult.Error)" -ForegroundColor Yellow
+    }
+    Write-Host ''
+}
+catch {
+    Write-SPLog -Message "Failed to generate batch summary HTML: $($_.Exception.Message)" `
+        -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'BatchReport' `
+        -CorrelationID $batchCorrelationID
+}
+
 # --- Build summary object ---
 $batchSummary = [PSCustomObject]@{
     CorrelationID    = $batchCorrelationID

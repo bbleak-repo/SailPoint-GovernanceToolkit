@@ -32,7 +32,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 | DA-15 | File Delivery Monitor | DA-11 | DONE |
 | DA-16 | Cross-App Identity Risk Report | DA-11 | DONE |
 | DA-17 | Unified Entitlement Catalog | DA-11 | DONE |
-| DA-18 | Batch Summary HTML Report | DA-14 | PENDING |
+| DA-18 | Batch Summary HTML Report | DA-14 | DONE |
 | DA-19 | SLA Tracking + Delivery History | DA-15 | PENDING |
 | DA-20 | Pester Tests | DA-19 | PENDING |
 
@@ -391,8 +391,8 @@ AssignedCount = how many accounts in the latest snapshot have this entitlement.
 
 ## DA-18: Batch Summary HTML Report
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-18
 - **Depends On:** DA-14
 
 **Description:**
