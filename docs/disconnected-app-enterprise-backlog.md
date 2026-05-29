@@ -28,7 +28,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 | DA-11 | App Registry (config-driven multi-app) | none | DONE |
 | DA-12 | App Registration CLI | DA-11 | DONE |
 | DA-13 | Account Deletion Threshold Protection | none | DONE |
-| DA-14 | Batch Orchestrator | DA-11, DA-13 | PENDING |
+| DA-14 | Batch Orchestrator | DA-11, DA-13 | DONE |
 | DA-15 | File Delivery Monitor | DA-11 | PENDING |
 | DA-16 | Cross-App Identity Risk Report | DA-11 | PENDING |
 | DA-17 | Unified Entitlement Catalog | DA-11 | PENDING |
@@ -207,8 +207,8 @@ but BEFORE identity resolution and campaign creation.
 
 ## DA-14: Batch Orchestrator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-14
 - **Depends On:** DA-11, DA-13
 
 **Description:**
