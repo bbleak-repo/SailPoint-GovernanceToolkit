@@ -221,6 +221,19 @@ For applications without a native ISC connector, the toolkit supports flat file 
     -EntitlementFilePath '.\Imports\PEP-Plus\entitlements.csv' -WhatIf
 ```
 
+For multiple apps, register them in the config and use batch mode:
+
+```powershell
+# Register apps once
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register -AppName 'PEP-Plus' `
+    -AccountFilePath '\\fileserver\imports\PEP-Plus\accounts.csv'
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register -AppName 'DebtNext' `
+    -AccountFilePath '\\fileserver\imports\DebtNext\accounts.csv'
+
+# Daily batch run -- processes all registered apps in one command
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -WhatIf
+```
+
 See [README.md](README.md) for the full parameter reference, daily workflow, and delta detection details.
 
 ---

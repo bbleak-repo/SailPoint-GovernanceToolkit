@@ -56,7 +56,7 @@ Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
   AuditQueryDialog.xaml    -- modal: audit query filters (Phase 7)
 ```
 
-7 modules, 22 .psm1 files, 6 .psd1 manifests, 8 Scripts, 9 XAML files, 15 Pester test files, Config + Templates + Docs.
+7 modules, 22 .psm1 files, 6 .psd1 manifests, 10 Scripts, 9 XAML files, 15 Pester test files, Config + Templates + Docs.
 
 ---
 
@@ -95,6 +95,8 @@ Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
 | | Invoke-SPADDeltaCert.ps1 | DONE (CLI thin wrapper, browser token, WhatIf, fallback reviewer) | - |
 | | Invoke-SPDeltaCertEscalate.ps1 | DONE (CLI thin wrapper, escalation with safety guards) | - |
 | | Invoke-SPDisconnectedAppCert.ps1 | DONE (CLI thin wrapper, validate+snapshot+delta+resolve+campaign+report, browser token, WhatIf) | - |
+| | Invoke-SPDisconnectedAppRegistry.ps1 | DONE (Register/Unregister/List/Test actions, config-driven Applications array) | - |
+| | Invoke-SPDisconnectedAppBatch.ps1 | DONE (batch orchestrator, per-app error isolation, threshold protection, JSONL audit trail, batch HTML report) | - |
 | **Config** | settings.json | DONE | A |
 | | test-identities.csv | DONE | C |
 | | test-campaigns.csv | DONE | C |
@@ -132,9 +134,9 @@ Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
 | **SP.DisconnectedApps** | SP.DisconnectedAppValidator.psm1 | DONE (Test-SPDisconnectedAppAccountFile, Test-SPDisconnectedAppEntitlementFile, Test-SPDisconnectedAppCrossReference) | - |
 | | SP.DisconnectedAppSnapshot.psm1 | DONE (Save-SPDisconnectedAppSnapshot, Get-SPDisconnectedAppPreviousSnapshot, Remove-SPDisconnectedAppOldSnapshots) | - |
 | | SP.DisconnectedAppDelta.psm1 | DONE (Compare-SPDisconnectedAppFiles -- 7 change types) | - |
-| | SP.DisconnectedAppRunner.psm1 | DONE (Resolve-SPDisconnectedAppIdentities, Invoke-SPDisconnectedAppCertRun, Export-SPDisconnectedAppDeltaHtml) | - |
+| | SP.DisconnectedAppRunner.psm1 | DONE (v1.6: +Get-SPRegisteredApps, +Initialize-SPDisconnectedAppDirectories, +Get-SPDisconnectedAppDeliveryStatus, +Get-SPDisconnectedAppIdentityRisk, +Get-SPDisconnectedAppEntitlementCatalog, +Export-SPDisconnectedAppBatchHtml, +Get-SPDisconnectedAppSlaStatus, +HTML export functions) | - |
 | **Tests** | SP.DeltaCert.Tests.ps1 | DONE - 50 tests (Phases 2-6 expanded from 14), PS 5.1 target | - |
-| | SP.DisconnectedApps.Tests.ps1 | DONE - 11 tests (DA-001 to DA-011), PS 5.1 target | - |
+| | SP.DisconnectedApps.Tests.ps1 | DONE - 53 tests (DA-001 to DA-011 + DA-12-T to DA-20-T), PS 5.1 target | - |
 | **Docs** | README.md | DONE | D |
 
 ### Pester Test Results (macOS pwsh 7.5.4 -- 2026-02-20, pre-SP.DeltaCert)
@@ -157,7 +159,7 @@ Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
 | SP.Certifications.Tests | 2 | 13 | Mock-scoping |
 | SP.Decisions.Tests | 0 | 14 | Mock-scoping |
 
-### Current Test Totals (289 tests across 15 files)
+### Current Test Totals (331 tests across 15 files)
 
 | Test File | Tests | Notes |
 |-----------|-------|-------|
@@ -168,7 +170,7 @@ Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)
 | SP.AuditQueries.Tests | 26 | 100% pass (PS7) |
 | SP.AuditReport.Tests | 32 | 100% pass (PS7) |
 | SP.DeltaCert.Tests | 50 | PS 5.1 target (Phases 2-6) |
-| SP.DisconnectedApps.Tests | 11 | DA-001 to DA-011, PS 5.1 target |
+| SP.DisconnectedApps.Tests | 53 | DA-001 to DA-011 (26 tests), DA-12-T to DA-20-T (27 tests), PS 5.1 target |
 | SP.ApiClient.Tests | 27 | Mock-scoping on PS7 |
 | SP.Auth.Tests | 9 | Mock-scoping on PS7 |
 | SP.Assertions.Tests | 10 | Mock-scoping on PS7 |
@@ -542,7 +544,7 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 
 ## Verification Checklist
 
-- [x] All 63 production files implemented (core toolkit + DeltaCert + Phase 7 GUI + DisconnectedApps)
+- [x] All 65 production files implemented (core toolkit + DeltaCert + Phase 7 GUI + DisconnectedApps + enterprise batch/registry)
 - [x] SP.Audit module implemented: SP.AuditQueries.psm1, SP.AuditReport.psm1, SP.Audit.psd1
 - [x] GUI Audit tab implemented: AuditTab.xaml, MainWindow.xaml (inline), SP.MainWindow.psm1, SP.GuiBridge.psm1
 - [x] Campaign report download refactored: v3 API first with silent legacy /cc/api fallback
@@ -550,6 +552,7 @@ grant_type=client_credentials&client_id={id}&client_secret={secret}
 - [x] All 15 Pester test files implemented (11 original + AuditQueries + AuditReport + DeltaCert + DisconnectedApps)
 - [x] SP.AuditQueries.Tests.ps1 and SP.AuditReport.Tests.ps1 implemented (13 tests total)
 - [x] SP.DeltaCert.Tests.ps1 implemented (50 tests: Phases 2-6 expanded from initial DC-001 to DC-014)
+- [x] SP.DisconnectedApps.Tests.ps1 expanded (53 tests: DA-001 to DA-011 single-app + DA-12-T to DA-20-T enterprise features)
 - [x] Module import chain loads on pwsh 7 (41 functions)
 - [x] Cross-module function name verification (zero mismatches)
 - [x] Zero PS7-only syntax (`??`, ternary, `&&`, `||`)

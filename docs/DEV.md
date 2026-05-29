@@ -281,19 +281,44 @@ Day-over-day delta detection engine:
 
 Internal (not exported): `Split-GroupsValue` (comma-separated groups parser).
 
+### SP.DisconnectedAppDelta.psm1 (continued)
+
+Account deletion threshold protection:
+
+| Function | Purpose |
+|----------|---------|
+| `Test-SPDisconnectedAppDeletionThreshold` | Compare removed-account percentage against a configurable threshold. Returns `Allowed`, `RemovedPct`, and `Reason` (OK, ThresholdExceeded, FirstRun, TooFewAccounts). Files with fewer than 5 previous accounts always pass. |
+
 ### SP.DisconnectedAppRunner.psm1
 
-Identity resolution, campaign creation, and HTML report generation:
+Identity resolution, campaign creation, HTML report generation, and enterprise operations:
 
 | Function | Purpose |
 |----------|---------|
 | `Resolve-SPDisconnectedAppIdentities` | Correlate delta accounts to ISC identities via `POST /v3/search` using email (primary) or username (fallback). Fetches manager details via `Get-SPDeltaIdentityDetail`. Results cached per session. |
 | `Invoke-SPDisconnectedAppCertRun` | Group resolved identities by manager, create one SEARCH campaign per group. Includes duplicate guard, max-campaigns safety, and WhatIf support. |
 | `Export-SPDisconnectedAppDeltaHtml` | Generate self-contained HTML delta report with color-coded sections for all change types. Inline CSS for Word paste compatibility. |
+| `Get-SPRegisteredApps` | Load enabled app registrations from `DisconnectedApps.Applications` in settings.json. Merges per-app fields with global defaults. Supports `-IncludeDisabled` switch. |
+| `Initialize-SPDisconnectedAppDirectories` | Scaffold per-app snapshot and report directories for newly registered apps. |
+| `Get-SPDisconnectedAppDeliveryStatus` | Check file delivery freshness for all registered apps. Classifies each as Delivered, Stale, Missing, Empty, or Disabled. Includes row count for delivered files. |
+| `Get-SPDisconnectedAppIdentityRisk` | Cross-app identity risk analysis. Scans latest account snapshots, correlates by email, classifies risk: High (3+ apps), Elevated (2 apps), Normal (1 app). |
+| `Export-SPDisconnectedAppIdentityRiskHtml` | Generate identity risk HTML report. |
+| `Get-SPDisconnectedAppEntitlementCatalog` | Aggregate entitlements from all registered apps into a unified catalog with per-entitlement assignment counts. |
+| `Export-SPDisconnectedAppEntitlementCatalogHtml` | Generate entitlement catalog HTML report. |
+| `Export-SPDisconnectedAppBatchHtml` | Generate batch orchestrator summary HTML report with executive summary, per-app status rows, error details, and optional delivery status section. |
+| `Get-SPDisconnectedAppSlaStatus` | Analyze snapshot filenames over a configurable window to compute per-app delivery rate, SLA compliance, longest gap, and missing dates. |
+| `Export-SPDisconnectedAppSlaHtml` | Generate SLA compliance HTML report with delivery grid. |
 
-Internal (not exported): `Search-SPIdentityByAttribute` (ISC search API wrapper with session cache), `Write-SPDisconnectedAppAuditEvent` (JSONL audit trail), HTML helper functions.
+Internal (not exported): `Search-SPIdentityByAttribute` (ISC search API wrapper with session cache), `Write-SPDisconnectedAppAuditEvent` (JSONL audit trail), `ConvertTo-DisconnectedHtmlSafe`, `Build-DisconnectedHtmlRow`, `Build-DisconnectedHtmlHeader` (HTML helper functions).
 
 **Dependencies:** SP.Core (logging, config), SP.Api (REST client, campaign lifecycle), SP.DeltaCert (identity detail resolution via `Get-SPDeltaIdentityDetail`, manager grouping via `Group-SPDeltaByManager`, search filter via `Build-SPDeltaSearchFilter`).
+
+### New CLI Scripts (Enterprise Operations)
+
+| Script | Purpose |
+|--------|---------|
+| `Invoke-SPDisconnectedAppRegistry.ps1` | Manages the `Applications` array in settings.json. Actions: Register (add app with file paths and overrides), Unregister (remove app, preserve files), List (show all apps with file status), Test (run CSV validation on a registered app). |
+| `Invoke-SPDisconnectedAppBatch.ps1` | Batch orchestrator that processes all (or filtered) registered apps in sequence. Full pipeline per app: validate, snapshot, delta, threshold check, resolve, campaign, report. Errors are isolated per-app. Writes JSONL batch audit trail and generates batch summary HTML report. |
 
 ---
 
@@ -327,7 +352,16 @@ Test IDs follow the pattern `{MODULE}-{NNN}`:
 - `EVD-001` through `EVD-005` -- SP.Evidence
 - `ASRT-001` through `ASRT-005` -- SP.Assertions
 - `DC-*` -- SP.DeltaCert (SP.DeltaCert.Tests.ps1)
-- `DA-*` -- SP.DisconnectedApps (SP.DisconnectedApps.Tests.ps1)
+- `DA-001` through `DA-011` -- SP.DisconnectedApps single-app features (SP.DisconnectedApps.Tests.ps1)
+- `DA-12-T` -- Get-SPRegisteredApps (enabled filter + default merge)
+- `DA-13-T` -- App registration config manipulation
+- `DA-14-T`, `DA-14-T2` -- Test-SPDisconnectedAppDeletionThreshold (threshold + first-run)
+- `DA-15-T` -- Invoke-SPDisconnectedAppBatch.ps1 syntax validation
+- `DA-16-T` -- Get-SPDisconnectedAppDeliveryStatus (Delivered/Missing/Disabled)
+- `DA-17-T` -- Get-SPDisconnectedAppIdentityRisk (cross-app risk classification)
+- `DA-18-T` -- Get-SPDisconnectedAppEntitlementCatalog (multi-app aggregation)
+- `DA-19-T` -- Export-SPDisconnectedAppBatchHtml (batch summary HTML)
+- `DA-20-T` -- Get-SPDisconnectedAppSlaStatus (delivery rate from snapshots)
 
 ### Mock Scoping
 

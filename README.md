@@ -558,6 +558,168 @@ On first run (no previous snapshot exists), all accounts in the file are treated
 | 5 | Validation failure (CSV structure or data errors) |
 | 6 | Campaign creation error |
 
+#### Multi-App Enterprise Operations
+
+When multiple disconnected applications need governance, the toolkit provides config-driven batch orchestration. Instead of running `Invoke-SPDisconnectedAppCert.ps1` per app, register each app in `settings.json` and process them all in a single batch run.
+
+**App Registry: settings.json Applications array**
+
+The `DisconnectedApps.Applications` array in `settings.json` holds the registration for each app. Each entry stores the app's file paths, correlation settings, and per-app overrides:
+
+```json
+"DisconnectedApps": {
+    "CorrelationAttribute": "e-mail",
+    "AccountDeletionThresholdPct": 20,
+    "Applications": [
+        {
+            "Name": "PEP-Plus",
+            "AccountFilePath": "\\\\fileserver\\imports\\PEP-Plus\\accounts.csv",
+            "EntitlementFilePath": "\\\\fileserver\\imports\\PEP-Plus\\entitlements.csv",
+            "ISCSourceId": "src-pep-001",
+            "CorrelationAttribute": "e-mail",
+            "CampaignNamePrefix": "PEP Access Review",
+            "DeadlineDays": 2,
+            "SlaDays": 1,
+            "Enabled": true
+        }
+    ]
+}
+```
+
+**Registry CLI: Invoke-SPDisconnectedAppRegistry.ps1**
+
+Manages the `Applications` array without hand-editing JSON.
+
+```powershell
+# Register a new app
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register `
+    -AppName 'IPAY' `
+    -AccountFilePath '\\fileserver\imports\IPAY\accounts.csv' `
+    -EntitlementFilePath '\\fileserver\imports\IPAY\entitlements.csv' `
+    -ISCSourceId 'src-ipay-001' `
+    -CorrelationAttribute 'e-mail' `
+    -CampaignNamePrefix 'IPAY Access Review' `
+    -DeadlineDays 3 -SlaDays 1
+
+# List all registered apps with file delivery status
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action List
+
+# Test CSV validation for a registered app (no campaigns created)
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName 'IPAY'
+
+# Unregister an app (preserves snapshots and reports on disk)
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Unregister -AppName 'IPAY'
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-Action` | Yes | `Register`, `Unregister`, `List`, or `Test` |
+| `-AppName` | Yes (except List) | Application name |
+| `-AccountFilePath` | Yes (Register) | Path to the account CSV file |
+| `-EntitlementFilePath` | No | Path to the entitlement CSV file |
+| `-ISCSourceId` | No | ISC source ID for the app |
+| `-CorrelationAttribute` | No | Identity correlation field override (default: `e-mail`) |
+| `-CampaignNamePrefix` | No | Campaign name prefix override (default: `{AppName} Cert`) |
+| `-DeadlineDays` | No | Campaign deadline in days (default: 2) |
+| `-SlaDays` | No | SLA days for file delivery monitoring (default: 1) |
+| `-ConfigPath` | No | Path to settings.json |
+| `-OutputMode` | No | `Console` (default), `JSON`, or `Both` |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | No registered apps found (List) or validation warnings (Test) |
+| 2 | Parameter error |
+| 4 | Configuration error |
+| 5 | Validation failure |
+
+**Batch Orchestrator: Invoke-SPDisconnectedAppBatch.ps1**
+
+Processes all (or specified) registered apps in sequence. Each app runs the full pipeline: validate, snapshot, delta, threshold check, resolve, campaign, report. Errors are isolated per-app so one failure does not stop the batch.
+
+```powershell
+# Process all enabled registered apps
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1
+
+# Process specific apps only
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -AppNames @('PEP-Plus','DebtNext')
+
+# Dry-run: validate and detect changes without creating campaigns
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -WhatIf
+
+# Process all apps with browser token auth, JSON output
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token 'eyJhbGciOiJSUzI1...' -OutputMode JSON
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-AppNames` | No | Filter to specific app names. If omitted, all enabled apps run. |
+| `-ConfigPath` | No | Path to settings.json |
+| `-Token` | No | Pre-obtained JWT bearer token from ISC browser session |
+| `-TokenExpiryMinutes` | No | Minutes until browser token expiry (default: 10) |
+| `-WhatIf` | No | Dry-run mode -- no write API calls |
+| `-OutputMode` | No | `Console` (default), `JSON`, or `Both` |
+
+Each app result is classified as: `Success`, `NoChanges`, `ThresholdBlocked`, or `Error`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | All apps succeeded (or NoChanges) |
+| 1 | Partial -- some apps failed or were blocked |
+| 2 | All apps failed |
+| 3 | Authentication error |
+| 4 | Configuration error |
+
+**Account Deletion Threshold Protection**
+
+The `AccountDeletionThresholdPct` setting (default: 20) guards against bad data by blocking processing when the percentage of removed accounts exceeds the threshold. If a CSV file suddenly drops from 100 accounts to 10, the 90% deletion rate exceeds the 20% threshold and the app is blocked with `ThresholdBlocked` status. The block is logged, and a delta report is still generated for review. First-run scenarios (no previous snapshot) and files with fewer than 5 accounts always pass the threshold check.
+
+**File Delivery Monitoring**
+
+Check whether registered apps have received their daily CSV file delivery:
+
+```powershell
+# Check delivery status (uses Get-SPDisconnectedAppDeliveryStatus internally)
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action List
+```
+
+The `List` action shows each app's file status: `Current` (delivered within 24 hours), `Stale` (older than 24 hours), `Missing` (file not found), `Empty`, or `No Path`. The last processed date is extracted from the most recent snapshot filename.
+
+**Cross-App Identity Risk Analysis**
+
+Identifies identities who appear across multiple disconnected applications -- a separation-of-duties concern:
+
+The `Get-SPDisconnectedAppIdentityRisk` function scans the latest account snapshots across all registered apps, correlates identities by email, and classifies risk:
+
+| App Count | Risk Level |
+|-----------|------------|
+| 3+ apps | High |
+| 2 apps | Elevated |
+| 1 app | Normal |
+
+Results are sorted by app count descending with summary counts for each risk tier.
+
+**Unified Entitlement Catalog**
+
+The `Get-SPDisconnectedAppEntitlementCatalog` function aggregates entitlements from all registered apps into a single catalog view. For each entitlement it reports the source app, display name, description, and the count of accounts currently assigned that entitlement (computed from the latest account snapshots).
+
+**SLA Tracking and Delivery History**
+
+The `Get-SPDisconnectedAppSlaStatus` function analyzes snapshot filenames over a configurable window (default 30 days) to compute per-app delivery rates:
+
+- **DeliveryRate**: percentage of days with a snapshot file present
+- **SlaCompliant**: `true` if delivery rate meets the threshold (based on per-app `SlaDays` setting)
+- **LongestGapDays**: longest consecutive run of missing deliveries
+- **DaysMissing**: list of specific dates with no delivery
+
 ### Vault: New-SPVault.ps1
 
 One-time setup to store OAuth credentials in an encrypted vault (recommended for non-development environments).
@@ -668,7 +830,9 @@ SailPoint-GovernanceToolkit/
         Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting
         Invoke-SPADDeltaCert.ps1         # Daily AD delta certification
         Invoke-SPDeltaCertEscalate.ps1   # Stale certification escalation
-        Invoke-SPDisconnectedAppCert.ps1 # Disconnected app flat file certification
+        Invoke-SPDisconnectedAppCert.ps1 # Disconnected app flat file certification (single app)
+        Invoke-SPDisconnectedAppRegistry.ps1  # App registry management (Register/Unregister/List/Test)
+        Invoke-SPDisconnectedAppBatch.ps1     # Batch orchestrator for all registered apps
         Test-SPConnectivity.ps1          # Quick smoke test (config -> token -> API)
         New-SPVault.ps1                  # One-time vault setup
         Show-SPDashboard.ps1             # WPF GUI launcher
