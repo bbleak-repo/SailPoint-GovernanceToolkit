@@ -10,10 +10,11 @@
 
     Functions:
         1. Compare-SPDisconnectedAppFiles - compares two account CSV files and returns structured deltas
+        2. Test-SPDisconnectedAppDeletionThreshold - guards against mass-removal from bad files
 
 .NOTES
     Module: SP.DisconnectedAppDelta
-    Version: 1.0.0
+    Version: 1.1.0
 #>
 
 #region Internal Functions
@@ -308,6 +309,94 @@ function Compare-SPDisconnectedAppFiles {
             Data    = $null
             Error   = "Delta comparison failed: $($_.Exception.Message)"
         }
+    }
+}
+
+function Test-SPDisconnectedAppDeletionThreshold {
+    <#
+    .SYNOPSIS
+        Checks whether the percentage of removed accounts exceeds a safety threshold.
+    .DESCRIPTION
+        Prevents a bad file (empty, partial export, wrong app's data) from triggering
+        mass-removal campaigns. Compares removed account count from the delta summary
+        against the configured threshold percentage.
+
+        Exceptions (always allowed):
+        - First run (TotalPrevious = 0): no baseline to compare against
+        - TotalPrevious < 5: too few accounts for percentage to be meaningful
+
+    .PARAMETER DeltaSummary
+        The Summary hashtable from Compare-SPDisconnectedAppFiles output
+        (i.e., $deltaResult.Data.Summary). Must contain TotalPrevious and Removed keys.
+    .PARAMETER ThresholdPct
+        Maximum allowed removal percentage (0-100). Default: 20.
+    .OUTPUTS
+        [hashtable] @{Allowed; RemovedPct; RemovedCount; TotalPrevious; ThresholdPct; Reason}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DeltaSummary,
+
+        [Parameter()]
+        [int]$ThresholdPct = 20
+    )
+
+    $totalPrevious = 0
+    if ($null -ne $DeltaSummary['TotalPrevious']) {
+        $totalPrevious = [int]$DeltaSummary['TotalPrevious']
+    }
+
+    $removedCount = 0
+    if ($null -ne $DeltaSummary['Removed']) {
+        $removedCount = [int]$DeltaSummary['Removed']
+    }
+
+    # First run -- no previous file, always allow
+    if ($totalPrevious -eq 0) {
+        return @{
+            Allowed       = $true
+            RemovedPct    = [double]0
+            RemovedCount  = $removedCount
+            TotalPrevious = $totalPrevious
+            ThresholdPct  = $ThresholdPct
+            Reason        = 'FirstRun'
+        }
+    }
+
+    # Too few accounts for percentage to be meaningful
+    if ($totalPrevious -lt 5) {
+        return @{
+            Allowed       = $true
+            RemovedPct    = [double]0
+            RemovedCount  = $removedCount
+            TotalPrevious = $totalPrevious
+            ThresholdPct  = $ThresholdPct
+            Reason        = 'TooFewAccounts'
+        }
+    }
+
+    $removedPct = [math]::Round(($removedCount / $totalPrevious) * 100, 1)
+
+    if ($removedPct -gt $ThresholdPct) {
+        return @{
+            Allowed       = $false
+            RemovedPct    = $removedPct
+            RemovedCount  = $removedCount
+            TotalPrevious = $totalPrevious
+            ThresholdPct  = $ThresholdPct
+            Reason        = 'ThresholdExceeded'
+        }
+    }
+
+    return @{
+        Allowed       = $true
+        RemovedPct    = $removedPct
+        RemovedCount  = $removedCount
+        TotalPrevious = $totalPrevious
+        ThresholdPct  = $ThresholdPct
+        Reason        = 'OK'
     }
 }
 

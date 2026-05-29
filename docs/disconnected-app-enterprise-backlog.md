@@ -27,7 +27,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 |----|---------|------------|--------|
 | DA-11 | App Registry (config-driven multi-app) | none | DONE |
 | DA-12 | App Registration CLI | DA-11 | DONE |
-| DA-13 | Account Deletion Threshold Protection | none | PENDING |
+| DA-13 | Account Deletion Threshold Protection | none | DONE |
 | DA-14 | Batch Orchestrator | DA-11, DA-13 | PENDING |
 | DA-15 | File Delivery Monitor | DA-11 | PENDING |
 | DA-16 | Cross-App Identity Risk Report | DA-11 | PENDING |
@@ -153,8 +153,8 @@ New CLI script `Scripts/Invoke-SPDisconnectedAppRegistry.ps1` with subcommands:
 
 ## DA-13: Account Deletion Threshold Protection
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-13
 - **Depends On:** none
 
 **Description:**
