@@ -1,0 +1,101 @@
+@startuml
+!theme plain
+title For Product Owners:\nWhy Your App Needs Access Review Integration
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    FontSize 12
+}
+skinparam note {
+    BackgroundColor #FFFFCC
+    BorderColor #CCCC00
+    FontSize 11
+}
+
+start
+:Your application has users\nwith different access levels;
+
+partition "WITHOUT Integration" #FFEEEE {
+    :No one reviews who\nhas access to your app;
+
+    fork
+        #CC3333:SOX / SOC2 AUDIT FINDING\n"Unreviewed application access"\nMaterial weakness\nCost: $1.8M+ to remediate;
+    fork again
+        #CC3333:TERMINATED EMPLOYEE\nretains access 116 days avg\nOrphan accounts undetected\nInsider threat: $16.2M avg;
+    fork again
+        #CC3333:PRIVILEGE CREEP\nUsers accumulate roles\nacross job changes\nNever cleaned up;
+    fork again
+        #FF8800:MANUAL REVIEWS\n15-30 min per user per app\n200 users = 250+ person-hours\nper review cycle;
+    end fork
+
+    #CC3333:Audit findings + security incidents\n+ wasted time;
+}
+
+partition "WITH Integration (What Changes)" #EEFFEE {
+    :Your app exports a daily\nuser/role file (CSV);
+    note right
+        **Your team's effort:**
+        ONE-TIME: 2 hours setup
+        ONGOING: automated daily
+        (or 15 min/week if manual)
+    end note
+
+    :SailPoint automatically\ndetects who got new access;
+    :Only CHANGED access\ngoes to managers for review;
+    note right
+        Day 1: 500 users - all reviewed (baseline)
+        Day 2: identical - nothing happens
+        Day 3: 1 new user - ONLY that
+        manager gets a certification
+    end note
+
+    :Managers click\nApprove or Revoke;
+    :Revocations tracked\nfor compliance evidence;
+
+    fork
+        #339933:AUDIT READY\nFull evidence trail\nSOX/SOC2 compliant\nReviews documented;
+    fork again
+        #339933:FAST DETECTION\nNew access reviewed\nwithin 24-48 hours\nnot 90+ days;
+    fork again
+        #339933:AUTO CLEANUP\nTerminated users\ndetected immediately\nwhen file is refreshed;
+    fork again
+        #339933:10x FASTER\nReviews take minutes\nnot hours\n(unified SailPoint dashboard);
+    end fork
+
+    #339933:Compliant + secure\n+ efficient;
+}
+
+partition "What YOU (Product Owner) Need to Do" #E8F4FD {
+    :1. APPROVE the export format\n(review CSV template)\n~30 minutes;
+    :2. ASSIGN someone to deliver\nthe file daily\n~15 minutes;
+    :3. REVIEW your entitlement catalog\n(are role names/descriptions accurate?)\n~1-2 hours;
+    :4. PARTICIPATE in first campaign\n(validate data quality)\n~30 minutes;
+
+    note right
+        **Total one-time effort: ~3 hours**
+        **Ongoing: near zero** (automated)
+        or 15 min/week (manual export)
+
+        You are already responsible for
+        knowing who has access. This just
+        makes it **visible, reviewable,
+        and auditable**.
+    end note
+}
+
+stop
+
+legend right
+    **Key Compliance Frameworks:**
+    SOX 404: Periodic access review required
+    SOC 2 CC6.3: Access authorized + reviewed
+    HIPAA 164.312: Access only to authorized persons
+    PCI DSS 7/8: Need-to-know + review every 6 months
+    NIST AC-2: Periodic account review + automated audit
+
+    **Bottom Line:**
+    Ungoverned apps are audit findings waiting to happen.
+    A daily CSV file prevents this.
+endlegend
+
+@enduml

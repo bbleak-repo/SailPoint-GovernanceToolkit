@@ -1,0 +1,98 @@
+@startuml
+!theme plain
+title Pattern C: AD + Application Database Join\n(On-Prem AD-Integrated Apps)
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    BackgroundColor #E8F4FD
+    BorderColor #336699
+    FontSize 11
+}
+
+start
+:PowerShell scheduled task fires at 03:00 UTC\n(domain-joined server with RSAT);
+
+partition "Step 1: Query AD Groups (Entitlement Source)" #E8F8E8 {
+    :Get-ADGroup -Filter "Name -like 'SG-MyApp-*'";
+    note right
+        **Pseudocode:**
+        $adGroups = Get-ADGroup
+            -Filter "Name -like '$adGroupPrefix*'"
+            -Properties Description
+        FOREACH $group:
+            Strip prefix for displayName
+            Use Description or "No description"
+    end note
+}
+
+partition "Step 2: Query App Roles (If App Has Own Role Table)" #E8E8F8 {
+    :Invoke-Sqlcmd "SELECT RoleName,\nDisplayName, Description FROM AppRoles";
+    :Merge AD groups + app roles\ninto unified entitlements list;
+    :Write entitlements.csv;
+}
+
+partition "Step 3: Build Account Membership Map" #FFF8E8 {
+    fork
+        :AD Group Memberships;
+        note right
+            FOREACH AD group:
+                Get-ADGroupMember -Recursive
+                Map: username -> [group1, group2, ...]
+        end note
+    fork again
+        :App Database Role Assignments;
+        note right
+            SQL: SELECT ADUsername, RoleName
+            FROM Users u
+            JOIN UserRoles ur ...
+            Map: username -> [role1, role2, ...]
+        end note
+    end fork
+
+    :Merge both maps by username;
+    note right
+        Combined: username ->
+            [AD-Group-A, AD-Group-B, AppRole-1]
+    end note
+}
+
+partition "Step 4: Enrich with AD Identity Attributes" #F8E8F8 {
+    :For each unique username:;
+    :Get-ADUser -Properties mail,\nGivenName, Surname, Department, Enabled;
+    note right
+        **Pseudocode:**
+        $accounts += @{
+            id        = $adUser.EmployeeID
+            name      = $username
+            givenName = $adUser.GivenName
+            familyName= $adUser.Surname
+            e-mail    = $adUser.mail
+            groups    = $mergedGroups -join ","
+            IIQDisabled = NOT $adUser.Enabled
+        }
+    end note
+    :Sort by id, write accounts.csv;
+}
+
+partition "Step 5: Validate + Deliver" #E8F4FD {
+    :Cross-reference groups vs entitlements;
+    :Deliver to \\\\fileserver\\sailpoint-imports\\;
+}
+
+stop
+
+legend right
+    **Split Identity Store Pattern:**
+    AD provides: authentication + coarse identity
+    App DB provides: fine-grained app roles
+
+    **Common in:** .NET/IIS apps using
+    Windows Authentication with
+    [Authorize(Roles="...")] attributes
+
+    **Key Risk:** AD group membership and
+    app DB roles can drift out of sync.
+    This export captures BOTH.
+endlegend
+
+@enduml

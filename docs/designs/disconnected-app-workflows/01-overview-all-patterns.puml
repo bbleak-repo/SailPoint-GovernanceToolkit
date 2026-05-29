@@ -1,0 +1,88 @@
+@startuml
+!theme plain
+title Disconnected App Export Patterns\nAll Paths Lead to SailPoint Certification
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    BackgroundColor #E8F4FD
+    BorderColor #336699
+    FontSize 11
+}
+skinparam partition {
+    BackgroundColor #F5F5F5
+    BorderColor #999999
+}
+skinparam note {
+    BackgroundColor #FFFFCC
+    BorderColor #CCCC00
+}
+
+|#E8F8E8|SaaS Apps|
+start
+:App has REST API or SCIM?;
+if (API available?) then (yes)
+    if (SCIM /Users /Groups?) then (yes)
+        :Pattern D\nSCIM Pagination Export;
+    else (no)
+        :Pattern A\nREST API Pagination Export;
+    endif
+    :Python/PowerShell\nScheduled Script;
+else (no)
+    :Pattern E1\nAdmin UI Manual Export;
+    :Human: Login, Export, Rename Columns;
+endif
+
+|#E8E8F8|On-Prem Apps|
+:App has database access?;
+if (DB access?) then (yes)
+    if (AD-integrated auth?) then (yes)
+        :Pattern C\nAD Groups + App DB Join;
+        :PowerShell: Get-ADGroupMember\n+ Invoke-Sqlcmd;
+    else (no)
+        :Pattern B\nSQL Database Export;
+        :SQL Agent Job / Python Script;
+    endif
+else (no)
+    if (Mainframe?) then (yes)
+        :Pattern F\nJCL/REXX Extract;
+        :EBCDIC -> UTF-8 Conversion;
+    else (no)
+        :Pattern E2/E3\nSpreadsheet or Screenshot;
+        :Human: Maintain Roster;
+    endif
+endif
+
+|#FFF8E8|Common Output|
+:accounts.csv\n(id, name, givenName, familyName,\ne-mail, department, groups, IIQDisabled);
+:entitlements.csv\n(id, name, displayName, description);
+
+|#F8E8E8|SailPoint ISC|
+:File Drop\n\\\\fileserver\\sailpoint-imports\\{AppName}\\;
+:SailPoint VA\nDelimited File Connector;
+:Account + Entitlement\nAggregation;
+:Delta Detection\n(toolkit compares today vs yesterday);
+
+if (Changes found?) then (yes)
+    :Create SEARCH Campaign\nper manager group;
+    :Managers receive\ncertification email;
+    :Approve / Revoke\ndecisions;
+else (no)
+    :No campaign needed\n(identical to yesterday);
+endif
+
+:Audit Trail\n(JSONL + HTML reports);
+stop
+
+legend right
+    |= Pattern |= Automation |= Typical Apps |
+    | A: REST API | Full | Custom web apps, niche SaaS |
+    | B: SQL Export | Full | SQL Server / Oracle apps |
+    | C: AD + DB Join | Full | AD-integrated on-prem |
+    | D: SCIM Export | Full | Modern SaaS (Slack, Box) |
+    | E1: Admin Export | Manual | Vendor-locked apps |
+    | E2: Spreadsheet | Semi | Tiny / legacy apps |
+    | E3: Screenshot | Manual | Last resort |
+    | F: Mainframe | Full | RACF, Top Secret, AS/400 |
+endlegend
+
+@enduml

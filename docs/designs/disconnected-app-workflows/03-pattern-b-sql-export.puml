@@ -1,0 +1,95 @@
+@startuml
+!theme plain
+title Pattern B: SQL Database Export\n(On-Prem SQL Server / Oracle Apps)
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    BackgroundColor #E8F4FD
+    BorderColor #336699
+    FontSize 11
+}
+
+start
+:SQL Agent Job fires at 03:00 UTC;
+
+partition "Step 1: Export Accounts" #E8F8E8 {
+    :Execute account query with role aggregation;
+    note right
+        **SQL Server:**
+        SELECT u.EmployeeID AS id,
+               u.LoginName AS name,
+               u.FirstName AS givenName,
+               u.LastName AS familyName,
+               u.Email AS [e-mail],
+               u.Department AS department,
+               STUFF((SELECT ',' + r.RoleName
+                      FROM UserRoles ur
+                      JOIN Roles r ON ur.RoleID = r.RoleID
+                      WHERE ur.UserID = u.UserID
+                      FOR XML PATH('')), 1, 1, '') AS groups,
+               CASE WHEN u.IsActive = 0
+                    THEN 'true' ELSE 'false'
+               END AS IIQDisabled
+        FROM Users u
+        ORDER BY u.EmployeeID
+
+        **Oracle alternative:**
+        Use LISTAGG(role_name, ',')
+        WITHIN GROUP (ORDER BY role_name)
+    end note
+    :Output to accounts.csv (UTF-8, no BOM);
+}
+
+partition "Step 2: Export Entitlements" #E8E8F8 {
+    :Execute entitlement query;
+    note right
+        SELECT r.RoleName AS id,
+               r.RoleName AS name,
+               r.DisplayName AS displayName,
+               ISNULL(r.Description,
+                 'No description') AS description
+        FROM Roles r
+        ORDER BY r.RoleName
+    end note
+    :Output to entitlements.csv;
+}
+
+partition "Step 3: Safety Checks" #FFF8E8 {
+    if (Account file size < 100 bytes?) then (yes)
+        #CC3333:ALERT: "Export suspiciously small\npossible query failure";
+        kill
+    else (no)
+    endif
+
+    if (File older than 25 hours?) then (yes)
+        #FF8800:ALERT: "File not refreshed\nstale data warning";
+    else (no)
+    endif
+}
+
+partition "Step 4: Archive + Deliver" #F8E8E8 {
+    :Copy to dated archive;
+    note right
+        accounts_2026-05-29.csv
+        entitlements_2026-05-29.csv
+        Delete archives > 90 days
+    end note
+    :Files land on \\\\fileserver\\sailpoint-imports\\{AppName}\\;
+}
+
+stop
+
+legend right
+    **DBA Requirements:**
+    - Read-only account on reporting replica
+    - Access to Users, Roles, UserRoles tables
+    - No writes, no DDL, no DML
+    - Query runs in < 60 seconds
+
+    **Monitoring:**
+    - SQL Agent job alerts on failure
+    - File size check catches bad queries
+    - SailPoint toolkit detects stale files
+endlegend
+
+@enduml

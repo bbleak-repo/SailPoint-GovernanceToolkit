@@ -1,0 +1,96 @@
+@startuml
+!theme plain
+title Pattern E: Manual Export Decision Tree\n(When Automation is Not Possible)
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    BackgroundColor #E8F4FD
+    BorderColor #336699
+    FontSize 11
+}
+
+start
+:Disconnected app needs\naccess review integration;
+
+if (App has a REST API\nor SCIM endpoint?) then (yes)
+    #339933:Use Pattern A or D\n(fully automated);
+    stop
+else (no)
+endif
+
+if (App has database\naccess available?) then (yes)
+    #339933:Use Pattern B or C\n(fully automated);
+    stop
+else (no)
+endif
+
+if (App admin console has\n"Export Users" feature?) then (yes)
+    :Pattern E1: Admin UI Export;
+    partition "Manual Weekly/Daily Process" #FFF8E8 {
+        :1. Admin logs into app console;
+        :2. Navigate to Users > Export;
+        :3. Download raw CSV/Excel;
+        :4. Open in Excel;
+        :5. Rename columns to match\nSailPoint template;
+        note right
+            "User ID" -> id
+            "Login" -> name
+            "First" -> givenName
+            "Last" -> familyName
+            "Email" -> e-mail
+            "Roles" -> groups
+            "Status" -> IIQDisabled
+               (Active=false, Disabled=true)
+        end note
+        :6. Save As CSV UTF-8;
+        :7. Run validation command:
+        Invoke-SPDisconnectedAppRegistry
+           -Action Test -AppName "MyApp";
+        :8. Copy to import share;
+    }
+    stop
+else (no)
+endif
+
+if (App owner can maintain\na spreadsheet roster?) then (yes)
+    :Pattern E2: Spreadsheet Roster;
+    partition "Shared Excel Workbook" #E8E8F8 {
+        :App owner maintains\n"Access Roster" spreadsheet;
+        :Columns pre-formatted\nto match SailPoint template;
+        :Updated within 24h of\nany access change;
+        :Scheduled script extracts\nCSV from Excel daily;
+        note right
+            **Semi-automated:**
+            Python openpyxl or COM
+            reads the "Current Access"
+            sheet -> exports CSV
+        end note
+    }
+    stop
+else (no)
+endif
+
+:Pattern E3: Screenshot Evidence\n(last resort);
+partition "Audit-Only Approach" #F8E8E8 {
+    :Admin screenshots user list\nfrom app console;
+    :Screenshots saved with\ndate stamp;
+    :Manual transcription\ninto CSV template;
+    :Second person verifies\n(four-eyes principle);
+    #FF8800:HIGH RISK:\nHuman error, stale data,\nincomplete coverage;
+}
+stop
+
+legend right
+    **Risk Comparison:**
+    |= Pattern |= Error Rate |= Staleness |= Cost/Cycle |
+    | A/B/C/D (auto) | <0.1% | Real-time | $0 (after setup) |
+    | E1 (admin UI) | ~2% | 1-3 days | 2-4 hours |
+    | E2 (spreadsheet) | ~5% | 1-5 days | 4-8 hours |
+    | E3 (screenshot) | ~10% | 5-30 days | 8-16 hours |
+
+    **Recommendation:** Invest in automation (A/B/C/D)
+    for any app with >20 users. Use E1/E2 only
+    for apps with <20 users. Avoid E3 if possible.
+endlegend
+
+@enduml

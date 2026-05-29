@@ -1,0 +1,84 @@
+@startuml
+!theme plain
+title Pattern A: REST API Export\n(Custom Web Apps, Niche SaaS)
+
+skinparam backgroundColor #FEFEFE
+skinparam activity {
+    BackgroundColor #E8F4FD
+    BorderColor #336699
+    FontSize 11
+}
+
+start
+:Read API credentials from vault;
+note right
+    API_KEY = read_from_vault("app-api-key")
+    BASE_URL = "https://myapp.corp.com/api"
+end note
+
+partition "Step 1: Export Entitlements" #E8F8E8 {
+    :GET /api/roles;
+    :Transform to SailPoint schema;
+    note right
+        **Pseudocode:**
+        roles = HTTP_GET(base_url + "/roles")
+        FOR each role:
+            id = role.id
+            name = role.name
+            displayName = role.display_name
+            description = role.description
+    end note
+    :Write entitlements.csv;
+}
+
+partition "Step 2: Export Accounts (Paginated)" #E8E8F8 {
+    :Initialize: page=1, has_more=TRUE;
+
+    repeat
+        :GET /api/users?page={N}&per_page=100&include=roles;
+        :Transform each user to SailPoint schema;
+        note right
+            **Pseudocode:**
+            FOR each user:
+                id = user.employee_id
+                name = user.username
+                groups = JOIN(user.roles, ",")
+                IIQDisabled = (status != "active")
+        end note
+        :Append to accounts list;
+        :page = page + 1;
+    repeat while (has_more == TRUE?) is (yes)
+    ->no;
+
+    :Sort accounts by id (ascending);
+    :Write accounts.csv;
+}
+
+partition "Step 3: Validate" #FFF8E8 {
+    :Cross-reference: every group\nin accounts exists in entitlements;
+    if (Unmatched groups found?) then (yes)
+        :LOG_WARNING per unmatched group;
+    else (no)
+    endif
+    :Verify file size > 100 bytes\n(catch empty result sets);
+}
+
+partition "Step 4: Deliver" #F8E8E8 {
+    :Copy to \\\\fileserver\\sailpoint-imports\\{AppName}\\;
+    :LOG: "{N} accounts, {M} entitlements exported";
+}
+
+stop
+
+legend right
+    **Rate Limiting:**
+    Most APIs enforce 60-100 req/min.
+    Add sleep(1) between pages if needed.
+
+    **Error Handling:**
+    Retry 3x on HTTP 429/503.
+    Abort on HTTP 401 (credential expired).
+    Alert on HTTP 500 (app issue).
+endlegend
+
+@enduml
