@@ -25,7 +25,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| DA-11 | App Registry (config-driven multi-app) | none | PENDING |
+| DA-11 | App Registry (config-driven multi-app) | none | DONE |
 | DA-12 | App Registration CLI | DA-11 | PENDING |
 | DA-13 | Account Deletion Threshold Protection | none | PENDING |
 | DA-14 | Batch Orchestrator | DA-11, DA-13 | PENDING |
@@ -40,8 +40,8 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 
 ## DA-11: App Registry (Config-Driven Multi-App)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-11
 - **Depends On:** none
 
 **Description:**

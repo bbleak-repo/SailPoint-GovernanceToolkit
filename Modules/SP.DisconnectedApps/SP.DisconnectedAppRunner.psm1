@@ -1402,10 +1402,219 @@ function Export-SPDisconnectedAppDeltaHtml {
     }
 }
 
+function Get-SPRegisteredApps {
+    <#
+    .SYNOPSIS
+        Returns enabled disconnected app registrations from settings.json.
+    .DESCRIPTION
+        Reads the Applications array from the DisconnectedApps config section,
+        filters to Enabled=true entries, and merges per-app settings with global
+        defaults. Per-app values override global defaults for CorrelationAttribute,
+        CampaignNamePrefix, and DeadlineDays.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@([hashtable]); Error}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$ConfigPath
+    )
+
+    try {
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $config = Get-SPConfig @configParams
+
+        $daConfig = $config.DisconnectedApps
+
+        # Global defaults for per-app overridable fields
+        $globalCorrelation = 'e-mail'
+        if ($null -ne $daConfig.PSObject.Properties['CorrelationAttribute'] -and
+            -not [string]::IsNullOrWhiteSpace($daConfig.CorrelationAttribute)) {
+            $globalCorrelation = [string]$daConfig.CorrelationAttribute
+        }
+
+        $globalPrefix = 'Disconnected App Cert'
+        if ($null -ne $daConfig.PSObject.Properties['DefaultCampaignNamePrefix'] -and
+            -not [string]::IsNullOrWhiteSpace($daConfig.DefaultCampaignNamePrefix)) {
+            $globalPrefix = [string]$daConfig.DefaultCampaignNamePrefix
+        }
+
+        $globalDeadline = 2
+        if ($null -ne $daConfig.PSObject.Properties['DefaultDeadlineDays'] -and
+            $null -ne $daConfig.DefaultDeadlineDays) {
+            $globalDeadline = [int]$daConfig.DefaultDeadlineDays
+        }
+
+        $globalThreshold = 20
+        if ($null -ne $daConfig.PSObject.Properties['AccountDeletionThresholdPct'] -and
+            $null -ne $daConfig.AccountDeletionThresholdPct) {
+            $globalThreshold = [int]$daConfig.AccountDeletionThresholdPct
+        }
+
+        # Read Applications array
+        $apps = @()
+        if ($null -ne $daConfig.PSObject.Properties['Applications']) {
+            $apps = @($daConfig.Applications)
+        }
+
+        $result = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($app in $apps) {
+            if ($null -eq $app) { continue }
+
+            # Skip disabled apps (default to enabled if field missing)
+            $enabled = $true
+            if ($null -ne $app.PSObject.Properties['Enabled']) {
+                $enabled = [bool]$app.Enabled
+            }
+            if (-not $enabled) { continue }
+
+            # Name is required
+            $appName = ''
+            if ($null -ne $app.PSObject.Properties['Name']) {
+                $appName = [string]$app.Name
+            }
+            if ([string]::IsNullOrWhiteSpace($appName)) {
+                Write-Warning "Skipping app entry with no Name"
+                continue
+            }
+
+            # Merge per-app with global defaults
+            $merged = @{
+                Name                       = $appName
+                AccountFilePath            = if ($null -ne $app.PSObject.Properties['AccountFilePath'])      { [string]$app.AccountFilePath }      else { '' }
+                EntitlementFilePath         = if ($null -ne $app.PSObject.Properties['EntitlementFilePath'])  { [string]$app.EntitlementFilePath }  else { '' }
+                ISCSourceId                 = if ($null -ne $app.PSObject.Properties['ISCSourceId'])          { [string]$app.ISCSourceId }          else { '' }
+                CorrelationAttribute        = if ($null -ne $app.PSObject.Properties['CorrelationAttribute'] -and
+                                                  -not [string]::IsNullOrWhiteSpace($app.CorrelationAttribute)) {
+                                                  [string]$app.CorrelationAttribute
+                                              } else { $globalCorrelation }
+                CampaignNamePrefix          = if ($null -ne $app.PSObject.Properties['CampaignNamePrefix'] -and
+                                                  -not [string]::IsNullOrWhiteSpace($app.CampaignNamePrefix)) {
+                                                  [string]$app.CampaignNamePrefix
+                                              } else { $globalPrefix }
+                DeadlineDays                = if ($null -ne $app.PSObject.Properties['DeadlineDays'] -and
+                                                  $null -ne $app.DeadlineDays) {
+                                                  [int]$app.DeadlineDays
+                                              } else { $globalDeadline }
+                SlaDays                     = if ($null -ne $app.PSObject.Properties['SlaDays'] -and
+                                                  $null -ne $app.SlaDays) {
+                                                  [int]$app.SlaDays
+                                              } else { $null }
+                AccountDeletionThresholdPct = $globalThreshold
+                Enabled                     = $true
+            }
+
+            $result.Add($merged)
+        }
+
+        return @{
+            Success = $true
+            Data    = $result.ToArray()
+            Error   = $null
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Data    = @()
+            Error   = "Get-SPRegisteredApps failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Initialize-SPDisconnectedAppDirectories {
+    <#
+    .SYNOPSIS
+        Creates Imports, Snapshots, and Reports directories for registered apps.
+    .DESCRIPTION
+        Scaffolds the directory structure for all (or specified) registered apps:
+        {ImportBasePath}/{AppName}/, {SnapshotPath}/{AppName}/, {ReportPath}/{AppName}/
+    .PARAMETER AppNames
+        Optional filter. If omitted, creates directories for all enabled registered apps.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{AppsProcessed; DirectoriesCreated}; Error}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string[]]$AppNames,
+        [Parameter()][string]$ConfigPath
+    )
+
+    try {
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $config = Get-SPConfig @configParams
+
+        $daConfig     = $config.DisconnectedApps
+        $importBase   = $daConfig.ImportBasePath
+        $snapshotBase = $daConfig.SnapshotPath
+        $reportBase   = $daConfig.ReportPath
+
+        # Determine which app names to process
+        $names = @()
+        if ($AppNames -and $AppNames.Count -gt 0) {
+            $names = $AppNames
+        }
+        else {
+            $appsResult = Get-SPRegisteredApps @configParams
+            if ($appsResult.Success) {
+                $names = @($appsResult.Data | ForEach-Object { $_.Name })
+            }
+        }
+
+        $created = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($name in $names) {
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+            $dirs = @(
+                (Join-Path $importBase $name),
+                (Join-Path $snapshotBase $name),
+                (Join-Path $reportBase $name)
+            )
+
+            foreach ($dir in $dirs) {
+                if (-not (Test-Path -Path $dir -PathType Container)) {
+                    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+                    $created.Add($dir)
+                }
+            }
+        }
+
+        Write-SPLog -Message "Initialize-SPDisconnectedAppDirectories: $($names.Count) app(s), $($created.Count) director(ies) created" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Initialize-SPDisconnectedAppDirectories'
+
+        return @{
+            Success = $true
+            Data    = @{
+                AppsProcessed      = $names.Count
+                DirectoriesCreated = $created.ToArray()
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Initialize-SPDisconnectedAppDirectories failed: $($_.Exception.Message)"
+        }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
-    'Export-SPDisconnectedAppDeltaHtml'
+    'Export-SPDisconnectedAppDeltaHtml',
+    'Get-SPRegisteredApps',
+    'Initialize-SPDisconnectedAppDirectories'
 )
