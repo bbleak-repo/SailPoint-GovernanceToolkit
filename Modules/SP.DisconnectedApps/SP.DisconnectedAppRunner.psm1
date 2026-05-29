@@ -12,6 +12,16 @@
         1. Resolve-SPDisconnectedAppIdentities - correlates delta accounts to ISC identities
         2. Invoke-SPDisconnectedAppCertRun - creates SEARCH campaigns per manager group
         3. Export-SPDisconnectedAppDeltaHtml - generates delta summary HTML report
+        4. Get-SPRegisteredApps - returns enabled app registrations from config
+        5. Initialize-SPDisconnectedAppDirectories - scaffolds per-app directories
+        6. Get-SPDisconnectedAppDeliveryStatus - checks file delivery freshness per app
+        7. Get-SPDisconnectedAppIdentityRisk - cross-app identity risk analysis
+        8. Export-SPDisconnectedAppIdentityRiskHtml - identity risk HTML report
+        9. Get-SPDisconnectedAppEntitlementCatalog - unified entitlement catalog across apps
+       10. Export-SPDisconnectedAppEntitlementCatalogHtml - entitlement catalog HTML report
+       11. Export-SPDisconnectedAppBatchHtml - batch orchestrator summary HTML report
+       12. Get-SPDisconnectedAppSlaStatus - 30-day SLA tracking from snapshot history
+       13. Export-SPDisconnectedAppSlaHtml - SLA compliance HTML report with delivery grid
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -22,7 +32,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.2.0
+    Version: 1.6.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -1402,10 +1412,2297 @@ function Export-SPDisconnectedAppDeltaHtml {
     }
 }
 
+function Get-SPRegisteredApps {
+    <#
+    .SYNOPSIS
+        Returns enabled disconnected app registrations from settings.json.
+    .DESCRIPTION
+        Reads the Applications array from the DisconnectedApps config section,
+        filters to Enabled=true entries, and merges per-app settings with global
+        defaults. Per-app values override global defaults for CorrelationAttribute,
+        CampaignNamePrefix, and DeadlineDays.
+    .PARAMETER IncludeDisabled
+        If set, includes apps with Enabled=false in the results (with Enabled=$false).
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@([hashtable]); Error}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][switch]$IncludeDisabled,
+        [Parameter()][string]$ConfigPath
+    )
+
+    try {
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $config = Get-SPConfig @configParams
+
+        $daConfig = $config.DisconnectedApps
+
+        # Global defaults for per-app overridable fields
+        $globalCorrelation = 'e-mail'
+        if ($null -ne $daConfig.PSObject.Properties['CorrelationAttribute'] -and
+            -not [string]::IsNullOrWhiteSpace($daConfig.CorrelationAttribute)) {
+            $globalCorrelation = [string]$daConfig.CorrelationAttribute
+        }
+
+        $globalPrefix = 'Disconnected App Cert'
+        if ($null -ne $daConfig.PSObject.Properties['DefaultCampaignNamePrefix'] -and
+            -not [string]::IsNullOrWhiteSpace($daConfig.DefaultCampaignNamePrefix)) {
+            $globalPrefix = [string]$daConfig.DefaultCampaignNamePrefix
+        }
+
+        $globalDeadline = 2
+        if ($null -ne $daConfig.PSObject.Properties['DefaultDeadlineDays'] -and
+            $null -ne $daConfig.DefaultDeadlineDays) {
+            $globalDeadline = [int]$daConfig.DefaultDeadlineDays
+        }
+
+        $globalThreshold = 20
+        if ($null -ne $daConfig.PSObject.Properties['AccountDeletionThresholdPct'] -and
+            $null -ne $daConfig.AccountDeletionThresholdPct) {
+            $globalThreshold = [int]$daConfig.AccountDeletionThresholdPct
+        }
+
+        # Read Applications array
+        $apps = @()
+        if ($null -ne $daConfig.PSObject.Properties['Applications']) {
+            $apps = @($daConfig.Applications)
+        }
+
+        $result = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($app in $apps) {
+            if ($null -eq $app) { continue }
+
+            # Check enabled status (default to enabled if field missing)
+            $enabled = $true
+            if ($null -ne $app.PSObject.Properties['Enabled']) {
+                $enabled = [bool]$app.Enabled
+            }
+            if (-not $enabled -and -not $IncludeDisabled) { continue }
+
+            # Name is required
+            $appName = ''
+            if ($null -ne $app.PSObject.Properties['Name']) {
+                $appName = [string]$app.Name
+            }
+            if ([string]::IsNullOrWhiteSpace($appName)) {
+                Write-Warning "Skipping app entry with no Name"
+                continue
+            }
+
+            # Merge per-app with global defaults
+            $merged = @{
+                Name                       = $appName
+                AccountFilePath            = if ($null -ne $app.PSObject.Properties['AccountFilePath'])      { [string]$app.AccountFilePath }      else { '' }
+                EntitlementFilePath         = if ($null -ne $app.PSObject.Properties['EntitlementFilePath'])  { [string]$app.EntitlementFilePath }  else { '' }
+                ISCSourceId                 = if ($null -ne $app.PSObject.Properties['ISCSourceId'])          { [string]$app.ISCSourceId }          else { '' }
+                CorrelationAttribute        = if ($null -ne $app.PSObject.Properties['CorrelationAttribute'] -and
+                                                  -not [string]::IsNullOrWhiteSpace($app.CorrelationAttribute)) {
+                                                  [string]$app.CorrelationAttribute
+                                              } else { $globalCorrelation }
+                CampaignNamePrefix          = if ($null -ne $app.PSObject.Properties['CampaignNamePrefix'] -and
+                                                  -not [string]::IsNullOrWhiteSpace($app.CampaignNamePrefix)) {
+                                                  [string]$app.CampaignNamePrefix
+                                              } else { $globalPrefix }
+                DeadlineDays                = if ($null -ne $app.PSObject.Properties['DeadlineDays'] -and
+                                                  $null -ne $app.DeadlineDays) {
+                                                  [int]$app.DeadlineDays
+                                              } else { $globalDeadline }
+                SlaDays                     = if ($null -ne $app.PSObject.Properties['SlaDays'] -and
+                                                  $null -ne $app.SlaDays) {
+                                                  [int]$app.SlaDays
+                                              } else { $null }
+                AccountDeletionThresholdPct = $globalThreshold
+                Enabled                     = $enabled
+            }
+
+            $result.Add($merged)
+        }
+
+        return @{
+            Success = $true
+            Data    = $result.ToArray()
+            Error   = $null
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Data    = @()
+            Error   = "Get-SPRegisteredApps failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Initialize-SPDisconnectedAppDirectories {
+    <#
+    .SYNOPSIS
+        Creates Imports, Snapshots, and Reports directories for registered apps.
+    .DESCRIPTION
+        Scaffolds the directory structure for all (or specified) registered apps:
+        {ImportBasePath}/{AppName}/, {SnapshotPath}/{AppName}/, {ReportPath}/{AppName}/
+    .PARAMETER AppNames
+        Optional filter. If omitted, creates directories for all enabled registered apps.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{AppsProcessed; DirectoriesCreated}; Error}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string[]]$AppNames,
+        [Parameter()][string]$ConfigPath
+    )
+
+    try {
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $config = Get-SPConfig @configParams
+
+        $daConfig     = $config.DisconnectedApps
+        $importBase   = $daConfig.ImportBasePath
+        $snapshotBase = $daConfig.SnapshotPath
+        $reportBase   = $daConfig.ReportPath
+
+        # Determine which app names to process
+        $names = @()
+        if ($AppNames -and $AppNames.Count -gt 0) {
+            $names = $AppNames
+        }
+        else {
+            $appsResult = Get-SPRegisteredApps @configParams
+            if ($appsResult.Success) {
+                $names = @($appsResult.Data | ForEach-Object { $_.Name })
+            }
+        }
+
+        $created = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($name in $names) {
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+            $dirs = @(
+                (Join-Path $importBase $name),
+                (Join-Path $snapshotBase $name),
+                (Join-Path $reportBase $name)
+            )
+
+            foreach ($dir in $dirs) {
+                if (-not (Test-Path -Path $dir -PathType Container)) {
+                    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+                    $created.Add($dir)
+                }
+            }
+        }
+
+        Write-SPLog -Message "Initialize-SPDisconnectedAppDirectories: $($names.Count) app(s), $($created.Count) director(ies) created" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Initialize-SPDisconnectedAppDirectories'
+
+        return @{
+            Success = $true
+            Data    = @{
+                AppsProcessed      = $names.Count
+                DirectoriesCreated = $created.ToArray()
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Initialize-SPDisconnectedAppDirectories failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-SPDisconnectedAppDeliveryStatus {
+    <#
+    .SYNOPSIS
+        Checks file delivery status for all registered disconnected apps.
+    .DESCRIPTION
+        Examines the AccountFilePath for each registered app and classifies
+        its delivery status:
+        - Delivered: file exists, modified within StaleHours
+        - Stale: file exists, modified more than StaleHours ago
+        - Missing: file path does not exist
+        - Disabled: app is registered but Enabled=false
+        - Error: file exists but is empty or unreadable
+
+        For Delivered and Stale files, RowCount is populated via a quick
+        Import-Csv | Measure-Object (no full validation).
+    .PARAMETER StaleHours
+        Number of hours after which a file is considered stale. Default: 24.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Apps = @(
+                    @{ Name; Status; LastModified; FileSize; RowCount; FilePath; ErrorDetail }
+                )
+                Summary = @{ Total; Delivered; Stale; Missing; Disabled; Error }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $status = Get-SPDisconnectedAppDeliveryStatus -StaleHours 24
+        $status.Data.Apps | Format-Table Name, Status, RowCount
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$StaleHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppDeliveryStatus: Checking file delivery (StaleHours=$StaleHours)" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppDeliveryStatus' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Get all registered apps including disabled
+        $configParams = @{ IncludeDisabled = $true }
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        $cutoff = (Get-Date).AddHours(-$StaleHours)
+
+        $appStatuses = [System.Collections.Generic.List[hashtable]]::new()
+        $summaryCounters = @{
+            Total     = $apps.Count
+            Delivered = 0
+            Stale     = 0
+            Missing   = 0
+            Disabled  = 0
+            Error     = 0
+        }
+
+        foreach ($app in $apps) {
+            $appName  = $app.Name
+            $filePath = $app.AccountFilePath
+
+            # Disabled apps
+            if (-not $app.Enabled) {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Disabled'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters['Disabled']++
+                continue
+            }
+
+            # Missing file path or file does not exist
+            if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path -Path $filePath -PathType Leaf)) {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Missing'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters['Missing']++
+                Write-SPLog -Message "App '$appName': file missing at '$filePath'" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # File exists -- check if readable and non-empty
+            try {
+                $fileInfo = Get-Item -Path $filePath -ErrorAction Stop
+                $lastModified = $fileInfo.LastWriteTimeUtc
+
+                if ($fileInfo.Length -eq 0) {
+                    $appStatuses.Add(@{
+                        Name         = $appName
+                        Status       = 'Error'
+                        LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        FileSize     = 0
+                        RowCount     = 0
+                        FilePath     = $filePath
+                        ErrorDetail  = 'File is empty (0 bytes)'
+                    })
+                    $summaryCounters['Error']++
+                    Write-SPLog -Message "App '$appName': file is empty at '$filePath'" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                    continue
+                }
+
+                # Quick row count via Import-Csv
+                $rowCount = 0
+                try {
+                    $rowCount = @(Import-Csv -Path $filePath -ErrorAction Stop).Count
+                }
+                catch {
+                    $appStatuses.Add(@{
+                        Name         = $appName
+                        Status       = 'Error'
+                        LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        FileSize     = $fileInfo.Length
+                        RowCount     = $null
+                        FilePath     = $filePath
+                        ErrorDetail  = "File unreadable as CSV: $($_.Exception.Message)"
+                    })
+                    $summaryCounters['Error']++
+                    Write-SPLog -Message "App '$appName': CSV parse error at '$filePath': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                    continue
+                }
+
+                # Classify as Delivered or Stale based on last modification time
+                $status = if ($lastModified -ge $cutoff) { 'Delivered' } else { 'Stale' }
+
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = $status
+                    LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    FileSize     = $fileInfo.Length
+                    RowCount     = $rowCount
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters[$status]++
+
+                Write-SPLog -Message "App '$appName': $status (rows=$rowCount, modified=$($lastModified.ToString('yyyy-MM-dd HH:mm')))" `
+                    -Severity $(if ($status -eq 'Stale') { 'WARN' } else { 'INFO' }) `
+                    -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+            }
+            catch {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Error'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = "File access error: $($_.Exception.Message)"
+                })
+                $summaryCounters['Error']++
+                Write-SPLog -Message "App '$appName': file access error at '$filePath': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+            }
+        }
+
+        Write-SPLog -Message "Delivery status: $($summaryCounters['Delivered']) delivered, $($summaryCounters['Stale']) stale, $($summaryCounters['Missing']) missing, $($summaryCounters['Disabled']) disabled, $($summaryCounters['Error']) error (of $($apps.Count) total)" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppDeliveryStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Apps    = $appStatuses.ToArray()
+                Summary = $summaryCounters
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppDeliveryStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPDisconnectedAppIdentityRisk {
+    <#
+    .SYNOPSIS
+        Identifies identities appearing across multiple disconnected apps.
+    .DESCRIPTION
+        Reads the latest account snapshot from each registered app and builds
+        an identity map keyed by the correlation attribute (email). Identities
+        found in multiple apps receive a risk classification:
+        - Normal: 1 app
+        - Elevated: 2 apps
+        - High: 3+ apps
+
+        Results are sorted by app count descending (highest risk first).
+        Only reads local snapshot files -- no ISC API calls.
+    .PARAMETER CorrelationAttribute
+        CSV column used to correlate identities across apps. Default: 'e-mail'.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to config SnapshotPath.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Identities = @(
+                    @{ Email; Name; Apps; AppCount; Risk }
+                )
+                Summary = @{ TotalIdentities; SingleApp; MultiApp; HighRisk }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $risk = Get-SPDisconnectedAppIdentityRisk
+        $risk.Data.Identities | Where-Object { $_.Risk -eq 'High' } | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CorrelationAttribute = 'e-mail',
+
+        [Parameter()]
+        [string]$SnapshotDir,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppIdentityRisk: Starting cross-app identity risk analysis" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load config for snapshot path if not provided
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) {
+            $configParams = @{}
+            if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+            $config = Get-SPConfig @configParams
+            $SnapshotDir = $config.DisconnectedApps.SnapshotPath
+        }
+
+        # Get registered apps
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Identities = @()
+                    Summary    = @{ TotalIdentities = 0; SingleApp = 0; MultiApp = 0; HighRisk = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        # Build identity map: email -> @{ Name; Apps = List[string] }
+        $identityMap = @{}
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                Write-SPLog -Message "App '$appName': no snapshot directory at '$appDir' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # Find latest accounts snapshot (descending sort by filename = date)
+            $snapshots = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-accounts\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($snapshots.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': no account snapshots found -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            $latestSnapshot = $snapshots[0].FullName
+
+            Write-SPLog -Message "App '$appName': loading snapshot '$($snapshots[0].Name)'" `
+                -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+
+            try {
+                $rows = @(Import-Csv -Path $latestSnapshot -ErrorAction Stop)
+            }
+            catch {
+                Write-SPLog -Message "App '$appName': failed to parse snapshot '$latestSnapshot': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # Check that the correlation column exists
+            if ($rows.Count -gt 0 -and $null -eq $rows[0].PSObject.Properties[$CorrelationAttribute]) {
+                Write-SPLog -Message "App '$appName': snapshot missing column '$CorrelationAttribute' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            foreach ($row in $rows) {
+                $email = ''
+                if ($null -ne $row.PSObject.Properties[$CorrelationAttribute]) {
+                    $email = [string]$row.$CorrelationAttribute
+                }
+                if ([string]::IsNullOrWhiteSpace($email)) { continue }
+
+                $emailKey = $email.Trim().ToLower()
+
+                # Build display name from givenName + familyName if available
+                $displayName = ''
+                if ($null -ne $row.PSObject.Properties['givenName'] -and
+                    $null -ne $row.PSObject.Properties['familyName']) {
+                    $gn = [string]$row.givenName
+                    $fn = [string]$row.familyName
+                    if (-not [string]::IsNullOrWhiteSpace($gn) -or -not [string]::IsNullOrWhiteSpace($fn)) {
+                        $displayName = ("$gn $fn").Trim()
+                    }
+                }
+
+                if (-not $identityMap.ContainsKey($emailKey)) {
+                    $identityMap[$emailKey] = @{
+                        Email = $email.Trim()
+                        Name  = $displayName
+                        Apps  = [System.Collections.Generic.List[string]]::new()
+                    }
+                }
+
+                # Update name if we have a better one (non-empty)
+                if (-not [string]::IsNullOrWhiteSpace($displayName) -and
+                    [string]::IsNullOrWhiteSpace($identityMap[$emailKey].Name)) {
+                    $identityMap[$emailKey].Name = $displayName
+                }
+
+                # Add app if not already listed (handles duplicate emails within one file)
+                if ($appName -notin $identityMap[$emailKey].Apps) {
+                    $identityMap[$emailKey].Apps.Add($appName)
+                }
+            }
+
+            Write-SPLog -Message "App '$appName': processed $($rows.Count) account(s)" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+        }
+
+        # Build result list sorted by app count descending
+        $identities = [System.Collections.Generic.List[hashtable]]::new()
+        $singleApp = 0
+        $multiApp  = 0
+        $highRisk  = 0
+
+        foreach ($key in $identityMap.Keys) {
+            $entry    = $identityMap[$key]
+            $appCount = $entry.Apps.Count
+            $risk     = switch ($appCount) {
+                1       { 'Normal' }
+                2       { 'Elevated' }
+                default { 'High' }
+            }
+
+            $identities.Add(@{
+                Email    = $entry.Email
+                Name     = $entry.Name
+                Apps     = @($entry.Apps)
+                AppCount = $appCount
+                Risk     = $risk
+            })
+
+            if ($appCount -eq 1)     { $singleApp++ }
+            elseif ($appCount -eq 2) { $multiApp++ }
+            else                     { $multiApp++; $highRisk++ }
+        }
+
+        # Sort by AppCount descending, then by Email ascending
+        $sorted = @($identities | Sort-Object -Property @(
+            @{ Expression = { $_.AppCount }; Descending = $true },
+            @{ Expression = { $_.Email };    Descending = $false }
+        ))
+
+        $totalIdentities = $sorted.Count
+
+        Write-SPLog -Message "Cross-app identity risk: $totalIdentities total, $singleApp single-app, $multiApp multi-app, $highRisk high-risk" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppIdentityRisk' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Identities = $sorted
+                Summary    = @{
+                    TotalIdentities = $totalIdentities
+                    SingleApp       = $singleApp
+                    MultiApp        = $multiApp
+                    HighRisk        = $highRisk
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppIdentityRisk failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppIdentityRiskHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report of cross-app identity risk findings.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppIdentityRisk and produces a
+        self-contained HTML report with:
+        - Executive summary with risk distribution counts
+        - Identity risk table sorted by app count descending
+        - Risk-level color coding (green=Normal, orange=Elevated, red=High)
+
+        Uses 100% inline CSS for Word paste compatibility.
+    .PARAMETER RiskResult
+        The .Data hashtable from Get-SPDisconnectedAppIdentityRisk.
+    .PARAMETER OutputPath
+        Directory where the report is saved. File: identity-risk-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath}; Error}
+    .EXAMPLE
+        $risk = Get-SPDisconnectedAppIdentityRisk
+        Export-SPDisconnectedAppIdentityRiskHtml -RiskResult $risk.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RiskResult,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "identity-risk-${ReportDate}.html"
+
+        $identities = @()
+        if ($null -ne $RiskResult['Identities']) { $identities = @($RiskResult['Identities']) }
+        $summary = if ($null -ne $RiskResult['Summary']) { $RiskResult['Summary'] } else { @{} }
+
+        $totalIdentities = if ($null -ne $summary['TotalIdentities']) { $summary['TotalIdentities'] } else { 0 }
+        $singleApp       = if ($null -ne $summary['SingleApp'])       { $summary['SingleApp'] }       else { 0 }
+        $multiApp        = if ($null -ne $summary['MultiApp'])        { $summary['MultiApp'] }        else { 0 }
+        $highRisk        = if ($null -ne $summary['HighRisk'])        { $summary['HighRisk'] }        else { 0 }
+
+        # Style constants (reuse from existing HTML patterns)
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Cross-App Identity Risk Report - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Cross-App Identity Risk Report</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # Section 1: Executive Summary
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $summaryRows = @(
+            @('Total Unique Identities', $totalIdentities),
+            @('Single-App Identities',   $singleApp),
+            @('Multi-App Identities',    $multiApp),
+            @('High Risk (3+ Apps)',      $highRisk)
+        )
+
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # Section 2: Identity Risk Table (only multi-app identities, or all if few)
+        $multiAppIdentities = @($identities | Where-Object { $_.AppCount -gt 1 })
+
+        if ($multiAppIdentities.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Multi-App Identities ($($multiAppIdentities.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Email', 'Name', 'Apps', 'App Count', 'Risk')))
+
+            $rowIdx = 0
+            foreach ($identity in $multiAppIdentities) {
+                $riskBadge = switch ($identity.Risk) {
+                    'High'     { "<span style=`"$badgeRed`">HIGH</span>" }
+                    'Elevated' { "<span style=`"$badgeOrange`">ELEVATED</span>" }
+                    default    { "<span style=`"$badgeGreen`">NORMAL</span>" }
+                }
+
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Email),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Name),
+                    (ConvertTo-DisconnectedHtmlSafe ($identity.Apps -join ', ')),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.AppCount),
+                    $riskBadge
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#339933; font-size:14px; font-weight:bold; margin-top:24px;`">No multi-app identities found. All identities appear in only one disconnected app.</p>")
+        }
+
+        # Section 3: Full identity list (if total is manageable, <= 500)
+        if ($identities.Count -gt 0 -and $identities.Count -le 500) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">All Identities ($($identities.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Email', 'Name', 'Apps', 'App Count', 'Risk')))
+
+            $rowIdx = 0
+            foreach ($identity in $identities) {
+                $riskBadge = switch ($identity.Risk) {
+                    'High'     { "<span style=`"$badgeRed`">HIGH</span>" }
+                    'Elevated' { "<span style=`"$badgeOrange`">ELEVATED</span>" }
+                    default    { "<span style=`"$badgeGreen`">NORMAL</span>" }
+                }
+
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Email),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Name),
+                    (ConvertTo-DisconnectedHtmlSafe ($identity.Apps -join ', ')),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.AppCount),
+                    $riskBadge
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        elseif ($identities.Count -gt 500) {
+            [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:16px;`">Full identity list omitted ($($identities.Count) identities exceeds display limit of 500). Multi-app identities are shown above.</p>")
+        }
+
+        # Footer
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Cross-App Identity Risk Analysis | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Identity risk HTML report saved to $filePath ($($identities.Count) identit(ies))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppIdentityRiskHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppIdentityRiskHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppIdentityRiskHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPDisconnectedAppEntitlementCatalog {
+    <#
+    .SYNOPSIS
+        Aggregates entitlements from all registered apps into a unified catalog.
+    .DESCRIPTION
+        Reads the latest entitlement snapshot from each registered app and builds
+        a unified searchable catalog. For each entitlement, calculates AssignedCount
+        by counting how many accounts in the latest account snapshot reference it
+        via the groups column.
+
+        Only reads local snapshot files -- no ISC API calls.
+        Apps with no entitlement snapshot are skipped gracefully.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to config SnapshotPath.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Catalog = @(
+                    @{ AppName; EntitlementId; DisplayName; Description; AssignedCount }
+                )
+                Summary = @{ TotalEntitlements; TotalApps; AppsSkipped }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $catalog = Get-SPDisconnectedAppEntitlementCatalog
+        $catalog.Data.Catalog | Format-Table AppName, EntitlementId, DisplayName, AssignedCount
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$SnapshotDir,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppEntitlementCatalog: Starting unified entitlement catalog build" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppEntitlementCatalog' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load config for snapshot path if not provided
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) {
+            $configParams = @{}
+            if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+            $config = Get-SPConfig @configParams
+            $SnapshotDir = $config.DisconnectedApps.SnapshotPath
+        }
+
+        # Get registered apps
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Catalog = @()
+                    Summary = @{ TotalEntitlements = 0; TotalApps = 0; AppsSkipped = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        $catalog     = [System.Collections.Generic.List[hashtable]]::new()
+        $totalApps   = 0
+        $appsSkipped = 0
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                Write-SPLog -Message "App '$appName': no snapshot directory at '$appDir' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            # Find latest entitlements snapshot
+            $entSnapshots = @(Get-ChildItem -Path $appDir -Filter '*-entitlements.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-entitlements\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($entSnapshots.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': no entitlement snapshots found -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            $latestEntPath = $entSnapshots[0].FullName
+
+            Write-SPLog -Message "App '$appName': loading entitlement snapshot '$($entSnapshots[0].Name)'" `
+                -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+
+            try {
+                $entRows = @(Import-Csv -Path $latestEntPath -ErrorAction Stop)
+            }
+            catch {
+                Write-SPLog -Message "App '$appName': failed to parse entitlement snapshot: $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            if ($entRows.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': entitlement snapshot is empty -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                $appsSkipped++
+                continue
+            }
+
+            # Build assignment count map from the latest accounts snapshot
+            $assignmentCounts = @{}
+
+            $acctSnapshots = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-accounts\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($acctSnapshots.Count -gt 0) {
+                try {
+                    $acctRows = @(Import-Csv -Path $acctSnapshots[0].FullName -ErrorAction Stop)
+
+                    foreach ($acct in $acctRows) {
+                        $groupsRaw = $acct.groups
+                        if ([string]::IsNullOrWhiteSpace($groupsRaw)) { continue }
+
+                        $groupList = @($groupsRaw -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+                        foreach ($g in $groupList) {
+                            if ($assignmentCounts.ContainsKey($g)) {
+                                $assignmentCounts[$g]++
+                            }
+                            else {
+                                $assignmentCounts[$g] = 1
+                            }
+                        }
+                    }
+
+                    Write-SPLog -Message "App '$appName': built assignment counts from $($acctRows.Count) account(s)" `
+                        -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                }
+                catch {
+                    Write-SPLog -Message "App '$appName': failed to parse account snapshot for assignment counts: $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+                    # Continue without assignment counts -- they'll all be 0
+                }
+            }
+
+            # Build catalog entries from entitlement rows
+            foreach ($ent in $entRows) {
+                $entId = ''
+                if ($null -ne $ent.PSObject.Properties['id']) {
+                    $entId = [string]$ent.id
+                }
+                if ([string]::IsNullOrWhiteSpace($entId)) { continue }
+
+                $displayName = ''
+                if ($null -ne $ent.PSObject.Properties['displayName']) {
+                    $displayName = [string]$ent.displayName
+                }
+
+                $description = ''
+                if ($null -ne $ent.PSObject.Properties['description']) {
+                    $description = [string]$ent.description
+                }
+
+                $name = ''
+                if ($null -ne $ent.PSObject.Properties['name']) {
+                    $name = [string]$ent.name
+                }
+
+                $assignedCount = 0
+                if ($assignmentCounts.ContainsKey($entId)) {
+                    $assignedCount = $assignmentCounts[$entId]
+                }
+                # Also check by name if id didn't match (groups column may use name)
+                if ($assignedCount -eq 0 -and -not [string]::IsNullOrWhiteSpace($name) -and
+                    $name -ne $entId -and $assignmentCounts.ContainsKey($name)) {
+                    $assignedCount = $assignmentCounts[$name]
+                }
+
+                $catalog.Add(@{
+                    AppName       = $appName
+                    EntitlementId = $entId
+                    Name          = $name
+                    DisplayName   = $displayName
+                    Description   = $description
+                    AssignedCount = $assignedCount
+                })
+            }
+
+            $totalApps++
+            Write-SPLog -Message "App '$appName': added $($entRows.Count) entitlement(s) to catalog" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Entitlement catalog: $($catalog.Count) entitlement(s) from $totalApps app(s), $appsSkipped skipped" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppEntitlementCatalog' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Catalog = $catalog.ToArray()
+                Summary = @{
+                    TotalEntitlements = $catalog.Count
+                    TotalApps         = $totalApps
+                    AppsSkipped       = $appsSkipped
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppEntitlementCatalog failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppEntitlementCatalog' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppEntitlementCatalogHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report of the unified entitlement catalog.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppEntitlementCatalog and produces a
+        self-contained HTML report with:
+        - Executive summary with total entitlements and app counts
+        - Per-app entitlement tables grouped by application
+        - Assignment count color coding (high=red, medium=orange, low=green)
+
+        Uses 100% inline CSS for Word paste compatibility.
+    .PARAMETER CatalogResult
+        The .Data hashtable from Get-SPDisconnectedAppEntitlementCatalog.
+    .PARAMETER OutputPath
+        Directory where the report is saved. File: entitlement-catalog-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath}; Error}
+    .EXAMPLE
+        $catalog = Get-SPDisconnectedAppEntitlementCatalog
+        Export-SPDisconnectedAppEntitlementCatalogHtml -CatalogResult $catalog.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$CatalogResult,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "entitlement-catalog-${ReportDate}.html"
+
+        $catalogEntries = @()
+        if ($null -ne $CatalogResult['Catalog']) { $catalogEntries = @($CatalogResult['Catalog']) }
+        $summary = if ($null -ne $CatalogResult['Summary']) { $CatalogResult['Summary'] } else { @{} }
+
+        $totalEntitlements = if ($null -ne $summary['TotalEntitlements']) { $summary['TotalEntitlements'] } else { 0 }
+        $totalApps         = if ($null -ne $summary['TotalApps'])         { $summary['TotalApps'] }         else { 0 }
+        $appsSkipped       = if ($null -ne $summary['AppsSkipped'])       { $summary['AppsSkipped'] }       else { 0 }
+
+        # Style constants
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $appHeadingStyle     = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#336699; margin-top:20px; margin-bottom:8px; font-size:15px;'
+
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Unified Entitlement Catalog - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Unified Entitlement Catalog</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # Section 1: Executive Summary
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $summaryRows = @(
+            @('Total Entitlements',      $totalEntitlements),
+            @('Applications Included',   $totalApps),
+            @('Applications Skipped',    $appsSkipped)
+        )
+
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # Section 2: Entitlement tables grouped by app
+        if ($catalogEntries.Count -gt 0) {
+            # Group entries by AppName
+            $appGroups = [ordered]@{}
+            foreach ($entry in $catalogEntries) {
+                $aName = $entry.AppName
+                if (-not $appGroups.Contains($aName)) {
+                    $appGroups[$aName] = [System.Collections.Generic.List[hashtable]]::new()
+                }
+                $appGroups[$aName].Add($entry)
+            }
+
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Entitlements by Application</h2>")
+
+            foreach ($aName in $appGroups.Keys) {
+                $entries = $appGroups[$aName]
+                $safeAppName = ConvertTo-DisconnectedHtmlSafe $aName
+
+                [void]$html.AppendLine("<h3 style=`"$appHeadingStyle`">$safeAppName ($($entries.Count) entitlement(s))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Entitlement ID', 'Display Name', 'Description', 'Assigned')))
+
+                $rowIdx = 0
+                foreach ($entry in $entries) {
+                    # Color-code assignment count: 20+ = red, 10-19 = orange, 0-9 = green
+                    $count = $entry.AssignedCount
+                    $countBadge = if ($count -ge 20) {
+                        "<span style=`"$badgeRed`">$count</span>"
+                    }
+                    elseif ($count -ge 10) {
+                        "<span style=`"$badgeOrange`">$count</span>"
+                    }
+                    else {
+                        "<span style=`"$badgeGreen`">$count</span>"
+                    }
+
+                    # Truncate long descriptions for display
+                    $descDisplay = $entry.Description
+                    if (-not [string]::IsNullOrWhiteSpace($descDisplay) -and $descDisplay.Length -gt 200) {
+                        $descDisplay = $descDisplay.Substring(0, 197) + '...'
+                    }
+
+                    $cells = @(
+                        (ConvertTo-DisconnectedHtmlSafe $entry.EntitlementId),
+                        (ConvertTo-DisconnectedHtmlSafe $entry.DisplayName),
+                        (ConvertTo-DisconnectedHtmlSafe $descDisplay),
+                        $countBadge
+                    )
+                    [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                    $rowIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#777; font-size:14px; margin-top:24px;`">No entitlements found across registered applications.</p>")
+        }
+
+        # Footer
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Unified Entitlement Catalog | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Entitlement catalog HTML report saved to $filePath ($($catalogEntries.Count) entitlement(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppEntitlementCatalogHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppEntitlementCatalogHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppEntitlementCatalogHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppBatchHtml {
+    <#
+    .SYNOPSIS
+        Generates a consolidated HTML report for a batch orchestrator run.
+    .DESCRIPTION
+        Takes the per-app results from Invoke-SPDisconnectedAppBatch and produces
+        a self-contained HTML report with executive summary, per-app status table,
+        error details, delivery status, and batch timing footer.
+
+        Designed for operations team review after a batch certification run.
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources, no flexbox, no grid.
+
+        Color coding:
+        - Green (#339933): success
+        - Red (#CC3333): error
+        - Orange (#FF8800): threshold blocked
+        - Gray (#999999): no changes
+
+    .PARAMETER BatchResults
+        Array of hashtables from the batch orchestrator, each containing:
+        App, Status, CorrelationID, StartedAt, CompletedAt, DurationSeconds,
+        CampaignsCreated, CampaignIds, IdentityCount, DeltaSummary, ReportPath,
+        Error, Reason.
+    .PARAMETER CorrelationID
+        Batch-level correlation ID for the overall run.
+    .PARAMETER StartedAt
+        UTC timestamp string for batch start time.
+    .PARAMETER CompletedAt
+        UTC timestamp string for batch end time.
+    .PARAMETER DurationSeconds
+        Total batch duration in seconds.
+    .PARAMETER DeliveryStatus
+        Optional output from Get-SPDisconnectedAppDeliveryStatus. If provided,
+        a delivery status section is included in the report.
+    .PARAMETER Environment
+        Environment name from config (e.g., 'Production', 'Sandbox').
+    .PARAMETER WhatIfRun
+        If true, the report header indicates this was a dry-run.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/batch-summary-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        Export-SPDisconnectedAppBatchHtml -BatchResults $batchResults `
+            -CorrelationID $batchCorrelationID -StartedAt $start -CompletedAt $end `
+            -DurationSeconds 45.2 -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable[]]$BatchResults,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$StartedAt,
+
+        [Parameter()]
+        [string]$CompletedAt,
+
+        [Parameter()]
+        [double]$DurationSeconds = 0,
+
+        [Parameter()]
+        [hashtable]$DeliveryStatus,
+
+        [Parameter()]
+        [string]$Environment,
+
+        [Parameter()]
+        [switch]$WhatIfRun,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # ---------------------------------------------------------------
+        # Ensure output directory exists
+        # ---------------------------------------------------------------
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "batch-summary-${ReportDate}.html"
+
+        # ---------------------------------------------------------------
+        # Compute summary metrics
+        # ---------------------------------------------------------------
+        $totalApps      = $BatchResults.Count
+        $successCount   = @($BatchResults | Where-Object { $_.Status -eq 'Success' }).Count
+        $noChangesCount = @($BatchResults | Where-Object { $_.Status -eq 'NoChanges' }).Count
+        $blockedCount   = @($BatchResults | Where-Object { $_.Status -eq 'ThresholdBlocked' }).Count
+        $errorCount     = @($BatchResults | Where-Object { $_.Status -eq 'Error' }).Count
+        $totalCampaigns = 0
+        $totalIdentities = 0
+        foreach ($r in $BatchResults) {
+            $totalCampaigns  += $r.CampaignsCreated
+            $totalIdentities += $r.IdentityCount
+        }
+
+        # ---------------------------------------------------------------
+        # Reusable style constants (matching toolkit conventions)
+        # ---------------------------------------------------------------
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeGray           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#999999;'
+
+        # ---------------------------------------------------------------
+        # Build HTML
+        # ---------------------------------------------------------------
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Batch Summary - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Report title
+        $titleSuffix = ''
+        if ($WhatIfRun) { $titleSuffix = ' <span style="' + $badgeOrange + '">DRY RUN</span>' }
+        $envLabel = ''
+        if (-not [string]::IsNullOrWhiteSpace($Environment)) {
+            $envLabel = " - $(ConvertTo-DisconnectedHtmlSafe $Environment)"
+        }
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Disconnected App Batch Summary${envLabel}${titleSuffix}</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # ---------------------------------------------------------------
+        # Section 1: Executive Summary
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+
+        # Overall status badge
+        $overallBadge = $badgeGreen
+        $overallLabel = 'ALL SUCCEEDED'
+        if ($errorCount -gt 0 -and $errorCount -eq $totalApps) {
+            $overallBadge = $badgeRed
+            $overallLabel = 'ALL FAILED'
+        }
+        elseif ($errorCount -gt 0 -or $blockedCount -gt 0) {
+            $overallBadge = $badgeOrange
+            $overallLabel = 'PARTIAL'
+        }
+        elseif ($totalApps -eq 0) {
+            $overallBadge = $badgeGray
+            $overallLabel = 'NO APPS'
+        }
+        [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$overallBadge`">$overallLabel</span></p>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        $summaryRows = @(
+            @('Apps Processed',     $totalApps)
+            @('Succeeded',          $successCount)
+            @('No Changes',         $noChangesCount)
+            @('Threshold Blocked',  $blockedCount)
+            @('Errors',             $errorCount)
+            @('Campaigns Created',  $totalCampaigns)
+            @('Identities Affected', $totalIdentities)
+        )
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 2: Per-App Status Table
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Per-App Results</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'Status', 'Accounts (Delta)', 'Changes', 'Campaigns', 'Duration', 'Errors')))
+
+        $rowIdx = 0
+        foreach ($r in $BatchResults) {
+            # Row background color by status
+            $rowBg = ''
+            switch ($r.Status) {
+                'Success'          { $rowBg = 'background:#f0fff0;' }
+                'NoChanges'        { $rowBg = 'background:#f9f9f9;' }
+                'ThresholdBlocked' { $rowBg = 'background:#fff8f0;' }
+                'Error'            { $rowBg = 'background:#fff0f0;' }
+            }
+
+            # Status badge
+            $statusBadge = switch ($r.Status) {
+                'Success'          { "<span style=`"$badgeGreen`">SUCCESS</span>" }
+                'NoChanges'        { "<span style=`"$badgeGray`">NO CHANGES</span>" }
+                'ThresholdBlocked' { "<span style=`"$badgeOrange`">BLOCKED</span>" }
+                'Error'            { "<span style=`"$badgeRed`">ERROR</span>" }
+                default            { "<span style=`"$badgeGray`">$($r.Status)</span>" }
+            }
+
+            # Delta summary
+            $deltaInfo = '-'
+            if ($null -ne $r.DeltaSummary -and $r.DeltaSummary.Count -gt 0) {
+                $parts = @()
+                if ($r.DeltaSummary.Added -gt 0)   { $parts += "+$($r.DeltaSummary.Added)" }
+                if ($r.DeltaSummary.Removed -gt 0)  { $parts += "-$($r.DeltaSummary.Removed)" }
+                if ($r.DeltaSummary.Enabled -gt 0)  { $parts += "~$($r.DeltaSummary.Enabled)en" }
+                if ($r.DeltaSummary.Granted -gt 0)  { $parts += "~$($r.DeltaSummary.Granted)ent" }
+                if ($parts.Count -gt 0) { $deltaInfo = $parts -join ' / ' }
+            }
+
+            # Changes count (campaign triggers)
+            $changesCount = 0
+            if ($null -ne $r.DeltaSummary) {
+                $changesCount = ($r.DeltaSummary.Added + $r.DeltaSummary.Enabled + $r.DeltaSummary.Granted)
+            }
+
+            # Error text (truncated for table)
+            $errorCell = '-'
+            if (-not [string]::IsNullOrWhiteSpace($r.Error)) {
+                $truncErr = $r.Error
+                if ($truncErr.Length -gt 60) { $truncErr = $truncErr.Substring(0, 57) + '...' }
+                $errorCell = ConvertTo-DisconnectedHtmlSafe $truncErr
+            }
+
+            # Duration
+            $durationCell = if ($r.DurationSeconds -gt 0) { "$($r.DurationSeconds)s" } else { '-' }
+
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $rowBg"
+            [void]$html.AppendLine("<tr>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $r.App)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$statusBadge</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$(ConvertTo-DisconnectedHtmlSafe $deltaInfo)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $changesCount)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $r.CampaignsCreated)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$(ConvertTo-DisconnectedHtmlSafe $durationCell)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$errorCell</td>")
+            [void]$html.AppendLine('</tr>')
+            $rowIdx++
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 3: Error Details (expandable)
+        # ---------------------------------------------------------------
+        $errorApps = @($BatchResults | Where-Object { $_.Status -eq 'Error' -or $_.Status -eq 'ThresholdBlocked' })
+
+        if ($errorApps.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Error Details ($($errorApps.Count))</h2>")
+
+            foreach ($errApp in $errorApps) {
+                $detailBadge = if ($errApp.Status -eq 'Error') { "<span style=`"$badgeRed`">ERROR</span>" } else { "<span style=`"$badgeOrange`">THRESHOLD BLOCKED</span>" }
+                $safeAppName = ConvertTo-DisconnectedHtmlSafe $errApp.App
+                $safeError   = ConvertTo-DisconnectedHtmlSafe $errApp.Error
+
+                [void]$html.AppendLine("<details style=`"margin-bottom:12px; border:1px solid #dee2e6; border-radius:4px; padding:0;`">")
+                [void]$html.AppendLine("  <summary style=`"padding:10px 14px; cursor:pointer; font-weight:bold; font-size:14px; background:#f8f9fa;`">$detailBadge $safeAppName</summary>")
+                [void]$html.AppendLine("  <div style=`"padding:12px 14px; font-size:13px;`">")
+                [void]$html.AppendLine("    <table style=`"$tableStyle`">")
+
+                $detailRows = @(
+                    @('App Name', $errApp.App)
+                    @('Status', $errApp.Status)
+                    @('Reason', $errApp.Reason)
+                    @('Error Message', $errApp.Error)
+                    @('Correlation ID', $errApp.CorrelationID)
+                    @('Started At', $errApp.StartedAt)
+                    @('Completed At', $errApp.CompletedAt)
+                    @('Duration', "$($errApp.DurationSeconds)s")
+                )
+
+                foreach ($dRow in $detailRows) {
+                    $dLabel = ConvertTo-DisconnectedHtmlSafe $dRow[0]
+                    $dValue = ConvertTo-DisconnectedHtmlSafe $dRow[1]
+                    [void]$html.AppendLine("      <tr><td style=`"$labelTdStyle`">$dLabel</td><td style=`"$valueTdStyle`">$dValue</td></tr>")
+                }
+
+                [void]$html.AppendLine('    </table>')
+                [void]$html.AppendLine('  </div>')
+                [void]$html.AppendLine('</details>')
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Section 4: Delivery Status (optional)
+        # ---------------------------------------------------------------
+        if ($null -ne $DeliveryStatus -and $DeliveryStatus.Success -eq $true -and
+            $null -ne $DeliveryStatus.Data -and $null -ne $DeliveryStatus.Data.Apps) {
+
+            $deliveryApps = @($DeliveryStatus.Data.Apps)
+            $deliverySummary = $DeliveryStatus.Data.Summary
+
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">File Delivery Status</h2>")
+
+            # Delivery summary
+            if ($null -ne $deliverySummary) {
+                [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+                $dSummaryRows = @(
+                    @('Total Apps',  $deliverySummary.Total)
+                    @('Delivered',   $deliverySummary.Delivered)
+                    @('Stale',       $deliverySummary.Stale)
+                    @('Missing',     $deliverySummary.Missing)
+                    @('Disabled',    $deliverySummary.Disabled)
+                )
+                foreach ($ds in $dSummaryRows) {
+                    $dsLabel = ConvertTo-DisconnectedHtmlSafe $ds[0]
+                    $dsValue = ConvertTo-DisconnectedHtmlSafe $ds[1]
+                    [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$dsLabel</td><td style=`"$valueTdStyle`">$dsValue</td></tr>")
+                }
+                [void]$html.AppendLine('</table>')
+            }
+
+            # Per-app delivery table
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'Delivery Status', 'Last Modified', 'File Size', 'Row Count')))
+
+            $dRowIdx = 0
+            foreach ($dApp in $deliveryApps) {
+                $dStatusBadge = switch ($dApp.Status) {
+                    'Delivered' { "<span style=`"$badgeGreen`">DELIVERED</span>" }
+                    'Stale'     { "<span style=`"$badgeOrange`">STALE</span>" }
+                    'Missing'   { "<span style=`"$badgeRed`">MISSING</span>" }
+                    'Disabled'  { "<span style=`"$badgeGray`">DISABLED</span>" }
+                    'Error'     { "<span style=`"$badgeRed`">ERROR</span>" }
+                    default     { "<span style=`"$badgeGray`">$($dApp.Status)</span>" }
+                }
+
+                $lastMod  = if ($null -ne $dApp.LastModified) { ConvertTo-DisconnectedHtmlSafe $dApp.LastModified } else { '-' }
+                $fileSize = if ($null -ne $dApp.FileSize) { ConvertTo-DisconnectedHtmlSafe "$([math]::Round($dApp.FileSize / 1KB, 1)) KB" } else { '-' }
+                $rowCount = if ($null -ne $dApp.RowCount) { ConvertTo-DisconnectedHtmlSafe $dApp.RowCount } else { '-' }
+
+                $dBg = if (($dRowIdx % 2) -eq 1) { 'background:#f9f9f9;' } else { '' }
+                $dTdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $dBg"
+
+                [void]$html.AppendLine("<tr>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $dApp.Name)</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$dStatusBadge</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$lastMod</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle`">$fileSize</td>")
+                [void]$html.AppendLine("  <td style=`"$dTdStyle text-align:center;`">$rowCount</td>")
+                [void]$html.AppendLine('</tr>')
+                $dRowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # ---------------------------------------------------------------
+        # Section 5: Footer
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
+
+        $footerRows = @(
+            @('Batch Start',    $(if (-not [string]::IsNullOrWhiteSpace($StartedAt)) { $StartedAt } else { '-' }))
+            @('Batch End',      $(if (-not [string]::IsNullOrWhiteSpace($CompletedAt)) { $CompletedAt } else { '-' }))
+            @('Duration',       $(if ($DurationSeconds -gt 0) { "${DurationSeconds}s" } else { '-' }))
+            @('Correlation ID', $(if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID } else { '-' }))
+        )
+
+        foreach ($fRow in $footerRows) {
+            $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]
+            $fValue = ConvertTo-DisconnectedHtmlSafe $fRow[1]
+            [void]$html.AppendLine("<tr><td style=`"padding:4px 10px; color:#999; font-size:11px; font-weight:bold; vertical-align:top;`">$fLabel</td><td style=`"padding:4px 10px; color:#999; font-size:11px; vertical-align:top;`">$fValue</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Batch Orchestrator | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Batch summary HTML report saved to $filePath ($totalApps app(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppBatchHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppBatchHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppBatchHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPDisconnectedAppSlaStatus {
+    <#
+    .SYNOPSIS
+        Tracks 30-day file delivery history and SLA compliance per app.
+    .DESCRIPTION
+        Scans the Snapshots/{AppName}/ directory for each registered app, parses
+        date-stamped filenames ({YYYY-MM-DD}-accounts.csv), and builds a 30-day
+        delivery calendar. Calculates delivery rate, longest gap, consecutive
+        misses, and SLA compliance based on each app's configured SlaDays.
+
+        New apps with less than 30 days of history are handled gracefully --
+        delivery rate is calculated against only the days since the first snapshot.
+    .PARAMETER DaysBack
+        Number of days of history to analyze. Default: 30.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to .\DisconnectedApps\Snapshots.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Apps = @(
+                    @{
+                        AppName; DeliveryRate; LongestGapDays; ConsecutiveMisses;
+                        SlaDays; SlaCompliant; DaysMissing; DaysDelivered; TotalDaysTracked;
+                        FirstSnapshotDate; LatestSnapshotDate
+                    }
+                )
+                Summary = @{ TotalApps; Compliant; NonCompliant; AvgDeliveryRate }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $sla = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+        $sla.Data.Apps | Format-Table AppName, DeliveryRate, SlaCompliant
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [ValidateRange(1, 365)]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$SnapshotDir = '.\DisconnectedApps\Snapshots',
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppSlaStatus: Analyzing $DaysBack day delivery history" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Get registered apps (enabled only)
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        $today = (Get-Date).Date
+        $windowStart = $today.AddDays(-($DaysBack - 1))
+
+        # Build the full date window as strings for comparison
+        $windowDates = [System.Collections.Generic.HashSet[string]]::new()
+        for ($d = 0; $d -lt $DaysBack; $d++) {
+            [void]$windowDates.Add($windowStart.AddDays($d).ToString('yyyy-MM-dd'))
+        }
+
+        $appResults = [System.Collections.Generic.List[hashtable]]::new()
+        $compliantCount    = 0
+        $nonCompliantCount = 0
+        $rateSum           = 0.0
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $slaDays = if ($null -ne $app.SlaDays) { [int]$app.SlaDays } else { 1 }
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            # No snapshot directory -- new app, no history
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                $appResults.Add(@{
+                    AppName            = $appName
+                    DeliveryRate       = 0.0
+                    LongestGapDays     = $DaysBack
+                    ConsecutiveMisses  = $DaysBack
+                    SlaDays            = $slaDays
+                    SlaCompliant       = $false
+                    DaysMissing        = @($windowDates | Sort-Object)
+                    DaysDelivered      = @()
+                    TotalDaysTracked   = 0
+                    FirstSnapshotDate  = $null
+                    LatestSnapshotDate = $null
+                })
+                $nonCompliantCount++
+                continue
+            }
+
+            # Scan snapshot files for account snapshots
+            $snapshotFiles = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File -ErrorAction SilentlyContinue)
+
+            # Parse dates from filenames
+            $allSnapshotDates = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($sf in $snapshotFiles) {
+                $datePart = $sf.Name.Substring(0, 10)
+                if ($datePart -match '^\d{4}-\d{2}-\d{2}$') {
+                    [void]$allSnapshotDates.Add($datePart)
+                }
+            }
+
+            if ($allSnapshotDates.Count -eq 0) {
+                $appResults.Add(@{
+                    AppName            = $appName
+                    DeliveryRate       = 0.0
+                    LongestGapDays     = $DaysBack
+                    ConsecutiveMisses  = $DaysBack
+                    SlaDays            = $slaDays
+                    SlaCompliant       = $false
+                    DaysMissing        = @($windowDates | Sort-Object)
+                    DaysDelivered      = @()
+                    TotalDaysTracked   = 0
+                    FirstSnapshotDate  = $null
+                    LatestSnapshotDate = $null
+                })
+                $nonCompliantCount++
+                continue
+            }
+
+            # Filter to dates within our window
+            $deliveredDates = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($sd in $allSnapshotDates) {
+                if ($windowDates.Contains($sd)) {
+                    [void]$deliveredDates.Add($sd)
+                }
+            }
+
+            # Determine the effective tracking window for new apps
+            $sortedAllDates = @($allSnapshotDates | Sort-Object)
+            $firstSnapshotDate  = $sortedAllDates[0]
+            $latestSnapshotDate = $sortedAllDates[$sortedAllDates.Count - 1]
+
+            # For delivery rate, only count days from first snapshot (or window start, whichever is later)
+            $effectiveStart = $windowStart.ToString('yyyy-MM-dd')
+            if ($firstSnapshotDate -gt $effectiveStart) {
+                $effectiveStart = $firstSnapshotDate
+            }
+
+            # Count trackable days (from effective start to today)
+            $effectiveStartDate = [datetime]::ParseExact($effectiveStart, 'yyyy-MM-dd', $null)
+            $totalDaysTracked = [math]::Max(1, ($today - $effectiveStartDate).Days + 1)
+
+            # Build missing days list (within window only)
+            $missingDays = [System.Collections.Generic.List[string]]::new()
+            foreach ($wd in ($windowDates | Sort-Object)) {
+                if (-not $deliveredDates.Contains($wd) -and $wd -ge $effectiveStart) {
+                    $missingDays.Add($wd)
+                }
+            }
+
+            # Delivery rate
+            $deliveredInWindow = @($deliveredDates | Where-Object { $_ -ge $effectiveStart }).Count
+            $deliveryRate = if ($totalDaysTracked -gt 0) {
+                [math]::Round(($deliveredInWindow / $totalDaysTracked) * 100, 1)
+            } else { 0.0 }
+
+            # Longest gap and consecutive misses (within trackable window)
+            $longestGap       = 0
+            $currentGap       = 0
+            $consecutiveMisses = 0
+
+            $trackableDates = @($windowDates | Sort-Object | Where-Object { $_ -ge $effectiveStart })
+            foreach ($td in $trackableDates) {
+                if ($deliveredDates.Contains($td)) {
+                    if ($currentGap -gt $longestGap) { $longestGap = $currentGap }
+                    $currentGap = 0
+                } else {
+                    $currentGap++
+                }
+            }
+            # Check if final streak of misses is the longest
+            if ($currentGap -gt $longestGap) { $longestGap = $currentGap }
+            # Consecutive misses = trailing gap (from most recent date backward)
+            $consecutiveMisses = $currentGap
+
+            # SLA compliance: no gap exceeds SlaDays
+            $slaCompliant = ($longestGap -le $slaDays)
+
+            $appResults.Add(@{
+                AppName            = $appName
+                DeliveryRate       = $deliveryRate
+                LongestGapDays     = $longestGap
+                ConsecutiveMisses  = $consecutiveMisses
+                SlaDays            = $slaDays
+                SlaCompliant       = $slaCompliant
+                DaysMissing        = $missingDays.ToArray()
+                DaysDelivered      = @($deliveredDates | Sort-Object)
+                TotalDaysTracked   = $totalDaysTracked
+                FirstSnapshotDate  = $firstSnapshotDate
+                LatestSnapshotDate = $latestSnapshotDate
+            })
+
+            $rateSum += $deliveryRate
+            if ($slaCompliant) { $compliantCount++ } else { $nonCompliantCount++ }
+
+            Write-SPLog -Message "App '$appName': $deliveryRate% delivery rate, SLA $(if ($slaCompliant) { 'COMPLIANT' } else { 'NON-COMPLIANT' }) (longest gap: ${longestGap}d, SLA: ${slaDays}d)" `
+                -Severity $(if ($slaCompliant) { 'INFO' } else { 'WARN' }) `
+                -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+                -CorrelationID $CorrelationID
+        }
+
+        $avgRate = if ($apps.Count -gt 0) { [math]::Round($rateSum / $apps.Count, 1) } else { 0.0 }
+
+        Write-SPLog -Message "SLA status: $compliantCount compliant, $nonCompliantCount non-compliant, avg delivery rate ${avgRate}% (of $($apps.Count) apps)" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppSlaStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Apps    = $appResults.ToArray()
+                Summary = @{
+                    TotalApps       = $apps.Count
+                    Compliant       = $compliantCount
+                    NonCompliant    = $nonCompliantCount
+                    AvgDeliveryRate = $avgRate
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppSlaStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppSlaStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppSlaHtml {
+    <#
+    .SYNOPSIS
+        Generates an SLA compliance HTML report with 30-day delivery grids.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppSlaStatus and produces a self-contained
+        HTML report with per-app 30-day delivery calendars, SLA compliance badges, and
+        an overall delivery health score.
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources.
+
+        Color coding:
+        - Green (#339933): delivered / compliant
+        - Red (#CC3333): missing / non-compliant
+        - Gray (#999999): before tracking period
+        - Orange (#FF8800): warning (high miss rate)
+    .PARAMETER SlaData
+        Output from Get-SPDisconnectedAppSlaStatus (the .Data property).
+    .PARAMETER DaysBack
+        Number of days in the delivery window. Default: 30.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/sla-report-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .PARAMETER CorrelationID
+        Correlation ID for log entries.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        $sla = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+        Export-SPDisconnectedAppSlaHtml -SlaData $sla.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$SlaData,
+
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # Ensure output directory exists
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "sla-report-${ReportDate}.html"
+
+        # Style constants (matching toolkit conventions)
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeGray           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#999999;'
+
+        # Grid cell styles for the 30-day calendar
+        $cellDelivered = 'display:inline-block; width:16px; height:16px; margin:1px; background:#339933; border-radius:2px; vertical-align:middle;'
+        $cellMissing   = 'display:inline-block; width:16px; height:16px; margin:1px; background:#CC3333; border-radius:2px; vertical-align:middle;'
+        $cellPreTrack  = 'display:inline-block; width:16px; height:16px; margin:1px; background:#e0e0e0; border-radius:2px; vertical-align:middle;'
+
+        $apps    = @($SlaData.Apps)
+        $summary = $SlaData.Summary
+
+        # Build the date window
+        $today       = (Get-Date).Date
+        $windowStart = $today.AddDays(-($DaysBack - 1))
+        $windowDates = [System.Collections.Generic.List[string]]::new()
+        for ($d = 0; $d -lt $DaysBack; $d++) {
+            $windowDates.Add($windowStart.AddDays($d).ToString('yyyy-MM-dd'))
+        }
+
+        # Build HTML
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>SLA Delivery Report - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Disconnected App SLA Delivery Report</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate | Window: $DaysBack days</p>")
+
+        # -----------------------------------------------------------
+        # Section 1: Overall Health Score
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Delivery Health Summary</h2>")
+
+        # Overall health badge
+        $avgRate = $summary.AvgDeliveryRate
+        $healthBadge = $badgeGreen
+        $healthLabel = 'HEALTHY'
+        if ($avgRate -lt 80) {
+            $healthBadge = $badgeRed
+            $healthLabel = 'AT RISK'
+        } elseif ($avgRate -lt 95) {
+            $healthBadge = $badgeOrange
+            $healthLabel = 'WARNING'
+        }
+        [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$healthBadge`">$healthLabel</span></p>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+        $summaryRows = @(
+            @('Total Apps',         $summary.TotalApps)
+            @('SLA Compliant',      $summary.Compliant)
+            @('SLA Non-Compliant',  $summary.NonCompliant)
+            @('Avg Delivery Rate',  "${avgRate}%")
+        )
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 2: Per-App SLA Table
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Per-App SLA Status</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('App Name', 'SLA', 'Delivery Rate', 'Longest Gap', 'Trailing Misses', 'SLA Days', 'Tracked Days')))
+
+        $rowIdx = 0
+        foreach ($app in $apps) {
+            $rowBg = if (($rowIdx % 2) -eq 1) { 'background:#f9f9f9;' } else { '' }
+            $tdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $rowBg"
+
+            # SLA compliance badge
+            $slaBadge = if ($app.SlaCompliant) {
+                "<span style=`"$badgeGreen`">COMPLIANT</span>"
+            } else {
+                "<span style=`"$badgeRed`">NON-COMPLIANT</span>"
+            }
+
+            # Delivery rate with color coding
+            $rateColor = '#339933'
+            if ($app.DeliveryRate -lt 80) { $rateColor = '#CC3333' }
+            elseif ($app.DeliveryRate -lt 95) { $rateColor = '#FF8800' }
+            $rateDisplay = "<span style=`"font-weight:bold; color:${rateColor};`">$($app.DeliveryRate)%</span>"
+
+            [void]$html.AppendLine('<tr>')
+            [void]$html.AppendLine("  <td style=`"$tdStyle font-weight:bold;`">$(ConvertTo-DisconnectedHtmlSafe $app.AppName)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$slaBadge</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle`">$rateDisplay</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.LongestGapDays)d</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.ConsecutiveMisses)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.SlaDays)</td>")
+            [void]$html.AppendLine("  <td style=`"$tdStyle text-align:center;`">$(ConvertTo-DisconnectedHtmlSafe $app.TotalDaysTracked)</td>")
+            [void]$html.AppendLine('</tr>')
+            $rowIdx++
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 3: 30-Day Delivery Grids
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">30-Day Delivery Calendar</h2>")
+
+        # Legend
+        [void]$html.AppendLine('<p style="font-size:12px; margin-bottom:16px;">')
+        [void]$html.AppendLine("  <span style=`"$cellDelivered`"></span> Delivered")
+        [void]$html.AppendLine("  <span style=`"margin-left:12px; $cellMissing`"></span> Missing")
+        [void]$html.AppendLine("  <span style=`"margin-left:12px; $cellPreTrack`"></span> Before tracking")
+        [void]$html.AppendLine('</p>')
+
+        foreach ($app in $apps) {
+            # Build a set of delivered dates for quick lookup
+            $deliveredSet = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($dd in $app.DaysDelivered) {
+                [void]$deliveredSet.Add($dd)
+            }
+
+            # App header with compliance badge
+            $appSlaBadge = if ($app.SlaCompliant) {
+                "<span style=`"$badgeGreen`">COMPLIANT</span>"
+            } else {
+                "<span style=`"$badgeRed`">NON-COMPLIANT</span>"
+            }
+
+            [void]$html.AppendLine("<div style=`"margin-bottom:20px; padding:12px 16px; border:1px solid #dee2e6; border-radius:4px;`">")
+            [void]$html.AppendLine("  <p style=`"font-weight:bold; font-size:14px; margin:0 0 8px 0;`">$(ConvertTo-DisconnectedHtmlSafe $app.AppName) $appSlaBadge <span style=`"font-weight:normal; color:#777; font-size:12px; margin-left:8px;`">$($app.DeliveryRate)% delivery rate</span></p>")
+
+            # Grid of day cells
+            [void]$html.AppendLine('  <div style="line-height:0;">')
+            foreach ($dateStr in $windowDates) {
+                $cellTitle = $dateStr
+                if ($null -ne $app.FirstSnapshotDate -and $dateStr -lt $app.FirstSnapshotDate) {
+                    # Before this app started tracking
+                    $cellStyle = $cellPreTrack
+                    $cellTitle = "$dateStr (before tracking)"
+                } elseif ($deliveredSet.Contains($dateStr)) {
+                    $cellStyle = $cellDelivered
+                    $cellTitle = "$dateStr (delivered)"
+                } else {
+                    $cellStyle = $cellMissing
+                    $cellTitle = "$dateStr (missing)"
+                }
+                [void]$html.Append("<span style=`"$cellStyle`" title=`"$cellTitle`"></span>")
+            }
+            [void]$html.AppendLine('')
+            [void]$html.AppendLine('  </div>')
+
+            # Date labels (first and last)
+            $firstDate = $windowDates[0]
+            $lastDate  = $windowDates[$windowDates.Count - 1]
+            [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:10px; color:#999;`">$firstDate to $lastDate</p>")
+
+            # Missing days detail (if any)
+            if ($app.DaysMissing.Count -gt 0 -and $app.DaysMissing.Count -le 10) {
+                $missingList = ($app.DaysMissing | ForEach-Object { ConvertTo-DisconnectedHtmlSafe $_ }) -join ', '
+                [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:11px; color:#CC3333;`">Missing: $missingList</p>")
+            } elseif ($app.DaysMissing.Count -gt 10) {
+                [void]$html.AppendLine("  <p style=`"margin:4px 0 0 0; font-size:11px; color:#CC3333;`">$($app.DaysMissing.Count) days missing</p>")
+            }
+
+            [void]$html.AppendLine('</div>')
+        }
+
+        # -----------------------------------------------------------
+        # Footer
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
+
+        $footerRows = @(
+            @('Window',        "${DaysBack} days")
+            @('Correlation ID', $(if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID } else { '-' }))
+        )
+        foreach ($fRow in $footerRows) {
+            $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]
+            $fValue = ConvertTo-DisconnectedHtmlSafe $fRow[1]
+            [void]$html.AppendLine("<tr><td style=`"padding:4px 10px; color:#999; font-size:11px; font-weight:bold; vertical-align:top;`">$fLabel</td><td style=`"padding:4px 10px; color:#999; font-size:11px; vertical-align:top;`">$fValue</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - SLA Monitor | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "SLA HTML report saved to $filePath ($($apps.Count) app(s))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppSlaHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppSlaHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppSlaHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
-    'Export-SPDisconnectedAppDeltaHtml'
+    'Export-SPDisconnectedAppDeltaHtml',
+    'Get-SPRegisteredApps',
+    'Initialize-SPDisconnectedAppDirectories',
+    'Get-SPDisconnectedAppDeliveryStatus',
+    'Get-SPDisconnectedAppIdentityRisk',
+    'Export-SPDisconnectedAppIdentityRiskHtml',
+    'Get-SPDisconnectedAppEntitlementCatalog',
+    'Export-SPDisconnectedAppEntitlementCatalogHtml',
+    'Export-SPDisconnectedAppBatchHtml',
+    'Get-SPDisconnectedAppSlaStatus',
+    'Export-SPDisconnectedAppSlaHtml'
 )

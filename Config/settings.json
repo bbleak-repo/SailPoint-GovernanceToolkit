@@ -110,7 +110,31 @@
         "CorrelationAttribute": "e-mail",
         "AccountDeletionThresholdPct": 20,
         "RequiredAccountColumns": ["id", "name", "givenName", "familyName", "e-mail", "groups", "IIQDisabled"],
-        "RequiredEntitlementColumns": ["id", "name", "displayName", "description"]
+        "RequiredEntitlementColumns": ["id", "name", "displayName", "description"],
+        "Applications": [
+            {
+                "Name": "PEP-Plus",
+                "AccountFilePath": "\\\\fileserver\\imports\\PEP-Plus\\accounts.csv",
+                "EntitlementFilePath": "\\\\fileserver\\imports\\PEP-Plus\\entitlements.csv",
+                "ISCSourceId": "",
+                "CorrelationAttribute": "e-mail",
+                "CampaignNamePrefix": "PEP+ Cert",
+                "DeadlineDays": 2,
+                "SlaDays": 1,
+                "Enabled": true
+            },
+            {
+                "Name": "DebtNext",
+                "AccountFilePath": "\\\\fileserver\\imports\\DebtNext\\accounts.csv",
+                "EntitlementFilePath": "",
+                "ISCSourceId": "",
+                "CorrelationAttribute": "e-mail",
+                "CampaignNamePrefix": "DebtNext Cert",
+                "DeadlineDays": 3,
+                "SlaDays": 2,
+                "Enabled": true
+            }
+        ]
     },
     "DeltaCert": {
         "SourceIds": [],

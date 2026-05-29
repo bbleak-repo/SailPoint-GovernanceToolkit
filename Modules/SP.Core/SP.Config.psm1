@@ -143,6 +143,7 @@ function Get-SPConfigDefaults {
             AccountDeletionThresholdPct = 20
             RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
             RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
+            Applications               = @()
         }
         DeltaCert = @{
             SourceIds                  = @()
@@ -396,6 +397,7 @@ function Get-SPConfigTemplate {
             AccountDeletionThresholdPct = 20
             RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
             RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
+            Applications               = @()
         }
         DeltaCert = [ordered]@{
             SourceIds                  = @()

@@ -25,23 +25,23 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| DA-11 | App Registry (config-driven multi-app) | none | PENDING |
-| DA-12 | App Registration CLI | DA-11 | PENDING |
-| DA-13 | Account Deletion Threshold Protection | none | PENDING |
-| DA-14 | Batch Orchestrator | DA-11, DA-13 | PENDING |
-| DA-15 | File Delivery Monitor | DA-11 | PENDING |
-| DA-16 | Cross-App Identity Risk Report | DA-11 | PENDING |
-| DA-17 | Unified Entitlement Catalog | DA-11 | PENDING |
-| DA-18 | Batch Summary HTML Report | DA-14 | PENDING |
-| DA-19 | SLA Tracking + Delivery History | DA-15 | PENDING |
-| DA-20 | Pester Tests | DA-19 | PENDING |
+| DA-11 | App Registry (config-driven multi-app) | none | DONE |
+| DA-12 | App Registration CLI | DA-11 | DONE |
+| DA-13 | Account Deletion Threshold Protection | none | DONE |
+| DA-14 | Batch Orchestrator | DA-11, DA-13 | DONE |
+| DA-15 | File Delivery Monitor | DA-11 | DONE |
+| DA-16 | Cross-App Identity Risk Report | DA-11 | DONE |
+| DA-17 | Unified Entitlement Catalog | DA-11 | DONE |
+| DA-18 | Batch Summary HTML Report | DA-14 | DONE |
+| DA-19 | SLA Tracking + Delivery History | DA-15 | DONE |
+| DA-20 | Pester Tests | DA-19 | DONE |
 
 ---
 
 ## DA-11: App Registry (Config-Driven Multi-App)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-11
 - **Depends On:** none
 
 **Description:**
@@ -110,8 +110,8 @@ function Initialize-SPDisconnectedAppDirectories {
 
 ## DA-12: App Registration CLI
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-12
 - **Depends On:** DA-11
 
 **Description:**
@@ -153,8 +153,8 @@ New CLI script `Scripts/Invoke-SPDisconnectedAppRegistry.ps1` with subcommands:
 
 ## DA-13: Account Deletion Threshold Protection
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-13
 - **Depends On:** none
 
 **Description:**
@@ -207,8 +207,8 @@ but BEFORE identity resolution and campaign creation.
 
 ## DA-14: Batch Orchestrator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-14
 - **Depends On:** DA-11, DA-13
 
 **Description:**
@@ -265,8 +265,8 @@ foreach ($app in $apps) {
 
 ## DA-15: File Delivery Monitor
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-15
 - **Depends On:** DA-11
 
 **Description:**
@@ -315,8 +315,8 @@ function Get-SPDisconnectedAppDeliveryStatus {
 
 ## DA-16: Cross-App Identity Risk Report
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-16
 - **Depends On:** DA-11
 
 **Description:**
@@ -357,8 +357,8 @@ apps are flagged as higher risk (broader access footprint).
 
 ## DA-17: Unified Entitlement Catalog
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-17
 - **Depends On:** DA-11
 
 **Description:**
@@ -391,8 +391,8 @@ AssignedCount = how many accounts in the latest snapshot have this entitlement.
 
 ## DA-18: Batch Summary HTML Report
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-18
 - **Depends On:** DA-14
 
 **Description:**
@@ -420,8 +420,8 @@ results. Designed for operations team review.
 
 ## DA-19: SLA Tracking + Delivery History
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-19
 - **Depends On:** DA-15
 
 **Description:**
@@ -463,8 +463,8 @@ delivery timeline per app. Flag apps that are chronically late or have gaps.
 
 ## DA-20: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-20
 - **Depends On:** DA-19
 
 **Description:**

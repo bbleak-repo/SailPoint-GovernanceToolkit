@@ -493,6 +493,39 @@ $unchangedCount = if ($null -ne $delta['Unchanged']) { $delta['Unchanged'] } els
 Write-Host "    Added=$addedCount Removed=$removedCount Disabled=$disabledCount Enabled=$enabledCount" -ForegroundColor DarkGray
 Write-Host "    Granted=$grantedCount Revoked=$revokedCount AttrChanges=$attrChgCount Unchanged=$unchangedCount" -ForegroundColor DarkGray
 
+# --- Account deletion threshold check (DA-13) ---
+$effectiveThresholdPct = 20
+if ($null -ne $daConfig -and
+    $null -ne $daConfig.PSObject.Properties['AccountDeletionThresholdPct']) {
+    $effectiveThresholdPct = [int]$daConfig.AccountDeletionThresholdPct
+}
+
+$thresholdResult = Test-SPDisconnectedAppDeletionThreshold -DeltaSummary $deltaSummary `
+    -ThresholdPct $effectiveThresholdPct
+
+if (-not $thresholdResult.Allowed) {
+    Write-Host ''
+    Write-Host "  THRESHOLD EXCEEDED: $($thresholdResult.RemovedPct)% accounts removed (threshold: $($thresholdResult.ThresholdPct)%). Aborting." -ForegroundColor Red
+    Write-Host "    Removed: $($thresholdResult.RemovedCount) of $($thresholdResult.TotalPrevious) accounts" -ForegroundColor Red
+    Write-Host '    This may indicate a bad file (empty, partial export, or wrong app data).' -ForegroundColor Yellow
+    Write-Host '    If this is intentional, increase AccountDeletionThresholdPct in settings.json.' -ForegroundColor Yellow
+    Write-SPLog -Message "Deletion threshold exceeded for '$AppName': $($thresholdResult.RemovedPct)% removed (threshold=$($thresholdResult.ThresholdPct)%)" `
+        -Severity ERROR -Component 'Invoke-SPDisconnectedAppCert' -Action 'ThresholdCheck' -CorrelationID $correlationID
+    Write-Host "  CorrelationID:   $correlationID" -ForegroundColor DarkGray
+    Write-Host ''
+    exit 5
+}
+
+if ($thresholdResult.Reason -eq 'FirstRun') {
+    Write-Host '    Threshold check: skipped (first run)' -ForegroundColor DarkGray
+}
+elseif ($thresholdResult.Reason -eq 'TooFewAccounts') {
+    Write-Host '    Threshold check: skipped (< 5 previous accounts)' -ForegroundColor DarkGray
+}
+elseif ($removedCount -gt 0) {
+    Write-Host "    Threshold check: passed ($($thresholdResult.RemovedPct)% removed, limit $($effectiveThresholdPct)%)" -ForegroundColor DarkGray
+}
+
 # Check for campaign-triggering changes (adds + grants + enables)
 $campaignTriggers = $addedCount + $grantedCount + $enabledCount
 
