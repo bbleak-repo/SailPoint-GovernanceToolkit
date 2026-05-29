@@ -34,7 +34,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 | DA-17 | Unified Entitlement Catalog | DA-11 | DONE |
 | DA-18 | Batch Summary HTML Report | DA-14 | DONE |
 | DA-19 | SLA Tracking + Delivery History | DA-15 | DONE |
-| DA-20 | Pester Tests | DA-19 | PENDING |
+| DA-20 | Pester Tests | DA-19 | DONE |
 
 ---
 
@@ -463,8 +463,8 @@ delivery timeline per app. Flag apps that are chronically late or have gaps.
 
 ## DA-20: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-20
 - **Depends On:** DA-19
 
 **Description:**
