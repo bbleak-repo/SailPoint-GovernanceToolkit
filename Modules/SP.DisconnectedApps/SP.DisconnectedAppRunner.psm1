@@ -12,6 +12,9 @@
         1. Resolve-SPDisconnectedAppIdentities - correlates delta accounts to ISC identities
         2. Invoke-SPDisconnectedAppCertRun - creates SEARCH campaigns per manager group
         3. Export-SPDisconnectedAppDeltaHtml - generates delta summary HTML report
+        4. Get-SPRegisteredApps - returns enabled app registrations from config
+        5. Initialize-SPDisconnectedAppDirectories - scaffolds per-app directories
+        6. Get-SPDisconnectedAppDeliveryStatus - checks file delivery freshness per app
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -1411,6 +1414,8 @@ function Get-SPRegisteredApps {
         filters to Enabled=true entries, and merges per-app settings with global
         defaults. Per-app values override global defaults for CorrelationAttribute,
         CampaignNamePrefix, and DeadlineDays.
+    .PARAMETER IncludeDisabled
+        If set, includes apps with Enabled=false in the results (with Enabled=$false).
     .PARAMETER ConfigPath
         Path to settings.json. Defaults to auto-resolved path.
     .OUTPUTS
@@ -1419,6 +1424,7 @@ function Get-SPRegisteredApps {
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
+        [Parameter()][switch]$IncludeDisabled,
         [Parameter()][string]$ConfigPath
     )
 
@@ -1465,12 +1471,12 @@ function Get-SPRegisteredApps {
         foreach ($app in $apps) {
             if ($null -eq $app) { continue }
 
-            # Skip disabled apps (default to enabled if field missing)
+            # Check enabled status (default to enabled if field missing)
             $enabled = $true
             if ($null -ne $app.PSObject.Properties['Enabled']) {
                 $enabled = [bool]$app.Enabled
             }
-            if (-not $enabled) { continue }
+            if (-not $enabled -and -not $IncludeDisabled) { continue }
 
             # Name is required
             $appName = ''
@@ -1505,7 +1511,7 @@ function Get-SPRegisteredApps {
                                                   [int]$app.SlaDays
                                               } else { $null }
                 AccountDeletionThresholdPct = $globalThreshold
-                Enabled                     = $true
+                Enabled                     = $enabled
             }
 
             $result.Add($merged)
@@ -1609,6 +1615,228 @@ function Initialize-SPDisconnectedAppDirectories {
     }
 }
 
+function Get-SPDisconnectedAppDeliveryStatus {
+    <#
+    .SYNOPSIS
+        Checks file delivery status for all registered disconnected apps.
+    .DESCRIPTION
+        Examines the AccountFilePath for each registered app and classifies
+        its delivery status:
+        - Delivered: file exists, modified within StaleHours
+        - Stale: file exists, modified more than StaleHours ago
+        - Missing: file path does not exist
+        - Disabled: app is registered but Enabled=false
+        - Error: file exists but is empty or unreadable
+
+        For Delivered and Stale files, RowCount is populated via a quick
+        Import-Csv | Measure-Object (no full validation).
+    .PARAMETER StaleHours
+        Number of hours after which a file is considered stale. Default: 24.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Apps = @(
+                    @{ Name; Status; LastModified; FileSize; RowCount; FilePath; ErrorDetail }
+                )
+                Summary = @{ Total; Delivered; Stale; Missing; Disabled; Error }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $status = Get-SPDisconnectedAppDeliveryStatus -StaleHours 24
+        $status.Data.Apps | Format-Table Name, Status, RowCount
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$StaleHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppDeliveryStatus: Checking file delivery (StaleHours=$StaleHours)" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppDeliveryStatus' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Get all registered apps including disabled
+        $configParams = @{ IncludeDisabled = $true }
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        $cutoff = (Get-Date).AddHours(-$StaleHours)
+
+        $appStatuses = [System.Collections.Generic.List[hashtable]]::new()
+        $summaryCounters = @{
+            Total     = $apps.Count
+            Delivered = 0
+            Stale     = 0
+            Missing   = 0
+            Disabled  = 0
+            Error     = 0
+        }
+
+        foreach ($app in $apps) {
+            $appName  = $app.Name
+            $filePath = $app.AccountFilePath
+
+            # Disabled apps
+            if (-not $app.Enabled) {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Disabled'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters['Disabled']++
+                continue
+            }
+
+            # Missing file path or file does not exist
+            if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path -Path $filePath -PathType Leaf)) {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Missing'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters['Missing']++
+                Write-SPLog -Message "App '$appName': file missing at '$filePath'" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # File exists -- check if readable and non-empty
+            try {
+                $fileInfo = Get-Item -Path $filePath -ErrorAction Stop
+                $lastModified = $fileInfo.LastWriteTimeUtc
+
+                if ($fileInfo.Length -eq 0) {
+                    $appStatuses.Add(@{
+                        Name         = $appName
+                        Status       = 'Error'
+                        LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        FileSize     = 0
+                        RowCount     = 0
+                        FilePath     = $filePath
+                        ErrorDetail  = 'File is empty (0 bytes)'
+                    })
+                    $summaryCounters['Error']++
+                    Write-SPLog -Message "App '$appName': file is empty at '$filePath'" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                    continue
+                }
+
+                # Quick row count via Import-Csv
+                $rowCount = 0
+                try {
+                    $rowCount = @(Import-Csv -Path $filePath -ErrorAction Stop).Count
+                }
+                catch {
+                    $appStatuses.Add(@{
+                        Name         = $appName
+                        Status       = 'Error'
+                        LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        FileSize     = $fileInfo.Length
+                        RowCount     = $null
+                        FilePath     = $filePath
+                        ErrorDetail  = "File unreadable as CSV: $($_.Exception.Message)"
+                    })
+                    $summaryCounters['Error']++
+                    Write-SPLog -Message "App '$appName': CSV parse error at '$filePath': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                        -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+                    continue
+                }
+
+                # Classify as Delivered or Stale based on last modification time
+                $status = if ($lastModified -ge $cutoff) { 'Delivered' } else { 'Stale' }
+
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = $status
+                    LastModified = $lastModified.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    FileSize     = $fileInfo.Length
+                    RowCount     = $rowCount
+                    FilePath     = $filePath
+                    ErrorDetail  = $null
+                })
+                $summaryCounters[$status]++
+
+                Write-SPLog -Message "App '$appName': $status (rows=$rowCount, modified=$($lastModified.ToString('yyyy-MM-dd HH:mm')))" `
+                    -Severity $(if ($status -eq 'Stale') { 'WARN' } else { 'INFO' }) `
+                    -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+            }
+            catch {
+                $appStatuses.Add(@{
+                    Name         = $appName
+                    Status       = 'Error'
+                    LastModified = $null
+                    FileSize     = $null
+                    RowCount     = $null
+                    FilePath     = $filePath
+                    ErrorDetail  = "File access error: $($_.Exception.Message)"
+                })
+                $summaryCounters['Error']++
+                Write-SPLog -Message "App '$appName': file access error at '$filePath': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+            }
+        }
+
+        Write-SPLog -Message "Delivery status: $($summaryCounters['Delivered']) delivered, $($summaryCounters['Stale']) stale, $($summaryCounters['Missing']) missing, $($summaryCounters['Disabled']) disabled, $($summaryCounters['Error']) error (of $($apps.Count) total)" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppDeliveryStatus' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Apps    = $appStatuses.ToArray()
+                Summary = $summaryCounters
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppDeliveryStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppDeliveryStatus' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1616,5 +1844,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPDisconnectedAppCertRun',
     'Export-SPDisconnectedAppDeltaHtml',
     'Get-SPRegisteredApps',
-    'Initialize-SPDisconnectedAppDirectories'
+    'Initialize-SPDisconnectedAppDirectories',
+    'Get-SPDisconnectedAppDeliveryStatus'
 )
