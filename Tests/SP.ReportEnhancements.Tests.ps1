@@ -506,7 +506,7 @@ Describe "RE-03: Export-SPLeadershipLevelHtml generates reports at each level" {
 #region RE-04: HTML detail modes (<details> in Detailed, none in Summary)
 # ---------------------------------------------------------------------------
 
-Describe "RE-04: HTML contains <details> tags in Detailed mode, none in Summary mode" {
+Describe "RE-04: HTML uses collapsible detail sections in Detailed mode, none in Summary mode" {
 
     Context "When generating reports in Detailed mode" {
         BeforeAll {
@@ -537,11 +537,11 @@ Describe "RE-04: HTML contains <details> tags in Detailed mode, none in Summary 
             }
         }
 
-        It "Should contain <details> tags in Detailed mode" {
+        It "Should contain detail-disclosure tags in Detailed mode" {
             $script:RE04DetailedHtml | Should -Match '<details'
         }
 
-        It "Should auto-expand revocations with <details open>" {
+        It "Should auto-expand revocations with an open detail section" {
             # Revocation sections should be auto-expanded
             $script:RE04DetailedHtml | Should -Match '<details open'
         }
@@ -576,7 +576,7 @@ Describe "RE-04: HTML contains <details> tags in Detailed mode, none in Summary 
             }
         }
 
-        It "Should NOT contain <details> tags in Summary mode" {
+        It "Should NOT contain detail-disclosure tags in Summary mode" {
             $script:RE04SummaryHtml | Should -Not -Match '<details'
         }
 
@@ -799,7 +799,12 @@ Describe "RE-07: Measure-SPAuditRubberStampRisk flags bulk-approve pattern" {
             Mock Write-SPLog -ModuleName SP.AuditReport { }
 
             # Build 100 APPROVE decisions with timestamps clustered in 30 seconds
-            $baseTime  = [datetime]::Parse('2026-03-15T10:00:00Z')
+            # Parse as UTC so the literal 'Z' in the formatted timestamps below is
+            # truthful regardless of host timezone. Otherwise Parse() yields a
+            # Local-kind value that, re-stamped with 'Z', mislabels local time as
+            # UTC -- decisions can then sort before the campaign-created time and
+            # distort the response-latency metric.
+            $baseTime  = [datetime]::Parse('2026-03-15T10:00:00Z', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
             $approvals = [System.Collections.Generic.List[object]]::new()
             for ($i = 0; $i -lt 100; $i++) {
                 $dt = $baseTime.AddSeconds($i * 0.3)  # 0.3 seconds apart = 30 seconds total
@@ -865,7 +870,12 @@ Describe "RE-07: Measure-SPAuditRubberStampRisk flags bulk-approve pattern" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.AuditReport { }
 
-            $baseTime  = [datetime]::Parse('2026-03-15T10:00:00Z')
+            # Parse as UTC so the literal 'Z' in the formatted timestamps below is
+            # truthful regardless of host timezone. Otherwise Parse() yields a
+            # Local-kind value that, re-stamped with 'Z', mislabels local time as
+            # UTC -- decisions can then sort before the campaign-created time and
+            # distort the response-latency metric.
+            $baseTime  = [datetime]::Parse('2026-03-15T10:00:00Z', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
             $approvals = [System.Collections.Generic.List[object]]::new()
             for ($i = 0; $i -lt 16; $i++) {
                 $dt = $baseTime.AddMinutes($i * 7.5)  # every 7.5 mins over 2 hours
