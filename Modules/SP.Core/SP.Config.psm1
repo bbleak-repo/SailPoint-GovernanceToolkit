@@ -561,6 +561,24 @@ function Test-SPConfiguration {
         }
     }
 
+    # --- HTTPS enforcement warning for non-mock environments ---
+    $envName = ''
+    try { $envName = [string]$config.Global.EnvironmentName } catch { }
+    $isMockEnv = ($envName -imatch 'mock|localhost|test|dev')
+    foreach ($urlField in @(
+        @('Authentication.ConfigFile.TenantUrl',   { $config.Authentication.ConfigFile.TenantUrl }),
+        @('Authentication.ConfigFile.OAuthTokenUrl', { $config.Authentication.ConfigFile.OAuthTokenUrl }),
+        @('Api.BaseUrl',                           { $config.Api.BaseUrl })
+    )) {
+        try {
+            $urlVal = [string](& $urlField[1])
+            if (-not [string]::IsNullOrWhiteSpace($urlVal) -and
+                $urlVal.StartsWith('http://') -and -not $isMockEnv) {
+                $warnings.Add("$($urlField[0]) uses HTTP (not HTTPS). This sends credentials in cleartext. Use HTTPS for production environments.")
+            }
+        } catch { }
+    }
+
     # --- Type checks: positive integers ---
     $positiveIntegers = @(
         @('Api.TimeoutSeconds',              { $config.Api.TimeoutSeconds }),

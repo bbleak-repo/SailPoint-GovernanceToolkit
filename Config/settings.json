@@ -1,16 +1,16 @@
 {
     "Global": {
-        "EnvironmentName": "MOCK-SERVER",
+        "EnvironmentName": "CHANGE_ME",
         "DebugMode": false,
         "ToolkitVersion": "1.0.0"
     },
     "Authentication": {
         "Mode": "ConfigFile",
         "ConfigFile": {
-            "TenantUrl": "http://localhost:8080",
-            "OAuthTokenUrl": "http://localhost:8080/oauth/token",
-            "ClientId": "mock",
-            "ClientSecret": "mock"
+            "TenantUrl": "https://CHANGE_ME.api.identitynow.com",
+            "OAuthTokenUrl": "https://CHANGE_ME.api.identitynow.com/oauth/token",
+            "ClientId": "CHANGE_ME",
+            "ClientSecret": "CHANGE_ME_DO_NOT_USE_IN_PRODUCTION"
         },
         "Vault": {
             "VaultPath": ".\\Data\\sp-vault.enc",
@@ -25,7 +25,7 @@
         "RetentionDays": 30
     },
     "Api": {
-        "BaseUrl": "http://localhost:8080/v3",
+        "BaseUrl": "https://CHANGE_ME.api.identitynow.com/v3",
         "TimeoutSeconds": 60,
         "RetryCount": 3,
         "RetryDelaySeconds": 5,
@@ -49,7 +49,7 @@
     },
     "Safety": {
         "MaxCampaignsPerRun": 10,
-        "RequireWhatIfOnProd": false,
+        "RequireWhatIfOnProd": true,
         "AllowCompleteCampaign": false
     },
     "Audit": {
@@ -66,8 +66,16 @@
         "LeadershipDepth": 3,
         "RiskIndicators": {
             "StaleAccessDays": 90,
-            "PrivilegedPatterns": ["Admin", "Root", "DBA", "Domain Admins"],
-            "ServiceAccountPatterns": ["^SVC-", "^svc-"]
+            "PrivilegedPatterns": [
+                "Admin",
+                "Root",
+                "DBA",
+                "Domain Admins"
+            ],
+            "ServiceAccountPatterns": [
+                "^SVC-",
+                "^svc-"
+            ]
         },
         "Smtp": {
             "Enabled": false,
@@ -79,7 +87,9 @@
         }
     },
     "Notification": {
-        "Backends": ["Log"],
+        "Backends": [
+            "Log"
+        ],
         "Smtp": {
             "Server": "",
             "Port": 587,
@@ -98,7 +108,11 @@
         "ArchiveDays": 30,
         "DeleteDays": 90,
         "ArchivePath": ".\\Archive",
-        "Paths": ["Audit", "DeltaCert", "Logs"]
+        "Paths": [
+            "Audit",
+            "DeltaCert",
+            "Logs"
+        ]
     },
     "DisconnectedApps": {
         "ImportBasePath": ".\\DisconnectedApps\\Imports",
@@ -109,8 +123,21 @@
         "DefaultDeadlineDays": 2,
         "CorrelationAttribute": "e-mail",
         "AccountDeletionThresholdPct": 20,
-        "RequiredAccountColumns": ["id", "name", "givenName", "familyName", "e-mail", "groups", "IIQDisabled"],
-        "RequiredEntitlementColumns": ["id", "name", "displayName", "description"],
+        "RequiredAccountColumns": [
+            "id",
+            "name",
+            "givenName",
+            "familyName",
+            "e-mail",
+            "groups",
+            "IIQDisabled"
+        ],
+        "RequiredEntitlementColumns": [
+            "id",
+            "name",
+            "displayName",
+            "description"
+        ],
         "Applications": [
             {
                 "Name": "PEP-Plus",
