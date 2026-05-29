@@ -15,6 +15,8 @@
         4. Get-SPRegisteredApps - returns enabled app registrations from config
         5. Initialize-SPDisconnectedAppDirectories - scaffolds per-app directories
         6. Get-SPDisconnectedAppDeliveryStatus - checks file delivery freshness per app
+        7. Get-SPDisconnectedAppIdentityRisk - cross-app identity risk analysis
+        8. Export-SPDisconnectedAppIdentityRiskHtml - identity risk HTML report
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -25,7 +27,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.2.0
+    Version: 1.3.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -1837,6 +1839,451 @@ function Get-SPDisconnectedAppDeliveryStatus {
     }
 }
 
+function Get-SPDisconnectedAppIdentityRisk {
+    <#
+    .SYNOPSIS
+        Identifies identities appearing across multiple disconnected apps.
+    .DESCRIPTION
+        Reads the latest account snapshot from each registered app and builds
+        an identity map keyed by the correlation attribute (email). Identities
+        found in multiple apps receive a risk classification:
+        - Normal: 1 app
+        - Elevated: 2 apps
+        - High: 3+ apps
+
+        Results are sorted by app count descending (highest risk first).
+        Only reads local snapshot files -- no ISC API calls.
+    .PARAMETER CorrelationAttribute
+        CSV column used to correlate identities across apps. Default: 'e-mail'.
+    .PARAMETER SnapshotDir
+        Root snapshot directory. Defaults to config SnapshotPath.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .PARAMETER ConfigPath
+        Path to settings.json. Defaults to auto-resolved path.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data = @{
+                Identities = @(
+                    @{ Email; Name; Apps; AppCount; Risk }
+                )
+                Summary = @{ TotalIdentities; SingleApp; MultiApp; HighRisk }
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $risk = Get-SPDisconnectedAppIdentityRisk
+        $risk.Data.Identities | Where-Object { $_.Risk -eq 'High' } | Format-Table
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CorrelationAttribute = 'e-mail',
+
+        [Parameter()]
+        [string]$SnapshotDir,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [string]$ConfigPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPDisconnectedAppIdentityRisk: Starting cross-app identity risk analysis" `
+        -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppIdentityRisk' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load config for snapshot path if not provided
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) {
+            $configParams = @{}
+            if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+            $config = Get-SPConfig @configParams
+            $SnapshotDir = $config.DisconnectedApps.SnapshotPath
+        }
+
+        # Get registered apps
+        $configParams = @{}
+        if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+        $appsResult = Get-SPRegisteredApps @configParams
+
+        if (-not $appsResult.Success) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to load registered apps: $($appsResult.Error)"
+            }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Identities = @()
+                    Summary    = @{ TotalIdentities = 0; SingleApp = 0; MultiApp = 0; HighRisk = 0 }
+                }
+                Error   = $null
+            }
+        }
+
+        # Build identity map: email -> @{ Name; Apps = List[string] }
+        $identityMap = @{}
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+            $appDir  = Join-Path -Path $SnapshotDir -ChildPath $appName
+
+            if (-not (Test-Path -Path $appDir -PathType Container)) {
+                Write-SPLog -Message "App '$appName': no snapshot directory at '$appDir' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # Find latest accounts snapshot (descending sort by filename = date)
+            $snapshots = @(Get-ChildItem -Path $appDir -Filter '*-accounts.csv' -File |
+                Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}-accounts\.csv$' } |
+                Sort-Object -Property Name -Descending)
+
+            if ($snapshots.Count -eq 0) {
+                Write-SPLog -Message "App '$appName': no account snapshots found -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            $latestSnapshot = $snapshots[0].FullName
+
+            Write-SPLog -Message "App '$appName': loading snapshot '$($snapshots[0].Name)'" `
+                -Severity DEBUG -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+
+            try {
+                $rows = @(Import-Csv -Path $latestSnapshot -ErrorAction Stop)
+            }
+            catch {
+                Write-SPLog -Message "App '$appName': failed to parse snapshot '$latestSnapshot': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            # Check that the correlation column exists
+            if ($rows.Count -gt 0 -and $null -eq $rows[0].PSObject.Properties[$CorrelationAttribute]) {
+                Write-SPLog -Message "App '$appName': snapshot missing column '$CorrelationAttribute' -- skipping" `
+                    -Severity WARN -Component 'SP.DisconnectedAppRunner' `
+                    -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+                continue
+            }
+
+            foreach ($row in $rows) {
+                $email = ''
+                if ($null -ne $row.PSObject.Properties[$CorrelationAttribute]) {
+                    $email = [string]$row.$CorrelationAttribute
+                }
+                if ([string]::IsNullOrWhiteSpace($email)) { continue }
+
+                $emailKey = $email.Trim().ToLower()
+
+                # Build display name from givenName + familyName if available
+                $displayName = ''
+                if ($null -ne $row.PSObject.Properties['givenName'] -and
+                    $null -ne $row.PSObject.Properties['familyName']) {
+                    $gn = [string]$row.givenName
+                    $fn = [string]$row.familyName
+                    if (-not [string]::IsNullOrWhiteSpace($gn) -or -not [string]::IsNullOrWhiteSpace($fn)) {
+                        $displayName = ("$gn $fn").Trim()
+                    }
+                }
+
+                if (-not $identityMap.ContainsKey($emailKey)) {
+                    $identityMap[$emailKey] = @{
+                        Email = $email.Trim()
+                        Name  = $displayName
+                        Apps  = [System.Collections.Generic.List[string]]::new()
+                    }
+                }
+
+                # Update name if we have a better one (non-empty)
+                if (-not [string]::IsNullOrWhiteSpace($displayName) -and
+                    [string]::IsNullOrWhiteSpace($identityMap[$emailKey].Name)) {
+                    $identityMap[$emailKey].Name = $displayName
+                }
+
+                # Add app if not already listed (handles duplicate emails within one file)
+                if ($appName -notin $identityMap[$emailKey].Apps) {
+                    $identityMap[$emailKey].Apps.Add($appName)
+                }
+            }
+
+            Write-SPLog -Message "App '$appName': processed $($rows.Count) account(s)" `
+                -Severity INFO -Component 'SP.DisconnectedAppRunner' `
+                -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+        }
+
+        # Build result list sorted by app count descending
+        $identities = [System.Collections.Generic.List[hashtable]]::new()
+        $singleApp = 0
+        $multiApp  = 0
+        $highRisk  = 0
+
+        foreach ($key in $identityMap.Keys) {
+            $entry    = $identityMap[$key]
+            $appCount = $entry.Apps.Count
+            $risk     = switch ($appCount) {
+                1       { 'Normal' }
+                2       { 'Elevated' }
+                default { 'High' }
+            }
+
+            $identities.Add(@{
+                Email    = $entry.Email
+                Name     = $entry.Name
+                Apps     = @($entry.Apps)
+                AppCount = $appCount
+                Risk     = $risk
+            })
+
+            if ($appCount -eq 1)     { $singleApp++ }
+            elseif ($appCount -eq 2) { $multiApp++ }
+            else                     { $multiApp++; $highRisk++ }
+        }
+
+        # Sort by AppCount descending, then by Email ascending
+        $sorted = @($identities | Sort-Object -Property @(
+            @{ Expression = { $_.AppCount }; Descending = $true },
+            @{ Expression = { $_.Email };    Descending = $false }
+        ))
+
+        $totalIdentities = $sorted.Count
+
+        Write-SPLog -Message "Cross-app identity risk: $totalIdentities total, $singleApp single-app, $multiApp multi-app, $highRisk high-risk" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Get-SPDisconnectedAppIdentityRisk' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Identities = $sorted
+                Summary    = @{
+                    TotalIdentities = $totalIdentities
+                    SingleApp       = $singleApp
+                    MultiApp        = $multiApp
+                    HighRisk        = $highRisk
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppIdentityRisk failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Get-SPDisconnectedAppIdentityRisk' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppIdentityRiskHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report of cross-app identity risk findings.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppIdentityRisk and produces a
+        self-contained HTML report with:
+        - Executive summary with risk distribution counts
+        - Identity risk table sorted by app count descending
+        - Risk-level color coding (green=Normal, orange=Elevated, red=High)
+
+        Uses 100% inline CSS for Word paste compatibility.
+    .PARAMETER RiskResult
+        The .Data hashtable from Get-SPDisconnectedAppIdentityRisk.
+    .PARAMETER OutputPath
+        Directory where the report is saved. File: identity-risk-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath}; Error}
+    .EXAMPLE
+        $risk = Get-SPDisconnectedAppIdentityRisk
+        Export-SPDisconnectedAppIdentityRiskHtml -RiskResult $risk.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RiskResult,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $OutputPath -ChildPath "identity-risk-${ReportDate}.html"
+
+        $identities = @()
+        if ($null -ne $RiskResult['Identities']) { $identities = @($RiskResult['Identities']) }
+        $summary = if ($null -ne $RiskResult['Summary']) { $RiskResult['Summary'] } else { @{} }
+
+        $totalIdentities = if ($null -ne $summary['TotalIdentities']) { $summary['TotalIdentities'] } else { 0 }
+        $singleApp       = if ($null -ne $summary['SingleApp'])       { $summary['SingleApp'] }       else { 0 }
+        $multiApp        = if ($null -ne $summary['MultiApp'])        { $summary['MultiApp'] }        else { 0 }
+        $highRisk        = if ($null -ne $summary['HighRisk'])        { $summary['HighRisk'] }        else { 0 }
+
+        # Style constants (reuse from existing HTML patterns)
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>Cross-App Identity Risk Report - $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Title
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">Cross-App Identity Risk Report</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # Section 1: Executive Summary
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Executive Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $summaryRows = @(
+            @('Total Unique Identities', $totalIdentities),
+            @('Single-App Identities',   $singleApp),
+            @('Multi-App Identities',    $multiApp),
+            @('High Risk (3+ Apps)',      $highRisk)
+        )
+
+        foreach ($row in $summaryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # Section 2: Identity Risk Table (only multi-app identities, or all if few)
+        $multiAppIdentities = @($identities | Where-Object { $_.AppCount -gt 1 })
+
+        if ($multiAppIdentities.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Multi-App Identities ($($multiAppIdentities.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Email', 'Name', 'Apps', 'App Count', 'Risk')))
+
+            $rowIdx = 0
+            foreach ($identity in $multiAppIdentities) {
+                $riskBadge = switch ($identity.Risk) {
+                    'High'     { "<span style=`"$badgeRed`">HIGH</span>" }
+                    'Elevated' { "<span style=`"$badgeOrange`">ELEVATED</span>" }
+                    default    { "<span style=`"$badgeGreen`">NORMAL</span>" }
+                }
+
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Email),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Name),
+                    (ConvertTo-DisconnectedHtmlSafe ($identity.Apps -join ', ')),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.AppCount),
+                    $riskBadge
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#339933; font-size:14px; font-weight:bold; margin-top:24px;`">No multi-app identities found. All identities appear in only one disconnected app.</p>")
+        }
+
+        # Section 3: Full identity list (if total is manageable, <= 500)
+        if ($identities.Count -gt 0 -and $identities.Count -le 500) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">All Identities ($($identities.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Email', 'Name', 'Apps', 'App Count', 'Risk')))
+
+            $rowIdx = 0
+            foreach ($identity in $identities) {
+                $riskBadge = switch ($identity.Risk) {
+                    'High'     { "<span style=`"$badgeRed`">HIGH</span>" }
+                    'Elevated' { "<span style=`"$badgeOrange`">ELEVATED</span>" }
+                    default    { "<span style=`"$badgeGreen`">NORMAL</span>" }
+                }
+
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Email),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.Name),
+                    (ConvertTo-DisconnectedHtmlSafe ($identity.Apps -join ', ')),
+                    (ConvertTo-DisconnectedHtmlSafe $identity.AppCount),
+                    $riskBadge
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        elseif ($identities.Count -gt 500) {
+            [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:16px;`">Full identity list omitted ($($identities.Count) identities exceeds display limit of 500). Multi-app identities are shown above.</p>")
+        }
+
+        # Footer
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Cross-App Identity Risk Analysis | $timestamp UTC</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Identity risk HTML report saved to $filePath ($($identities.Count) identit(ies))" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppIdentityRiskHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppIdentityRiskHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppIdentityRiskHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1845,5 +2292,7 @@ Export-ModuleMember -Function @(
     'Export-SPDisconnectedAppDeltaHtml',
     'Get-SPRegisteredApps',
     'Initialize-SPDisconnectedAppDirectories',
-    'Get-SPDisconnectedAppDeliveryStatus'
+    'Get-SPDisconnectedAppDeliveryStatus',
+    'Get-SPDisconnectedAppIdentityRisk',
+    'Export-SPDisconnectedAppIdentityRiskHtml'
 )

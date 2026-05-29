@@ -30,7 +30,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 | DA-13 | Account Deletion Threshold Protection | none | DONE |
 | DA-14 | Batch Orchestrator | DA-11, DA-13 | DONE |
 | DA-15 | File Delivery Monitor | DA-11 | DONE |
-| DA-16 | Cross-App Identity Risk Report | DA-11 | PENDING |
+| DA-16 | Cross-App Identity Risk Report | DA-11 | DONE |
 | DA-17 | Unified Entitlement Catalog | DA-11 | PENDING |
 | DA-18 | Batch Summary HTML Report | DA-14 | PENDING |
 | DA-19 | SLA Tracking + Delivery History | DA-15 | PENDING |
@@ -315,8 +315,8 @@ function Get-SPDisconnectedAppDeliveryStatus {
 
 ## DA-16: Cross-App Identity Risk Report
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-16
 - **Depends On:** DA-11
 
 **Description:**
