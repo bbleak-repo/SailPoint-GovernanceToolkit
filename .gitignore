@@ -6,6 +6,7 @@
 Logs/
 Evidence/
 Reports/
+Audit/
 *.jsonl
 
 # Large runtime log files
@@ -15,7 +16,7 @@ GovernanceToolkit_*.json
 Data/*.enc
 
 # Local config overrides (per-developer, not for commit)
-Config/settings.local.json
+Config/*.local.json
 
 # Keep directory structure with .gitkeep
 !Logs/.gitkeep
@@ -23,3 +24,13 @@ Config/settings.local.json
 !Reports/.gitkeep
 !Data/.gitkeep
 .local-backups/
+
+# Test/dev run logs & artifacts (transient, regenerated)
+docs/*.log
+docs/*.log.err
+docs/pester-*.xml
+docs/windows-test-rounds/full-gui-validation-*/
+docs/windows-test-rounds/round-.md
+
+# Local working notes (not repo content)
+/status.md

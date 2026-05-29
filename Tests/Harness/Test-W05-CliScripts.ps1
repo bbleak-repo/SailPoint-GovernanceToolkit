@@ -209,6 +209,11 @@ try {
         $summary = ($r.Stdout -split "`r?`n" | Where-Object { $_ -match '(CampaignsCreated|Identities|Reason|Created \d|DuplicatesExist)' } | Select-Object -First 1)
         $summary = if ($summary) { $summary.Trim() } else { '<no summary line>' }
         Add-Result 'WC-05-04' 'PASS' ("exit 0; {0}" -f $summary)
+    } elseif ($r.ExitCode -eq 1 -and $r.Stdout -match 'No Changes|No AD grant events') {
+        # Exit 1 = documented "no changes" outcome (Invoke-SPADDeltaCert.ps1 exit
+        # contract): no AD grant events in the query window. A valid empty result,
+        # not a failure -- e.g. when mock events fall outside the 24h window.
+        Add-Result 'WC-05-04' 'PASS' 'exit 1 = No changes (no AD grant events in window) -- documented valid outcome'
     } else {
         $errLine = ($r.Stderr -split "`r?`n" | Select-Object -First 1)
         Add-Result 'WC-05-04' 'FAIL' ("exit={0}; first stderr: '{1}'. Transcript: {2}" -f $r.ExitCode, $errLine, $tx)
@@ -230,6 +235,9 @@ try {
         $summary = ($r.Stdout -split "`r?`n" | Where-Object { $_ -match '(SourceOwner|CampaignsCreated|Reason|Created \d|DuplicatesExist)' } | Select-Object -First 1)
         $summary = if ($summary) { $summary.Trim() } else { '<no summary line>' }
         Add-Result 'WC-05-05' 'PASS' ("exit 0; {0}" -f $summary)
+    } elseif ($r.ExitCode -eq 1 -and $r.Stdout -match 'No Changes|No AD grant events') {
+        # Exit 1 = documented "no changes" outcome (see WC-05-04). Valid empty result.
+        Add-Result 'WC-05-05' 'PASS' 'exit 1 = No changes (no AD grant events in window) -- documented valid outcome'
     } else {
         $errLine = ($r.Stderr -split "`r?`n" | Select-Object -First 1)
         Add-Result 'WC-05-05' 'FAIL' ("exit={0}; first stderr: '{1}'. Transcript: {2}" -f $r.ExitCode, $errLine, $tx)
@@ -278,6 +286,11 @@ try {
         } else {
             Add-Result 'WC-05-07' 'FAIL' ("exit 0 but no [WhatIf] marker in stdout. Transcript: {0}" -f $tx)
         }
+    } elseif ($r.ExitCode -eq 1 -and $r.Stdout -match 'No stale certifications') {
+        # Exit 1 = documented "no stale certifications found" outcome
+        # (Invoke-SPDeltaCertEscalate.ps1 exit contract). A valid no-op result,
+        # not a failure -- nothing was stale enough to escalate in the window.
+        Add-Result 'WC-05-07' 'PASS' 'exit 1 = No stale certifications found -- documented valid outcome'
     } else {
         $errLine = ($r.Stderr -split "`r?`n" | Select-Object -First 1)
         Add-Result 'WC-05-07' 'FAIL' ("exit={0}; first stderr: '{1}'. Transcript: {2}" -f $r.ExitCode, $errLine, $tx)

@@ -1552,22 +1552,21 @@ function Group-SPAuditByLeadership {
         if ($lvl -gt $discoveredTopLevel) { $discoveredTopLevel = $lvl }
     }
 
-    # Labels assigned by position FROM THE TOP (not from leaves).
-    # Position 0 = top leader, 1 = one below, 2 = two below, etc.
-    $topDownLabelList = @(
-        'Executive Leadership'    # 0: top
-        'Vice Presidents'         # 1: one below top
-        'Directors'               # 2: two below top
-        'Managers'                # 3: three below top
-        'Team Leads'              # 4
-        'Individual Contributors' # 5+
-    )
+    # Labels assigned by ABSOLUTE level (distance up from individual contributors
+    # at level 0), matching Build-SPOrgTree's canonical org-tree labels so the same
+    # tree is labeled identically wherever it is rendered. Levels above the known
+    # set fall back to the top label.
+    $absoluteLabels = @{
+        0 = 'Individual Contributors'
+        1 = 'Managers'
+        2 = 'Directors'
+        3 = 'Vice Presidents'
+        4 = 'Senior Vice Presidents'
+        5 = 'Executive Leadership'
+    }
     $levelLabels = @{}
     for ($lvl = 0; $lvl -le [Math]::Max($discoveredTopLevel, 5); $lvl++) {
-        $posFromTop = $discoveredTopLevel - $lvl
-        if ($posFromTop -lt 0) { $posFromTop = $topDownLabelList.Count - 1 }
-        if ($posFromTop -ge $topDownLabelList.Count) { $posFromTop = 0 }
-        $levelLabels[$lvl] = $topDownLabelList[$posFromTop]
+        $levelLabels[$lvl] = if ($absoluteLabels.ContainsKey($lvl)) { $absoluteLabels[$lvl] } else { 'Executive Leadership' }
     }
 
     $levels = @{}

@@ -425,7 +425,9 @@ Describe "LR-02: Build-SPOrgTree handles cyclic manager references" {
         }
 
         It "Should have logged a WARN about the cycle" {
-            Should -Invoke Write-SPLog -ModuleName SP.DeltaCertQueries -Times 1 -Exactly -ParameterFilter {
+            # Build-SPOrgTree runs in the Context BeforeAll, so assert against the
+            # Context scope (Should -Invoke defaults to the It scope, which sees 0).
+            Should -Invoke Write-SPLog -ModuleName SP.DeltaCertQueries -Scope Context -Times 1 -Exactly -ParameterFilter {
                 $Severity -eq 'WARN' -and $Message -match 'Cycle detected'
             }
         }
@@ -453,7 +455,7 @@ Describe "LR-02: Build-SPOrgTree handles cyclic manager references" {
         }
 
         It "Should have logged a WARN about the cycle" {
-            Should -Invoke Write-SPLog -ModuleName SP.DeltaCertQueries -Times 1 -Exactly -ParameterFilter {
+            Should -Invoke Write-SPLog -ModuleName SP.DeltaCertQueries -Scope Context -Times 1 -Exactly -ParameterFilter {
                 $Severity -eq 'WARN' -and $Message -match 'Cycle detected'
             }
         }
@@ -767,6 +769,7 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
     Context "When SMTP is disabled (default)" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Send-MailMessage -ModuleName SP.AuditReport { }
 
             Mock Get-SPConfig -ModuleName SP.AuditReport {
                 return [PSCustomObject]@{
@@ -812,19 +815,21 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
 
         It "Should log at DEBUG level when SMTP is disabled" {
-            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -ParameterFilter {
+            # Send-SPReport runs in the Context BeforeAll -- assert at Context scope.
+            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -Scope Context -ParameterFilter {
                 $Severity -eq 'DEBUG' -and $Message -match 'SMTP disabled'
             }
         }
 
         It "Should NOT invoke Send-MailMessage" {
-            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport
+            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport -Scope Context
         }
     }
 
     Context "When SMTP is enabled (stub mode)" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Send-MailMessage -ModuleName SP.AuditReport { }
 
             Mock Get-SPConfig -ModuleName SP.AuditReport {
                 return [PSCustomObject]@{
@@ -857,7 +862,7 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
 
         It "Should log at INFO level when SMTP is enabled (stub)" {
-            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -ParameterFilter {
+            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -Scope Context -ParameterFilter {
                 $Severity -eq 'INFO' -and $Message -match 'SMTP stub'
             }
         }
@@ -867,7 +872,7 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
 
         It "Should NOT invoke Send-MailMessage (stub only)" {
-            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport
+            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport -Scope Context
         }
     }
 
