@@ -26,7 +26,7 @@ delivery monitoring, cross-app analytics, and consolidated reporting.
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | DA-11 | App Registry (config-driven multi-app) | none | DONE |
-| DA-12 | App Registration CLI | DA-11 | PENDING |
+| DA-12 | App Registration CLI | DA-11 | DONE |
 | DA-13 | Account Deletion Threshold Protection | none | PENDING |
 | DA-14 | Batch Orchestrator | DA-11, DA-13 | PENDING |
 | DA-15 | File Delivery Monitor | DA-11 | PENDING |
@@ -110,8 +110,8 @@ function Initialize-SPDisconnectedAppDirectories {
 
 ## DA-12: App Registration CLI
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-12
 - **Depends On:** DA-11
 
 **Description:**
