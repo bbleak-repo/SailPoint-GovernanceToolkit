@@ -205,6 +205,26 @@ Configure Delta Cert parameters in `Config\settings.json` under the `DeltaCert` 
 
 ---
 
+## Step 10: Disconnected App Onboarding (Optional)
+
+For applications without a native ISC connector, the toolkit supports flat file CSV integration. Application teams export their account and entitlement data as CSV files; the toolkit detects daily changes and creates certification campaigns for new or changed access.
+
+**CSV templates** are provided in `Config\Templates\`:
+- `disconnected-app-accounts.csv` -- account file template with required columns and sample data
+- `disconnected-app-entitlements.csv` -- entitlement file template
+- `ONBOARDING-GUIDE.md` -- hand this file to application teams for delivery instructions
+
+```powershell
+# Daily run -- validate CSV, detect changes, create campaigns for new access
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' `
+    -AccountFilePath '.\Imports\PEP-Plus\accounts.csv' `
+    -EntitlementFilePath '.\Imports\PEP-Plus\entitlements.csv' -WhatIf
+```
+
+See [README.md](README.md) for the full parameter reference, daily workflow, and delta detection details.
+
+---
+
 ## Getting Help
 
 Every script supports `-Help` and `-?` to display built-in documentation:

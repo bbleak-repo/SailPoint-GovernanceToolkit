@@ -434,6 +434,130 @@ Register-ScheduledTask -TaskName 'SailPoint-DeltaCert-Escalate' -Action $action2
 2. **10:00, 14:00, 18:00, 22:00** -- `Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24` escalates unactioned certifications.
 3. **Ad-hoc** -- Use the GUI Delta Cert tab or `Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'AD Delta Cert'` to audit completed delta cert campaigns.
 
+### Disconnected App Onboarding: Invoke-SPDisconnectedAppCert.ps1
+
+Flat file integration for applications that lack a native SailPoint ISC connector. Application teams deliver daily CSV exports (accounts + entitlements) to a local directory. The toolkit validates the files, takes a date-stamped snapshot, compares against the previous day's snapshot to detect deltas, resolves changed accounts to ISC identities via email/username correlation, and creates targeted SEARCH-type certification campaigns per manager group for new or changed access.
+
+**Scope requirement:** Identity resolution requires `sp:search:read` (POST /v3/search). Campaign creation requires `idn:campaign:manage`. Use `-Token` with a browser JWT if OAuth PAT is unavailable.
+
+**CSV Templates:**
+
+Two CSV template files are provided in `Config\Templates\`:
+
+**Account file** (`disconnected-app-accounts.csv`):
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `id` | Yes | Unique account identifier (max 128 characters) |
+| `name` | Yes | Username or login name |
+| `givenName` | Yes | First name |
+| `familyName` | Yes | Last name |
+| `e-mail` | Yes | Corporate email address (used to correlate to ISC identity) |
+| `department` | Recommended | Department name |
+| `groups` | Yes | Comma-separated entitlement IDs assigned to this account |
+| `IIQDisabled` | Yes | Account status: `true` = disabled, `false` = active |
+
+**Entitlement file** (`disconnected-app-entitlements.csv`):
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| `id` | Yes | Unique entitlement identifier (must match values in accounts `groups` column) |
+| `name` | Yes | Technical name |
+| `displayName` | Yes | Human-readable name shown to reviewers during certification |
+| `description` | Yes | Description shown to reviewers (max 2000 characters) |
+
+See `Config\Templates\ONBOARDING-GUIDE.md` for detailed instructions to hand off to application teams.
+
+**CLI usage:**
+
+```powershell
+# Basic daily run -- validate, snapshot, detect changes, create campaigns
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' -AccountFilePath '.\Imports\PEP-Plus\accounts.csv'
+
+# Dry-run -- full workflow validation without any write API calls
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' -AccountFilePath '.\Imports\PEP-Plus\accounts.csv' -WhatIf
+
+# With entitlement cross-reference validation and browser token auth
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'DebtNext' `
+    -AccountFilePath '.\Imports\DebtNext\accounts.csv' `
+    -EntitlementFilePath '.\Imports\DebtNext\entitlements.csv' `
+    -Token 'eyJhbGciOiJSUzI1...'
+
+# Include manager-less identities via fallback reviewer with a 3-day deadline
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'IPAY' `
+    -AccountFilePath '.\Imports\IPAY\accounts.csv' `
+    -FallbackReviewerIdentityId 'mgr-fallback-id' -DeadlineDays 3
+
+# Custom campaign name prefix, snapshot directory, and output path
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' `
+    -AccountFilePath '.\Imports\PEP-Plus\accounts.csv' `
+    -CampaignNamePrefix 'PEP Access Review' `
+    -SnapshotDir 'D:\Snapshots' `
+    -OutputPath 'D:\Reports'
+
+# JSON output mode with custom config path
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' `
+    -AccountFilePath '.\Imports\PEP-Plus\accounts.csv' `
+    -ConfigPath 'D:\Config\settings.json' -OutputMode JSON
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-AppName` | Yes | Application name (used for directory paths, campaign naming, report titles) |
+| `-AccountFilePath` | Yes | Path to today's account CSV file |
+| `-EntitlementFilePath` | No | Path to entitlement CSV file (enables cross-reference validation) |
+| `-CampaignNamePrefix` | No | Campaign name prefix (default: `Disconnected App Cert`) |
+| `-DeadlineDays` | No | Days until campaign deadline (default: 2) |
+| `-FallbackReviewerIdentityId` | No | Identity ID for reviewing manager-less identities |
+| `-MaxCampaignsPerRun` | No | Abort if manager group count exceeds this (default: 20) |
+| `-SnapshotDir` | No | Root directory for date-stamped snapshots (default: `.\DisconnectedApps\Snapshots`) |
+| `-OutputPath` | No | Root directory for reports and JSONL audit trail (default: `.\DisconnectedApps\Reports`) |
+| `-ConfigPath` | No | Path to settings.json (default: `Config\settings.json`) |
+| `-Token` | No | Pre-obtained JWT bearer token from ISC browser session |
+| `-TokenExpiryMinutes` | No | Minutes until browser token expiry (default: 10) |
+| `-OutputMode` | No | `Console` (default), `JSON`, or `Both` |
+| `-WhatIf` | No | Dry-run mode -- no write API calls |
+| `-Help` | No | Display built-in help and exit |
+
+The `CorrelationAttribute` setting (which field to use for ISC identity matching -- defaults to `e-mail`) is configured in `settings.json` under `DisconnectedApps.CorrelationAttribute`, not as a CLI parameter.
+
+**Daily workflow:**
+
+1. Application team drops `accounts.csv` (and optionally `entitlements.csv`) into a local import directory by 04:00 UTC.
+2. The toolkit **validates** the CSV structure (required columns, data types, encoding, duplicate IDs).
+3. A **date-stamped snapshot** is saved (e.g., `2026-05-21-accounts.csv`) for historical comparison.
+4. **Delta detection** compares today's file against the previous snapshot. Seven change types are detected: added accounts, removed accounts, disabled, enabled, entitlements granted, entitlements revoked, and attribute changes.
+5. Changed accounts (adds, enables, grants) are **resolved** to ISC identities via `POST /v3/search` using email (primary) or username (fallback) correlation.
+6. Resolved identities are grouped by manager. One SEARCH-type **certification campaign** is created per manager group.
+7. An **HTML delta report** is generated with color-coded sections for all change types.
+8. A **JSONL audit event** is appended to the per-app audit trail.
+
+On quiet days with no changes between snapshots, the script exits with code 1 (expected no-op).
+
+**File delivery pattern:**
+
+Application teams place their CSV exports in a local directory (e.g., a network share, SFTP drop, or scheduled export target). The toolkit reads from wherever the files land -- it does not pull files from remote systems. File names should always be `accounts.csv` and `entitlements.csv` (no date suffixes). The toolkit handles date-stamped archival via the snapshot system.
+
+**Delta detection:**
+
+Each day's file is compared against the most recent previous snapshot (excluding today). The comparison is done by building hashtables keyed by account `id` for O(1) lookup, then checking each account for seven change types. Only campaign-triggering changes (added accounts, enabled accounts, entitlement grants) result in certification campaigns. Removals, revocations, disables, and attribute changes are logged in the HTML report but do not trigger campaigns.
+
+On first run (no previous snapshot exists), all accounts in the file are treated as added.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Campaigns created (or WhatIf completed) |
+| 1 | No changes detected between snapshots |
+| 2 | Parameter error |
+| 3 | Authentication error |
+| 4 | Configuration error |
+| 5 | Validation failure (CSV structure or data errors) |
+| 6 | Campaign creation error |
+
 ### Vault: New-SPVault.ps1
 
 One-time setup to store OAuth credentials in an encrypted vault (recommended for non-development environments).
@@ -544,6 +668,7 @@ SailPoint-GovernanceToolkit/
         Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting
         Invoke-SPADDeltaCert.ps1         # Daily AD delta certification
         Invoke-SPDeltaCertEscalate.ps1   # Stale certification escalation
+        Invoke-SPDisconnectedAppCert.ps1 # Disconnected app flat file certification
         Test-SPConnectivity.ps1          # Quick smoke test (config -> token -> API)
         New-SPVault.ps1                  # One-time vault setup
         Show-SPDashboard.ps1             # WPF GUI launcher
@@ -576,6 +701,12 @@ SailPoint-GovernanceToolkit/
             SP.DeltaCert.Cleanup.psm1    # Stale campaign completion
             SP.DeltaCert.Escalation.psm1 # Stale certification reassignment
 
+        SP.DisconnectedApps/             # Flat file disconnected app integration
+            SP.DisconnectedAppValidator.psm1  # CSV structure + data validation
+            SP.DisconnectedAppSnapshot.psm1   # Date-stamped file snapshot management
+            SP.DisconnectedAppDelta.psm1      # Day-over-day delta detection engine
+            SP.DisconnectedAppRunner.psm1     # Identity resolution + campaign creation + HTML reports
+
         SP.Gui/                          # WPF presentation layer
             SP.GuiBridge.psm1            # GUI-to-module bridge adapter
             SP.MainWindow.psm1           # WPF window host + event wiring
@@ -595,6 +726,10 @@ SailPoint-GovernanceToolkit/
         settings.json                    # Runtime configuration
         test-identities.csv              # Test identity definitions
         test-campaigns.csv               # Campaign test cases
+        Templates/                       # Disconnected app onboarding templates
+            disconnected-app-accounts.csv       # Account CSV template with sample data
+            disconnected-app-entitlements.csv   # Entitlement CSV template with sample data
+            ONBOARDING-GUIDE.md                 # Instructions for application teams
 
     Evidence/                            # JSONL evidence output (per test run)
     Reports/                             # HTML report output
@@ -608,6 +743,7 @@ SailPoint-GovernanceToolkit/
 - `SP.Testing` depends on `SP.Core` and `SP.Api`
 - `SP.Audit` depends on `SP.Core` and `SP.Api` only (same level as SP.Testing)
 - `SP.DeltaCert` depends on `SP.Core` and `SP.Api` only (same level as SP.Testing and SP.Audit)
+- `SP.DisconnectedApps` depends on `SP.Core`, `SP.Api`, and `SP.DeltaCert` (reuses identity resolution and manager grouping from DeltaCert)
 - `SP.Gui` depends on SP.Core, SP.Api, SP.Testing, SP.Audit, and SP.DeltaCert
 - Scripts are thin wrappers: module load -> config -> WhatIf guard -> dispatch
 

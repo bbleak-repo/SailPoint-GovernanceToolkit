@@ -21,6 +21,7 @@ Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Api.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.Testing.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.Audit.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCert.psd1') -Force
+Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedApps.psd1') -Force  # requires SP.DeltaCert
 
 # 4. GUI (optional, Windows only)
 Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.Gui.psd1') -Force
@@ -246,6 +247,56 @@ Campaign lifecycle orchestration for delta certifications:
 
 ---
 
+## SP.DisconnectedApps Module Internals
+
+### SP.DisconnectedAppValidator.psm1
+
+CSV validation for disconnected application flat file imports:
+
+| Function | Purpose |
+|----------|---------|
+| `Test-SPDisconnectedAppAccountFile` | Validate account CSV structure and data (required columns, duplicate IDs, encoding, email format, IIQDisabled values, sort order) |
+| `Test-SPDisconnectedAppEntitlementFile` | Validate entitlement CSV structure and data (required columns, duplicate IDs, name character restrictions, description length) |
+| `Test-SPDisconnectedAppCrossReference` | Cross-validate account `groups` references against entitlement IDs. Flags unmatched groups and orphaned entitlements. |
+
+Internal (not exported): `Test-SPFileIsUtf8` (encoding check), `Get-SPCsvColumnsFromHeader` (header parser).
+
+### SP.DisconnectedAppSnapshot.psm1
+
+Date-stamped file archival and retrieval for day-over-day comparison:
+
+| Function | Purpose |
+|----------|---------|
+| `Save-SPDisconnectedAppSnapshot` | Copy today's import file to `{SnapshotDir}/{AppName}/{YYYY-MM-DD}-{FileType}.csv`. Idempotent (re-run overwrites today's snapshot). |
+| `Get-SPDisconnectedAppPreviousSnapshot` | Find the most recent snapshot before today. Returns `$null` on first run (no previous snapshot). |
+| `Remove-SPDisconnectedAppOldSnapshots` | Delete snapshots older than the retention period (default 30 days). |
+
+### SP.DisconnectedAppDelta.psm1
+
+Day-over-day delta detection engine:
+
+| Function | Purpose |
+|----------|---------|
+| `Compare-SPDisconnectedAppFiles` | Compare current vs. previous account CSV. Detects seven change types: AccountAdded, AccountRemoved, AccountDisabled, AccountEnabled, EntitlementGranted, EntitlementRevoked, AttributeChanged. On first run (no previous file), all accounts are treated as Added. |
+
+Internal (not exported): `Split-GroupsValue` (comma-separated groups parser).
+
+### SP.DisconnectedAppRunner.psm1
+
+Identity resolution, campaign creation, and HTML report generation:
+
+| Function | Purpose |
+|----------|---------|
+| `Resolve-SPDisconnectedAppIdentities` | Correlate delta accounts to ISC identities via `POST /v3/search` using email (primary) or username (fallback). Fetches manager details via `Get-SPDeltaIdentityDetail`. Results cached per session. |
+| `Invoke-SPDisconnectedAppCertRun` | Group resolved identities by manager, create one SEARCH campaign per group. Includes duplicate guard, max-campaigns safety, and WhatIf support. |
+| `Export-SPDisconnectedAppDeltaHtml` | Generate self-contained HTML delta report with color-coded sections for all change types. Inline CSS for Word paste compatibility. |
+
+Internal (not exported): `Search-SPIdentityByAttribute` (ISC search API wrapper with session cache), `Write-SPDisconnectedAppAuditEvent` (JSONL audit trail), HTML helper functions.
+
+**Dependencies:** SP.Core (logging, config), SP.Api (REST client, campaign lifecycle), SP.DeltaCert (identity detail resolution via `Get-SPDeltaIdentityDetail`, manager grouping via `Group-SPDeltaByManager`, search filter via `Build-SPDeltaSearchFilter`).
+
+---
+
 ## Testing
 
 ### Running Tests
@@ -276,6 +327,7 @@ Test IDs follow the pattern `{MODULE}-{NNN}`:
 - `EVD-001` through `EVD-005` -- SP.Evidence
 - `ASRT-001` through `ASRT-005` -- SP.Assertions
 - `DC-*` -- SP.DeltaCert (SP.DeltaCert.Tests.ps1)
+- `DA-*` -- SP.DisconnectedApps (SP.DisconnectedApps.Tests.ps1)
 
 ### Mock Scoping
 
@@ -360,6 +412,7 @@ These were discovered during development and are documented here for reference:
 | `/v3/certifications/{id}/sign-off` | POST | SP.Decisions | Sign off certification |
 | `/v3/account-activities` | GET | SP.AuditQueries | Identity lifecycle events. Requires `sp:scopes:all` (no granular scope). |
 | `/v3/search/identities/{id}` | GET | SP.DeltaCert | Identity detail resolution (manager, lifecycle state). Requires `sp:search:read`. Note: `GET /v3/identities/{id}` does not exist -- use this search endpoint. |
+| `/v3/search` | POST | SP.DisconnectedApps | Identity correlation by email or username for disconnected app accounts. Requires `sp:search:read`. |
 | `/v3/sources/{id}` | GET | SP.AuditQueries | Source name resolution |
 | `/v3/accounts` | GET | SP.AuditQueries | Identity account resolution (UPN/sAMAccountName) |
 | `/v3/reports/{id}` | GET | SP.AuditQueries | CSV report download (v3, preferred) |

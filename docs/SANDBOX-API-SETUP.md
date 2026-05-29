@@ -86,6 +86,7 @@ The Governance Toolkit uses these ISC v3 API endpoints:
 | SP.AuditQueries | GET | `/v3/reports/{id}` | Download campaign report CSV |
 | SP.AuditQueries | GET | `/v3/sources/{id}` | Resolve source ID to display name |
 | SP.AuditQueries | GET | `/v3/accounts` | Resolve identity to account (UPN/sAMAccountName) |
+| SP.DisconnectedApps | POST | `/v3/search` | Identity correlation for disconnected app CSV accounts (email/username match) |
 | Legacy fallback | GET | `/cc/api/report/get/{id}?format=csv` | Legacy report download (if v3 fails) |
 
 ### Endpoint-to-Scope Mapping
@@ -132,6 +133,9 @@ ISC PAT scopes use granular strings (not role names). Here is the exact mapping 
 | Endpoint | Method | Required Scope |
 |----------|--------|----------------|
 | `/v3/search/identities/{id}` | GET | `sp:search:read` or `sp:search:manage` |
+| `/v3/search` | POST | `sp:search:read` or `sp:search:manage` |
+
+Note: `POST /v3/search` is used by the Disconnected App Onboarding Kit (`SP.DisconnectedApps` module) for identity correlation -- matching CSV account email addresses and usernames to ISC identity records. It uses the same `sp:search:read` scope as the `GET /v3/search/identities/{id}` endpoint above.
 
 **Account Activities (no granular scope):**
 
