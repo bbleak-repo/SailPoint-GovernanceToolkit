@@ -1,0 +1,7 @@
+id,name,givenName,familyName,e-mail,department,groups,IIQDisabled,accountType,created,lastLogin
+EMP10001,jsmith,John,Smith,john.smith@corp.com,Treasury,"PEP-ADMIN,PEP-REPORTS",false,standard,2024-03-15,2026-05-27T14:30:00Z
+EMP10002,jdoe,Jane,Doe,jane.doe@corp.com,Operations,PEP-READONLY,false,standard,2025-01-10,2026-05-28T09:15:00Z
+EMP10003,mjones,Mike,Jones,mike.jones@corp.com,Finance,"PEP-ADMIN,PEP-POWERUSER",false,admin,2023-06-01,2026-05-28T08:00:00Z
+EMP10004,alee,Alice,Lee,alice.lee@corp.com,IT,PEP-READONLY,false,standard,2025-09-20,2026-05-20T11:45:00Z
+EMP10005,tresigned,Tom,Resigned,tom.resigned@corp.com,Treasury,,true,standard,2022-01-05,2025-11-15T16:00:00Z
+SVC-PEP-01,svc-pep-batch,PEP,Batch Service,,,PEP-ADMIN,false,service,2023-01-01,2026-05-28T04:00:00Z

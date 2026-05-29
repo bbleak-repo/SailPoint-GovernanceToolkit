@@ -1,0 +1,6 @@
+id,name,displayName,description,owner,type,riskLevel
+PEP-ADMIN,PEP-ADMIN,PEP+ System Administrator,Full administrative access to PEP+ ACH processing system including user management and system configuration,security-ops@corp.com,role,critical
+PEP-POWERUSER,PEP-POWERUSER,PEP+ Power User,Extended access for advanced ACH processing features and batch operations,treasury-lead@corp.com,role,high
+PEP-READONLY,PEP-READONLY,PEP+ Read Only,View-only access to PEP+ transaction data and reports,treasury-lead@corp.com,role,low
+PEP-REPORTS,PEP-REPORTS,PEP+ Report Generator,Access to generate and export PEP+ transaction reports and audit logs,finance-mgr@corp.com,permission,low
+PEP-ACH-ORIGINATOR,PEP-ACH-ORIGINATOR,ACH Payment Originator,Ability to originate ACH debit and credit transactions through PEP+,treasury-lead@corp.com,permission,high
