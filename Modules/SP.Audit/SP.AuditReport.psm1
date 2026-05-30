@@ -4420,7 +4420,10 @@ function Export-SPLeadershipLevelHtml {
 
         [Parameter()]
         [ValidateSet('Summary', 'Detailed', 'Verbose')]
-        [string]$DetailLevel = 'Verbose'
+        [string]$DetailLevel = 'Verbose',
+
+        [Parameter()]
+        [hashtable]$BandData
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -4938,11 +4941,17 @@ $detailSectionsHtml
             }
         }
 
-        # --- Title ---
+        # --- Title (with optional band designation from BandData) ---
+        $bandSuffix = ''
+        if ($null -ne $BandData -and $null -ne $BandData.Bands -and
+            $BandData.Bands.ContainsKey($leaderId)) {
+            $bandSuffix = " (Band $($BandData.Bands[$leaderId]))"
+        }
+
         $reportTitle = if ($isTopLevel) {
-            "Executive Summary"
+            "Executive Summary$bandSuffix"
         } else {
-            "$($thisLevelLabel -replace 's$', '') Report: $safeLeaderName"
+            "$($thisLevelLabel -replace 's$', '') Report${bandSuffix}: $safeLeaderName"
         }
 
         # --- Footer ---
@@ -5003,6 +5012,269 @@ $footerHtml
     }
 
     return @($outputPaths.ToArray())
+}
+
+function Export-SPLeadershipBandHtml {
+    <#
+    .SYNOPSIS
+        Generates per-band leadership HTML reports filtered by band classification.
+    .DESCRIPTION
+        Orchestrates band-aware report generation by filtering leadership data
+        through band classifications from Resolve-SPIdentityBand. Produces reports
+        only for leaders whose band matches the TargetBands / ExcludeBands criteria.
+
+        Delegates actual HTML generation to Export-SPLeadershipLevelHtml with
+        filtered leader sets and band-decorated headers.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership with Levels and TopLevel keys.
+    .PARAMETER Decisions
+        Hashtable from Group-SPAuditDecisions with Approved, Revoked, Pending arrays.
+    .PARAMETER OrgTree
+        Hashtable from Build-SPOrgTree .Data containing Nodes, LevelLabels, etc.
+    .PARAMETER BandData
+        Hashtable from Resolve-SPIdentityBand .Data containing Bands (id->letter),
+        Sources, and Summary.
+    .PARAMETER TargetBands
+        Array of band letters to include (e.g. @('A','B','C')). When specified,
+        only leaders with matching bands are included. Mutually exclusive logic
+        with ExcludeBands -- if both are specified, TargetBands takes precedence.
+    .PARAMETER ExcludeBands
+        Array of band letters to exclude (e.g. @('D','E')). When specified,
+        leaders with matching bands are skipped. Ignored if TargetBands is provided.
+    .PARAMETER CampaignName
+        Display name of the campaign (or combined campaign label).
+    .PARAMETER DateRange
+        Descriptive date range string for the report header.
+    .PARAMETER OutputPath
+        Directory in which to write the HTML files. Created if absent.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in each report footer.
+    .PARAMETER DetailLevel
+        Controls identity-level detail in reports: Summary, Detailed, or Verbose.
+    .OUTPUTS
+        [hashtable] @{
+            Success       = [bool]
+            Data          = @{
+                Files         = [string[]]  array of generated file paths
+                ReportCount   = [int]       total reports generated
+                BandsIncluded = [string[]]  bands that had matching leaders
+                LeadersSkipped = [int]      leaders filtered out by band
+            }
+            Error         = $null | [string]
+        }
+    .EXAMPLE
+        $result = Export-SPLeadershipBandHtml -LeadershipData $leadership `
+            -Decisions $grouped -OrgTree $tree.Data -BandData $bands.Data `
+            -TargetBands @('A','B','C') -CampaignName 'Q1 Review' `
+            -OutputPath 'C:\Reports\leadership'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [hashtable]$BandData,
+
+        [Parameter()]
+        [string[]]$TargetBands,
+
+        [Parameter()]
+        [string[]]$ExcludeBands,
+
+        [Parameter(Mandatory)]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [ValidateSet('Summary', 'Detailed', 'Verbose')]
+        [string]$DetailLevel = 'Verbose'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Export-SPLeadershipBandHtml'
+
+    # --- Build the set of allowed bands ---
+    $validBandLetters = @('A', 'B', 'C', 'D', 'E')
+    $allowedBands = @{}
+
+    if ($null -ne $TargetBands -and $TargetBands.Count -gt 0) {
+        foreach ($b in $TargetBands) {
+            $bu = $b.ToUpper()
+            if ($bu -in $validBandLetters) { $allowedBands[$bu] = $true }
+        }
+    }
+    elseif ($null -ne $ExcludeBands -and $ExcludeBands.Count -gt 0) {
+        foreach ($b in $validBandLetters) { $allowedBands[$b] = $true }
+        foreach ($b in $ExcludeBands) {
+            $bu = $b.ToUpper()
+            if ($allowedBands.ContainsKey($bu)) { $allowedBands.Remove($bu) }
+        }
+    }
+    else {
+        # No filtering -- all bands allowed
+        foreach ($b in $validBandLetters) { $allowedBands[$b] = $true }
+    }
+
+    if ($allowedBands.Count -eq 0) {
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = 'No valid bands in filter. TargetBands/ExcludeBands resolved to an empty set.'
+        }
+    }
+
+    # --- Validate inputs ---
+    $levels = if ($LeadershipData.ContainsKey('Levels')) { $LeadershipData['Levels'] } else { @{} }
+    $bands  = if ($null -ne $BandData -and $null -ne $BandData.Bands) { $BandData.Bands } else { @{} }
+
+    if ($levels.Count -eq 0) {
+        return @{
+            Success = $true
+            Data    = @{ Files = @(); ReportCount = 0; BandsIncluded = @(); LeadersSkipped = 0 }
+            Error   = $null
+        }
+    }
+
+    # --- Determine level range ---
+    $topLevel = if ($LeadershipData.ContainsKey('TopLevel')) { [int]$LeadershipData.TopLevel } else {
+        ($levels.Keys | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+    }
+    $lowestLevel = ($levels.Keys | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
+
+    # --- Build filtered leadership data per level ---
+    $filteredLevels   = @{}
+    $leadersSkipped   = 0
+    $bandsIncludedSet = @{}
+
+    foreach ($lvlKey in $levels.Keys) {
+        $lvl = [int]$lvlKey
+        $lvlData = $levels[$lvlKey]
+        if ($null -eq $lvlData.Leaders -or $lvlData.Leaders.Count -eq 0) { continue }
+
+        $filteredLeaders = @{}
+        foreach ($leaderId in $lvlData.Leaders.Keys) {
+            if ($leaderId -eq '__unmanaged__') {
+                $filteredLeaders[$leaderId] = $lvlData.Leaders[$leaderId]
+                continue
+            }
+
+            # Look up this leader's band
+            $leaderBand = $null
+            if ($bands.ContainsKey($leaderId)) {
+                $leaderBand = $bands[$leaderId]
+            }
+
+            if ($null -ne $leaderBand -and $allowedBands.ContainsKey($leaderBand)) {
+                $filteredLeaders[$leaderId] = $lvlData.Leaders[$leaderId]
+                $bandsIncludedSet[$leaderBand] = $true
+            }
+            else {
+                $leadersSkipped++
+            }
+        }
+
+        # Only include level if it has non-unmanaged leaders after filtering
+        $realLeaderCount = @($filteredLeaders.Keys | Where-Object { $_ -ne '__unmanaged__' }).Count
+        if ($realLeaderCount -gt 0) {
+            $filteredLevels[$lvl] = @{
+                Label   = $lvlData.Label
+                Leaders = $filteredLeaders
+            }
+        }
+    }
+
+    if ($filteredLevels.Count -eq 0) {
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Band filter produced no matching leaders (allowed: $($allowedBands.Keys -join ', '))" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+        return @{
+            Success = $true
+            Data    = @{
+                Files          = @()
+                ReportCount    = 0
+                BandsIncluded  = @()
+                LeadersSkipped = $leadersSkipped
+            }
+            Error   = $null
+        }
+    }
+
+    # Build filtered LeadershipData clone with filtered levels
+    $filteredLeadershipData = @{}
+    foreach ($key in $LeadershipData.Keys) {
+        if ($key -eq 'Levels') { continue }
+        $filteredLeadershipData[$key] = $LeadershipData[$key]
+    }
+    $filteredLeadershipData['Levels'] = $filteredLevels
+
+    # Determine effective start/lowest levels from filtered data
+    $filteredLevelNums = @($filteredLevels.Keys | ForEach-Object { [int]$_ })
+    $effectiveStartLevel  = ($filteredLevelNums | Measure-Object -Maximum).Maximum
+    $effectiveLowestLevel = ($filteredLevelNums | Measure-Object -Minimum).Minimum
+
+    # --- Generate reports per level ---
+    $allFiles = [System.Collections.Generic.List[string]]::new()
+
+    for ($lvl = $effectiveStartLevel; $lvl -ge $effectiveLowestLevel; $lvl--) {
+        if (-not $filteredLevels.ContainsKey($lvl)) { continue }
+
+        $lvlPaths = Export-SPLeadershipLevelHtml `
+            -LeadershipData $filteredLeadershipData `
+            -Decisions $Decisions `
+            -OrgTree $OrgTree `
+            -Level $lvl `
+            -StartLevel $effectiveStartLevel `
+            -LowestLevel $effectiveLowestLevel `
+            -CampaignName $CampaignName `
+            -DateRange $DateRange `
+            -OutputPath $OutputPath `
+            -CorrelationID $CorrelationID `
+            -DetailLevel $DetailLevel `
+            -BandData $BandData
+
+        foreach ($p in @($lvlPaths)) {
+            $allFiles.Add($p)
+        }
+    }
+
+    $bandsIncluded = @($bandsIncludedSet.Keys | Sort-Object)
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "Band-filtered reports complete: $($allFiles.Count) files, bands=$($bandsIncluded -join ','), skipped=$leadersSkipped" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    return @{
+        Success = $true
+        Data    = @{
+            Files          = @($allFiles.ToArray())
+            ReportCount    = $allFiles.Count
+            BandsIncluded  = $bandsIncluded
+            LeadersSkipped = $leadersSkipped
+        }
+        Error   = $null
+    }
 }
 
 function Send-SPReport {
@@ -11833,6 +12105,7 @@ Export-ModuleMember -Function @(
     'Export-SPLeadershipExecutiveHtml',
     'Export-SPLeadershipDirectorHtml',
     'Export-SPLeadershipLevelHtml',
+    'Export-SPLeadershipBandHtml',
     'Send-SPReport',
     'Compare-SPCampaigns',
     'Export-SPCampaignComparisonHtml',

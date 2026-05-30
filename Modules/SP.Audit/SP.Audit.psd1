@@ -58,6 +58,7 @@
         'Export-SPLeadershipExecutiveHtml'
         'Export-SPLeadershipDirectorHtml'
         'Export-SPLeadershipLevelHtml'
+        'Export-SPLeadershipBandHtml'
         'Send-SPReport'
 
         # SP.AuditReport - Comparison functions
