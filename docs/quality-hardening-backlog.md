@@ -19,7 +19,7 @@ Critical items first, then high, medium, low.
 |---|----------|---------|------|--------|
 | QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | DONE |
 | QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | DONE |
-| QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | PENDING |
+| QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | DONE |
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | PENDING |
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | PENDING |
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | PENDING |
@@ -75,7 +75,7 @@ Keep the `Smtp.Enabled = false` guard (only send when explicitly enabled).
 
 ## QH-03: Add Log Retention Step to Daily Orchestrator
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Invoke-SPLogRetention` exists but the Daily Orchestrator never calls it.

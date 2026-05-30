@@ -17,7 +17,8 @@
       7. Disconnected App Batch    (Invoke-SPDisconnectedAppBatch)
       8. Decision Collection       (Get-SPDisconnectedAppCampaignDecisions)
       9. Remediation Check         (Update-SPRemediationStatus)
-     10. Daily Summary             (consolidated output + JSONL audit trail)
+     10. Log Retention             (Invoke-SPLogRetention)
+     11. Daily Summary             (consolidated output + JSONL audit trail)
 
     Each step is isolated -- a failure in one step does not prevent subsequent
     steps from executing. The exit code reflects the worst outcome.
@@ -51,6 +52,8 @@
     Skip Step 6: Campaign health check.
 .PARAMETER SkipDisconnectedApps
     Skip Steps 7-9: Disconnected app batch, decision collection, and remediation check.
+.PARAMETER SkipRetention
+    Skip Step 10: Log retention (archive and delete old output files).
 .PARAMETER HoursBack
     Override the look-back window in hours for delta cert run and report.
 .PARAMETER DeadlineDays
@@ -127,6 +130,9 @@ param(
 
     [Parameter()]
     [switch]$SkipDisconnectedApps,
+
+    [Parameter()]
+    [switch]$SkipRetention,
 
     # Overrides
     [Parameter()]
@@ -416,6 +422,7 @@ $stepResults = [ordered]@{
     DABatch       = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DADecisions   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DARemediation = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    Retention     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
 # Track worst exit code
@@ -1188,7 +1195,61 @@ else {
 
 #endregion
 
-#region Step 10: Daily Summary
+#region Step 10: Log Retention
+
+if (-not $SkipRetention) {
+    Write-Host '  Step 10: Log Retention' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        $retentionParams = @{
+            CorrelationID = $correlationID
+        }
+        if ($isWhatIf) { $retentionParams['WhatIf'] = $true }
+
+        $retentionResult = Invoke-SPLogRetention @retentionParams
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+
+        if ($retentionResult.Success) {
+            $archived = 0
+            $deleted  = 0
+            $skipped  = 0
+            if ($null -ne $retentionResult.Data) {
+                if ($null -ne $retentionResult.Data.Archived) { $archived = $retentionResult.Data.Archived.FileCount }
+                if ($null -ne $retentionResult.Data.Deleted)  { $deleted  = $retentionResult.Data.Deleted.FileCount }
+                if ($null -ne $retentionResult.Data.Skipped)  { $skipped  = $retentionResult.Data.Skipped.FileCount }
+            }
+            $detail = "Archived $archived file(s), deleted $deleted archive(s), skipped $skipped"
+            Set-StepResult -Step 'Retention' -Status 'Success' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 10: $detail" -ForegroundColor Green
+        }
+        else {
+            $detail = "WARN - $($retentionResult.Error)"
+            Set-StepResult -Step 'Retention' -Status 'Warning' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 10: $detail" -ForegroundColor Yellow
+            Write-SPLog -Message "Log retention warning: $($retentionResult.Error)" `
+                -Severity WARN -Component 'DailyOrchestrator' -Action 'RetentionWarn' -CorrelationID $correlationID
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+        }
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'Retention' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Step 10: WARN - $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Log retention exception: $($_.Exception.Message)" `
+            -Severity WARN -Component 'DailyOrchestrator' -Action 'RetentionError' -CorrelationID $correlationID
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 10: Log Retention [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 11: Daily Summary
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime)
