@@ -22,7 +22,7 @@ Critical items first, then high, medium, low.
 | QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | DONE |
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | DONE |
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | DONE |
-| QH-06 | HIGH | Update valid-settings.json test fixture | S | PENDING |
+| QH-06 | HIGH | Update valid-settings.json test fixture | S | DONE |
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | PENDING |
 | QH-08 | HIGH | Document settings.local.json override in README | S | PENDING |
 | QH-09 | HIGH | Document Audit-Mock directory | S | PENDING |
@@ -129,7 +129,7 @@ type validation, range constraints, path existence checks.
 
 ## QH-06: Update valid-settings.json Test Fixture
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-04
 
 **Problem:** Test fixture missing Notification, Retention, Leadership, DisconnectedApps.ISC

@@ -58,7 +58,44 @@
         "DefaultIdentityEventDays": 2,
         "DefaultStatuses": ["COMPLETED", "ACTIVE"],
         "IncludeCampaignReports": true,
-        "IncludeIdentityEvents": true
+        "IncludeIdentityEvents": true,
+        "IncludeLeadershipRollup": false,
+        "LeadershipDepth": 3,
+        "RiskIndicators": {
+            "StaleAccessDays": 90,
+            "PrivilegedPatterns": ["Admin", "Root", "DBA", "Domain Admins"],
+            "ServiceAccountPatterns": ["^SVC-", "^svc-"]
+        },
+        "Smtp": {
+            "Enabled": false,
+            "Server": "smtp.testlab.local",
+            "Port": 587,
+            "From": "sailpoint-audit@testlab.local",
+            "UseSsl": true,
+            "SubjectPrefix": "[SailPoint Audit]"
+        }
+    },
+    "Notification": {
+        "Backends": ["Log"],
+        "Smtp": {
+            "Server": "smtp.testlab.local",
+            "Port": 587,
+            "From": "sailpoint-notify@testlab.local",
+            "UseSsl": true
+        },
+        "Webhook": {
+            "Url": "",
+            "Method": "POST",
+            "Headers": {},
+            "IncludePayload": true
+        }
+    },
+    "Retention": {
+        "Enabled": false,
+        "ArchiveDays": 30,
+        "DeleteDays": 90,
+        "ArchivePath": ".\\Archive",
+        "Paths": ["Audit", "DeltaCert", "Logs"]
     },
     "DisconnectedApps": {
         "ImportBasePath": ".\\DisconnectedApps\\Imports",
@@ -69,8 +106,38 @@
         "DefaultDeadlineDays": 2,
         "CorrelationAttribute": "e-mail",
         "AccountDeletionThresholdPct": 20,
+        "ISC": {
+            "UploadMethod": "API",
+            "FileDropBasePath": "",
+            "WaitForAggregationSeconds": 120
+        },
         "RequiredAccountColumns": ["id", "name", "givenName", "familyName", "e-mail", "groups", "IIQDisabled"],
-        "RequiredEntitlementColumns": ["id", "name", "displayName", "description"]
+        "RequiredEntitlementColumns": ["id", "name", "displayName", "description"],
+        "Applications": [
+            {
+                "Name": "TestApp",
+                "AccountFilePath": ".\\DisconnectedApps\\Imports\\TestApp\\accounts.csv",
+                "EntitlementFilePath": ".\\DisconnectedApps\\Imports\\TestApp\\entitlements.csv",
+                "ISCSourceId": "test-source-id-001",
+                "CorrelationAttribute": "e-mail",
+                "CampaignNamePrefix": "TestApp Cert",
+                "DeadlineDays": 2,
+                "SlaDays": 1,
+                "Enabled": true
+            }
+        ]
+    },
+    "Leadership": {
+        "OrgChartSupplementPath": "",
+        "UseSupplementForReports": false,
+        "DefaultBandMapping": {
+            "0": "E",
+            "1": "D",
+            "2": "C",
+            "3": "B",
+            "4": "A"
+        },
+        "ISCBandAttribute": "jobLevel"
     },
     "DeltaCert": {
         "SourceIds": [],
