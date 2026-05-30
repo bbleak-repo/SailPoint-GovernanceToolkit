@@ -22,6 +22,8 @@
        11. Export-SPDisconnectedAppBatchHtml - batch orchestrator summary HTML report
        12. Get-SPDisconnectedAppSlaStatus - 30-day SLA tracking from snapshot history
        13. Export-SPDisconnectedAppSlaHtml - SLA compliance HTML report with delivery grid
+       14. Get-SPDisconnectedAppCampaignDecisions - harvests campaign decisions from ISC
+       15. Export-SPDisconnectedAppDecisionHarvestHtml - decision harvest HTML report
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -32,7 +34,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.6.0
+    Version: 1.7.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -3689,6 +3691,570 @@ function Export-SPDisconnectedAppSlaHtml {
     }
 }
 
+function Get-SPDisconnectedAppCampaignDecisions {
+    <#
+    .SYNOPSIS
+        Harvests campaign decisions from ISC for disconnected app campaigns.
+    .DESCRIPTION
+        Reads campaign IDs from the per-app JSONL audit trail, queries ISC for
+        each campaign's current status, and for completed campaigns retrieves
+        item-level decisions (APPROVE / REVOKE). Results are categorized and
+        written back to the audit trail as a DecisionHarvest event.
+
+        This closes the governance loop: the toolkit created campaigns (cert run),
+        and now it checks what managers decided.
+
+        Uses Get-SPCampaign for status, Get-SPAuditCertifications for reviewer
+        info, and Get-SPAuditCertificationItems for item-level decisions.
+    .PARAMETER AppName
+        Application name. Used to locate the correct JSONL audit trail.
+    .PARAMETER OutputPath
+        Base directory for reports. Reads from {OutputPath}/{AppName}/disconnected-app-audit.jsonl.
+    .PARAMETER DaysBack
+        How many days of audit trail to scan for campaign IDs. Default: 7.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=$bool; Data=@{CampaignsChecked; Completed; Active;
+            Expired; Purged; Decisions=@{Approved; Revoked; Pending};
+            RevocationDetails=@(...)  }; Error=$string}
+    .EXAMPLE
+        $result = Get-SPDisconnectedAppCampaignDecisions -AppName 'PEP-Plus' -OutputPath '.\Reports'
+        $result.Data.Decisions.Revoked  # count of REVOKE decisions
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [ValidateRange(1, 365)]
+        [int]$DaysBack = 7,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Get-SPDisconnectedAppCampaignDecisions'
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    Write-SPLog -Message "Starting decision harvest for app '$AppName' (DaysBack=$DaysBack)" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Read JSONL audit trail and extract campaign IDs
+        # -----------------------------------------------------------
+        $appOutputPath   = Join-Path -Path $OutputPath -ChildPath $AppName
+        $auditTrailPath  = Join-Path -Path $appOutputPath -ChildPath 'disconnected-app-audit.jsonl'
+
+        if (-not (Test-Path -Path $auditTrailPath -PathType Leaf)) {
+            $errMsg = "No audit trail found at '$auditTrailPath'. Run a cert cycle first."
+            Write-SPLog -Message $errMsg -Severity WARN -Component $component `
+                -Action $action -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        $cutoffDate = (Get-Date).ToUniversalTime().AddDays(-$DaysBack)
+        $lines = @(Get-Content -Path $auditTrailPath -Encoding UTF8)
+        $campaignIdSet = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+
+        foreach ($line in $lines) {
+            $trimmed = $line.Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+
+            try {
+                $event = $trimmed | ConvertFrom-Json
+            }
+            catch { continue }
+
+            # Only look at DisconnectedAppCertRun events
+            if ($event.Action -ne 'DisconnectedAppCertRun') { continue }
+
+            # Parse timestamp and apply cutoff
+            $eventTime = $null
+            if (-not [string]::IsNullOrWhiteSpace($event.Timestamp)) {
+                try {
+                    $eventTime = [datetime]::Parse($event.Timestamp).ToUniversalTime()
+                }
+                catch { }
+            }
+            if ($null -ne $eventTime -and $eventTime -lt $cutoffDate) { continue }
+
+            # Collect campaign IDs
+            if ($null -ne $event.CampaignIds) {
+                foreach ($cid in @($event.CampaignIds)) {
+                    if (-not [string]::IsNullOrWhiteSpace($cid)) {
+                        [void]$campaignIdSet.Add($cid)
+                    }
+                }
+            }
+        }
+
+        if ($campaignIdSet.Count -eq 0) {
+            Write-SPLog -Message "No campaign IDs found in audit trail for '$AppName' within $DaysBack days" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            $emptyData = @{
+                CampaignsChecked = 0
+                Completed        = 0
+                Active           = 0
+                Expired          = 0
+                Purged           = 0
+                Decisions        = @{ Approved = 0; Revoked = 0; Pending = 0 }
+                RevocationDetails = @()
+            }
+            return @{ Success = $true; Data = $emptyData; Error = $null }
+        }
+
+        Write-SPLog -Message "Found $($campaignIdSet.Count) campaign ID(s) in audit trail for '$AppName'" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------
+        # Step 2: Query ISC for each campaign's status
+        # -----------------------------------------------------------
+        $completedCount = 0
+        $activeCount    = 0
+        $expiredCount   = 0
+        $purgedCount    = 0
+        $approvedCount  = 0
+        $revokedCount   = 0
+        $pendingCount   = 0
+        $revocationDetails = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($campId in $campaignIdSet) {
+            Write-SPLog -Message "Checking campaign '$campId'" `
+                -Severity DEBUG -Component $component -Action $action -CorrelationID $CorrelationID
+
+            $campResult = Get-SPCampaign -CampaignId $campId -CorrelationID $CorrelationID
+            if (-not $campResult.Success) {
+                # Campaign may have been purged/deleted from ISC
+                if ($campResult.Error -match '404|Not Found|does not exist') {
+                    $purgedCount++
+                    Write-SPLog -Message "Campaign '$campId' no longer exists in ISC (purged/deleted)" `
+                        -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                }
+                else {
+                    Write-SPLog -Message "Failed to query campaign '$campId': $($campResult.Error)" `
+                        -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                }
+                continue
+            }
+
+            $campaign = $campResult.Data
+            $status   = if ($null -ne $campaign.status) { $campaign.status } else { 'UNKNOWN' }
+
+            # Categorize by status
+            if ($status -eq 'COMPLETED') {
+                $completedCount++
+            }
+            elseif ($status -in @('ACTIVE', 'STAGED', 'ACTIVATING')) {
+                $activeCount++
+                # Cannot harvest decisions from non-completed campaigns yet
+                continue
+            }
+            else {
+                # COMPLETING or other transitional states -- treat as active
+                $activeCount++
+                continue
+            }
+
+            # -----------------------------------------------------------
+            # Step 3: For completed campaigns, get certifications + items
+            # -----------------------------------------------------------
+            $certResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+            if (-not $certResult.Success) {
+                Write-SPLog -Message "Failed to get certifications for campaign '$campId': $($certResult.Error)" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                continue
+            }
+
+            $certifications = @($certResult.Data)
+            foreach ($cert in $certifications) {
+                $certId = $cert.id
+                if ([string]::IsNullOrWhiteSpace($certId)) { continue }
+
+                $itemResult = Get-SPAuditCertificationItems -CertificationId $certId `
+                    -CorrelationID $CorrelationID
+                if (-not $itemResult.Success) {
+                    Write-SPLog -Message "Failed to get items for certification '$certId': $($itemResult.Error)" `
+                        -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                    continue
+                }
+
+                $items = @($itemResult.Data)
+                $reviewerName = ''
+                if ($null -ne $cert.EffectiveReviewer -and
+                    $null -ne $cert.EffectiveReviewer.displayName) {
+                    $reviewerName = $cert.EffectiveReviewer.displayName
+                }
+
+                foreach ($item in $items) {
+                    $decision = if ($null -ne $item.decision) { $item.decision.ToUpper() } else { '' }
+
+                    if ($decision -eq 'APPROVE') {
+                        $approvedCount++
+                    }
+                    elseif ($decision -eq 'REVOKE') {
+                        $revokedCount++
+
+                        # Extract revocation details for remediation tracking
+                        $identityName = ''
+                        if ($null -ne $item.identitySummary -and
+                            $null -ne $item.identitySummary.name) {
+                            $identityName = $item.identitySummary.name
+                        }
+
+                        $accountId = ''
+                        if ($null -ne $item.PSObject.Properties['accountId']) {
+                            $accountId = [string]$item.accountId
+                        }
+                        elseif ($null -ne $item.accessSummary -and
+                                $null -ne $item.accessSummary.PSObject.Properties['accountId']) {
+                            $accountId = [string]$item.accessSummary.accountId
+                        }
+
+                        $entitlementName = ''
+                        if ($null -ne $item.accessSummary -and
+                            $null -ne $item.accessSummary.PSObject.Properties['entitlement'] -and
+                            $null -ne $item.accessSummary.entitlement.PSObject.Properties['name']) {
+                            $entitlementName = $item.accessSummary.entitlement.name
+                        }
+                        elseif ($null -ne $item.accessSummary -and
+                                $null -ne $item.accessSummary.PSObject.Properties['access'] -and
+                                $null -ne $item.accessSummary.access.PSObject.Properties['name']) {
+                            $entitlementName = $item.accessSummary.access.name
+                        }
+
+                        $decisionDate = ''
+                        if ($null -ne $item.PSObject.Properties['completed'] -and
+                            $null -ne $item.completed) {
+                            $decisionDate = [string]$item.completed
+                        }
+
+                        $revocationDetails.Add(@{
+                            AppName         = $AppName
+                            CampaignId      = $campId
+                            CertificationId = $certId
+                            IdentityName    = $identityName
+                            AccountId       = $accountId
+                            Entitlement     = $entitlementName
+                            ReviewerName    = $reviewerName
+                            DecisionDate    = $decisionDate
+                        })
+                    }
+                    else {
+                        # No decision yet (should not happen for COMPLETED campaigns)
+                        $pendingCount++
+                    }
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 5: Write decision harvest event to JSONL
+        # -----------------------------------------------------------
+        $stopwatch.Stop()
+
+        $harvestEvent = [ordered]@{
+            Timestamp        = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            CorrelationID    = $CorrelationID
+            Action           = 'DecisionHarvest'
+            AppName          = $AppName
+            DaysBack         = $DaysBack
+            CampaignsChecked = $campaignIdSet.Count
+            Completed        = $completedCount
+            Active           = $activeCount
+            Expired          = $expiredCount
+            Purged           = $purgedCount
+            Approved         = $approvedCount
+            Revoked          = $revokedCount
+            Pending          = $pendingCount
+            RevocationCount  = $revocationDetails.Count
+            DurationSeconds  = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+        }
+
+        try {
+            if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+                New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+            }
+            $jsonLine = $harvestEvent | ConvertTo-Json -Depth 5 -Compress
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::AppendAllText($auditTrailPath, "$jsonLine`n", $utf8NoBom)
+        }
+        catch {
+            Write-SPLog -Message "Failed to write decision harvest event to JSONL: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+
+        # -----------------------------------------------------------
+        # Step 6: Return structured data
+        # -----------------------------------------------------------
+        $resultData = @{
+            CampaignsChecked  = $campaignIdSet.Count
+            Completed         = $completedCount
+            Active            = $activeCount
+            Expired           = $expiredCount
+            Purged            = $purgedCount
+            Decisions         = @{
+                Approved = $approvedCount
+                Revoked  = $revokedCount
+                Pending  = $pendingCount
+            }
+            RevocationDetails = $revocationDetails.ToArray()
+        }
+
+        Write-SPLog -Message ("Decision harvest complete for '$AppName': " +
+            "$($campaignIdSet.Count) campaigns checked, " +
+            "$completedCount completed, $approvedCount approved, " +
+            "$revokedCount revoked, $purgedCount purged") `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $resultData; Error = $null }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppCampaignDecisions failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppDecisionHarvestHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML decision harvest report for a disconnected app.
+    .DESCRIPTION
+        Takes the output of Get-SPDisconnectedAppCampaignDecisions and renders
+        a self-contained HTML report showing campaign statuses, decision breakdown,
+        and revocation details requiring remediation follow-up.
+
+        Uses 100% inline CSS for Microsoft Word paste compatibility.
+    .PARAMETER DecisionData
+        The .Data hashtable from Get-SPDisconnectedAppCampaignDecisions.
+    .PARAMETER AppName
+        Application name shown in the report title.
+    .PARAMETER OutputPath
+        Base directory for reports. Report is saved to
+        {OutputPath}/{AppName}/decision-harvest-{YYYY-MM-DD}.html
+    .PARAMETER ReportDate
+        Date stamp for the report filename and header. Defaults to today.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{FilePath=[string]}; Error}
+    .EXAMPLE
+        $decisions = (Get-SPDisconnectedAppCampaignDecisions -AppName 'PEP-Plus').Data
+        Export-SPDisconnectedAppDecisionHarvestHtml -DecisionData $decisions -AppName 'PEP-Plus'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DecisionData,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$ReportDate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ReportDate)) {
+        $ReportDate = Get-Date -Format 'yyyy-MM-dd'
+    }
+
+    try {
+        # -----------------------------------------------------------
+        # Ensure output directory
+        # -----------------------------------------------------------
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+            New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $appOutputPath -ChildPath "decision-harvest-${ReportDate}.html"
+
+        # -----------------------------------------------------------
+        # Extract data
+        # -----------------------------------------------------------
+        $campaignsChecked = if ($null -ne $DecisionData['CampaignsChecked']) { $DecisionData['CampaignsChecked'] } else { 0 }
+        $completed        = if ($null -ne $DecisionData['Completed'])        { $DecisionData['Completed'] }        else { 0 }
+        $active           = if ($null -ne $DecisionData['Active'])           { $DecisionData['Active'] }           else { 0 }
+        $expired          = if ($null -ne $DecisionData['Expired'])          { $DecisionData['Expired'] }          else { 0 }
+        $purged           = if ($null -ne $DecisionData['Purged'])           { $DecisionData['Purged'] }           else { 0 }
+        $decisions        = if ($null -ne $DecisionData['Decisions'])        { $DecisionData['Decisions'] }        else { @{} }
+        $approved         = if ($null -ne $decisions['Approved'])            { $decisions['Approved'] }            else { 0 }
+        $revoked          = if ($null -ne $decisions['Revoked'])             { $decisions['Revoked'] }             else { 0 }
+        $pending          = if ($null -ne $decisions['Pending'])             { $decisions['Pending'] }             else { 0 }
+        $revocations      = @()
+        if ($null -ne $DecisionData['RevocationDetails']) {
+            $revocations = @($DecisionData['RevocationDetails'])
+        }
+
+        # -----------------------------------------------------------
+        # Style constants
+        # -----------------------------------------------------------
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeBlue           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#336699;'
+
+        # -----------------------------------------------------------
+        # Build HTML
+        # -----------------------------------------------------------
+        $html = [System.Text.StringBuilder]::new(8192)
+
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>$(ConvertTo-DisconnectedHtmlSafe $AppName) - Decision Harvest $ReportDate</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        $safeAppName = ConvertTo-DisconnectedHtmlSafe $AppName
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">$safeAppName - Decision Harvest</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Report date: $ReportDate</p>")
+
+        # -----------------------------------------------------------
+        # Section 1: Campaign Status Summary
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Campaign Status Summary</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $statusRows = @(
+            @('Campaigns Checked', $campaignsChecked)
+            @('Completed',         $completed)
+            @('Active',            $active)
+            @('Expired',           $expired)
+            @('Purged / Deleted',  $purged)
+        )
+        foreach ($row in $statusRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 2: Decision Breakdown
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Decision Breakdown</h2>")
+        [void]$html.AppendLine("<table style=`"$tableStyle`">")
+
+        $totalDecisions = $approved + $revoked + $pending
+        $decisionRows = @(
+            @('Total Decisions', $totalDecisions)
+        )
+        foreach ($row in $decisionRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+
+        # Approved with green badge
+        [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`"><span style=`"$badgeGreen`">APPROVED</span></td><td style=`"$valueTdStyle`">$(ConvertTo-DisconnectedHtmlSafe $approved)</td></tr>")
+        # Revoked with red badge
+        [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`"><span style=`"$badgeRed`">REVOKED</span></td><td style=`"$valueTdStyle`">$(ConvertTo-DisconnectedHtmlSafe $revoked)</td></tr>")
+        # Pending with orange badge
+        if ($pending -gt 0) {
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`"><span style=`"$badgeOrange`">PENDING</span></td><td style=`"$valueTdStyle`">$(ConvertTo-DisconnectedHtmlSafe $pending)</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # -----------------------------------------------------------
+        # Section 3: Revocation Details (remediation required)
+        # -----------------------------------------------------------
+        if ($revocations.Count -gt 0) {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`"><span style=`"$badgeRed`">ACTION REQUIRED</span> Revocations Requiring Remediation ($($revocations.Count))</h2>")
+            [void]$html.AppendLine("<table style=`"$tableStyle`">")
+            [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Identity', 'Account ID', 'Entitlement', 'Reviewer', 'Decision Date')))
+
+            $rowIdx = 0
+            foreach ($rev in $revocations) {
+                $cells = @(
+                    (ConvertTo-DisconnectedHtmlSafe $rev.IdentityName),
+                    (ConvertTo-DisconnectedHtmlSafe $rev.AccountId),
+                    (ConvertTo-DisconnectedHtmlSafe $rev.Entitlement),
+                    (ConvertTo-DisconnectedHtmlSafe $rev.ReviewerName),
+                    (ConvertTo-DisconnectedHtmlSafe $rev.DecisionDate)
+                )
+                [void]$html.AppendLine((Build-DisconnectedHtmlRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)))
+                $rowIdx++
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        else {
+            [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Revocations</h2>")
+            [void]$html.AppendLine("<p style=`"color:#339933; font-size:13px;`">No revocations requiring remediation.</p>")
+        }
+
+        # -----------------------------------------------------------
+        # Footer
+        # -----------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
+
+        $footerRows = @(
+            @('Report Type', 'Decision Harvest')
+            @('Application', $AppName)
+        )
+        foreach ($fRow in $footerRows) {
+            $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]
+            $fValue = ConvertTo-DisconnectedHtmlSafe $fRow[1]
+            [void]$html.AppendLine("<tr><td style=`"padding:4px 10px; color:#999; font-size:11px; font-weight:bold; vertical-align:top;`">$fLabel</td><td style=`"padding:4px 10px; color:#999; font-size:11px; vertical-align:top;`">$fValue</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Decision Harvest | $timestamp UTC</p>")
+
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # -----------------------------------------------------------
+        # Write file (UTF-8 no BOM)
+        # -----------------------------------------------------------
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Decision harvest HTML report saved to $filePath" `
+            -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppDecisionHarvestHtml'
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppDecisionHarvestHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DisconnectedAppRunner' `
+            -Action 'Export-SPDisconnectedAppDecisionHarvestHtml'
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -3704,5 +4270,7 @@ Export-ModuleMember -Function @(
     'Export-SPDisconnectedAppEntitlementCatalogHtml',
     'Export-SPDisconnectedAppBatchHtml',
     'Get-SPDisconnectedAppSlaStatus',
-    'Export-SPDisconnectedAppSlaHtml'
+    'Export-SPDisconnectedAppSlaHtml',
+    'Get-SPDisconnectedAppCampaignDecisions',
+    'Export-SPDisconnectedAppDecisionHarvestHtml'
 )

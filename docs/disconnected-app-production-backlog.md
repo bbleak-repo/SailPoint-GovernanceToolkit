@@ -25,7 +25,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 
 | Rank | ID | Feature | Depends On | Status |
 |------|-----|---------|------------|--------|
-| 1 | DA-21 | Post-Campaign Decision Collection | none | PENDING |
+| 1 | DA-21 | Post-Campaign Decision Collection | none | DONE |
 | 2 | DA-22 | Disconnected App Remediation Tracker | DA-21 | PENDING |
 | 3 | DA-23 | Unified Daily Orchestrator Integration | none | PENDING |
 | 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | PENDING |
@@ -40,8 +40,8 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 
 ## DA-21: Post-Campaign Decision Collection
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-21
 - **Depends On:** none
 
 **Description:**
