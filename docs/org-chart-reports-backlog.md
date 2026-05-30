@@ -33,7 +33,7 @@ campaigns or sending emails.
 | OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | DONE |
 | OC-06 | Band/Level Classification Engine | OC-01 | DONE |
 | OC-07 | Per-Band Leadership Reports | OC-06 | DONE |
-| OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | PENDING |
+| OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | DONE |
 | OC-09 | Org Chart Gap Detector | OC-01 | PENDING |
 | OC-10 | Pester Tests | OC-09 | PENDING |
 
@@ -369,8 +369,8 @@ This extends the existing `Export-SPLeadershipLevelHtml` to filter by band.
 
 ## OC-08: Report Distribution CLI
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-04
 
 **Description:**
