@@ -3,6 +3,7 @@
 Get the SailPoint ISC Governance Toolkit running in 15 minutes.
 
 For full documentation, see [README.md](README.md).
+For detailed reference with searchable tabs, see [USER-GUIDE.html](USER-GUIDE.html).
 
 ---
 

@@ -1,0 +1,5499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SailPoint Governance Toolkit</title>
+<style>
+/* ====================================================
+   TABBED REPORT FRAMEWORK -- LIGHT THEME
+   SailPoint color scheme
+   ==================================================== */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:      #336699;
+    --primary-dark:  #264d73;
+    --primary-light: #4a7fb5;
+    --success:      #339933;
+    --success-bg:   #edf6ef;
+    --danger:       #CC3333;
+    --danger-bg:    #fdf0ef;
+    --warning:      #FF8800;
+    --warning-bg:   #fff8ec;
+    --sidebar-bg:   #1e2a3a;
+    --sidebar-hover: rgba(255,255,255,0.05);
+    --sidebar-active-bg: rgba(91,155,213,0.10);
+    --header-bg:    #2c3e50;
+    --accent:       #5B9BD5;
+    --text:         #2c3e50;
+    --text-muted:   #555e70;
+    --bg:           #f7f8fa;
+    --surface:      #ffffff;
+    --border:       #e0e4ea;
+    --border-light: #eaecf0;
+    --code-bg:      #f5f6f8;
+    --table-header: #34495e;
+    --table-alt:    #f9f9f9;
+    --sidebar-w:    220px;
+}
+
+html { font-size: 15px; }
+
+body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+}
+
+/* ---- STICKY TOP BAND ---- */
+#top-band {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---- REPORT HEADER ---- */
+#report-header {
+    background: var(--header-bg);
+    color: #ffffff;
+    padding: 14px 24px;
+    border-bottom: 3px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.title-block {}
+
+.report-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.01em;
+}
+
+.report-sub {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.65);
+    margin-top: 2px;
+}
+
+.meta-items {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.meta-item {
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.60);
+    line-height: 1.4;
+}
+
+.meta-item strong {
+    display: block;
+    color: rgba(255,255,255,0.85);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* ---- MOBILE TAB BAR (hidden on desktop) ---- */
+#mobile-nav {
+    display: none;
+    background: var(--sidebar-bg);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    border-bottom: 2px solid var(--accent);
+    scrollbar-width: none;
+}
+
+#mobile-nav::-webkit-scrollbar { display: none; }
+
+#mobile-nav a {
+    display: inline-block;
+    padding: 10px 14px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    border-bottom: 3px solid transparent;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+#mobile-nav a.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* ---- LAYOUT: SIDEBAR + CONTENT ---- */
+#app-layout {
+    display: flex;
+    min-height: calc(100vh - 80px);
+}
+
+/* ---- SIDEBAR ---- */
+#sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+    align-self: flex-start;
+}
+
+#sidebar-inner {
+    padding: 20px 0;
+}
+
+.sidebar-label {
+    font-size: 0.60rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+    padding: 0 16px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 8px;
+}
+
+#sidebar a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    font-size: 0.80rem;
+    font-weight: 500;
+    color: #8892a8;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    line-height: 1.3;
+}
+
+#sidebar a:hover {
+    color: #c8d0e0;
+    background: var(--sidebar-hover);
+}
+
+#sidebar a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--sidebar-active-bg);
+    font-weight: 600;
+}
+
+.sidebar-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.10);
+    font-size: 0.60rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: rgba(255,255,255,0.50);
+}
+
+#sidebar a.active .sidebar-num {
+    background: var(--accent);
+    color: var(--sidebar-bg);
+}
+
+/* ---- MAIN CONTENT AREA ---- */
+#content-area {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.report-section {
+    min-height: calc(100vh - 80px);
+    padding: 28px 36px 52px;
+    max-width: 960px;
+}
+
+/* ---- SECTION CONTENT TYPOGRAPHY ---- */
+.report-section h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--primary);
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+    letter-spacing: -0.01em;
+}
+
+.report-section h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--header-bg);
+    margin: 28px 0 10px 0;
+}
+
+.report-section h4 {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 20px 0 8px 0;
+}
+
+.report-section p {
+    font-size: 0.875rem;
+    margin-bottom: 12px;
+    color: var(--text);
+    line-height: 1.65;
+}
+
+.report-section p:last-child { margin-bottom: 0; }
+
+/* ---- LISTS ---- */
+.report-section ul,
+.report-section ol {
+    padding-left: 22px;
+    margin: 8px 0 14px 0;
+}
+
+.report-section li {
+    font-size: 0.875rem;
+    padding: 3px 0;
+    line-height: 1.55;
+    color: var(--text);
+}
+
+.report-section li + li {
+    margin-top: 2px;
+}
+
+/* ---- TABLES ---- */
+.report-section table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    margin: 14px 0 18px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.report-section thead tr {
+    background: var(--table-header);
+    color: #ffffff;
+}
+
+.report-section thead th {
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 0.70rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.report-section thead th:first-child {
+    color: var(--accent);
+}
+
+.report-section tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.report-section tbody tr:nth-child(odd) {
+    background: var(--surface);
+}
+
+.report-section tbody tr:hover {
+    background: #eef3fb;
+}
+
+.report-section td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+    line-height: 1.45;
+}
+
+.report-section td:first-child {
+    font-weight: 600;
+    color: var(--primary-dark);
+}
+
+/* ---- CODE BLOCKS ---- */
+.report-section pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    margin: 12px 0 16px 0;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.report-section code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+    font-size: 0.84em;
+}
+
+.report-section p code,
+.report-section li code,
+.report-section td code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.82em;
+    color: var(--danger);
+}
+
+.report-section pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 1em;
+}
+
+/* ---- CALLOUT BOXES ---- */
+.callout {
+    border-radius: 6px;
+    padding: 13px 16px;
+    margin: 14px 0;
+    font-size: 0.84rem;
+}
+
+.callout-label {
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    margin-bottom: 6px;
+}
+
+.callout p {
+    font-size: 0.84rem;
+    margin-bottom: 0;
+}
+
+.callout-info {
+    background: #eef3fb;
+    border: 1px solid #b8d0ee;
+    border-left: 4px solid var(--primary);
+}
+
+.callout-info .callout-label { color: var(--primary); }
+
+.callout-warning {
+    background: var(--warning-bg);
+    border: 1px solid #f0d080;
+    border-left: 4px solid var(--warning);
+}
+
+.callout-warning .callout-label { color: var(--warning); }
+
+.callout-success {
+    background: var(--success-bg);
+    border: 1px solid #b0d8ba;
+    border-left: 4px solid var(--success);
+}
+
+.callout-success .callout-label { color: var(--success); }
+
+.callout-danger {
+    background: var(--danger-bg);
+    border: 1px solid #f0b8b4;
+    border-left: 4px solid var(--danger);
+}
+
+.callout-danger .callout-label { color: var(--danger); }
+
+/* ---- CONTENT CARDS ---- */
+.content-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.content-card .card-header {
+    background: var(--sidebar-bg);
+    color: #ffffff;
+    padding: 11px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.content-card .card-badge {
+    width: 26px;
+    height: 26px;
+    background: var(--accent);
+    color: var(--sidebar-bg);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.content-card .card-header h3 {
+    font-size: 0.88rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #ffffff;
+    margin: 0;
+    border: none;
+}
+
+.content-card .card-body {
+    padding: 18px 22px;
+}
+
+/* ---- PARAMETER TABLE (for CLI docs) ---- */
+.param-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin: 10px 0 16px 0;
+}
+
+.param-table thead tr {
+    background: var(--primary);
+    color: #ffffff;
+}
+
+.param-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.param-table tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.param-table tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+}
+
+.param-table tbody td:first-child {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-weight: 600;
+    color: var(--primary-dark);
+    white-space: nowrap;
+}
+
+/* ---- STAT CARDS ---- */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+}
+
+.stat-card {
+    background: var(--header-bg);
+    color: #ffffff;
+    border-radius: 7px;
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 6px;
+}
+
+.stat-label {
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.3;
+}
+
+/* ---- DETAILS/SUMMARY (collapsible) ---- */
+.report-section details {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 10px 0;
+    overflow: hidden;
+}
+
+.report-section summary {
+    padding: 10px 16px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+    background: var(--code-bg);
+    border-bottom: 1px solid var(--border);
+    list-style: none;
+}
+
+.report-section summary::-webkit-details-marker { display: none; }
+
+.report-section summary::before {
+    content: '+ ';
+    font-weight: 800;
+    color: var(--primary);
+}
+
+.report-section details[open] summary::before {
+    content: '- ';
+}
+
+.report-section details .detail-body {
+    padding: 14px 18px;
+}
+
+/* ---- STATUS BADGES ---- */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.badge-required {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.badge-optional {
+    background: #eef3fb;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+}
+
+.badge-default {
+    background: var(--code-bg);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+/* ---- PRINT STYLES ---- */
+@media print {
+    #top-band, #sidebar, #mobile-nav { display: none !important; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        display: block !important;
+        max-width: 100%;
+        padding: 12pt 0;
+    }
+    .report-section + .report-section {
+        page-break-before: always;
+    }
+    body {
+        background: #ffffff;
+        color: #000000;
+        font-size: 10pt;
+    }
+    .report-section h2 {
+        color: #000000;
+        border-bottom-color: #cccccc;
+    }
+    .report-section pre {
+        border-color: #cccccc;
+        background: #f5f5f5;
+    }
+    .report-section table {
+        border-color: #cccccc;
+    }
+    .report-section thead tr {
+        background: #333333 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .callout {
+        border-left-width: 3px;
+    }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ---- MOBILE LAYOUT ---- */
+@media (max-width: 767px) {
+    #sidebar { display: none !important; }
+    #mobile-nav { display: block; }
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        padding: 20px 16px 36px;
+    }
+    .meta-items { display: none; }
+    .stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 768px) {
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+    }
+}
+
+</style>
+</head>
+<body>
+
+<!-- Sticky top band: header + mobile nav -->
+<div id="top-band">
+    <div id="report-header">
+        <div class="title-block">
+            <div class="report-title">SailPoint Governance Toolkit</div>
+            <div class="report-sub">User Guide v1.0 -- Comprehensive Reference</div>
+        </div>
+        <div class="meta-items">            <div class="meta-item"><strong>Version</strong>1.0</div>
+            <div class="meta-item"><strong>Generated</strong>2026-05-30</div></div>
+    </div>
+    <!-- Mobile tab bar (hidden on desktop) -->
+    <div id="mobile-nav">        <a href="#getting-started" onclick="showSection('getting-started'); return false;">Getting Started</a>
+        <a href="#campaign-audit" onclick="showSection('campaign-audit'); return false;">Campaign Audit</a>
+        <a href="#delta-certification" onclick="showSection('delta-certification'); return false;">Delta Certification</a>
+        <a href="#disconnected-apps" onclick="showSection('disconnected-apps'); return false;">Disconnected Apps</a></div>
+</div>
+
+<!-- Layout: sidebar + content -->
+<div id="app-layout">
+    <div id="sidebar">
+        <div id="sidebar-inner">
+            <div class="sidebar-label">User Guide</div>
+                        <a href="#getting-started" onclick="showSection('getting-started'); return false;"><span class="sidebar-num">1</span>Getting Started</a>
+            <a href="#campaign-audit" onclick="showSection('campaign-audit'); return false;"><span class="sidebar-num">2</span>Campaign Audit</a>
+            <a href="#delta-certification" onclick="showSection('delta-certification'); return false;"><span class="sidebar-num">3</span>Delta Certification</a>
+            <a href="#disconnected-apps" onclick="showSection('disconnected-apps'); return false;"><span class="sidebar-num">4</span>Disconnected Apps</a>
+        </div>
+    </div>
+    <div id="content-area">
+                <div id="section-getting-started" class="report-section">
+<h2>Getting Started</h2>
+
+<p>This section walks you from a fresh toolkit extract to your first audit report in under 15 minutes.
+It covers prerequisites, configuration, connectivity testing, and safety defaults.</p>
+
+<!-- ============================================================ -->
+<h3>What This Toolkit Does</h3>
+
+<p>The SailPoint ISC Governance Toolkit is a PowerShell 5.1 toolkit for automated testing and
+auditing of SailPoint IdentityNow (ISC) certification campaign workflows. It creates, activates,
+and validates certification campaigns against the ISC REST API v3, producing structured JSONL
+evidence and HTML reports for UAT sign-off, compliance audits, and daily governance operations.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">14</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">6</div>
+        <div class="stat-label">Module Layers</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">5</div>
+        <div class="stat-label">GUI Tabs</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">3</div>
+        <div class="stat-label">Auth Modes</div>
+    </div>
+</div>
+
+<p>The toolkit covers three governance domains:</p>
+<ul>
+    <li><strong>Campaign Audit</strong> -- post-campaign compliance reporting with reviewer accountability,
+        decision breakdowns, remediation proof, and leadership rollups</li>
+    <li><strong>Delta Certification</strong> -- daily AD access change detection with automatic SEARCH campaign
+        creation per manager group, escalation for stale certifications, and orchestrated daily workflows</li>
+    <li><strong>Disconnected App Onboarding</strong> -- flat file CSV integration for applications without native
+        ISC connectors, with delta detection, identity resolution, and batch orchestration</li>
+</ul>
+
+<!-- ============================================================ -->
+<h3>Prerequisites</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>Requirement</th>
+            <th>Version</th>
+            <th>Notes</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>PowerShell</td>
+            <td>5.1 Desktop</td>
+            <td>Windows PowerShell only. PS Core / PS 7 not supported.</td>
+        </tr>
+        <tr>
+            <td>Windows</td>
+            <td>10 / 11 / Server 2019+</td>
+            <td>WPF GUI requires Windows. CLI works on any edition.</td>
+        </tr>
+        <tr>
+            <td>.NET Framework</td>
+            <td>4.5+</td>
+            <td>Required for WPF dashboard. Included in Windows 10+.</td>
+        </tr>
+        <tr>
+            <td>ISC API credentials</td>
+            <td>--</td>
+            <td>OAuth 2.0 PAT or browser token. See PAT scopes below.</td>
+        </tr>
+        <tr>
+            <td>Pester</td>
+            <td>5.x</td>
+            <td>Only required for running unit tests in <code>Tests/</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Required PAT Scopes (Read-Only Audit)</h4>
+
+<p>The toolkit's audit and reporting features require 6 read-only scopes on your ISC Personal Access Token:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Scope</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>idn:campaign:read</td>
+            <td>Query campaigns, certifications, and access review items</td>
+        </tr>
+        <tr>
+            <td>idn:campaign-report:read</td>
+            <td>Download campaign status and signoff reports</td>
+        </tr>
+        <tr>
+            <td>sp:report:read</td>
+            <td>Access ISC report exports (CSV format)</td>
+        </tr>
+        <tr>
+            <td>sp:search:read</td>
+            <td>Identity resolution (manager lookup, email correlation)</td>
+        </tr>
+        <tr>
+            <td>idn:sources:read</td>
+            <td>Source metadata for coverage analysis</td>
+        </tr>
+        <tr>
+            <td>idn:accounts:read</td>
+            <td>Account details for identity-to-account mapping</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Important</div>
+    <p>Delta Certification's <code>GET /v3/account-activities</code> endpoint requires <code>sp:scopes:all</code>
+    or a browser token. The 6 read-only scopes above are <strong>not sufficient</strong> for Delta Cert operations.
+    Use the <code>-Token</code> parameter with a browser JWT as a workaround.</p>
+</div>
+
+<p>For the complete API client setup walkthrough (including how to create a PAT in the ISC admin console),
+see <code>docs/SANDBOX-API-SETUP.md</code>.</p>
+
+<!-- ============================================================ -->
+<h3>Installation</h3>
+
+<p>The toolkit is pure PowerShell -- no build step, no installers, no external dependencies.</p>
+
+<ol>
+    <li>Extract the toolkit zip (or clone the repository) to a local directory</li>
+    <li>Open PowerShell and navigate to the toolkit root</li>
+    <li>Verify the directory structure</li>
+</ol>
+
+<pre><code># Navigate to the toolkit root
+cd C:\Tools\SailPoint-GovernanceToolkit
+
+# Verify key directories exist
+ls Scripts\, Modules\, Config\</code></pre>
+
+<p>You should see the <code>Scripts\</code>, <code>Modules\</code>, and <code>Config\</code> directories.
+The toolkit auto-generates <code>Config\settings.json</code> on first run if it does not exist.</p>
+
+<h4>Directory Overview</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Directory</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Scripts/</code></td>
+            <td>CLI entry points (thin wrappers that load modules and dispatch)</td>
+        </tr>
+        <tr>
+            <td><code>Modules/</code></td>
+            <td>PowerShell module layers: SP.Core, SP.Api, SP.Testing, SP.Audit, SP.DeltaCert, SP.DisconnectedApps, SP.Gui</td>
+        </tr>
+        <tr>
+            <td><code>Config/</code></td>
+            <td>Runtime configuration, test CSVs, and disconnected app templates</td>
+        </tr>
+        <tr>
+            <td><code>Gui/</code></td>
+            <td>XAML UI definitions for the WPF dashboard</td>
+        </tr>
+        <tr>
+            <td><code>Evidence/</code></td>
+            <td>JSONL evidence output (created per test run)</td>
+        </tr>
+        <tr>
+            <td><code>Reports/</code></td>
+            <td>HTML report output</td>
+        </tr>
+        <tr>
+            <td><code>Tests/</code></td>
+            <td>Pester unit tests</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Configuration</h3>
+
+<p>The toolkit uses a single <code>Config\settings.json</code> file. On first run,
+<code>Test-SPConnectivity.ps1</code> auto-generates the file from a template and exits with guidance.
+Open the file and replace all <code>CHANGE_ME</code> values.</p>
+
+<h4>Minimum Required Configuration</h4>
+
+<p>Only four values need to change for basic operation. Replace <code>acme</code> with your ISC tenant name:</p>
+
+<pre><code>{
+  "Global": {
+    "EnvironmentName": "Sandbox"
+  },
+  "Authentication": {
+    "Mode": "ConfigFile",
+    "ConfigFile": {
+      "TenantUrl": "https://acme.api.identitynow.com",
+      "OAuthTokenUrl": "https://acme.api.identitynow.com/oauth/token",
+      "ClientId": "your-client-id-here",
+      "ClientSecret": "your-client-secret-here"
+    }
+  },
+  "Api": {
+    "BaseUrl": "https://acme.api.identitynow.com/v3"
+  }
+}</code></pre>
+
+<div class="callout callout-info">
+    <div class="callout-label">Note</div>
+    <p>All three URLs use the <code>api.</code> prefix: <code>https://&lt;tenant&gt;.api.identitynow.com</code>.
+    This is the correct format for both the tenant URL and the OAuth token URL.</p>
+</div>
+
+<h4>Full Configuration Reference</h4>
+
+<details>
+    <summary>Global Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>EnvironmentName</td>
+                    <td>Sandbox</td>
+                    <td>Label displayed in connectivity checks and reports</td>
+                </tr>
+                <tr>
+                    <td>DebugMode</td>
+                    <td>false</td>
+                    <td>Enable verbose diagnostic output</td>
+                </tr>
+                <tr>
+                    <td>ToolkitVersion</td>
+                    <td>1.0.0</td>
+                    <td>Toolkit version stamp for audit trail</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>Authentication Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Mode</td>
+                    <td>ConfigFile</td>
+                    <td><code>ConfigFile</code> (plaintext), <code>Vault</code> (AES-256 encrypted), or browser token via <code>-Token</code> CLI param</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.TenantUrl</td>
+                    <td>--</td>
+                    <td>ISC tenant base URL (<code>https://&lt;tenant&gt;.api.identitynow.com</code>)</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.OAuthTokenUrl</td>
+                    <td>--</td>
+                    <td>OAuth 2.0 token endpoint (<code>https://&lt;tenant&gt;.api.identitynow.com/oauth/token</code>)</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.ClientId</td>
+                    <td>--</td>
+                    <td>OAuth client ID from your ISC PAT</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.ClientSecret</td>
+                    <td>--</td>
+                    <td>OAuth client secret (plaintext -- use Vault mode for non-dev environments)</td>
+                </tr>
+                <tr>
+                    <td>Vault.VaultPath</td>
+                    <td>.\Data\sp-vault.enc</td>
+                    <td>Path to AES-256-CBC encrypted vault file</td>
+                </tr>
+                <tr>
+                    <td>Vault.Pbkdf2Iterations</td>
+                    <td>600000</td>
+                    <td>PBKDF2 iteration count for key derivation</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>API Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>BaseUrl</td>
+                    <td>--</td>
+                    <td>ISC REST API v3 base URL (<code>https://&lt;tenant&gt;.api.identitynow.com/v3</code>)</td>
+                </tr>
+                <tr>
+                    <td>TimeoutSeconds</td>
+                    <td>60</td>
+                    <td>HTTP request timeout</td>
+                </tr>
+                <tr>
+                    <td>RetryCount</td>
+                    <td>3</td>
+                    <td>Number of retries on transient failures</td>
+                </tr>
+                <tr>
+                    <td>RateLimitRequestsPerWindow</td>
+                    <td>95</td>
+                    <td>Max requests per rate limit window (ISC limit is 100)</td>
+                </tr>
+                <tr>
+                    <td>RateLimitWindowSeconds</td>
+                    <td>10</td>
+                    <td>Sliding window duration for rate limiting</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>Safety Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>MaxCampaignsPerRun</td>
+                    <td>10</td>
+                    <td>Caps the number of campaigns created per execution</td>
+                </tr>
+                <tr>
+                    <td>RequireWhatIfOnProd</td>
+                    <td>true</td>
+                    <td>Requires operator confirmation before running without <code>-WhatIf</code></td>
+                </tr>
+                <tr>
+                    <td>AllowCompleteCampaign</td>
+                    <td>false</td>
+                    <td>Blocks the irreversible <code>POST /campaigns/{id}/complete</code> API call</td>
+                </tr>
+            </tbody>
+        </table>
+        <p>See the <a href="#" onclick="showSection('getting-started'); return false;">Safety Defaults</a> sub-section below for full details.</p>
+    </div>
+</details>
+
+<details>
+    <summary>Audit Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>OutputPath</td>
+                    <td>.\Audit</td>
+                    <td>Root directory for audit HTML reports and JSONL trails</td>
+                </tr>
+                <tr>
+                    <td>DefaultDaysBack</td>
+                    <td>365</td>
+                    <td>Default look-back window for campaign queries</td>
+                </tr>
+                <tr>
+                    <td>DefaultIdentityEventDays</td>
+                    <td>2</td>
+                    <td>Days of identity lifecycle events to include per revoked identity</td>
+                </tr>
+                <tr>
+                    <td>DefaultStatuses</td>
+                    <td>["COMPLETED", "ACTIVE"]</td>
+                    <td>Campaign statuses to include by default</td>
+                </tr>
+                <tr>
+                    <td>IncludeCampaignReports</td>
+                    <td>true</td>
+                    <td>Fetch ISC campaign status and signoff reports</td>
+                </tr>
+                <tr>
+                    <td>IncludeIdentityEvents</td>
+                    <td>true</td>
+                    <td>Fetch identity lifecycle events for revoked identities</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>First Run: Test Connectivity</h3>
+
+<p>After configuring <code>settings.json</code>, run the connectivity test to verify your configuration,
+credentials, and network access:</p>
+
+<pre><code>.\Scripts\Test-SPConnectivity.ps1</code></pre>
+
+<p>Expected output -- three steps, all PASS:</p>
+
+<pre><code>  [PASS] Step 1: Load and validate settings.json (12ms)
+         Environment: Sandbox | Mode: ConfigFile
+  [PASS] Step 2: Acquire OAuth 2.0 bearer token (340ms)
+         Mode: ConfigFile | Expires: 2026-02-18T15:12:49Z
+  [PASS] Step 3: GET /v3/campaigns?limit=1 (180ms)
+         API responded successfully. Items returned: 1
+
+  RESULT: All connectivity checks passed.</code></pre>
+
+<div class="callout callout-success">
+    <div class="callout-label">What Each Step Validates</div>
+    <p><strong>Step 1</strong> loads and validates <code>Config\settings.json</code> (required keys, URL formats).
+    <strong>Step 2</strong> acquires an OAuth 2.0 bearer token using the configured credentials.
+    <strong>Step 3</strong> makes a live API call (<code>GET /v3/campaigns?limit=1</code>) to confirm network
+    access and that the token has sufficient permissions.</p>
+</div>
+
+<!-- ============================================================ -->
+<h3>Your First Audit</h3>
+
+<p>Once connectivity is confirmed, run your first campaign audit. Start with a dry-run to see what
+campaigns match your filter without generating reports:</p>
+
+<pre><code># Dry-run: see matching campaigns without generating reports
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7 -WhatIf</code></pre>
+
+<p>Then run the actual audit:</p>
+
+<pre><code># Audit all campaigns completed in the last 7 days
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7</code></pre>
+
+<p>The audit produces per-campaign HTML reports with an Executive Summary Dashboard, decision breakdowns,
+reviewer accountability, and remediation proof. Output goes to the <code>Audit\</code> directory by default:</p>
+
+<pre><code>Audit\
+    &lt;CampaignName&gt;\
+        &lt;CampaignName&gt;_audit.html      # Per-campaign HTML report
+        &lt;CampaignName&gt;_summary.txt     # Per-campaign text summary
+    CampaignAudit_&lt;CorrelationID&gt;.html  # Combined HTML report (all campaigns)
+    CampaignAudit_&lt;CorrelationID&gt;.jsonl # JSONL audit trail</code></pre>
+
+<div class="callout callout-info">
+    <div class="callout-label">Tip</div>
+    <p>At least one campaign filter is required. Use <code>-Status</code>, <code>-CampaignName</code>,
+    <code>-CampaignNameStartsWith</code>, or <code>-CampaignNameContains</code>. Without a filter, the
+    script exits with code 2.</p>
+</div>
+
+<p>Other ways to filter campaigns:</p>
+
+<pre><code># Audit a specific campaign by exact name
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Q1 2026 Access Review'
+
+# Audit campaigns whose name contains a keyword (substring match)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'entitlement' -DaysBack 90
+
+# Use a browser token instead of configured OAuth credentials
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7</code></pre>
+
+<!-- ============================================================ -->
+<h3>GUI Overview</h3>
+
+<p>The WPF dashboard provides a graphical interface for all toolkit operations. Launch it from PowerShell:</p>
+
+<pre><code>.\Scripts\Show-SPDashboard.ps1</code></pre>
+
+<p>The dashboard has five tabs:</p>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">1</div>
+        <h3>Campaigns Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Load test identity and campaign CSV data, select and run certification campaign tests
+        with real-time progress tracking, and view pass/fail results. Supports tag-based filtering
+        and <code>-WhatIf</code> dry-run mode.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">2</div>
+        <h3>Evidence Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Browse the <code>Evidence\</code> directory tree. Open JSONL event logs in a searchable,
+        sortable data grid. View per-test summary JSON files with status, timing, and correlation IDs.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">3</div>
+        <h3>Settings Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Edit all <code>settings.json</code> fields with form validation. Test connectivity directly
+        from the GUI. Paste a browser JWT token for quick authentication without modifying configuration
+        files. Configure Delta Cert parameters (source IDs, look-back window, deadline days, reviewer mode).</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">4</div>
+        <h3>Audit Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Query campaigns by keyword or substring search. Select campaigns from the results grid
+        and generate HTML compliance reports with reviewer performance metrics, decision breakdowns,
+        and remediation proof.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">5</div>
+        <h3>Delta Cert Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Configure and run daily AD delta certifications. The summary row shows current parameters
+        (sources, look-back, deadline, reviewer mode). Secondary actions include campaign cleanup
+        (completes stale campaigns) and escalation (reassigns unactioned certifications).
+        A color-coded run history shows recent results.</p>
+    </div>
+</div>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Windows Only</div>
+    <p>The GUI requires Windows with .NET Framework 4.5+ and a Single-Threaded Apartment (STA)
+    PowerShell thread. The launcher script handles STA relaunching automatically. If you encounter
+    STA errors, run from PowerShell ISE (always STA) or use
+    <code>powershell.exe -STA -File .\Scripts\Show-SPDashboard.ps1</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h3>Safety Defaults</h3>
+
+<p>The toolkit ships with conservative safety defaults to prevent accidental changes in production
+environments. These are configured in the <code>Safety</code> section of <code>settings.json</code>:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Default</th>
+            <th>What It Does</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>MaxCampaignsPerRun</code></td>
+            <td><code>10</code></td>
+            <td>Caps the number of campaigns created per execution. If the toolkit calculates that more
+            campaigns would be needed (e.g., more manager groups than the limit), it aborts before
+            creating any campaigns.</td>
+        </tr>
+        <tr>
+            <td><code>RequireWhatIfOnProd</code></td>
+            <td><code>true</code></td>
+            <td>When set, the toolkit requires operator confirmation via <code>ShouldProcess</code> before
+            proceeding without <code>-WhatIf</code>. This prevents accidental live runs.</td>
+        </tr>
+        <tr>
+            <td><code>AllowCompleteCampaign</code></td>
+            <td><code>false</code></td>
+            <td>Blocks the irreversible <code>POST /campaigns/{id}/complete</code> API call. This endpoint
+            only works on past-due campaigns and its effects cannot be undone.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Additionally, every CLI script supports the <code>-WhatIf</code> parameter for dry-run mode.
+When <code>-WhatIf</code> is active, the toolkit performs all validation and planning steps but
+makes no write API calls and creates no campaigns.</p>
+
+<div class="callout callout-info">
+    <div class="callout-label">Recommendation</div>
+    <p>Always run with <code>-WhatIf</code> first in a new environment. Review the planned actions,
+    then re-run without <code>-WhatIf</code> to execute. Once comfortable with the toolkit behavior,
+    adjust the safety settings in <code>Config\settings.json</code> as needed.</p>
+</div>
+
+<h4>Authentication Modes</h4>
+
+<p>The toolkit supports three ways to authenticate with ISC:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>How It Works</th>
+            <th>When to Use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>ConfigFile</code></td>
+            <td>Reads <code>ClientId</code> and <code>ClientSecret</code> directly from <code>settings.json</code> in plaintext</td>
+            <td>Isolated development environments only</td>
+        </tr>
+        <tr>
+            <td><code>Vault</code></td>
+            <td>Credentials stored in an AES-256-CBC encrypted vault file (<code>Data\sp-vault.enc</code>). Passphrase prompted at runtime.</td>
+            <td>Shared, CI/CD, or production-adjacent environments</td>
+        </tr>
+        <tr>
+            <td>Browser Token</td>
+            <td>Pass a JWT bearer token from an active ISC browser session via <code>-Token</code> parameter. ~12 minute expiry.</td>
+            <td>Ad-hoc audits, restricted network environments, Delta Cert operations</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>To set up the encrypted vault:</p>
+
+<pre><code># One-time vault setup (prompts for passphrase and credentials)
+.\Scripts\New-SPVault.ps1
+
+# Then update settings.json:
+# "Authentication": { "Mode": "Vault" }</code></pre>
+
+<p>To use a browser token: open the ISC admin console, open developer tools (F12), go to the Network tab,
+and copy the <code>Authorization: Bearer eyJ...</code> value from any API request. Pass it with <code>-Token</code>:</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7</code></pre>
+
+<!-- ============================================================ -->
+<h3>Troubleshooting</h3>
+
+<p>Common issues and their resolutions:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Symptom</th>
+            <th>Cause</th>
+            <th>Fix</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>First-run configuration detected</code></td>
+            <td><code>CHANGE_ME</code> values remain in settings.json</td>
+            <td>Open <code>Config\settings.json</code> and replace all <code>CHANGE_ME</code> with real values</td>
+        </tr>
+        <tr>
+            <td><code>Token acquisition failed</code></td>
+            <td>Wrong tenant URL, expired credentials, or network issue</td>
+            <td>Verify <code>OAuthTokenUrl</code> uses <code>api.</code> prefix and check <code>ClientId</code>/<code>ClientSecret</code></td>
+        </tr>
+        <tr>
+            <td><code>API responded with 403</code></td>
+            <td>PAT missing required scopes</td>
+            <td>Verify all 6 read-only scopes are assigned to your PAT (see Prerequisites above)</td>
+        </tr>
+        <tr>
+            <td><code>Required module not found</code></td>
+            <td>Module path resolution failed</td>
+            <td>Run from the toolkit root directory (<code>cd C:\Tools\SailPoint-GovernanceToolkit</code>)</td>
+        </tr>
+        <tr>
+            <td>GUI fails with STA error</td>
+            <td>Script was run in MTA thread and auto-relaunch failed</td>
+            <td>Run from PowerShell ISE (always STA) or use <code>powershell.exe -STA -File .\Scripts\Show-SPDashboard.ps1</code></td>
+        </tr>
+        <tr>
+            <td><code>MaxCampaignsPerRun exceeded</code></td>
+            <td>More campaigns than the safety limit allows</td>
+            <td>Reduce your filter scope or increase <code>Safety.MaxCampaignsPerRun</code> in settings.json</td>
+        </tr>
+        <tr>
+            <td><code>Pester module not found</code></td>
+            <td>Pester 5.x not installed (only needed for unit tests)</td>
+            <td><code>Install-Module Pester -Force -SkipPublisherCheck</code></td>
+        </tr>
+        <tr>
+            <td><code>No campaigns matched</code> (exit code 1)</td>
+            <td>Filter criteria too narrow or no campaigns in the time window</td>
+            <td>Widen <code>-DaysBack</code> or use a broader filter (<code>-Status COMPLETED,ACTIVE</code>)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Getting Help</h4>
+
+<p>Every script supports <code>-Help</code> and <code>-?</code> for built-in documentation:</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Help
+.\Scripts\Test-SPConnectivity.ps1 -?
+Get-Help .\Scripts\Invoke-GovernanceTest.ps1 -Detailed</code></pre>
+
+        </div>
+
+        <div id="section-campaign-audit" class="report-section">
+<h2>Campaign Audit</h2>
+
+<p>The Campaign Audit workflow produces post-campaign compliance reports with reviewer accountability,
+decision breakdowns, remediation proof, risk indicators, and leadership rollups. It queries completed
+or active ISC certification campaigns, retrieves all certifications and review items, and generates
+per-campaign HTML reports plus a combined summary and JSONL audit trail.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">18</div>
+        <div class="stat-label">Compliance Fields</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">7</div>
+        <div class="stat-label">Report Sections</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Risk Checks</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">5</div>
+        <div class="stat-label">Org Levels</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Campaign Audit Overview</h3>
+
+<p>Each audit run produces three types of output:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Output</th>
+            <th>Format</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Per-campaign report</td>
+            <td>HTML + TXT</td>
+            <td>Detailed audit of a single campaign: executive dashboard, decision breakdown, reviewer metrics, remediation proof</td>
+        </tr>
+        <tr>
+            <td>Combined report</td>
+            <td>HTML</td>
+            <td>Multi-campaign summary covering all campaigns in a single run</td>
+        </tr>
+        <tr>
+            <td>Audit trail</td>
+            <td>JSONL</td>
+            <td>Machine-readable compliance evidence with 18 mandatory fields per decision</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>The per-campaign HTML report opens with an <strong>Executive Summary Dashboard</strong> containing a
+status badge, decision breakdown donut chart (SVG), remediation completion bar, risk scorecard, and
+reviewer response time summary. Below the dashboard, seven detailed sections follow:</p>
+
+<ol>
+    <li><strong>Campaign Summary</strong> -- name, status, dates, duration, certification count</li>
+    <li><strong>Reviewer Accountability</strong> -- primary certifiers and reassignments with sign-off proof</li>
+    <li><strong>Reviewer Performance</strong> -- time-to-decision metrics per reviewer, color-coded by response time</li>
+    <li><strong>Decision Summary</strong> -- approved, revoked, and pending items with identity and entitlement detail</li>
+    <li><strong>Campaign Reports</strong> -- Campaign Status Report and Certification Signoff Report from ISC</li>
+    <li><strong>Remediation and Reassignment Proof</strong> -- item-level completion status and reassignment chain</li>
+    <li><strong>Audit Metadata</strong> -- correlation ID, generation timestamp, and filters applied</li>
+</ol>
+
+<p>Output directory structure:</p>
+
+<pre><code>Audit\
+    &lt;CampaignName&gt;\
+        campaign-audit-&lt;CampaignName&gt;-&lt;timestamp&gt;.html    # Per-campaign HTML report
+        campaign-audit-&lt;CampaignName&gt;-&lt;timestamp&gt;.txt     # Per-campaign text summary
+    campaign-audit-combined-&lt;timestamp&gt;.html               # Combined multi-campaign HTML
+    audit-&lt;timestamp&gt;.jsonl                                # JSONL audit trail
+    leadership\                                            # (if -IncludeLeadershipRollup)
+        executive-summary.html
+        &lt;LevelLabel&gt;-&lt;LeaderName&gt;-&lt;timestamp&gt;.html</code></pre>
+
+<!-- ============================================================ -->
+<h3>CLI Reference: Invoke-SPCampaignAudit.ps1</h3>
+
+<p>The primary audit script. At least one campaign filter is required -- without a filter the script exits with code 2.</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 [-Status &lt;string[]&gt;] [-CampaignName &lt;string&gt;]
+    [-CampaignNameStartsWith &lt;string&gt;] [-CampaignNameContains &lt;string&gt;]
+    [-DaysBack &lt;int&gt;] [-IdentityEventDays &lt;int&gt;] [-DetailLevel &lt;string&gt;]
+    [-IncludeLeadershipRollup] [-LeadershipDepth &lt;int&gt;] [-LeadershipStartLevel &lt;int&gt;]
+    [-OutputPath &lt;string&gt;] [-OutputMode &lt;string&gt;] [-Token &lt;string&gt;]
+    [-CampaignReportCsvPath &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Campaign Filter Parameters</h4>
+
+<p>At least one of these is required. They can be combined (e.g., <code>-Status COMPLETED -CampaignNameContains 'quarterly'</code>).</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-CampaignName</code></td>
+            <td>string</td>
+            <td>Exact name match (case-insensitive). Maps to ISC filter <code>name eq "..."</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNameStartsWith</code></td>
+            <td>string</td>
+            <td>Prefix match. Maps to ISC filter <code>name sw "..."</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNameContains</code></td>
+            <td>string</td>
+            <td>Substring match anywhere in the name. Maps to ISC filter <code>name co "..."</code>. Recommended for keyword-based searching.</td>
+        </tr>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td>One or more campaign statuses. Valid values: <code>STAGED</code>, <code>ACTIVE</code>, <code>COMPLETING</code>, <code>COMPLETED</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Data Control Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Only include campaigns created within the last N days. Overridden by <code>Audit.DefaultDaysBack</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-IdentityEventDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days before campaign end date to search for identity lifecycle events for revoked identities.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignReportCsvPath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Path to a locally exported campaign report CSV. When provided, skips live campaign-report API calls.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td><code>.\Audit</code></td>
+            <td>Directory for audit output files. Created if absent. Overrides <code>Audit.OutputPath</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Console summary format. Valid values: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DetailLevel</code></td>
+            <td>string</td>
+            <td>Verbose</td>
+            <td>Identity-level detail in HTML reports. Valid values: <code>Summary</code>, <code>Detailed</code>, <code>Verbose</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Leadership Rollup Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-IncludeLeadershipRollup</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Generate leadership rollup reports. Requires SP.DeltaCert module. Also configurable via <code>Audit.IncludeLeadershipRollup</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipDepth</code></td>
+            <td>int</td>
+            <td>3</td>
+            <td>Maximum org levels to walk above reviewed identities. <code>3</code> = identity, manager, director, VP.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipStartLevel</code></td>
+            <td>int</td>
+            <td>-1</td>
+            <td>Highest level from which to begin generating per-level reports. <code>-1</code> = auto-detect (highest level found).</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT bearer token from the ISC admin console. Bypasses OAuth entirely. ~12 minute expiry.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>auto</td>
+            <td>Path to settings.json. Defaults to auto-resolved path relative to the Scripts directory.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>0</td>
+            <td>Audit completed successfully</td>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>No campaigns matched the filter criteria</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Parameter error (missing required filter or invalid combination)</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Authentication error (failed to acquire token)</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Configuration error (settings.json missing, invalid, or first-run placeholders)</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Leadership Rollup Reports</h3>
+
+<p>Leadership rollups aggregate campaign decisions up the organizational hierarchy, producing per-level
+reports for VPs, directors, and managers. Enable with <code>-IncludeLeadershipRollup</code> or set
+<code>Audit.IncludeLeadershipRollup = true</code> in settings.json.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li>The toolkit collects all unique identity IDs from campaign decisions</li>
+    <li><code>Build-SPOrgTree</code> walks each identity's ISC manager chain upward to <code>-LeadershipDepth</code> levels</li>
+    <li>Decisions are grouped by org level using <code>Group-SPAuditByLeadership</code></li>
+    <li>Per-level HTML reports are generated for each leader at each level</li>
+</ol>
+
+<h4>Org Level Labels</h4>
+
+<p>The toolkit assigns labels based on the absolute distance from individual contributors (level 0):</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Level</th>
+            <th>Label</th>
+            <th>Typical Role</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>0</td>
+            <td>Individual Contributors</td>
+            <td>End users whose access was reviewed</td>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>Managers</td>
+            <td>Direct managers who reviewed certifications</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Directors</td>
+            <td>Second-level leaders overseeing managers</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Vice Presidents</td>
+            <td>Third-level leaders overseeing directors</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Senior Vice Presidents</td>
+            <td>Fourth-level leaders</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Executive Leadership</td>
+            <td>C-suite or equivalent</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Depth Control</h4>
+
+<p>The <code>-LeadershipDepth</code> parameter controls how far up the org tree to walk.
+The <code>-LeadershipStartLevel</code> parameter controls where report generation begins
+(<code>-1</code> = auto-detect, starting from the highest level found).</p>
+
+<pre><code># Walk 3 levels: identity -> manager -> director -> VP
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 30 -IncludeLeadershipRollup
+
+# Walk only 2 levels: identity -> manager -> director (no VP reports)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -IncludeLeadershipRollup -LeadershipDepth 2
+
+# Walk 4 levels for a large org
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -IncludeLeadershipRollup -LeadershipDepth 4</code></pre>
+
+<h4>Executive Summary Report</h4>
+
+<p>The executive summary (<code>leadership/executive-summary.html</code>) provides a high-level view across
+all directors. It includes overall approval/revocation rates, an SVG donut chart, and a per-director
+summary table sorted by completion percentage ascending (worst-performing first). Completion cells are
+color-coded: green for >= 95%, orange for 80-95%, red for &lt; 80%.</p>
+
+<h4>Per-Leader Reports</h4>
+
+<p>Each leader at each level gets an individual report with:</p>
+<ul>
+    <li>Level-appropriate header (e.g., "VP Report: Alice Johnson")</li>
+    <li>Summary cards showing total items, approved, revoked, and pending counts</li>
+    <li>Subordinate table listing each direct report's decision statistics</li>
+    <li>Navigation links up to parent report and down to child reports</li>
+    <li>At the lowest generated level: full identity decision detail</li>
+</ul>
+
+<!-- ============================================================ -->
+<h3>Detail Levels</h3>
+
+<p>The <code>-DetailLevel</code> parameter controls how much identity-level information appears in the
+HTML reports. All three levels include the executive dashboard, reviewer accountability, and campaign
+metadata. The difference is in the decision detail tables.</p>
+
+<details>
+    <summary>Summary -- Counts and percentages only</summary>
+    <div class="detail-body">
+        <p>Shows aggregate statistics: total items, approval rate, revocation rate, completion
+        percentage, and reviewer count. No per-identity or per-entitlement detail. Best for
+        executive-level distribution where readers need the headline numbers only.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Summary</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Detailed -- Identity names and decisions</summary>
+    <div class="detail-body">
+        <p>Includes per-identity rows with name, account identifier, access name, decision, and
+        reviewer. Omits lifecycle events, remediation timestamps, and justification text. Good for
+        manager-level review where the focus is on who-decided-what.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Detailed</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Verbose -- Full compliance evidence (default)</summary>
+    <div class="detail-body">
+        <p>Everything in Detailed plus: justification comments, remediation status and dates, identity
+        lifecycle events, risk flags, and the full reassignment chain. This is the default and the
+        level required for SOX/SOC2 compliance evidence packages.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Verbose</code></pre>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>Compliance Features</h3>
+
+<h4>18 Mandatory Compliance Fields</h4>
+
+<p>Every access review decision is emitted as a <code>DecisionRecorded</code> event in the JSONL audit
+trail with exactly 18 fields. This structure supports SOX, SOC2, and NIST audit requirements:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Action</code></td>
+            <td>Always <code>DecisionRecorded</code></td>
+        </tr>
+        <tr>
+            <td><code>IdentityName</code></td>
+            <td>Display name of the identity whose access was reviewed</td>
+        </tr>
+        <tr>
+            <td><code>IdentityId</code></td>
+            <td>ISC identity ID</td>
+        </tr>
+        <tr>
+            <td><code>AccountId</code></td>
+            <td>ISC account ID linked to the identity</td>
+        </tr>
+        <tr>
+            <td><code>ApplicationSource</code></td>
+            <td>ISC source name (e.g., "Active Directory - Corp")</td>
+        </tr>
+        <tr>
+            <td><code>EntitlementName</code></td>
+            <td>Name of the entitlement or access profile reviewed</td>
+        </tr>
+        <tr>
+            <td><code>AccessType</code></td>
+            <td>Type of access (entitlement, access profile, role)</td>
+        </tr>
+        <tr>
+            <td><code>ReviewerName</code></td>
+            <td>Name of the reviewer who made the decision</td>
+        </tr>
+        <tr>
+            <td><code>ReviewerEmail</code></td>
+            <td>Email address of the reviewer</td>
+        </tr>
+        <tr>
+            <td><code>Decision</code></td>
+            <td><code>APPROVE</code>, <code>REVOKE</code>, or pending (no decision recorded)</td>
+        </tr>
+        <tr>
+            <td><code>DecisionDateTime</code></td>
+            <td>ISO 8601 timestamp of the decision</td>
+        </tr>
+        <tr>
+            <td><code>Justification</code></td>
+            <td>Reviewer's comment or justification text</td>
+        </tr>
+        <tr>
+            <td><code>CampaignName</code></td>
+            <td>Name of the certification campaign</td>
+        </tr>
+        <tr>
+            <td><code>CampaignStart</code></td>
+            <td>Campaign start date</td>
+        </tr>
+        <tr>
+            <td><code>CampaignDueDate</code></td>
+            <td>Campaign deadline</td>
+        </tr>
+        <tr>
+            <td><code>CampaignCompletion</code></td>
+            <td>Campaign completion date</td>
+        </tr>
+        <tr>
+            <td><code>RemediationStatus</code></td>
+            <td><code>Provisioned</code> (completed), <code>Pending</code>, or <code>N/A</code> (non-revoke)</td>
+        </tr>
+        <tr>
+            <td><code>RemediationDate</code></td>
+            <td>Date the revocation was provisioned (if applicable)</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <div class="callout-label">Note</div>
+    <p>Two additional fields (<code>ReassignmentChain</code> and <code>SystemTimestamp</code>) are also
+    included in the JSONL event, bringing the total to 20 fields per event. The 18 above are the
+    mandatory compliance fields referenced in the audit report headers.</p>
+</div>
+
+<h4>Anti-Rubber-Stamping Detection</h4>
+
+<p>The <code>Measure-SPAuditRubberStampRisk</code> function performs four SOX/SOC2 red-flag checks on
+reviewer behavior, producing a per-reviewer risk severity (None, Low, Medium, High):</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Check</th>
+            <th>What It Detects</th>
+            <th>Threshold</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Approval-only rate</td>
+            <td>Reviewer approved 100% of items without a single revocation</td>
+            <td>100% approval across &gt; 10 items</td>
+        </tr>
+        <tr>
+            <td>Decision velocity</td>
+            <td>Decisions made faster than humanly possible for the item count</td>
+            <td>&gt; 50 items decided in &lt; 60 seconds</td>
+        </tr>
+        <tr>
+            <td>Bulk decision clusters</td>
+            <td>Consecutive identical decisions within a narrow time window</td>
+            <td>&gt; 5 identical decisions within 30 seconds</td>
+        </tr>
+        <tr>
+            <td>Response latency</td>
+            <td>First decision made suspiciously soon after campaign assignment</td>
+            <td>&lt; 1 minute after assignment with &gt; 5 items</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Severity is calculated as: <strong>High</strong> = 2+ flags; <strong>Medium</strong> = 1 flag (velocity
+or approval-only); <strong>Low</strong> = 1 flag (other type); <strong>None</strong> = 0 flags.</p>
+
+<h4>Risk Indicators</h4>
+
+<p>The <code>Get-SPAuditRiskFlags</code> function adds risk flags to individual access review decisions.
+Each decision item can receive zero or more of the following flags:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Flag</th>
+            <th>Color</th>
+            <th>Trigger</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>STALE</code></td>
+            <td style="color:#FF8800;">Orange</td>
+            <td>Last login &gt; <code>StaleAccessDays</code> ago (default 90)</td>
+        </tr>
+        <tr>
+            <td><code>PRIVILEGED</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Entitlement name matches <code>PrivilegedPatterns</code> (Admin, Root, DBA, Domain Admins)</td>
+        </tr>
+        <tr>
+            <td><code>ORPHAN</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Identity has no manager assigned in ISC</td>
+        </tr>
+        <tr>
+            <td><code>TERMINATED</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Identity lifecycle state is <code>terminated</code></td>
+        </tr>
+        <tr>
+            <td><code>SVC-ACCOUNT</code></td>
+            <td style="color:#777777;">Gray</td>
+            <td>Identity name matches <code>ServiceAccountPatterns</code> (<code>^SVC-</code>, <code>^svc-</code>)</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Risk indicator thresholds are configurable in settings.json under <code>Audit.RiskIndicators</code>:</p>
+
+<pre><code>"Audit": {
+    "RiskIndicators": {
+        "StaleAccessDays": 90,
+        "PrivilegedPatterns": ["Admin", "Root", "DBA", "Domain Admins"],
+        "ServiceAccountPatterns": ["^SVC-", "^svc-"]
+    }
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Search</h3>
+
+<p><code>Invoke-SPCampaignSearch.ps1</code> is a unified campaign search and analysis tool. It combines
+keyword/type/status/date filtering with five analysis modes for deeper investigation.</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 [-Keyword &lt;string&gt;] [-Type &lt;string&gt;]
+    [-Status &lt;string[]&gt;] [-DaysBack &lt;int&gt;] [-CreatedAfter &lt;DateTime&gt;]
+    [-CreatedBefore &lt;DateTime&gt;] [-ShowDeadlines] [-ShowMetrics]
+    [-ReviewerIdentityId &lt;string&gt;] [-IdentityId &lt;string&gt;]
+    [-SourceCoverage] [-CompareIds &lt;string[]&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-Token &lt;string&gt;] [-Help]</code></pre>
+
+<h4>Search Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Keyword</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Substring search against campaign names. Uses ISC <code>co</code> (contains) filter.</td>
+        </tr>
+        <tr>
+            <td><code>-Type</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Campaign type. Valid values: <code>MANAGER</code>, <code>SOURCE_OWNER</code>, <code>SEARCH</code>, <code>ROLE_COMPOSITION</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td>COMPLETED, ACTIVE</td>
+            <td>One or more statuses. Also accepts: <code>STAGED</code>, <code>ACTIVATING</code>, <code>COMPLETING</code>, <code>ERROR</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>90</td>
+            <td>Look-back window. Ignored when <code>-CreatedAfter</code> or <code>-CreatedBefore</code> is specified.</td>
+        </tr>
+        <tr>
+            <td><code>-CreatedAfter</code></td>
+            <td>DateTime</td>
+            <td>--</td>
+            <td>Lower bound for campaign creation date. Takes precedence over <code>-DaysBack</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CreatedBefore</code></td>
+            <td>DateTime</td>
+            <td>--</td>
+            <td>Upper bound for campaign creation date. Takes precedence over <code>-DaysBack</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format. Valid values: <code>Console</code>, <code>JSON</code>, <code>CSV</code>, <code>HTML</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td><code>.\SearchResults</code></td>
+            <td>Directory for CSV/HTML output files. Created if absent.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Analysis Modes</h4>
+
+<p>Only one analysis mode can be active at a time. When none is specified, the default is a standard
+campaign search with optional deadline and metrics enrichment.</p>
+
+<details>
+    <summary>Deadline Urgency (-ShowDeadlines)</summary>
+    <div class="detail-body">
+        <p>Adds an urgency classification to each campaign result based on its deadline and status:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Classification</th>
+                    <th>Criteria</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Overdue</strong></td>
+                    <td>Deadline has passed AND campaign is still ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Critical</strong></td>
+                    <td>Deadline within 24 hours AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Warning</strong></td>
+                    <td>Deadline within 72 hours AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>OnTrack</strong></td>
+                    <td>Deadline more than 72 hours away AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Completed</strong></td>
+                    <td>Campaign status is COMPLETED</td>
+                </tr>
+                <tr>
+                    <td><strong>NoDeadline</strong></td>
+                    <td>No deadline set on the campaign</td>
+                </tr>
+            </tbody>
+        </table>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Campaign Metrics (-ShowMetrics)</summary>
+    <div class="detail-body">
+        <p>Retrieves per-campaign KPIs including approval rate, completion rate, reviewer count,
+        and response time statistics (average, min, max, median hours). Also identifies the fastest
+        and slowest reviewers and calculates items-per-reviewer distribution.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -Status COMPLETED -DaysBack 90 -ShowMetrics -OutputMode CSV</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Reviewer Workload (-ReviewerIdentityId)</summary>
+    <div class="detail-body">
+        <p>Finds all campaigns and certifications assigned to a specific reviewer. Returns per-campaign
+        workload counts: items assigned, decided, and pending.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId 'id-mgr-001' -Status ACTIVE</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Identity Decision History (-IdentityId)</summary>
+    <div class="detail-body">
+        <p>Shows all access review decisions about a specific identity across all matching campaigns.
+        Returns per-campaign decision lists with access name, decision, reviewer, and date.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -IdentityId 'id-001' -Status COMPLETED -DaysBack 365</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Source Coverage (-SourceCoverage)</summary>
+    <div class="detail-body">
+        <p>Analyzes which ISC sources have been included in certification campaigns and which have not.
+        Returns covered sources, uncovered sources, and a coverage rate percentage.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -DaysBack 365</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Campaign Comparison (-CompareIds)</summary>
+    <div class="detail-body">
+        <p>Side-by-side metric comparison of two or more campaigns by ID. Produces a comparison table
+        with approval rates, revocation rates, reviewer counts, and response times.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode HTML</code></pre>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>Report Distribution</h3>
+
+<p><code>Invoke-SPReportDistribution.ps1</code> generates leadership reports with optional SMTP email
+delivery. It combines campaign audit, leadership rollup, org tree building, band classification, and
+per-band filtering into a single CLI workflow. Default behavior is generate-only.</p>
+
+<pre><code>.\Scripts\Invoke-SPReportDistribution.ps1 -Status &lt;string[]&gt; [-DaysBack &lt;int&gt;]
+    [-LeadershipDepth &lt;int&gt;] [-TargetBands &lt;string[]&gt;] [-DetailLevel &lt;string&gt;]
+    [-OrgSupplementPath &lt;string&gt;] [-PreviewOnly] [-SendReports]
+    [-OutputPath &lt;string&gt;] [-OutputMode &lt;string&gt;] [-Token &lt;string&gt;] [-Help]</code></pre>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td><em>Mandatory</em></td>
+            <td>Filter campaigns by status. Valid values: <code>STAGED</code>, <code>ACTIVE</code>, <code>COMPLETING</code>, <code>COMPLETED</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Only include campaigns created within the last N days.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipDepth</code></td>
+            <td>int</td>
+            <td>4</td>
+            <td>Maximum org levels to walk above reviewed identities.</td>
+        </tr>
+        <tr>
+            <td><code>-TargetBands</code></td>
+            <td>string[]</td>
+            <td>all</td>
+            <td>Band letters to include (e.g., <code>@('B','C')</code>). Omit to include all bands.</td>
+        </tr>
+        <tr>
+            <td><code>-DetailLevel</code></td>
+            <td>string</td>
+            <td>Verbose</td>
+            <td>Identity-level detail in reports. Valid values: <code>Summary</code>, <code>Detailed</code>, <code>Verbose</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OrgSupplementPath</code></td>
+            <td>string</td>
+            <td>from config</td>
+            <td>Path to an org chart supplement CSV to fill gaps in ISC manager chain data.</td>
+        </tr>
+        <tr>
+            <td><code>-PreviewOnly</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Show distribution plan without generating reports or sending email. Exits after preview.</td>
+        </tr>
+        <tr>
+            <td><code>-SendReports</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Send generated reports to leaders via SMTP. Requires <code>Audit.Smtp</code> config.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Workflow</h4>
+
+<ol>
+    <li>Query campaigns matching the status and date filters</li>
+    <li>Collect all certifications, review items, and decisions per campaign</li>
+    <li>Build the org tree via <code>Build-SPOrgTree</code></li>
+    <li>If an org supplement CSV is configured: merge it with the API-derived org tree</li>
+    <li>Assign A-E band classifications via <code>Resolve-SPIdentityBand</code></li>
+    <li>Group decisions by leadership level and band</li>
+    <li>Generate per-band filtered HTML reports via <code>Export-SPLeadershipBandHtml</code></li>
+    <li>If <code>-SendReports</code>: match reports to leader emails and send via SMTP</li>
+</ol>
+
+<pre><code># Preview the distribution plan first
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -PreviewOnly
+
+# Generate reports for Band B and C leaders only
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -TargetBands B,C
+
+# Full distribution with SMTP delivery
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -SendReports
+
+# Use org chart supplement to fill gaps
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -OrgSupplementPath '.\Config\org-chart-supplement.csv'</code></pre>
+
+<!-- ============================================================ -->
+<h3>Band Classification</h3>
+
+<p>The toolkit assigns A-E band letters to leaders in the org tree for report filtering and distribution.
+Band assignment uses a three-source priority system:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Priority</th>
+            <th>Source</th>
+            <th>How It Works</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1 (highest)</td>
+            <td>Org Chart Supplement CSV</td>
+            <td>Explicit <code>band</code> column in the supplement CSV, keyed by email address</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>ISC Identity Attribute</td>
+            <td>Reads the <code>jobLevel</code> attribute (or custom attribute from <code>Leadership.ISCBandAttribute</code>). If the value is already a valid band letter, uses it directly.</td>
+        </tr>
+        <tr>
+            <td>3 (fallback)</td>
+            <td>Auto-detect from Tree Depth</td>
+            <td>Uses <code>BandMapping</code> to map org level to band letter. Default: <code>0=E, 1=D, 2=C, 3=B, 4=A</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Band Definitions</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Band</th>
+            <th>Typical Level</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>A</strong></td>
+            <td>President / C-Suite</td>
+            <td>Top-level executives</td>
+        </tr>
+        <tr>
+            <td><strong>B</strong></td>
+            <td>VP / SVP</td>
+            <td>Vice presidents and senior vice presidents</td>
+        </tr>
+        <tr>
+            <td><strong>C</strong></td>
+            <td>Director</td>
+            <td>Second-level leaders</td>
+        </tr>
+        <tr>
+            <td><strong>D</strong></td>
+            <td>Manager</td>
+            <td>First-level people managers</td>
+        </tr>
+        <tr>
+            <td><strong>E</strong></td>
+            <td>Individual Contributor</td>
+            <td>End users</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Org Chart Supplement CSV</h4>
+
+<p>To override or fill gaps in ISC manager chain data, provide a CSV with the following columns:</p>
+
+<pre><code>identityEmail,managerEmail,level,title,band
+alice@example.com,bob@example.com,3,Vice President of Engineering,B
+bob@example.com,,4,CTO,A
+carol@example.com,alice@example.com,2,Director of Security,C</code></pre>
+
+<p>The supplement is configured in settings.json:</p>
+
+<pre><code>"Leadership": {
+    "OrgChartSupplementPath": ".\\Config\\org-chart-supplement.csv",
+    "UseSupplementForReports": true,
+    "DefaultBandMapping": { "0": "E", "1": "D", "2": "C", "3": "B", "4": "A" },
+    "ISCBandAttribute": "jobLevel"
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Example Workflows</h3>
+
+<details>
+    <summary>Quarterly Compliance Audit</summary>
+    <div class="detail-body">
+        <p>Run at the end of each quarter to generate a comprehensive audit package for all completed
+        campaigns within the quarter.</p>
+        <pre><code># Step 1: Dry-run to review matching campaigns
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 90 -WhatIf
+
+# Step 2: Generate full audit with leadership rollup
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 90 \
+    -IncludeLeadershipRollup -LeadershipDepth 3
+
+# Step 3: Distribute leadership reports to Band B and C leaders
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 90 \
+    -TargetBands B,C -PreviewOnly
+
+# Step 4: After reviewing preview, send reports
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 90 \
+    -TargetBands B,C -SendReports</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Annual Compliance Review</summary>
+    <div class="detail-body">
+        <p>Year-end review covering all campaigns with source coverage analysis to identify gaps.</p>
+        <pre><code># Step 1: Source coverage -- which apps were audited, which were not
+.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -DaysBack 365
+
+# Step 2: Full audit with verbose detail for the archive
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 365 \
+    -IncludeLeadershipRollup -LeadershipDepth 4
+
+# Step 3: Generate leadership reports for all bands
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 365 \
+    -LeadershipDepth 4</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Ad-Hoc Investigation</summary>
+    <div class="detail-body">
+        <p>Investigate a specific campaign or identity for an internal audit or incident response.</p>
+        <pre><code># Investigate a single campaign by name
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Privileged Access Review 2026-Q1'
+
+# Trace all decisions about a specific identity
+.\Scripts\Invoke-SPCampaignSearch.ps1 -IdentityId 'abc123def' -DaysBack 365
+
+# Check a reviewer's workload across active campaigns
+.\Scripts\Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId 'mgr-456' -Status ACTIVE
+
+# Compare two campaigns side by side
+.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-q1','camp-q2' -OutputMode HTML</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Active Campaign Monitoring</summary>
+    <div class="detail-body">
+        <p>Monitor in-flight campaigns for deadline risks and reviewer bottlenecks.</p>
+        <pre><code># Show all active campaigns with deadline urgency
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines
+
+# Show active campaigns with full metrics
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowMetrics
+
+# Export active campaign data to CSV for executive review
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines -ShowMetrics -OutputMode CSV</code></pre>
+    </div>
+</details>
+
+        </div>
+
+        <div id="section-delta-certification" class="report-section">
+<h2>Delta Certification</h2>
+
+<p>Delta Certification detects daily AD access changes by querying SailPoint ISC account-activity
+events for <code>GRANT_ACCESS</code> operations. When new grants are found, the toolkit creates
+targeted certification campaigns scoped to only the identities who received new access, routed
+to their managers (or source owners) for review. Combined with escalation, cleanup, and reporting
+scripts, this forms a continuous compliance loop for AD entitlement governance.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Core Functions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">6</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">2</div>
+        <div class="stat-label">Reviewer Modes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">10</div>
+        <div class="stat-label">Orchestrator Steps</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Delta Cert Overview</h3>
+
+<p>The delta certification workflow addresses a gap in ISC's native certification capabilities:
+there is no built-in way to automatically certify only new access grants on a daily basis.
+Standard ISC campaigns review all entitlements for a population, which is too broad for
+day-to-day change detection. The toolkit fills this gap with an event-driven approach.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li><strong>Event Detection</strong> -- <code>Get-SPDeltaGrantEvents</code> queries
+    <code>GET /v3/account-activities</code> for <code>GRANT_ACCESS</code> events on specified
+    AD source IDs within a configurable time window (default: 24 hours).</li>
+
+    <li><strong>Identity Resolution</strong> -- <code>Get-SPDeltaAffectedIdentities</code>
+    resolves each event to an active ISC identity, filtering out terminated, inactive, leaver,
+    and prehire lifecycle states. Additional exclusion filters (display name patterns, explicit
+    identity IDs) are configurable.</li>
+
+    <li><strong>Manager Grouping</strong> -- <code>Group-SPDeltaByManager</code> groups
+    affected identities by their ISC manager, forming one reviewer group per manager.</li>
+
+    <li><strong>Campaign Creation</strong> -- <code>Invoke-SPDeltaCertRun</code> creates one
+    SEARCH-type certification campaign per manager group, scoped via identity ID filter
+    (<code>id:"abc" OR id:"def"</code>). Each campaign is started immediately after creation.</li>
+</ol>
+
+<p>Campaign naming convention: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code></p>
+
+<h4>Scope Requirement</h4>
+
+<div class="callout callout-warning">
+    <strong>Important:</strong> <code>GET /v3/account-activities</code> requires
+    <code>sp:scopes:all</code> -- there is no granular scope for this endpoint. Use a browser
+    token (<code>-Token</code>) from the ISC admin console as a workaround, or configure a PAT
+    with <code>sp:scopes:all</code>.
+</div>
+
+<h4>Output Structure</h4>
+
+<pre><code>DeltaCert\
+    deltacert-audit.jsonl          # Append-only JSONL audit trail (one line per run)
+    deltacert-escalation.jsonl     # Escalation event log
+    reports\
+        delta-report-YYYY-MM-DD.html   # Daily delta report
+        delta-report-YYYY-MM-DD.jsonl  # Machine-readable report data</code></pre>
+
+<!-- ============================================================ -->
+<h3>CLI Reference: Invoke-SPADDeltaCert.ps1</h3>
+
+<p>The primary delta certification script. Creates daily campaigns for managers of identities
+who received new AD access.</p>
+
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId &lt;string[]&gt;
+    [-HoursBack &lt;int&gt;] [-DeadlineDays &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-CampaignNamePrefix &lt;string&gt;] [-MaxCampaignsPerRun &lt;int&gt;]
+    [-ReviewerMode &lt;string&gt;] [-RunCleanup]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Required Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SourceId</code></td>
+            <td>string[]</td>
+            <td>One or more SailPoint ISC source IDs to monitor for AD group add operations.
+            Obtain from: ISC Admin &gt; Sources &gt; select source &gt; URL contains the source ID.
+            Example: <code>-SourceId 'abc123def456'</code> or <code>@('src-1','src-2')</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Campaign Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-HoursBack</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Look-back window in hours. Increase to 48+ for catch-up after a missed run.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days from today until the campaign deadline. ISC enforces this deadline on the campaign.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Identity ID of the reviewer for identities with no manager in ISC. If omitted, manager-less identities are skipped with warnings.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>AD Delta Cert</td>
+            <td>Prefix for campaign names. Full name format: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>. Also configurable via <code>DeltaCert.CampaignNamePrefix</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxCampaignsPerRun</code></td>
+            <td>int</td>
+            <td>50</td>
+            <td>Safety guard -- abort before creating any campaigns if the number of manager groups exceeds this threshold. Also configurable via <code>DeltaCert.MaxCampaignsPerRun</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-ReviewerMode</code></td>
+            <td>string</td>
+            <td>Manager</td>
+            <td>Who reviews the campaigns. <code>Manager</code>: one SEARCH campaign per manager group. <code>SourceOwner</code>: one SOURCE_OWNER campaign per source ID. See <a href="#" onclick="event.preventDefault()">Reviewer Modes</a> below.</td>
+        </tr>
+        <tr>
+            <td><code>-RunCleanup</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Run <code>Invoke-SPDeltaCertCleanup</code> before creating new campaigns. Completes past-due campaigns older than <code>DeltaCert.CleanupDaysStale</code> (default: 3 days). Requires <code>Safety.AllowCompleteCampaign = true</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Pre-obtained JWT bearer token from the ISC admin console browser session. Bypasses OAuth <code>client_credentials</code>. Obtain via: F12 &gt; Network tab &gt; any ISC API call &gt; Authorization header value. The <code>Bearer </code> prefix is stripped automatically.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired. ISC browser tokens are typically valid for ~12 minutes.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Console summary format. Valid values: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. Shows what campaigns would be created without making any write API calls.</td>
+        </tr>
+        <tr>
+            <td><code>-Help</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Display full comment-based help and exit.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success -- campaigns created (or WhatIf completed)</td></tr>
+        <tr><td>1</td><td>No changes -- no AD grant events found in the time window (expected on quiet days)</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Campaign creation/activation error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Daily run: create campaigns for the last 24 hours
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123'
+
+# Dry-run: preview without making write calls
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -WhatIf
+
+# Catch-up run after a weekend (48-hour window, 3-day deadline)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId @('src-abc','src-def') -HoursBack 48 -DeadlineDays 3
+
+# With browser token and cleanup
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -Token 'eyJhbGciOiJSUzI1...' -RunCleanup
+
+# Fallback reviewer for manager-less identities
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -FallbackReviewerIdentityId 'mgr-fallback-id'
+
+# Source owner mode (one campaign per source, ISC routes to source owner)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -ReviewerMode SourceOwner</code></pre>
+
+<!-- ============================================================ -->
+<h3>Reviewer Modes</h3>
+
+<p>The <code>-ReviewerMode</code> parameter (or <code>DeltaCert.DefaultReviewerMode</code> in settings.json)
+controls how certification campaigns are routed to reviewers.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>Campaign Type</th>
+            <th>Grouping</th>
+            <th>Best For</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Manager</strong> (default)</td>
+            <td>SEARCH</td>
+            <td>One campaign per manager group. Each manager reviews only their direct reports who received new AD access.</td>
+            <td>Organizations where managers are accountable for their team's access.</td>
+        </tr>
+        <tr>
+            <td><strong>SourceOwner</strong></td>
+            <td>SOURCE_OWNER</td>
+            <td>One campaign per AD source ID. ISC automatically routes certification items to whoever owns each source.</td>
+            <td>Organizations where application/source owners control access decisions. Fewer API calls (skips identity resolution and manager grouping).</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Manager Mode Flow</h4>
+
+<pre><code>Get-SPDeltaGrantEvents (GRANT_ACCESS events)
+  -> Get-SPDeltaAffectedIdentities (resolve to active identities)
+    -> Group-SPDeltaByManager (one group per manager)
+      -> For each manager:
+           New-SPCampaign -Type SEARCH -SearchFilter 'id:"x" OR id:"y"' -CertifierIdentityId $managerId
+           Start-SPCampaign</code></pre>
+
+<h4>SourceOwner Mode Flow</h4>
+
+<pre><code>Get-SPDeltaGrantEvents (GRANT_ACCESS events)
+  -> For each unique SourceId:
+       New-SPCampaign -Type SOURCE_OWNER -SourceId $sourceId
+       Start-SPCampaign</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Cleanup</h3>
+
+<p>Over time, managers may neglect to act on their delta cert campaigns, causing campaign
+pile-up. <code>Invoke-SPDeltaCertCleanup</code> finds past-due delta cert campaigns and
+completes them, preventing stale campaigns from accumulating.</p>
+
+<h4>How Cleanup Works</h4>
+
+<ol>
+    <li>Searches for active campaigns matching the campaign name prefix via
+    <code>Search-SPCampaigns -Keyword $Prefix -Status @('ACTIVE')</code></li>
+    <li>For each campaign, checks if the deadline has passed or if the campaign
+    is older than <code>CleanupDaysStale</code> (default: 3 days)</li>
+    <li>Calls <code>Complete-SPCampaign -CampaignId $id</code> on past-due campaigns</li>
+    <li>Returns a summary: campaigns completed, campaigns still active, errors</li>
+</ol>
+
+<div class="callout callout-warning">
+    <strong>Safety Guard:</strong> <code>Complete-SPCampaign</code> is guarded by
+    <code>Safety.AllowCompleteCampaign</code> (default: <code>false</code>). You must set
+    this to <code>true</code> in settings.json for cleanup to work. When blocked, the function
+    returns <code>Success=$false</code> with a clear error message and makes no API calls.
+</div>
+
+<h4>Triggering Cleanup</h4>
+
+<p>Cleanup runs when you pass <code>-RunCleanup</code> to <code>Invoke-SPADDeltaCert.ps1</code>.
+It executes before creating new campaigns. Example:</p>
+
+<pre><code># Run cleanup then create new campaigns
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -RunCleanup -Token $token</code></pre>
+
+<h4>Configuration</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DeltaCert.CleanupDaysStale</code></td>
+            <td>3</td>
+            <td>Days before an active delta cert campaign is considered stale and eligible for completion.</td>
+        </tr>
+        <tr>
+            <td><code>Safety.AllowCompleteCampaign</code></td>
+            <td>false</td>
+            <td>Must be <code>true</code> for cleanup to call the ISC campaign-complete API.</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Escalation</h3>
+
+<p>When a reviewer does not act on a certification within a configurable threshold, the toolkit
+can escalate by reassigning the certification to the reviewer's manager in the ISC org tree.</p>
+
+<h4>Escalation Workflow</h4>
+
+<ol>
+    <li><strong>Stale Detection</strong> -- <code>Get-SPDeltaCertStaleCertifications</code>
+    finds active delta cert certifications where <code>signed</code> is null (not completed)
+    and <code>created</code> is older than <code>StaleHours</code> (default: 24).</li>
+
+    <li><strong>Org Tree Walk</strong> -- <code>Invoke-SPDeltaCertEscalate</code> looks up
+    each stale reviewer's manager via <code>Get-SPDeltaIdentityDetail</code>.</li>
+
+    <li><strong>Reassignment</strong> -- Calls <code>Invoke-SPReassign</code> to reassign
+    the certification to the reviewer's manager. The reassignment reason includes the
+    hours-open context: <code>"SLA escalation: 48 hours without action"</code>.</li>
+
+    <li><strong>ISC Notification</strong> -- ISC sends its own email notification to the
+    new reviewer when a certification is reassigned. No custom email logic is needed.</li>
+</ol>
+
+<h4>Escalation Safeguards</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Safeguard</th>
+            <th>Behavior</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>No manager</td>
+            <td>Reviewer with no manager in ISC is skipped with a WARN log (not an error).</td>
+        </tr>
+        <tr>
+            <td>Max escalation levels</td>
+            <td><code>MaxEscalationLevels</code> (default: 2) prevents infinite escalation loops. If the reviewer's manager was already the target from a previous escalation, the walk goes up one more level.</td>
+        </tr>
+        <tr>
+            <td>Large certifications</td>
+            <td>Certifications with &gt;50 review items automatically use <code>Invoke-SPReassignAsync</code> (max 500 items) instead of the synchronous endpoint (max 50).</td>
+        </tr>
+        <tr>
+            <td>Governance Groups</td>
+            <td>Reassignment does NOT work for Governance Group certifications (documented ISC exception). These are detected and skipped with a WARN log.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDeltaCertEscalate.ps1</h4>
+
+<p>Standalone escalation script, designed to run on a separate schedule from the main delta
+cert script (e.g., every 4 hours, or daily after business hours).</p>
+
+<pre><code>.\Scripts\Invoke-SPDeltaCertEscalate.ps1
+    [-CampaignNamePrefix &lt;string&gt;] [-StaleHours &lt;int&gt;] [-MaxEscalationLevels &lt;int&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>AD Delta Cert</td>
+            <td>Prefix used to find delta cert campaigns. Reads from <code>DeltaCert.Escalation.CampaignNamePrefix</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-StaleHours</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Hours with no reviewer action before a certification is considered stale. Reads from <code>DeltaCert.Escalation.DefaultStaleHours</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxEscalationLevels</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Maximum number of org-tree hops from the original reviewer. Reads from <code>DeltaCert.Escalation.MaxEscalationLevels</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token. Required for the reassignment API (<code>sp:scopes:all</code>).</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Show which certifications would be escalated without making API calls.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Escalation completed (or WhatIf)</td></tr>
+        <tr><td>1</td><td>No stale certifications found</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Escalation error (partial or full failure)</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Preview stale certifications without escalating
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
+
+# Escalate with browser token
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
+
+# Aggressive escalation: 12-hour threshold, single hop
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 12 -MaxEscalationLevels 1</code></pre>
+
+<!-- ============================================================ -->
+<h3>Delta Reports</h3>
+
+<p><code>Invoke-SPDeltaReport.ps1</code> generates a lightweight daily operations report showing
+what changed since the last run. This is not a full campaign audit -- it shows only access
+changes within the time window for quick daily review.</p>
+
+<h4>Report Contents</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Section</th>
+            <th>Data Source</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>New Grants</td>
+            <td>GRANT_ACCESS account-activity events</td>
+            <td>Identities that received new AD group memberships</td>
+        </tr>
+        <tr>
+            <td>Revocations</td>
+            <td>REVOKE_ACCESS account-activity events</td>
+            <td>AD group memberships that were removed</td>
+        </tr>
+        <tr>
+            <td>Campaigns Created</td>
+            <td>Delta cert campaign search</td>
+            <td>New campaigns created in this period</td>
+        </tr>
+        <tr>
+            <td>Pending Reviews</td>
+            <td>Active certification items</td>
+            <td>Items awaiting reviewer action</td>
+        </tr>
+        <tr>
+            <td>Anomalies</td>
+            <td>Cross-reference analysis</td>
+            <td>Unusual patterns (e.g., grants immediately followed by revocations)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDeltaReport.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId &lt;string[]&gt;
+    [-HoursBack &lt;int&gt;] [-OutputPath &lt;string&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SourceId</code></td>
+            <td>string[]</td>
+            <td>(required)</td>
+            <td>ISC source IDs to monitor for access events.</td>
+        </tr>
+        <tr>
+            <td><code>-HoursBack</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Look-back window in hours. Increase for catch-up after missed days.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>DeltaCert\reports\</td>
+            <td>Directory for HTML and JSONL output files. Created if absent.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token. Required for <code>sp:scopes:all</code> account-activity endpoint.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Daily delta report
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 24
+
+# Catch-up report for the last 48 hours to a custom directory
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 48 -OutputPath 'C:\Reports'
+
+# With browser token
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -Token 'eyJhbGciOiJSUzI1...'</code></pre>
+
+<!-- ============================================================ -->
+<h3>Daily Orchestrator</h3>
+
+<p><code>Invoke-SPDailyOrchestrator.ps1</code> consolidates the full daily governance workflow
+into a single coordinated invocation. It runs 10 dependency-aware steps in sequence, with each
+step isolated so that a failure in one does not prevent subsequent steps from executing.</p>
+
+<h4>Execution Steps</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Step</th>
+            <th>Operation</th>
+            <th>Function</th>
+            <th>Skip Switch</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Configuration Validation</td>
+            <td><code>Test-SPConfiguration</code></td>
+            <td><code>-SkipValidation</code></td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Campaign Cleanup</td>
+            <td><code>Invoke-SPDeltaCertCleanup</code></td>
+            <td><code>-SkipCleanup</code></td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Delta Cert Run</td>
+            <td><code>Invoke-SPDeltaCertRun</code></td>
+            <td><code>-SkipDeltaCert</code></td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Delta Report</td>
+            <td><code>Get-SPDeltaReportData</code> + <code>Export-SPDeltaReportHtml</code></td>
+            <td><code>-SkipDeltaReport</code></td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Escalation</td>
+            <td><code>Invoke-SPDeltaCertEscalate</code></td>
+            <td><code>-SkipEscalation</code></td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Health Check</td>
+            <td><code>Get-SPCampaignHealth</code></td>
+            <td><code>-SkipHealthCheck</code></td>
+        </tr>
+        <tr>
+            <td>7</td>
+            <td>Disconnected App Batch</td>
+            <td><code>Invoke-SPDisconnectedAppBatch</code></td>
+            <td rowspan="3"><code>-SkipDisconnectedApps</code></td>
+        </tr>
+        <tr>
+            <td>8</td>
+            <td>Decision Collection</td>
+            <td><code>Get-SPDisconnectedAppCampaignDecisions</code></td>
+        </tr>
+        <tr>
+            <td>9</td>
+            <td>Remediation Check</td>
+            <td><code>Update-SPRemediationStatus</code></td>
+        </tr>
+        <tr>
+            <td>10</td>
+            <td>Daily Summary</td>
+            <td>Consolidated output + JSONL audit trail</td>
+            <td>--</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDailyOrchestrator.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDailyOrchestrator.ps1
+    [-SourceId &lt;string[]&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-HoursBack &lt;int&gt;] [-DeadlineDays &lt;int&gt;]
+    [-ReviewerMode &lt;string&gt;] [-StaleHours &lt;int&gt;] [-CampaignNamePrefix &lt;string&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-SkipValidation] [-SkipCleanup] [-SkipDeltaCert] [-SkipDeltaReport]
+    [-SkipEscalation] [-SkipHealthCheck] [-SkipDisconnectedApps]
+    [-WhatIf] [-Help]</code></pre>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>All steps succeeded</td></tr>
+        <tr><td>1</td><td>One or more non-critical steps had warnings</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration validation failed</td></tr>
+        <tr><td>5</td><td>Critical step failed</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Single daily command replacing separate script invocations
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $token
+
+# With parameter overrides
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -HoursBack 48 -StaleHours 12 -Token $token
+
+# Skip specific steps
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -SkipEscalation -SkipHealthCheck -Token $token
+
+# Dry run -- all sub-steps receive WhatIf
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -WhatIf</code></pre>
+
+<!-- ============================================================ -->
+<h3>Weekly Digest</h3>
+
+<p><code>Invoke-SPWeeklyDigest.ps1</code> generates a comprehensive weekly governance digest
+combining campaign activity, health status, identity risk, reviewer performance, remediation
+tracking, and orchestrator reliability into a single consolidated report.</p>
+
+<h4>Digest Sections</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Section</th>
+            <th>Data Source</th>
+            <th>Skip Switch</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Campaign Activity Summary</td>
+            <td><code>Get-SPAuditCampaigns</code>, <code>Measure-SPCampaignMetrics</code></td>
+            <td><code>-SkipCampaignSummary</code></td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Current Campaign Health</td>
+            <td><code>Get-SPCampaignHealth</code></td>
+            <td>--</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Identity Risk Highlights</td>
+            <td><code>Measure-SPIdentityRisk</code></td>
+            <td><code>-SkipIdentityRisk</code></td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Reviewer Performance</td>
+            <td><code>Measure-SPReviewerReputation</code></td>
+            <td><code>-SkipReviewerAnalysis</code></td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Remediation Tracking</td>
+            <td><code>Get-SPRemediationStatus</code></td>
+            <td><code>-SkipRemediationTracking</code></td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Orchestrator Health</td>
+            <td><code>Get-SPOrchestratorHistory</code></td>
+            <td><code>-SkipOrchestratorHealth</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPWeeklyDigest.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1
+    [-DaysBack &lt;int&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-SourceId &lt;string[]&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-SkipCampaignSummary] [-SkipIdentityRisk] [-SkipReviewerAnalysis]
+    [-SkipOrchestratorHealth] [-SkipRemediationTracking]
+    [-SendNotification] [-NotifyRecipients &lt;string[]&gt;]
+    [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>7</td>
+            <td>Number of days to include in the digest. Default produces a weekly view.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format. Valid values: <code>Console</code>, <code>HTML</code>, <code>JSON</code>, <code>Both</code> (console + HTML).</td>
+        </tr>
+        <tr>
+            <td><code>-SendNotification</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Send the digest via configured notification backends.</td>
+        </tr>
+        <tr>
+            <td><code>-NotifyRecipients</code></td>
+            <td>string[]</td>
+            <td>--</td>
+            <td>Email addresses for SMTP notification backend.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Weekly digest with default 7-day window
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token
+
+# Console + HTML output with email notification
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token -OutputMode Both -SendNotification
+
+# Two-week digest, skip identity risk section
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -DaysBack 14 -SkipIdentityRisk -Token $token</code></pre>
+
+<!-- ============================================================ -->
+<h3>Scheduling</h3>
+
+<p>The delta certification scripts are designed to run unattended on a schedule. The
+recommended setup uses Windows Task Scheduler for on-premise environments or cron
+for Linux/macOS.</p>
+
+<h4>Recommended Schedule</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Script</th>
+            <th>Schedule</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Invoke-SPDailyOrchestrator.ps1</code></td>
+            <td>Daily at 06:00</td>
+            <td>Full daily workflow: cleanup, delta cert, report, escalation, health check</td>
+        </tr>
+        <tr>
+            <td><code>Invoke-SPDeltaCertEscalate.ps1</code></td>
+            <td>Every 4 hours (business hours)</td>
+            <td>Catch stale certifications between daily runs</td>
+        </tr>
+        <tr>
+            <td><code>Invoke-SPWeeklyDigest.ps1</code></td>
+            <td>Monday at 07:00</td>
+            <td>Weekly governance summary for leadership</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Windows Task Scheduler</h4>
+
+<p>Create a scheduled task using PowerShell:</p>
+
+<pre><code># Daily orchestrator at 6:00 AM
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\GovernanceToolkit\Scripts\Invoke-SPDailyOrchestrator.ps1`" -SourceId 'src-ad-001'"
+$trigger = New-ScheduledTaskTrigger -Daily -At '06:00'
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
+Register-ScheduledTask -TaskName "SailPoint-DailyOrchestrator" `
+    -Action $action -Trigger $trigger -Settings $settings `
+    -User "DOMAIN\ServiceAccount" -Password "***"
+
+# Escalation every 4 hours during business hours (8 AM - 6 PM)
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\GovernanceToolkit\Scripts\Invoke-SPDeltaCertEscalate.ps1`" -StaleHours 24"
+$trigger = New-ScheduledTaskTrigger -Daily -At '08:00'
+$repetition = New-TimeSpan -Hours 4
+$duration = New-TimeSpan -Hours 10
+$trigger.Repetition.Interval = $repetition
+$trigger.Repetition.Duration = $duration
+Register-ScheduledTask -TaskName "SailPoint-Escalation" `
+    -Action $action -Trigger $trigger -Settings $settings `
+    -User "DOMAIN\ServiceAccount" -Password "***"</code></pre>
+
+<h4>Linux/macOS Cron</h4>
+
+<pre><code># crontab -e
+
+# Daily orchestrator at 6:00 AM
+0 6 * * * /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' >> /var/log/sailpoint-orchestrator.log 2>&1
+
+# Escalation every 4 hours during business hours (8-18)
+0 8,12,16 * * 1-5 /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 >> /var/log/sailpoint-escalation.log 2>&1
+
+# Weekly digest every Monday at 7:00 AM
+0 7 * * 1 /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPWeeklyDigest.ps1 -OutputMode Both >> /var/log/sailpoint-digest.log 2>&1</code></pre>
+
+<!-- ============================================================ -->
+<h3>Configuration Reference</h3>
+
+<p>All DeltaCert settings in <code>Config/settings.json</code>:</p>
+
+<pre><code>{
+    "DeltaCert": {
+        "SourceIds": [],
+        "DefaultHoursBack": 24,
+        "DefaultDeadlineDays": 2,
+        "FallbackReviewerIdentityId": "",
+        "CampaignNamePrefix": "AD Delta Cert",
+        "MaxCampaignsPerRun": 50,
+        "CleanupDaysStale": 3,
+        "OutputPath": ".\\DeltaCert",
+        "DefaultReviewerMode": "Manager",
+        "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+        "ExcludeDisplayNamePatterns": [],
+        "ExcludeIdentityIds": [],
+        "Escalation": {
+            "DefaultStaleHours": 24,
+            "MaxEscalationLevels": 2,
+            "CampaignNamePrefix": "AD Delta Cert"
+        }
+    }
+}</code></pre>
+
+<h4>Identity Exclusion Filters</h4>
+
+<p>Service accounts, admin accounts, and other non-human identities can be excluded from
+delta cert campaigns even if they receive AD group grants:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>ExcludeLifecycleStates</code></td>
+            <td>string[]</td>
+            <td>Identity lifecycle states to exclude. Default: <code>terminated</code>, <code>inactive</code>, <code>leaver</code>, <code>prehire</code>. Customize to add states like <code>dormant</code>.</td>
+        </tr>
+        <tr>
+            <td><code>ExcludeDisplayNamePatterns</code></td>
+            <td>string[]</td>
+            <td>Regex patterns matched against identity <code>displayName</code>. Examples: <code>^SVC-</code>, <code>^ADM-</code>, <code>Service Account</code>.</td>
+        </tr>
+        <tr>
+            <td><code>ExcludeIdentityIds</code></td>
+            <td>string[]</td>
+            <td>Explicit identity IDs to always skip regardless of other criteria.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>JSONL Audit Trail</h4>
+
+<p>Every delta cert run, escalation, and orchestrator execution appends a structured JSONL
+event to the output directory for compliance evidence and troubleshooting:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>File</th>
+            <th>Source</th>
+            <th>Key Fields</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>deltacert-audit.jsonl</code></td>
+            <td><code>Invoke-SPDeltaCertRun</code></td>
+            <td>Timestamp, CorrelationID, SourceIds, HoursBack, GrantEventsFound, CampaignsCreated, CampaignIds, Reason</td>
+        </tr>
+        <tr>
+            <td><code>deltacert-escalation.jsonl</code></td>
+            <td><code>Invoke-SPDeltaCertEscalate.ps1</code></td>
+            <td>Timestamp, CorrelationID, StaleCertsFound, Escalated, Skipped, StaleHours, MaxEscalationLevels</td>
+        </tr>
+        <tr>
+            <td><code>orchestrator-audit.jsonl</code></td>
+            <td><code>Invoke-SPDailyOrchestrator.ps1</code></td>
+            <td>Timestamp, CorrelationID, Steps (per-step status/detail/duration), ExitCode, DurationSeconds</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Each line is valid JSON parseable by <code>ConvertFrom-Json</code>. No-change runs
+(Reason=NoChanges) are also logged for a complete operational history.</p>
+
+<!-- ============================================================ -->
+<h3>SP.DeltaCert Module Functions</h3>
+
+<p>The SP.DeltaCert module exports 19 public functions across three sub-modules:</p>
+
+<details>
+    <summary><strong>SP.DeltaCertQueries (14 functions)</strong> -- Data retrieval and org tree</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPDeltaGrantEvents</code></td>
+                <td>Queries GRANT_ACCESS account-activity events within a time window.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaAffectedIdentities</code></td>
+                <td>Resolves grant events to active ISC identities with exclusion filtering.</td>
+            </tr>
+            <tr>
+                <td><code>Group-SPDeltaByManager</code></td>
+                <td>Groups affected identities by their ISC manager.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaCertStaleCertifications</code></td>
+                <td>Finds active certifications with no reviewer action past threshold.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaIdentityDetail</code></td>
+                <td>Retrieves identity detail including manager, lifecycle state, and job level.</td>
+            </tr>
+            <tr>
+                <td><code>Build-SPOrgTree</code></td>
+                <td>Constructs a hierarchical org tree from campaign identities.</td>
+            </tr>
+            <tr>
+                <td><code>Import-SPOrgChartSupplement</code></td>
+                <td>Imports an org chart supplement CSV for band assignment and manager corrections.</td>
+            </tr>
+            <tr>
+                <td><code>Merge-SPOrgTreeWithSupplement</code></td>
+                <td>Merges supplement data into the org tree (band overrides, synthetic nodes).</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPOrgTree</code></td>
+                <td>Renders a text-based org tree to the console.</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPCampaignOrgPreview</code></td>
+                <td>Preview campaign distribution across the org tree.</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPReportDistributionPreview</code></td>
+                <td>Preview leadership rollup report distribution.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPOrgChartHtml</code></td>
+                <td>Renders a self-contained HTML org chart (no JS/flexbox, Word-compatible).</td>
+            </tr>
+            <tr>
+                <td><code>Resolve-SPIdentityBand</code></td>
+                <td>Resolves identity band classification (A-E) from supplement, ISC attribute, or depth.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPOrgChartGaps</code></td>
+                <td>Detects org tree gaps: missing managers, shallow chains, orphaned branches, circular references.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DeltaCertRunner (3 functions)</strong> -- Campaign orchestration</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Invoke-SPDeltaCertRun</code></td>
+                <td>Full delta cert workflow: detect events, resolve identities, group by manager, create and start campaigns.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDeltaCertCleanup</code></td>
+                <td>Completes past-due delta cert campaigns older than the staleness threshold.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDeltaCertEscalate</code></td>
+                <td>Reassigns stale certifications up the org tree to the reviewer's manager.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DeltaCertReport (2 functions)</strong> -- Delta report generation</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPDeltaReportData</code></td>
+                <td>Gathers delta data: grants, revocations, campaigns, pending reviews, anomalies.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDeltaReportHtml</code></td>
+                <td>Renders a lightweight 1-2 page HTML report plus JSONL output.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+        </div>
+
+        <div id="section-disconnected-apps" class="report-section">
+<h2>Disconnected Apps</h2>
+
+<p>Disconnected App Onboarding provides certification governance for applications that lack native
+ISC connectors. App teams export daily account and entitlement CSV files to a shared location; the
+toolkit validates the files, detects day-over-day access changes, resolves identities to ISC records,
+and creates targeted manager-routed certification campaigns -- the same pattern used by Delta
+Certification, adapted for flat-file sources. A registry tracks all onboarded apps, and a batch
+orchestrator processes them in sequence with SLA monitoring, team dashboards, and cross-app analytics.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">17</div>
+        <div class="stat-label">Public Functions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">3</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">7</div>
+        <div class="stat-label">Change Types Detected</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Sub-Modules</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Disconnected App Overview</h3>
+
+<p>Many enterprise applications -- legacy mainframe systems, vendor-hosted SaaS platforms, niche
+financial tools -- have no SailPoint ISC connector and no public API. The only viable integration
+path is flat-file import: the app team extracts a CSV of current accounts and entitlements,
+places it on a shared drive or SFTP location, and the toolkit picks it up for governance.</p>
+
+<h4>Why Flat Files?</h4>
+
+<ul>
+    <li><strong>No connector available</strong> -- ISC has ~200 connectors, but thousands of
+    enterprise apps fall outside that catalog (e.g., PEP+ by Fiserv, DebtNext dPlat, IPAY by
+    Jack Henry).</li>
+    <li><strong>No admin API</strong> -- even SaaS apps may not expose a REST API for reading
+    account/entitlement data.</li>
+    <li><strong>Compliance deadline</strong> -- building a custom connector takes weeks to months;
+    flat-file onboarding can begin the same day.</li>
+    <li><strong>Phase 1 / Phase 2 pattern</strong> -- start with flat-file CSV governance (Phase 1),
+    then invest in a custom connector only if the app's user volume and churn rate justify it
+    (Phase 2).</li>
+</ul>
+
+<h4>Architecture</h4>
+
+<pre><code>App Team (daily export)          Toolkit (daily run)                ISC
+-----------------------------    --------------------------------   ----------------
+accounts.csv    ---+
+entitlements.csv --+--> shared drive --> Validate --> Snapshot --> Delta Detection
+                                                                      |
+                                  Resolve identities (ISC search) <---+
+                                      |
+                                  Group by manager
+                                      |
+                                  Create SEARCH campaigns ----------> ISC Campaigns
+                                      |
+                                  HTML delta report + JSONL audit</code></pre>
+
+<h4>Module Structure</h4>
+
+<pre><code>Modules/SP.DisconnectedApps/
+    SP.DisconnectedAppRunner.psm1       # Core orchestration (17 public functions)
+    SP.DisconnectedAppSnapshot.psm1     # Snapshot save/retrieve/cleanup
+    SP.DisconnectedAppDelta.psm1        # File comparison engine
+    SP.DisconnectedAppValidator.psm1    # CSV schema + cross-reference validation
+
+Scripts/
+    Invoke-SPDisconnectedAppCert.ps1    # Single-app daily certification
+    Invoke-SPDisconnectedAppBatch.ps1   # Multi-app batch orchestrator
+    Invoke-SPDisconnectedAppRegistry.ps1 # App registration management
+
+Config/Templates/
+    v2/disconnected-app-accounts.csv    # Account CSV template (extended)
+    v2/disconnected-app-entitlements.csv # Entitlement CSV template (extended)</code></pre>
+
+<h4>Output Structure</h4>
+
+<pre><code>DisconnectedApps\
+    Imports\
+        {AppName}\accounts.csv              # Current import file (app team places here)
+        {AppName}\entitlements.csv
+    Snapshots\
+        {AppName}\2026-05-30-accounts.csv   # Date-stamped daily snapshots
+        {AppName}\2026-05-29-accounts.csv
+    Reports\
+        {AppName}\delta-2026-05-30.html     # Daily delta report
+        {AppName}\team-dashboard.html       # Self-service status page
+        batch-summary-2026-05-30.html       # Batch run summary
+        identity-risk-2026-05-30.html       # Cross-app identity risk</code></pre>
+
+<!-- ============================================================ -->
+<h3>CSV Templates</h3>
+
+<p>Two CSV files define each disconnected app's identity data: an accounts file (who has access)
+and an optional entitlements file (what access exists). The toolkit validates both files against
+a strict schema before processing.</p>
+
+<h4>Account CSV Columns</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Column</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>id</code></td>
+            <td>Yes</td>
+            <td>Unique account identifier. Max 128 characters. No duplicates allowed.</td>
+        </tr>
+        <tr>
+            <td><code>name</code></td>
+            <td>Yes</td>
+            <td>Account display name or username.</td>
+        </tr>
+        <tr>
+            <td><code>givenName</code></td>
+            <td>Yes</td>
+            <td>First name of the account holder.</td>
+        </tr>
+        <tr>
+            <td><code>familyName</code></td>
+            <td>Yes</td>
+            <td>Last name of the account holder.</td>
+        </tr>
+        <tr>
+            <td><code>e-mail</code></td>
+            <td>Yes</td>
+            <td>Email address. Must contain <code>@</code>. Primary correlation attribute for ISC identity resolution.</td>
+        </tr>
+        <tr>
+            <td><code>department</code></td>
+            <td>No</td>
+            <td>Organizational department. Included in reports but not used for correlation.</td>
+        </tr>
+        <tr>
+            <td><code>groups</code></td>
+            <td>Yes</td>
+            <td>Comma-separated entitlement IDs. Must match <code>id</code> values in the entitlement file. Drives delta detection for entitlement grants and revocations.</td>
+        </tr>
+        <tr>
+            <td><code>IIQDisabled</code></td>
+            <td>Yes</td>
+            <td>Account status: <code>true</code> (disabled) or <code>false</code> (active). Drives enable/disable delta detection.</td>
+        </tr>
+        <tr>
+            <td><code>accountType</code></td>
+            <td>No (v2)</td>
+            <td>Account classification (e.g., Standard, Admin, Service). v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>created</code></td>
+            <td>No (v2)</td>
+            <td>Account creation date. v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>lastLogin</code></td>
+            <td>No (v2)</td>
+            <td>Last authentication timestamp. v2 extension.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Entitlement CSV Columns</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Column</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>id</code></td>
+            <td>Yes</td>
+            <td>Unique entitlement identifier. Referenced by the <code>groups</code> column in the account file.</td>
+        </tr>
+        <tr>
+            <td><code>name</code></td>
+            <td>Yes</td>
+            <td>Entitlement name. No <code>+</code> characters or emoji allowed.</td>
+        </tr>
+        <tr>
+            <td><code>displayName</code></td>
+            <td>Yes</td>
+            <td>Human-readable label shown in ISC and reports.</td>
+        </tr>
+        <tr>
+            <td><code>description</code></td>
+            <td>Yes</td>
+            <td>What this entitlement grants. Max 2,000 characters.</td>
+        </tr>
+        <tr>
+            <td><code>owner</code></td>
+            <td>No (v2)</td>
+            <td>Entitlement owner email or name. v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>type</code></td>
+            <td>No (v2)</td>
+            <td>Entitlement type classification (e.g., Role, Permission, Group). v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>riskLevel</code></td>
+            <td>No (v2)</td>
+            <td>Risk level (e.g., Low, Medium, High, Critical). v2 extension.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Cross-Reference Validation</h4>
+
+<p><code>Test-SPDisconnectedAppCrossReference</code> verifies referential integrity between the two
+files. Every entitlement ID in an account's <code>groups</code> column must exist in the entitlement
+file's <code>id</code> column. Orphaned entitlements (defined but never referenced) are reported as
+warnings.</p>
+
+<h4>Example Account CSV</h4>
+
+<pre><code>id,name,givenName,familyName,e-mail,department,groups,IIQDisabled
+ACC-001,jsmith,John,Smith,john.smith@contoso.com,Finance,"ENT-VIEWER,ENT-APPROVER",false
+ACC-002,jdoe,Jane,Doe,jane.doe@contoso.com,IT,"ENT-ADMIN",false
+ACC-003,svc-batch,Service,Account,svc-batch@contoso.com,IT,"ENT-ADMIN,ENT-VIEWER",true</code></pre>
+
+<h4>Example Entitlement CSV</h4>
+
+<pre><code>id,name,displayName,description
+ENT-VIEWER,Viewer,Read-Only Viewer,View reports and dashboards without modification access
+ENT-APPROVER,Approver,Transaction Approver,Approve financial transactions up to $10000
+ENT-ADMIN,Administrator,Full Administrator,Full administrative access including user management</code></pre>
+
+<!-- ============================================================ -->
+<h3>Onboarding a New App</h3>
+
+<p><code>Invoke-SPDisconnectedAppRegistry.ps1</code> manages the app registry in
+<code>Config/settings.json</code>. Four actions are available: <code>Register</code>,
+<code>Unregister</code>, <code>List</code>, and <code>Test</code>.</p>
+
+<h4>Step 1: Prepare CSV Files</h4>
+
+<p>Copy the templates from <code>Config/Templates/v2/</code> and populate them with real data from
+the target application. Place the files on a shared drive or local path accessible to the toolkit.</p>
+
+<pre><code># Copy templates
+Copy-Item Config\Templates\v2\disconnected-app-accounts.csv \\fileserver\imports\MyApp\accounts.csv
+Copy-Item Config\Templates\v2\disconnected-app-entitlements.csv \\fileserver\imports\MyApp\entitlements.csv
+
+# Populate with real data (use your app team's export process)</code></pre>
+
+<h4>Step 2: Register the App</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register `
+    -AppName "MyApp" `
+    -AccountFilePath "\\fileserver\imports\MyApp\accounts.csv" `
+    -EntitlementFilePath "\\fileserver\imports\MyApp\entitlements.csv" `
+    -CorrelationAttribute "e-mail" `
+    -CampaignNamePrefix "MyApp Cert" `
+    -DeadlineDays 2 `
+    -SlaDays 1</code></pre>
+
+<p>This adds an entry to <code>DisconnectedApps.Applications</code> in settings.json and creates
+the directory structure (<code>Imports</code>, <code>Snapshots</code>, <code>Reports</code> under
+the app name).</p>
+
+<h4>Step 3: Validate the Files</h4>
+
+<pre><code># Run 5-step validation: file paths, CSV structure, entitlements, cross-references
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName "MyApp"</code></pre>
+
+<p>The <code>Test</code> action runs five validation checks:</p>
+
+<ol>
+    <li>Account file path exists and is readable</li>
+    <li>Account CSV structure: required columns present, no empty IDs, no duplicate IDs,
+    <code>id</code> length &lt;= 128, <code>IIQDisabled</code> is <code>true</code> or
+    <code>false</code>, <code>e-mail</code> contains <code>@</code></li>
+    <li>Entitlement file path exists (if configured)</li>
+    <li>Entitlement CSV structure: required columns, no duplicate IDs,
+    <code>description</code> &lt;= 2,000 chars, no <code>+</code> in <code>name</code></li>
+    <li>Cross-reference: all <code>groups</code> values in accounts resolve to entitlement IDs</li>
+</ol>
+
+<h4>Step 4: List Registered Apps</h4>
+
+<pre><code># View all registered apps with delivery status
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action List</code></pre>
+
+<p>Output shows <code>Name</code>, <code>Enabled</code>, <code>FileStatus</code> (Current / Stale /
+Missing / Empty / Error), <code>LastProcessed</code> (from snapshot filename), and
+<code>AccountPath</code>.</p>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppRegistry.ps1</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Action</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>ValidateSet: <code>Register</code>, <code>Unregister</code>, <code>List</code>, <code>Test</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Required for Register, Unregister, Test. Case-sensitive name for the application.</td>
+        </tr>
+        <tr>
+            <td><code>-AccountFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Required for Register. Path to the account CSV file.</td>
+        </tr>
+        <tr>
+            <td><code>-EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Optional. Path to the entitlement CSV file. Enables cross-reference validation.</td>
+        </tr>
+        <tr>
+            <td><code>-ISCSourceId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>ISC source ID for API-based CSV upload. Leave empty to skip ISC aggregation.</td>
+        </tr>
+        <tr>
+            <td><code>-CorrelationAttribute</code></td>
+            <td>string</td>
+            <td>e-mail</td>
+            <td>Identity attribute used to resolve CSV accounts to ISC identities.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>{AppName} Cert</td>
+            <td>Prefix for certification campaign names.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days until the campaign deadline.</td>
+        </tr>
+        <tr>
+            <td><code>-SlaDays</code></td>
+            <td>int</td>
+            <td>1</td>
+            <td>Expected delivery frequency in days. Used for SLA compliance scoring.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success (action completed)</td></tr>
+        <tr><td>1</td><td>No apps found (List) or validation warnings (Test)</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Validation failure</td></tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Single App Processing</h3>
+
+<p><code>Invoke-SPDisconnectedAppCert.ps1</code> runs the full daily certification pipeline for a
+single app: validate, snapshot, detect deltas, resolve identities, create campaigns, and generate
+reports.</p>
+
+<h4>Pipeline Steps</h4>
+
+<ol>
+    <li><strong>Validate</strong> -- <code>Test-SPDisconnectedAppAccountFile</code> checks CSV
+    structure and data integrity. If an entitlement file is provided,
+    <code>Test-SPDisconnectedAppEntitlementFile</code> and
+    <code>Test-SPDisconnectedAppCrossReference</code> also run.</li>
+
+    <li><strong>Snapshot</strong> -- <code>Save-SPDisconnectedAppSnapshot</code> copies the current
+    CSV to <code>{SnapshotDir}/{AppName}/{YYYY-MM-DD}-accounts.csv</code>. Idempotent: re-running
+    on the same day does not create duplicate snapshots.</li>
+
+    <li><strong>Previous Snapshot</strong> -- <code>Get-SPDisconnectedAppPreviousSnapshot</code>
+    finds the most recent snapshot before today. Returns <code>$null</code> on first run.</li>
+
+    <li><strong>Delta Detection</strong> -- <code>Compare-SPDisconnectedAppFiles</code> compares
+    today's file against yesterday's snapshot. Seven change types detected (see
+    <a href="#" onclick="event.preventDefault()">Delta Detection</a> below).</li>
+
+    <li><strong>Threshold Check</strong> -- <code>Test-SPDisconnectedAppDeletionThreshold</code>
+    blocks processing if account removals exceed <code>AccountDeletionThresholdPct</code>
+    (default: 20%). Prevents mass-revocation from corrupt or truncated CSV files.</li>
+
+    <li><strong>Identity Resolution</strong> -- <code>Resolve-SPDisconnectedAppIdentities</code>
+    resolves changed accounts to ISC identities via <code>POST /v3/search</code> (email primary,
+    username fallback). Session-level cache avoids duplicate API calls.</li>
+
+    <li><strong>Campaign Creation</strong> -- <code>Invoke-SPDisconnectedAppCertRun</code> groups
+    resolved identities by manager and creates one SEARCH campaign per manager. Includes duplicate
+    campaign detection and <code>MaxCampaignsPerRun</code> safety guard (default: 20).</li>
+
+    <li><strong>HTML Report</strong> -- <code>Export-SPDisconnectedAppDeltaHtml</code> generates
+    a self-contained delta report with six sections.</li>
+
+    <li><strong>Audit Event</strong> -- JSONL audit trail entry appended for compliance evidence.</li>
+</ol>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppCert.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName &lt;string&gt; -AccountFilePath &lt;string&gt;
+    [-EntitlementFilePath &lt;string&gt;] [-CampaignNamePrefix &lt;string&gt;]
+    [-DeadlineDays &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-MaxCampaignsPerRun &lt;int&gt;] [-SnapshotDir &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Required Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>Application name. Drives directory paths, campaign naming, and report organization.</td>
+        </tr>
+        <tr>
+            <td><code>-AccountFilePath</code></td>
+            <td>string</td>
+            <td>Path to today's account CSV file. The file is validated before processing.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Campaign Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Path to entitlement CSV. Enables cross-reference validation and richer delta reports.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>config or Disconnected App Cert</td>
+            <td>Prefix for campaign names. Full name: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days from today until the campaign deadline.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Reviewer for accounts whose resolved ISC identity has no manager.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxCampaignsPerRun</code></td>
+            <td>int</td>
+            <td>20 (from config)</td>
+            <td>Safety guard. Abort if the number of manager groups exceeds this threshold.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Path Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>config or .\DisconnectedApps\Snapshots</td>
+            <td>Directory for date-stamped CSV snapshots.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>config or .\DisconnectedApps\Reports</td>
+            <td>Directory for HTML reports and audit trail.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json. Auto-resolved from script location.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token from ISC admin console. The <code>Bearer </code> prefix is stripped automatically. Bypasses OAuth client_credentials flow.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired. ISC browser tokens are typically valid for ~12 minutes.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. Runs validation, snapshot, and delta detection but skips campaign creation.</td>
+        </tr>
+        <tr>
+            <td><code>-Help</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Display comment-based help and exit.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success -- campaigns created (or WhatIf completed)</td></tr>
+        <tr><td>1</td><td>No changes -- CSV is identical to yesterday's snapshot</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Validation failure (CSV structure or threshold exceeded)</td></tr>
+        <tr><td>6</td><td>Campaign creation error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># First run for a new app (all accounts treated as Added)
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "PEP-Plus" `
+    -AccountFilePath "\\fileserver\imports\PEP-Plus\accounts.csv"
+
+# With entitlement cross-reference and dry-run
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "PEP-Plus" `
+    -AccountFilePath "\\fileserver\imports\PEP-Plus\accounts.csv" `
+    -EntitlementFilePath "\\fileserver\imports\PEP-Plus\entitlements.csv" `
+    -WhatIf
+
+# Browser token authentication
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "DebtNext" `
+    -AccountFilePath "\\fileserver\imports\DebtNext\accounts.csv" `
+    -Token 'eyJhbGciOiJSUzI1...'
+
+# Custom campaign prefix and fallback reviewer
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "IPAY" `
+    -AccountFilePath "C:\Imports\IPAY\accounts.csv" `
+    -CampaignNamePrefix "IPAY Access Review" `
+    -FallbackReviewerIdentityId 'abc-fallback-123' `
+    -DeadlineDays 3</code></pre>
+
+<!-- ============================================================ -->
+<h3>Batch Processing</h3>
+
+<p><code>Invoke-SPDisconnectedAppBatch.ps1</code> processes all registered apps (or a specified
+subset) in a single coordinated run. Designed for enterprises with 20+ disconnected apps that need
+daily governance.</p>
+
+<h4>Batch Pipeline</h4>
+
+<p>The batch orchestrator runs three phases:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Phase</th>
+            <th>Step</th>
+            <th>Operation</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td rowspan="2"><strong>Pre</strong></td>
+            <td>1</td>
+            <td>Campaign cleanup -- complete past-due campaigns (requires <code>Safety.AllowCompleteCampaign = true</code>)</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Load registered apps from settings.json (filter to enabled, or <code>-AppNames</code> subset)</td>
+        </tr>
+        <tr>
+            <td rowspan="7"><strong>Per-App</strong></td>
+            <td>3</td>
+            <td>CSV validation (structure + cross-reference)</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Snapshot today's file</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>ISC source upload (if <code>ISCSourceId</code> configured)</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Find previous snapshot + delta detection</td>
+        </tr>
+        <tr>
+            <td>7</td>
+            <td>Deletion threshold check</td>
+        </tr>
+        <tr>
+            <td>8</td>
+            <td>Identity resolution + manager grouping + campaign creation</td>
+        </tr>
+        <tr>
+            <td>9</td>
+            <td>Per-app HTML delta report</td>
+        </tr>
+        <tr>
+            <td rowspan="3"><strong>Post</strong></td>
+            <td>10</td>
+            <td>Batch summary HTML report</td>
+        </tr>
+        <tr>
+            <td>11</td>
+            <td>Escalation -- reassign stale certifications across all apps</td>
+        </tr>
+        <tr>
+            <td>12</td>
+            <td>Team dashboards -- regenerate per-app status pages</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Each app is processed independently -- a failure in one app does not prevent subsequent apps from
+running. The batch summary report aggregates all results with color-coded per-app status.</p>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppBatch.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppBatch.ps1
+    [-AppNames &lt;string[]&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-Force] [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all enabled apps</td>
+            <td>Process only the specified apps. Omit to process all enabled registered apps.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Fallback reviewer for manager-less identities across all apps.</td>
+        </tr>
+        <tr>
+            <td><code>-Force</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Bypass duplicate campaign detection. Creates campaigns even if same-day campaigns already exist for an app.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. All per-app steps receive WhatIf.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>All apps succeeded or had no changes</td></tr>
+        <tr><td>1</td><td>Partial failure -- some apps failed, others succeeded</td></tr>
+        <tr><td>2</td><td>All apps failed</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Process all enabled registered apps
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token $token
+
+# Process specific apps only
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -AppNames @('PEP-Plus','DebtNext') -Token $token
+
+# Dry-run all apps
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -WhatIf
+
+# Force re-run (bypass duplicate campaign guard)
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token $token -Force</code></pre>
+
+<div class="callout callout-info">
+    <strong>Daily Orchestrator:</strong> For fully automated daily runs, use
+    <code>Invoke-SPDailyOrchestrator.ps1</code> (see the Delta Certification section) which
+    runs disconnected app batch processing as Steps 7-9 alongside AD delta cert, escalation,
+    and health checks in a single coordinated invocation.
+</div>
+
+<!-- ============================================================ -->
+<h3>Delta Detection</h3>
+
+<p><code>Compare-SPDisconnectedAppFiles</code> compares today's account CSV against yesterday's
+snapshot and classifies every account into one of seven change types. The comparison uses O(1)
+hashtable lookups keyed by the <code>id</code> column for performance.</p>
+
+<h4>Change Types</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Change Type</th>
+            <th>Detection Logic</th>
+            <th>Triggers Campaign?</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>AccountAdded</strong></td>
+            <td>Account ID exists in today's file but not in yesterday's snapshot.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>AccountRemoved</strong></td>
+            <td>Account ID exists in yesterday's snapshot but not in today's file.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AccountDisabled</strong></td>
+            <td><code>IIQDisabled</code> changed from <code>false</code> to <code>true</code>.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AccountEnabled</strong></td>
+            <td><code>IIQDisabled</code> changed from <code>true</code> to <code>false</code>.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>EntitlementGranted</strong></td>
+            <td>New entitlement ID(s) appear in the <code>groups</code> column compared to yesterday.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>EntitlementRevoked</strong></td>
+            <td>Entitlement ID(s) removed from the <code>groups</code> column compared to yesterday.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AttributeChanged</strong></td>
+            <td>Any other column value differs between today and yesterday (e.g., name, email, department).</td>
+            <td>No (informational)</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Only three change types trigger certification campaigns: <strong>AccountAdded</strong>,
+<strong>AccountEnabled</strong>, and <strong>EntitlementGranted</strong>. These represent new
+or expanded access that requires manager review. Removals, disables, and attribute changes are
+captured in the delta report for audit visibility but do not create campaigns.</p>
+
+<h4>First Run Behavior</h4>
+
+<p>On the first run for an app (no previous snapshot exists), all accounts in the CSV are treated
+as <code>AccountAdded</code>. This creates campaigns for every identity in the file, establishing
+the baseline. Subsequent runs detect only day-over-day changes.</p>
+
+<h4>Deletion Threshold Protection</h4>
+
+<p><code>Test-SPDisconnectedAppDeletionThreshold</code> prevents mass-revocation from corrupt or
+truncated CSV files. If the percentage of removed accounts exceeds
+<code>AccountDeletionThresholdPct</code> (default: 20%), processing is blocked.</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Scenario</th>
+            <th>Behavior</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>First run (no previous snapshot)</td>
+            <td>Threshold check bypassed -- all accounts are Added.</td>
+        </tr>
+        <tr>
+            <td>Previous snapshot has &lt; 5 accounts</td>
+            <td>Threshold check bypassed -- too few accounts for meaningful percentage.</td>
+        </tr>
+        <tr>
+            <td>Removals &lt;= 20% of previous count</td>
+            <td>Processing continues normally.</td>
+        </tr>
+        <tr>
+            <td>Removals &gt; 20% of previous count</td>
+            <td>Processing blocked. Exit code 5. Investigate the CSV before re-running.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <strong>Threshold exceeded?</strong> Verify that the CSV file is complete and not truncated.
+    If the removals are legitimate (e.g., a department was offboarded), increase
+    <code>DisconnectedApps.AccountDeletionThresholdPct</code> temporarily, re-run, then restore
+    the default.
+</div>
+
+<h4>Delta Summary Output</h4>
+
+<p>The <code>Summary</code> hashtable from <code>Compare-SPDisconnectedAppFiles</code> provides
+counts for all seven change types plus totals:</p>
+
+<pre><code>@{
+    TotalCurrent          = 142
+    TotalPrevious         = 140
+    Added                 = 5
+    Removed               = 3
+    Disabled              = 1
+    Enabled               = 2
+    EntitlementsGranted   = 8
+    EntitlementsRevoked   = 4
+    AttributeChanges      = 6
+    Unchanged             = 126
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Remediation Tracking</h3>
+
+<p>When a reviewer revokes an entitlement in an ISC certification campaign, that decision must be
+verified against the next day's CSV to confirm the app team actually removed the access. The
+remediation tracking workflow bridges this gap between ISC governance decisions and real-world
+access removal.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li><strong>Decision harvest</strong> -- <code>Get-SPDisconnectedAppCampaignDecisions</code>
+    queries completed campaigns and collects revocation decisions (see
+    <a href="#" onclick="event.preventDefault()">Decision Collection</a> below).</li>
+
+    <li><strong>Record creation</strong> -- <code>New-SPRemediationRecord</code> writes revocation
+    details to <code>remediation-tracker.json</code> in the app's report directory. Each record
+    includes: identity, entitlement, campaign ID, decision timestamp, and status
+    (<code>Pending</code>).</li>
+
+    <li><strong>Verification</strong> -- On the next daily run, delta detection identifies
+    <code>EntitlementRevoked</code> changes. The toolkit cross-references these against pending
+    remediation records to confirm removal.</li>
+
+    <li><strong>Status update</strong> -- Confirmed removals are marked <code>Remediated</code>
+    with the verification date. Unconfirmed removals remain <code>Pending</code> and are flagged
+    in the team dashboard and batch summary.</li>
+</ol>
+
+<h4>Remediation States</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>State</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Pending</strong></td>
+            <td>Revocation decision made in ISC but not yet confirmed in next-day CSV.</td>
+        </tr>
+        <tr>
+            <td><strong>Remediated</strong></td>
+            <td>Entitlement removal confirmed: the group no longer appears in the account's <code>groups</code> column.</td>
+        </tr>
+        <tr>
+            <td><strong>Overdue</strong></td>
+            <td>More than <code>DeadlineDays</code> elapsed since the revocation decision with no confirmation.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <strong>No provisioning API:</strong> Disconnected apps by definition lack an API for
+    automated access removal. The revocation decision in ISC is a directive to the app team,
+    not an automated action. Remediation tracking provides accountability evidence that the
+    directive was fulfilled.
+</div>
+
+<!-- ============================================================ -->
+<h3>Decision Collection</h3>
+
+<p><code>Get-SPDisconnectedAppCampaignDecisions</code> harvests certification outcomes from
+completed ISC campaigns, providing the raw data for remediation tracking and compliance reporting.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li>Reads the JSONL audit trail for campaign IDs created within the last <code>DaysBack</code>
+    days (default: 7).</li>
+    <li>Queries ISC for each campaign's current status via <code>Get-SPCampaign</code>.</li>
+    <li>For completed campaigns, retrieves item-level decisions via
+    <code>Get-SPAuditCertifications</code> and <code>Get-SPAuditCertificationItems</code>.</li>
+    <li>Classifies decisions: <strong>Approved</strong>, <strong>Revoked</strong>, or
+    <strong>Pending</strong>.</li>
+</ol>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>Application name. Used to locate audit trail and filter campaigns by prefix.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>7</td>
+            <td>Look-back window for campaign IDs in the audit trail. Range: 1-365.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Reports</td>
+            <td>Directory containing the JSONL audit trail.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Return Structure</h4>
+
+<pre><code>@{
+    CampaignsChecked  = 5
+    Completed         = 3
+    Active            = 1
+    Expired           = 1
+    Purged            = 0
+    Decisions         = @{
+        Approved = 12
+        Revoked  = 4
+        Pending  = 2
+    }
+    RevocationDetails = @(
+        @{ Identity = "John Smith"; Entitlement = "ENT-ADMIN"; CampaignId = "abc123"; ... }
+        # ...
+    )
+}</code></pre>
+
+<h4>Decision Harvest Report</h4>
+
+<p><code>Export-SPDisconnectedAppDecisionHarvestHtml</code> generates a self-contained HTML report
+from the decision data, saved to <code>{OutputPath}/{AppName}/</code>. This report serves as
+evidence for compliance audits showing what was reviewed, by whom, and what actions were taken.</p>
+
+<!-- ============================================================ -->
+<h3>SLA Tracking and Delivery Monitoring</h3>
+
+<p>Two complementary functions monitor whether app teams are delivering their CSV files on schedule.</p>
+
+<h4>Delivery Status (Real-Time)</h4>
+
+<p><code>Get-SPDisconnectedAppDeliveryStatus</code> examines the <code>AccountFilePath</code>
+for each registered app and reports its current state:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Condition</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Delivered</strong></td>
+            <td>File modified within the last <code>StaleHours</code> (default: 24).</td>
+        </tr>
+        <tr>
+            <td><strong>Stale</strong></td>
+            <td>File exists but was last modified more than <code>StaleHours</code> ago.</td>
+        </tr>
+        <tr>
+            <td><strong>Missing</strong></td>
+            <td>File does not exist at the configured path.</td>
+        </tr>
+        <tr>
+            <td><strong>Disabled</strong></td>
+            <td>App is registered but <code>Enabled = false</code>.</td>
+        </tr>
+        <tr>
+            <td><strong>Error</strong></td>
+            <td>File exists but is empty or cannot be parsed as CSV.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>SLA Compliance (Historical)</h4>
+
+<p><code>Get-SPDisconnectedAppSlaStatus</code> scans the snapshot directory for date-stamped
+filenames and builds a 30-day delivery calendar for each app. It calculates:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Metric</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DeliveryRate</code></td>
+            <td>Percentage of days with a snapshot file present in the tracking window.</td>
+        </tr>
+        <tr>
+            <td><code>LongestGapDays</code></td>
+            <td>Maximum consecutive days without a snapshot.</td>
+        </tr>
+        <tr>
+            <td><code>ConsecutiveMisses</code></td>
+            <td>Current streak of missed days (0 if today was delivered).</td>
+        </tr>
+        <tr>
+            <td><code>SlaCompliant</code></td>
+            <td>Boolean. <code>$true</code> if the longest gap does not exceed the app's <code>SlaDays</code> setting.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Number of days to include in the compliance window. Range: 1-365.</td>
+        </tr>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Snapshots</td>
+            <td>Root directory containing per-app snapshot subdirectories.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>SLA HTML Report</h4>
+
+<p><code>Export-SPDisconnectedAppSlaHtml</code> generates a compliance report with a 30-day
+delivery grid for each app. Days with snapshots are shown as filled cells; gaps are highlighted.
+This report is useful for holding app teams accountable for timely data delivery.</p>
+
+<!-- ============================================================ -->
+<h3>App Team Dashboard</h3>
+
+<p><code>Export-SPDisconnectedAppTeamDashboard</code> generates a self-service HTML status page
+for each registered app. App teams can open this file in a browser to see their governance
+status without needing ISC admin access.</p>
+
+<h4>Dashboard Sections</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Section</th>
+            <th>Content</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Delivery Status</td>
+            <td>Current file delivery state (Delivered / Stale / Missing), last modified timestamp, file size, row count.</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Delta Summary</td>
+            <td>Today's change counts: accounts added, removed, enabled, disabled; entitlements granted, revoked.</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Campaign Status</td>
+            <td>Active and completed campaigns for this app, with reviewer names and decision counts.</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Remediation Queue</td>
+            <td>Pending revocations awaiting confirmation in the next CSV delivery.</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>SLA Compliance</td>
+            <td>30-day delivery calendar with filled/empty day cells.</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Trend Sparkline</td>
+            <td>90-day CSS bar chart showing daily account counts and change volumes.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>Application name. Dashboard is saved to <code>{OutputPath}/{AppName}/team-dashboard.html</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Reports</td>
+            <td>Base directory for report output.</td>
+        </tr>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Snapshots</td>
+            <td>Snapshot directory for SLA and trend data.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <strong>No JavaScript dependencies:</strong> The team dashboard is fully self-contained with
+    inline CSS. The sparkline chart uses CSS-only bar rendering (no JavaScript charting libraries).
+    This means it can be emailed, saved to SharePoint, or opened from a file share without any
+    browser security restrictions.
+</div>
+
+<h4>Example</h4>
+
+<pre><code># Generate a single app's dashboard
+$result = Export-SPDisconnectedAppTeamDashboard -AppName "PEP-Plus"
+Write-Host "Dashboard saved to: $($result.Data.FilePath)"
+
+# Batch orchestrator auto-generates dashboards for all apps in its post-step</code></pre>
+
+<!-- ============================================================ -->
+<h3>Cross-App Analytics</h3>
+
+<p>Two functions provide enterprise-wide visibility across all registered disconnected apps.</p>
+
+<h4>Identity Risk Analysis</h4>
+
+<p><code>Get-SPDisconnectedAppIdentityRisk</code> reads the latest account snapshot from each
+registered app and builds a cross-app identity map keyed by email address. No ISC API calls
+are made -- this is a purely local analysis.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Risk Level</th>
+            <th>Condition</th>
+            <th>Example</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Normal</strong></td>
+            <td>Identity appears in 1 app</td>
+            <td>John Smith has a PEP+ account only</td>
+        </tr>
+        <tr>
+            <td><strong>Elevated</strong></td>
+            <td>Identity appears in 2 apps</td>
+            <td>Jane Doe has both PEP+ and DebtNext accounts</td>
+        </tr>
+        <tr>
+            <td><strong>High</strong></td>
+            <td>Identity appears in 3+ apps</td>
+            <td>Service account svc-batch has accounts in PEP+, DebtNext, and IPAY</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><code>Export-SPDisconnectedAppIdentityRiskHtml</code> generates a risk report with an executive
+summary (total identities, single-app, multi-app, high-risk counts) and a color-coded identity
+table. For large environments (over 500 identities), the all-identity table is suppressed and
+only multi-app identities are shown.</p>
+
+<h4>Entitlement Catalog</h4>
+
+<p><code>Get-SPDisconnectedAppEntitlementCatalog</code> reads the latest entitlement snapshot from
+all registered apps and produces a unified catalog. This provides a single view of all entitlements
+across all disconnected apps.</p>
+
+<p><code>Export-SPDisconnectedAppEntitlementCatalogHtml</code> generates the catalog as a
+searchable HTML report, organized by app with entitlement details including name, display name,
+description, and v2 extensions (owner, type, risk level) when available.</p>
+
+<h4>Examples</h4>
+
+<pre><code># Identity risk analysis
+$risk = Get-SPDisconnectedAppIdentityRisk
+Export-SPDisconnectedAppIdentityRiskHtml -RiskResult $risk.Data
+Write-Host "High-risk identities: $($risk.Data.Summary.HighRisk)"
+
+# Entitlement catalog
+$catalog = Get-SPDisconnectedAppEntitlementCatalog
+Export-SPDisconnectedAppEntitlementCatalogHtml -CatalogResult $catalog.Data</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Cleanup and Escalation</h3>
+
+<p>The disconnected apps module reuses the same cleanup and escalation patterns as
+Delta Certification, adapted for per-app campaign prefixes.</p>
+
+<h4>Campaign Cleanup</h4>
+
+<p><code>Invoke-SPDisconnectedAppCleanup</code> finds active campaigns matching each app's
+<code>CampaignNamePrefix</code> and completes past-due campaigns older than
+<code>DaysStale</code> (default: 3 days).</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all registered apps</td>
+            <td>Limit cleanup to specific apps.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysStale</code></td>
+            <td>int</td>
+            <td>3</td>
+            <td>Days before a campaign is eligible for auto-completion.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Preview which campaigns would be completed.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <strong>Safety Guard:</strong> Cleanup is guarded by <code>Safety.AllowCompleteCampaign</code>
+    (default: <code>false</code>). Set to <code>true</code> in settings.json for cleanup to make
+    API calls. This is the same guard used by Delta Certification cleanup.
+</div>
+
+<h4>Escalation</h4>
+
+<p><code>Invoke-SPDisconnectedAppEscalation</code> detects stale certifications across all
+registered apps and escalates them via org-tree reassignment. Each app can override the default
+stale-hours threshold via its <code>EscalationStaleHours</code> setting.</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all registered apps</td>
+            <td>Limit escalation to specific apps.</td>
+        </tr>
+        <tr>
+            <td><code>-DefaultStaleHours</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Hours without reviewer action before escalation. Per-app <code>EscalationStaleHours</code> overrides this.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxEscalationLevels</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Maximum org-tree hops from the original reviewer.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Preview which certifications would be escalated.</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>ISC Source Upload</h3>
+
+<p><code>Push-SPDisconnectedAppToISC</code> optionally uploads the account and entitlement CSV
+files to an ISC delimited file source for aggregation. This enables ISC to display the disconnected
+app's accounts alongside native connector sources in the identity cube.</p>
+
+<h4>Upload Methods</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Method</th>
+            <th>How It Works</th>
+            <th>When to Use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>API</strong></td>
+            <td>Multipart/form-data POST to the ISC source import endpoint.</td>
+            <td>Direct API access available (no firewall restrictions).</td>
+        </tr>
+        <tr>
+            <td><strong>FileDrop</strong></td>
+            <td>Copies CSV files to a configured file drop path monitored by the Virtual Appliance.</td>
+            <td>Network restrictions prevent direct API access; VA handles the upload.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Configuration</h4>
+
+<p>ISC upload is optional and controlled per-app. Set <code>ISCSourceId</code> in the app
+registration to enable upload. Leave it empty to skip.</p>
+
+<pre><code>"ISC": {
+    "UploadMethod": "API",              // "API" or "FileDrop"
+    "FileDropBasePath": "",             // UNC path for FileDrop method
+    "WaitForAggregationSeconds": 120    // Seconds to wait for ISC aggregation after upload
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Configuration Reference</h3>
+
+<p>All disconnected app settings in <code>Config/settings.json</code>:</p>
+
+<pre><code>{
+    "DisconnectedApps": {
+        "ImportBasePath": ".\\DisconnectedApps\\Imports",
+        "SnapshotPath": ".\\DisconnectedApps\\Snapshots",
+        "ReportPath": ".\\DisconnectedApps\\Reports",
+        "SnapshotRetentionDays": 30,
+        "DefaultCampaignNamePrefix": "Disconnected App Cert",
+        "DefaultDeadlineDays": 2,
+        "CorrelationAttribute": "e-mail",
+        "AccountDeletionThresholdPct": 20,
+        "ISC": {
+            "UploadMethod": "API",
+            "FileDropBasePath": "",
+            "WaitForAggregationSeconds": 120
+        },
+        "RequiredAccountColumns": [
+            "id", "name", "givenName", "familyName",
+            "e-mail", "groups", "IIQDisabled"
+        ],
+        "RequiredEntitlementColumns": [
+            "id", "name", "displayName", "description"
+        ],
+        "Applications": [
+            {
+                "Name": "PEP-Plus",
+                "AccountFilePath": "\\\\fileserver\\imports\\PEP-Plus\\accounts.csv",
+                "EntitlementFilePath": "\\\\fileserver\\imports\\PEP-Plus\\entitlements.csv",
+                "ISCSourceId": "",
+                "CorrelationAttribute": "e-mail",
+                "CampaignNamePrefix": "PEP+ Cert",
+                "DeadlineDays": 2,
+                "SlaDays": 1,
+                "Enabled": true
+            }
+        ]
+    }
+}</code></pre>
+
+<h4>Per-App Settings</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Name</code></td>
+            <td>string</td>
+            <td>Unique application name. Used for directory paths, campaign naming, and report organization.</td>
+        </tr>
+        <tr>
+            <td><code>AccountFilePath</code></td>
+            <td>string</td>
+            <td>Path to the daily account CSV. UNC paths supported for shared drives.</td>
+        </tr>
+        <tr>
+            <td><code>EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>Path to the entitlement CSV. Empty string to skip entitlement validation.</td>
+        </tr>
+        <tr>
+            <td><code>ISCSourceId</code></td>
+            <td>string</td>
+            <td>ISC source ID for CSV upload. Empty string to skip upload.</td>
+        </tr>
+        <tr>
+            <td><code>CorrelationAttribute</code></td>
+            <td>string</td>
+            <td>Identity attribute for ISC search resolution. Default: <code>e-mail</code>.</td>
+        </tr>
+        <tr>
+            <td><code>CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>Prefix for campaign names. Full name: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>.</td>
+        </tr>
+        <tr>
+            <td><code>DeadlineDays</code></td>
+            <td>int</td>
+            <td>Campaign deadline in days from creation.</td>
+        </tr>
+        <tr>
+            <td><code>SlaDays</code></td>
+            <td>int</td>
+            <td>Expected delivery frequency. SLA compliance checks use this value.</td>
+        </tr>
+        <tr>
+            <td><code>Enabled</code></td>
+            <td>bool</td>
+            <td>Whether the batch orchestrator includes this app. Disabled apps are skipped.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Global Defaults</h4>
+
+<p>Per-app settings inherit from global defaults when not specified:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Global Setting</th>
+            <th>Default</th>
+            <th>Per-App Override</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DisconnectedApps.CorrelationAttribute</code></td>
+            <td>e-mail</td>
+            <td><code>Applications[].CorrelationAttribute</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.DefaultCampaignNamePrefix</code></td>
+            <td>Disconnected App Cert</td>
+            <td><code>Applications[].CampaignNamePrefix</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.DefaultDeadlineDays</code></td>
+            <td>2</td>
+            <td><code>Applications[].DeadlineDays</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.AccountDeletionThresholdPct</code></td>
+            <td>20</td>
+            <td><code>Applications[].AccountDeletionThresholdPct</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Module Function Reference</h3>
+
+<p>The SP.DisconnectedApps module exports 17 public functions across four sub-modules:</p>
+
+<details>
+    <summary><strong>SP.DisconnectedAppRunner (17 functions)</strong> -- Core orchestration</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPRegisteredApps</code></td>
+                <td>Reads app registry from settings.json, merges per-app settings with global defaults.</td>
+            </tr>
+            <tr>
+                <td><code>Initialize-SPDisconnectedAppDirectories</code></td>
+                <td>Creates Import, Snapshot, and Report directories for registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Resolve-SPDisconnectedAppIdentities</code></td>
+                <td>Resolves delta-changed accounts to ISC identities via POST /v3/search.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppCertRun</code></td>
+                <td>Groups identities by manager, creates SEARCH campaigns. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppDeltaHtml</code></td>
+                <td>Generates per-app HTML delta report with six sections.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppBatchHtml</code></td>
+                <td>Generates batch summary HTML with per-app status and error details.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppDeliveryStatus</code></td>
+                <td>Real-time delivery status check for all registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppSlaStatus</code></td>
+                <td>30-day SLA compliance analysis from snapshot history.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppSlaHtml</code></td>
+                <td>SLA compliance HTML report with 30-day delivery grid.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppIdentityRisk</code></td>
+                <td>Cross-app identity risk classification (Normal / Elevated / High).</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppIdentityRiskHtml</code></td>
+                <td>Identity risk HTML report with color-coded identity table.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppEntitlementCatalog</code></td>
+                <td>Unified entitlement catalog across all registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppEntitlementCatalogHtml</code></td>
+                <td>Entitlement catalog HTML report organized by app.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppCampaignDecisions</code></td>
+                <td>Harvests certification decisions from completed ISC campaigns.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppDecisionHarvestHtml</code></td>
+                <td>Decision harvest HTML report for compliance evidence.</td>
+            </tr>
+            <tr>
+                <td><code>Push-SPDisconnectedAppToISC</code></td>
+                <td>Uploads CSV files to ISC source via API or FileDrop.</td>
+            </tr>
+            <tr>
+                <td><code>Send-SPDisconnectedAppAlert</code></td>
+                <td>Dispatches alerts for validation failures, threshold blocks, delivery gaps.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppCleanup</code></td>
+                <td>Completes past-due disconnected app campaigns. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppEscalation</code></td>
+                <td>Escalates stale certifications via org-tree reassignment. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppTeamDashboard</code></td>
+                <td>Generates self-service HTML status page for an app team.</td>
+            </tr>
+            <tr>
+                <td><code>New-SPRemediationRecord</code></td>
+                <td>Creates remediation tracking records from revocation decisions.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppSnapshot (3 functions)</strong> -- Snapshot management</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Save-SPDisconnectedAppSnapshot</code></td>
+                <td>Saves a date-stamped copy of the current CSV. Idempotent on same-day re-runs.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppPreviousSnapshot</code></td>
+                <td>Finds the most recent snapshot before today for delta comparison.</td>
+            </tr>
+            <tr>
+                <td><code>Remove-SPDisconnectedAppOldSnapshots</code></td>
+                <td>Deletes snapshots older than RetentionDays (default: 30). Called during batch cleanup.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppDelta (2 functions)</strong> -- File comparison engine</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Compare-SPDisconnectedAppFiles</code></td>
+                <td>Detects 7 change types between today's CSV and yesterday's snapshot using O(1) hashtable lookups.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppDeletionThreshold</code></td>
+                <td>Blocks processing if account removals exceed the configured percentage threshold.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppValidator (3 functions)</strong> -- CSV validation</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Test-SPDisconnectedAppAccountFile</code></td>
+                <td>Validates account CSV: required columns, encoding, data integrity, duplicate IDs.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppEntitlementFile</code></td>
+                <td>Validates entitlement CSV: required columns, description length, name constraints.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppCrossReference</code></td>
+                <td>Verifies all groups references in accounts resolve to entitlement IDs.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+        </div>
+    </div>
+</div>
+
+<script>
+var sections = ["getting-started", "campaign-audit", "delta-certification", "disconnected-apps"];
+
+function showSection(id) {
+    sections.forEach(function(s) {
+        var el = document.getElementById('section-' + s);
+        if (el) el.style.display = 'none';
+    });
+    var target = document.getElementById('section-' + id);
+    if (target) target.style.display = 'block';
+
+    document.querySelectorAll('#sidebar a, #mobile-nav a').forEach(function(a) {
+        a.classList.remove('active');
+    });
+    document.querySelectorAll(
+        '#sidebar a[href="#' + id + '"], #mobile-nav a[href="#' + id + '"]'
+    ).forEach(function(a) {
+        a.classList.add('active');
+    });
+
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    window.scrollTo(0, 0);
+}
+window.showSection = showSection;
+
+document.addEventListener('DOMContentLoaded', function() {
+    var hash = location.hash.replace('#', '');
+    showSection(hash && sections.indexOf(hash) !== -1 ? hash : sections[0]);
+});
+</script>
+</body>
+</html>

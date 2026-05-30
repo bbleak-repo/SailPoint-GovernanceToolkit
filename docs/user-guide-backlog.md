@@ -73,23 +73,23 @@ Agent loop: `UG-01 -> UG-02 -> UG-03 -> UG-04 -> UG-05 -> UG-06 -> UG-07 -> UG-0
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| UG-01 | Framework Shell Template (HTML+CSS+JS) | none | PENDING |
-| UG-02 | Framework Python Generator | UG-01 | PENDING |
-| UG-03 | Framework Themes (light + dark) | UG-01 | PENDING |
-| UG-04 | Getting Started Section Content | none | PENDING |
-| UG-05 | Campaign Audit Section Content | none | PENDING |
-| UG-06 | Delta Certification Section Content | none | PENDING |
-| UG-07 | Disconnected Apps Section Content | none | PENDING |
-| UG-08 | Generate SailPoint USER-GUIDE.html | UG-02 to UG-07 | PENDING |
-| UG-09 | Update README/QUICKSTART References | UG-08 | PENDING |
-| UG-10 | Add to Handoff Zip + Validation | UG-09 | PENDING |
+| UG-01 | Framework Shell Template (HTML+CSS+JS) | none | DONE |
+| UG-02 | Framework Python Generator | UG-01 | DONE |
+| UG-03 | Framework Themes (light + dark) | UG-01 | DONE |
+| UG-04 | Getting Started Section Content | none | DONE |
+| UG-05 | Campaign Audit Section Content | none | DONE |
+| UG-06 | Delta Certification Section Content | none | DONE |
+| UG-07 | Disconnected Apps Section Content | none | DONE |
+| UG-08 | Generate SailPoint USER-GUIDE.html | UG-02 to UG-07 | DONE |
+| UG-09 | Update README/QUICKSTART References | UG-08 | DONE |
+| UG-10 | Add to Handoff Zip + Validation | UG-09 | DONE |
 
 ---
 
 ## UG-01: Framework Shell Template
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** none
 
 **Description:**
@@ -186,8 +186,8 @@ JavaScript for section switching.
 
 ## UG-02: Framework Python Generator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-01
 
 **Description:**
@@ -251,8 +251,8 @@ If markdown lib not installed, only .html section files are supported.
 
 ## UG-03: Framework Themes
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-01
 
 **Description:**
@@ -287,8 +287,8 @@ Create two CSS theme files for the tabbed report framework.
 
 ## UG-04: Getting Started Section Content
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** c48b848 (feature/user-guide)
 - **Depends On:** none
 
 **Description:**
@@ -317,8 +317,8 @@ This is the first tab users see.
 
 ## UG-05: Campaign Audit Section Content
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** none
 
 **Description:**
@@ -341,8 +341,8 @@ Write the "Campaign Audit" section covering the full audit workflow.
 
 ## UG-06: Delta Certification Section Content
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** none
 
 **Description:**
@@ -365,8 +365,8 @@ Write the "Delta Certification" section covering daily AD access change detectio
 
 ## UG-07: Disconnected Apps Section Content
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 80fd965 (feature/user-guide)
 - **Depends On:** none
 
 **Description:**
@@ -393,8 +393,8 @@ without ISC connectors.
 
 ## UG-08: Generate SailPoint USER-GUIDE.html
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-02 to UG-07
 
 **Description:**
@@ -426,8 +426,8 @@ python generate-report.py \
 
 ## UG-09: Update README/QUICKSTART References
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 5dfd367 (feature/user-guide)
 - **Depends On:** UG-08
 
 **Description:**
@@ -444,8 +444,8 @@ Add references to USER-GUIDE.html in README.md and QUICKSTART.md.
 
 ## UG-10: Add to Handoff Zip + Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-09
 
 **Description:**

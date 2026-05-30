@@ -1,0 +1,741 @@
+<!-- section: getting-started -->
+<!-- title: Getting Started -->
+<!-- icon: 1 -->
+
+<h2>Getting Started</h2>
+
+<p>This section walks you from a fresh toolkit extract to your first audit report in under 15 minutes.
+It covers prerequisites, configuration, connectivity testing, and safety defaults.</p>
+
+<!-- ============================================================ -->
+<h3>What This Toolkit Does</h3>
+
+<p>The SailPoint ISC Governance Toolkit is a PowerShell 5.1 toolkit for automated testing and
+auditing of SailPoint IdentityNow (ISC) certification campaign workflows. It creates, activates,
+and validates certification campaigns against the ISC REST API v3, producing structured JSONL
+evidence and HTML reports for UAT sign-off, compliance audits, and daily governance operations.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">14</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">6</div>
+        <div class="stat-label">Module Layers</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">5</div>
+        <div class="stat-label">GUI Tabs</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">3</div>
+        <div class="stat-label">Auth Modes</div>
+    </div>
+</div>
+
+<p>The toolkit covers three governance domains:</p>
+<ul>
+    <li><strong>Campaign Audit</strong> -- post-campaign compliance reporting with reviewer accountability,
+        decision breakdowns, remediation proof, and leadership rollups</li>
+    <li><strong>Delta Certification</strong> -- daily AD access change detection with automatic SEARCH campaign
+        creation per manager group, escalation for stale certifications, and orchestrated daily workflows</li>
+    <li><strong>Disconnected App Onboarding</strong> -- flat file CSV integration for applications without native
+        ISC connectors, with delta detection, identity resolution, and batch orchestration</li>
+</ul>
+
+<!-- ============================================================ -->
+<h3>Prerequisites</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>Requirement</th>
+            <th>Version</th>
+            <th>Notes</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>PowerShell</td>
+            <td>5.1 Desktop</td>
+            <td>Windows PowerShell only. PS Core / PS 7 not supported.</td>
+        </tr>
+        <tr>
+            <td>Windows</td>
+            <td>10 / 11 / Server 2019+</td>
+            <td>WPF GUI requires Windows. CLI works on any edition.</td>
+        </tr>
+        <tr>
+            <td>.NET Framework</td>
+            <td>4.5+</td>
+            <td>Required for WPF dashboard. Included in Windows 10+.</td>
+        </tr>
+        <tr>
+            <td>ISC API credentials</td>
+            <td>--</td>
+            <td>OAuth 2.0 PAT or browser token. See PAT scopes below.</td>
+        </tr>
+        <tr>
+            <td>Pester</td>
+            <td>5.x</td>
+            <td>Only required for running unit tests in <code>Tests/</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Required PAT Scopes (Read-Only Audit)</h4>
+
+<p>The toolkit's audit and reporting features require 6 read-only scopes on your ISC Personal Access Token:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Scope</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>idn:campaign:read</td>
+            <td>Query campaigns, certifications, and access review items</td>
+        </tr>
+        <tr>
+            <td>idn:campaign-report:read</td>
+            <td>Download campaign status and signoff reports</td>
+        </tr>
+        <tr>
+            <td>sp:report:read</td>
+            <td>Access ISC report exports (CSV format)</td>
+        </tr>
+        <tr>
+            <td>sp:search:read</td>
+            <td>Identity resolution (manager lookup, email correlation)</td>
+        </tr>
+        <tr>
+            <td>idn:sources:read</td>
+            <td>Source metadata for coverage analysis</td>
+        </tr>
+        <tr>
+            <td>idn:accounts:read</td>
+            <td>Account details for identity-to-account mapping</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Important</div>
+    <p>Delta Certification's <code>GET /v3/account-activities</code> endpoint requires <code>sp:scopes:all</code>
+    or a browser token. The 6 read-only scopes above are <strong>not sufficient</strong> for Delta Cert operations.
+    Use the <code>-Token</code> parameter with a browser JWT as a workaround.</p>
+</div>
+
+<p>For the complete API client setup walkthrough (including how to create a PAT in the ISC admin console),
+see <code>docs/SANDBOX-API-SETUP.md</code>.</p>
+
+<!-- ============================================================ -->
+<h3>Installation</h3>
+
+<p>The toolkit is pure PowerShell -- no build step, no installers, no external dependencies.</p>
+
+<ol>
+    <li>Extract the toolkit zip (or clone the repository) to a local directory</li>
+    <li>Open PowerShell and navigate to the toolkit root</li>
+    <li>Verify the directory structure</li>
+</ol>
+
+<pre><code># Navigate to the toolkit root
+cd C:\Tools\SailPoint-GovernanceToolkit
+
+# Verify key directories exist
+ls Scripts\, Modules\, Config\</code></pre>
+
+<p>You should see the <code>Scripts\</code>, <code>Modules\</code>, and <code>Config\</code> directories.
+The toolkit auto-generates <code>Config\settings.json</code> on first run if it does not exist.</p>
+
+<h4>Directory Overview</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Directory</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Scripts/</code></td>
+            <td>CLI entry points (thin wrappers that load modules and dispatch)</td>
+        </tr>
+        <tr>
+            <td><code>Modules/</code></td>
+            <td>PowerShell module layers: SP.Core, SP.Api, SP.Testing, SP.Audit, SP.DeltaCert, SP.DisconnectedApps, SP.Gui</td>
+        </tr>
+        <tr>
+            <td><code>Config/</code></td>
+            <td>Runtime configuration, test CSVs, and disconnected app templates</td>
+        </tr>
+        <tr>
+            <td><code>Gui/</code></td>
+            <td>XAML UI definitions for the WPF dashboard</td>
+        </tr>
+        <tr>
+            <td><code>Evidence/</code></td>
+            <td>JSONL evidence output (created per test run)</td>
+        </tr>
+        <tr>
+            <td><code>Reports/</code></td>
+            <td>HTML report output</td>
+        </tr>
+        <tr>
+            <td><code>Tests/</code></td>
+            <td>Pester unit tests</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Configuration</h3>
+
+<p>The toolkit uses a single <code>Config\settings.json</code> file. On first run,
+<code>Test-SPConnectivity.ps1</code> auto-generates the file from a template and exits with guidance.
+Open the file and replace all <code>CHANGE_ME</code> values.</p>
+
+<h4>Minimum Required Configuration</h4>
+
+<p>Only four values need to change for basic operation. Replace <code>acme</code> with your ISC tenant name:</p>
+
+<pre><code>{
+  "Global": {
+    "EnvironmentName": "Sandbox"
+  },
+  "Authentication": {
+    "Mode": "ConfigFile",
+    "ConfigFile": {
+      "TenantUrl": "https://acme.api.identitynow.com",
+      "OAuthTokenUrl": "https://acme.api.identitynow.com/oauth/token",
+      "ClientId": "your-client-id-here",
+      "ClientSecret": "your-client-secret-here"
+    }
+  },
+  "Api": {
+    "BaseUrl": "https://acme.api.identitynow.com/v3"
+  }
+}</code></pre>
+
+<div class="callout callout-info">
+    <div class="callout-label">Note</div>
+    <p>All three URLs use the <code>api.</code> prefix: <code>https://&lt;tenant&gt;.api.identitynow.com</code>.
+    This is the correct format for both the tenant URL and the OAuth token URL.</p>
+</div>
+
+<h4>Full Configuration Reference</h4>
+
+<details>
+    <summary>Global Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>EnvironmentName</td>
+                    <td>Sandbox</td>
+                    <td>Label displayed in connectivity checks and reports</td>
+                </tr>
+                <tr>
+                    <td>DebugMode</td>
+                    <td>false</td>
+                    <td>Enable verbose diagnostic output</td>
+                </tr>
+                <tr>
+                    <td>ToolkitVersion</td>
+                    <td>1.0.0</td>
+                    <td>Toolkit version stamp for audit trail</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>Authentication Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Mode</td>
+                    <td>ConfigFile</td>
+                    <td><code>ConfigFile</code> (plaintext), <code>Vault</code> (AES-256 encrypted), or browser token via <code>-Token</code> CLI param</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.TenantUrl</td>
+                    <td>--</td>
+                    <td>ISC tenant base URL (<code>https://&lt;tenant&gt;.api.identitynow.com</code>)</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.OAuthTokenUrl</td>
+                    <td>--</td>
+                    <td>OAuth 2.0 token endpoint (<code>https://&lt;tenant&gt;.api.identitynow.com/oauth/token</code>)</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.ClientId</td>
+                    <td>--</td>
+                    <td>OAuth client ID from your ISC PAT</td>
+                </tr>
+                <tr>
+                    <td>ConfigFile.ClientSecret</td>
+                    <td>--</td>
+                    <td>OAuth client secret (plaintext -- use Vault mode for non-dev environments)</td>
+                </tr>
+                <tr>
+                    <td>Vault.VaultPath</td>
+                    <td>.\Data\sp-vault.enc</td>
+                    <td>Path to AES-256-CBC encrypted vault file</td>
+                </tr>
+                <tr>
+                    <td>Vault.Pbkdf2Iterations</td>
+                    <td>600000</td>
+                    <td>PBKDF2 iteration count for key derivation</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>API Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>BaseUrl</td>
+                    <td>--</td>
+                    <td>ISC REST API v3 base URL (<code>https://&lt;tenant&gt;.api.identitynow.com/v3</code>)</td>
+                </tr>
+                <tr>
+                    <td>TimeoutSeconds</td>
+                    <td>60</td>
+                    <td>HTTP request timeout</td>
+                </tr>
+                <tr>
+                    <td>RetryCount</td>
+                    <td>3</td>
+                    <td>Number of retries on transient failures</td>
+                </tr>
+                <tr>
+                    <td>RateLimitRequestsPerWindow</td>
+                    <td>95</td>
+                    <td>Max requests per rate limit window (ISC limit is 100)</td>
+                </tr>
+                <tr>
+                    <td>RateLimitWindowSeconds</td>
+                    <td>10</td>
+                    <td>Sliding window duration for rate limiting</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<details>
+    <summary>Safety Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>MaxCampaignsPerRun</td>
+                    <td>10</td>
+                    <td>Caps the number of campaigns created per execution</td>
+                </tr>
+                <tr>
+                    <td>RequireWhatIfOnProd</td>
+                    <td>true</td>
+                    <td>Requires operator confirmation before running without <code>-WhatIf</code></td>
+                </tr>
+                <tr>
+                    <td>AllowCompleteCampaign</td>
+                    <td>false</td>
+                    <td>Blocks the irreversible <code>POST /campaigns/{id}/complete</code> API call</td>
+                </tr>
+            </tbody>
+        </table>
+        <p>See the <a href="#" onclick="showSection('getting-started'); return false;">Safety Defaults</a> sub-section below for full details.</p>
+    </div>
+</details>
+
+<details>
+    <summary>Audit Settings</summary>
+    <div class="detail-body">
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>OutputPath</td>
+                    <td>.\Audit</td>
+                    <td>Root directory for audit HTML reports and JSONL trails</td>
+                </tr>
+                <tr>
+                    <td>DefaultDaysBack</td>
+                    <td>365</td>
+                    <td>Default look-back window for campaign queries</td>
+                </tr>
+                <tr>
+                    <td>DefaultIdentityEventDays</td>
+                    <td>2</td>
+                    <td>Days of identity lifecycle events to include per revoked identity</td>
+                </tr>
+                <tr>
+                    <td>DefaultStatuses</td>
+                    <td>["COMPLETED", "ACTIVE"]</td>
+                    <td>Campaign statuses to include by default</td>
+                </tr>
+                <tr>
+                    <td>IncludeCampaignReports</td>
+                    <td>true</td>
+                    <td>Fetch ISC campaign status and signoff reports</td>
+                </tr>
+                <tr>
+                    <td>IncludeIdentityEvents</td>
+                    <td>true</td>
+                    <td>Fetch identity lifecycle events for revoked identities</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>First Run: Test Connectivity</h3>
+
+<p>After configuring <code>settings.json</code>, run the connectivity test to verify your configuration,
+credentials, and network access:</p>
+
+<pre><code>.\Scripts\Test-SPConnectivity.ps1</code></pre>
+
+<p>Expected output -- three steps, all PASS:</p>
+
+<pre><code>  [PASS] Step 1: Load and validate settings.json (12ms)
+         Environment: Sandbox | Mode: ConfigFile
+  [PASS] Step 2: Acquire OAuth 2.0 bearer token (340ms)
+         Mode: ConfigFile | Expires: 2026-02-18T15:12:49Z
+  [PASS] Step 3: GET /v3/campaigns?limit=1 (180ms)
+         API responded successfully. Items returned: 1
+
+  RESULT: All connectivity checks passed.</code></pre>
+
+<div class="callout callout-success">
+    <div class="callout-label">What Each Step Validates</div>
+    <p><strong>Step 1</strong> loads and validates <code>Config\settings.json</code> (required keys, URL formats).
+    <strong>Step 2</strong> acquires an OAuth 2.0 bearer token using the configured credentials.
+    <strong>Step 3</strong> makes a live API call (<code>GET /v3/campaigns?limit=1</code>) to confirm network
+    access and that the token has sufficient permissions.</p>
+</div>
+
+<!-- ============================================================ -->
+<h3>Your First Audit</h3>
+
+<p>Once connectivity is confirmed, run your first campaign audit. Start with a dry-run to see what
+campaigns match your filter without generating reports:</p>
+
+<pre><code># Dry-run: see matching campaigns without generating reports
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7 -WhatIf</code></pre>
+
+<p>Then run the actual audit:</p>
+
+<pre><code># Audit all campaigns completed in the last 7 days
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7</code></pre>
+
+<p>The audit produces per-campaign HTML reports with an Executive Summary Dashboard, decision breakdowns,
+reviewer accountability, and remediation proof. Output goes to the <code>Audit\</code> directory by default:</p>
+
+<pre><code>Audit\
+    &lt;CampaignName&gt;\
+        &lt;CampaignName&gt;_audit.html      # Per-campaign HTML report
+        &lt;CampaignName&gt;_summary.txt     # Per-campaign text summary
+    CampaignAudit_&lt;CorrelationID&gt;.html  # Combined HTML report (all campaigns)
+    CampaignAudit_&lt;CorrelationID&gt;.jsonl # JSONL audit trail</code></pre>
+
+<div class="callout callout-info">
+    <div class="callout-label">Tip</div>
+    <p>At least one campaign filter is required. Use <code>-Status</code>, <code>-CampaignName</code>,
+    <code>-CampaignNameStartsWith</code>, or <code>-CampaignNameContains</code>. Without a filter, the
+    script exits with code 2.</p>
+</div>
+
+<p>Other ways to filter campaigns:</p>
+
+<pre><code># Audit a specific campaign by exact name
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Q1 2026 Access Review'
+
+# Audit campaigns whose name contains a keyword (substring match)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'entitlement' -DaysBack 90
+
+# Use a browser token instead of configured OAuth credentials
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7</code></pre>
+
+<!-- ============================================================ -->
+<h3>GUI Overview</h3>
+
+<p>The WPF dashboard provides a graphical interface for all toolkit operations. Launch it from PowerShell:</p>
+
+<pre><code>.\Scripts\Show-SPDashboard.ps1</code></pre>
+
+<p>The dashboard has five tabs:</p>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">1</div>
+        <h3>Campaigns Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Load test identity and campaign CSV data, select and run certification campaign tests
+        with real-time progress tracking, and view pass/fail results. Supports tag-based filtering
+        and <code>-WhatIf</code> dry-run mode.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">2</div>
+        <h3>Evidence Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Browse the <code>Evidence\</code> directory tree. Open JSONL event logs in a searchable,
+        sortable data grid. View per-test summary JSON files with status, timing, and correlation IDs.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">3</div>
+        <h3>Settings Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Edit all <code>settings.json</code> fields with form validation. Test connectivity directly
+        from the GUI. Paste a browser JWT token for quick authentication without modifying configuration
+        files. Configure Delta Cert parameters (source IDs, look-back window, deadline days, reviewer mode).</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">4</div>
+        <h3>Audit Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Query campaigns by keyword or substring search. Select campaigns from the results grid
+        and generate HTML compliance reports with reviewer performance metrics, decision breakdowns,
+        and remediation proof.</p>
+    </div>
+</div>
+
+<div class="content-card">
+    <div class="card-header">
+        <div class="card-badge">5</div>
+        <h3>Delta Cert Tab</h3>
+    </div>
+    <div class="card-body">
+        <p>Configure and run daily AD delta certifications. The summary row shows current parameters
+        (sources, look-back, deadline, reviewer mode). Secondary actions include campaign cleanup
+        (completes stale campaigns) and escalation (reassigns unactioned certifications).
+        A color-coded run history shows recent results.</p>
+    </div>
+</div>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Windows Only</div>
+    <p>The GUI requires Windows with .NET Framework 4.5+ and a Single-Threaded Apartment (STA)
+    PowerShell thread. The launcher script handles STA relaunching automatically. If you encounter
+    STA errors, run from PowerShell ISE (always STA) or use
+    <code>powershell.exe -STA -File .\Scripts\Show-SPDashboard.ps1</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h3>Safety Defaults</h3>
+
+<p>The toolkit ships with conservative safety defaults to prevent accidental changes in production
+environments. These are configured in the <code>Safety</code> section of <code>settings.json</code>:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Default</th>
+            <th>What It Does</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>MaxCampaignsPerRun</code></td>
+            <td><code>10</code></td>
+            <td>Caps the number of campaigns created per execution. If the toolkit calculates that more
+            campaigns would be needed (e.g., more manager groups than the limit), it aborts before
+            creating any campaigns.</td>
+        </tr>
+        <tr>
+            <td><code>RequireWhatIfOnProd</code></td>
+            <td><code>true</code></td>
+            <td>When set, the toolkit requires operator confirmation via <code>ShouldProcess</code> before
+            proceeding without <code>-WhatIf</code>. This prevents accidental live runs.</td>
+        </tr>
+        <tr>
+            <td><code>AllowCompleteCampaign</code></td>
+            <td><code>false</code></td>
+            <td>Blocks the irreversible <code>POST /campaigns/{id}/complete</code> API call. This endpoint
+            only works on past-due campaigns and its effects cannot be undone.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Additionally, every CLI script supports the <code>-WhatIf</code> parameter for dry-run mode.
+When <code>-WhatIf</code> is active, the toolkit performs all validation and planning steps but
+makes no write API calls and creates no campaigns.</p>
+
+<div class="callout callout-info">
+    <div class="callout-label">Recommendation</div>
+    <p>Always run with <code>-WhatIf</code> first in a new environment. Review the planned actions,
+    then re-run without <code>-WhatIf</code> to execute. Once comfortable with the toolkit behavior,
+    adjust the safety settings in <code>Config\settings.json</code> as needed.</p>
+</div>
+
+<h4>Authentication Modes</h4>
+
+<p>The toolkit supports three ways to authenticate with ISC:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>How It Works</th>
+            <th>When to Use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>ConfigFile</code></td>
+            <td>Reads <code>ClientId</code> and <code>ClientSecret</code> directly from <code>settings.json</code> in plaintext</td>
+            <td>Isolated development environments only</td>
+        </tr>
+        <tr>
+            <td><code>Vault</code></td>
+            <td>Credentials stored in an AES-256-CBC encrypted vault file (<code>Data\sp-vault.enc</code>). Passphrase prompted at runtime.</td>
+            <td>Shared, CI/CD, or production-adjacent environments</td>
+        </tr>
+        <tr>
+            <td>Browser Token</td>
+            <td>Pass a JWT bearer token from an active ISC browser session via <code>-Token</code> parameter. ~12 minute expiry.</td>
+            <td>Ad-hoc audits, restricted network environments, Delta Cert operations</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>To set up the encrypted vault:</p>
+
+<pre><code># One-time vault setup (prompts for passphrase and credentials)
+.\Scripts\New-SPVault.ps1
+
+# Then update settings.json:
+# "Authentication": { "Mode": "Vault" }</code></pre>
+
+<p>To use a browser token: open the ISC admin console, open developer tools (F12), go to the Network tab,
+and copy the <code>Authorization: Bearer eyJ...</code> value from any API request. Pass it with <code>-Token</code>:</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Token 'eyJhbGciOiJSUzI1NiIs...' -Status COMPLETED -DaysBack 7</code></pre>
+
+<!-- ============================================================ -->
+<h3>Troubleshooting</h3>
+
+<p>Common issues and their resolutions:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Symptom</th>
+            <th>Cause</th>
+            <th>Fix</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>First-run configuration detected</code></td>
+            <td><code>CHANGE_ME</code> values remain in settings.json</td>
+            <td>Open <code>Config\settings.json</code> and replace all <code>CHANGE_ME</code> with real values</td>
+        </tr>
+        <tr>
+            <td><code>Token acquisition failed</code></td>
+            <td>Wrong tenant URL, expired credentials, or network issue</td>
+            <td>Verify <code>OAuthTokenUrl</code> uses <code>api.</code> prefix and check <code>ClientId</code>/<code>ClientSecret</code></td>
+        </tr>
+        <tr>
+            <td><code>API responded with 403</code></td>
+            <td>PAT missing required scopes</td>
+            <td>Verify all 6 read-only scopes are assigned to your PAT (see Prerequisites above)</td>
+        </tr>
+        <tr>
+            <td><code>Required module not found</code></td>
+            <td>Module path resolution failed</td>
+            <td>Run from the toolkit root directory (<code>cd C:\Tools\SailPoint-GovernanceToolkit</code>)</td>
+        </tr>
+        <tr>
+            <td>GUI fails with STA error</td>
+            <td>Script was run in MTA thread and auto-relaunch failed</td>
+            <td>Run from PowerShell ISE (always STA) or use <code>powershell.exe -STA -File .\Scripts\Show-SPDashboard.ps1</code></td>
+        </tr>
+        <tr>
+            <td><code>MaxCampaignsPerRun exceeded</code></td>
+            <td>More campaigns than the safety limit allows</td>
+            <td>Reduce your filter scope or increase <code>Safety.MaxCampaignsPerRun</code> in settings.json</td>
+        </tr>
+        <tr>
+            <td><code>Pester module not found</code></td>
+            <td>Pester 5.x not installed (only needed for unit tests)</td>
+            <td><code>Install-Module Pester -Force -SkipPublisherCheck</code></td>
+        </tr>
+        <tr>
+            <td><code>No campaigns matched</code> (exit code 1)</td>
+            <td>Filter criteria too narrow or no campaigns in the time window</td>
+            <td>Widen <code>-DaysBack</code> or use a broader filter (<code>-Status COMPLETED,ACTIVE</code>)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Getting Help</h4>
+
+<p>Every script supports <code>-Help</code> and <code>-?</code> for built-in documentation:</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Help
+.\Scripts\Test-SPConnectivity.ps1 -?
+Get-Help .\Scripts\Invoke-GovernanceTest.ps1 -Detailed</code></pre>

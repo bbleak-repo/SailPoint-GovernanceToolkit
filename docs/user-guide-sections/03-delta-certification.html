@@ -1,0 +1,1146 @@
+<!-- section: delta-certification -->
+<!-- title: Delta Certification -->
+<!-- icon: 3 -->
+
+<h2>Delta Certification</h2>
+
+<p>Delta Certification detects daily AD access changes by querying SailPoint ISC account-activity
+events for <code>GRANT_ACCESS</code> operations. When new grants are found, the toolkit creates
+targeted certification campaigns scoped to only the identities who received new access, routed
+to their managers (or source owners) for review. Combined with escalation, cleanup, and reporting
+scripts, this forms a continuous compliance loop for AD entitlement governance.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Core Functions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">6</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">2</div>
+        <div class="stat-label">Reviewer Modes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">10</div>
+        <div class="stat-label">Orchestrator Steps</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Delta Cert Overview</h3>
+
+<p>The delta certification workflow addresses a gap in ISC's native certification capabilities:
+there is no built-in way to automatically certify only new access grants on a daily basis.
+Standard ISC campaigns review all entitlements for a population, which is too broad for
+day-to-day change detection. The toolkit fills this gap with an event-driven approach.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li><strong>Event Detection</strong> -- <code>Get-SPDeltaGrantEvents</code> queries
+    <code>GET /v3/account-activities</code> for <code>GRANT_ACCESS</code> events on specified
+    AD source IDs within a configurable time window (default: 24 hours).</li>
+
+    <li><strong>Identity Resolution</strong> -- <code>Get-SPDeltaAffectedIdentities</code>
+    resolves each event to an active ISC identity, filtering out terminated, inactive, leaver,
+    and prehire lifecycle states. Additional exclusion filters (display name patterns, explicit
+    identity IDs) are configurable.</li>
+
+    <li><strong>Manager Grouping</strong> -- <code>Group-SPDeltaByManager</code> groups
+    affected identities by their ISC manager, forming one reviewer group per manager.</li>
+
+    <li><strong>Campaign Creation</strong> -- <code>Invoke-SPDeltaCertRun</code> creates one
+    SEARCH-type certification campaign per manager group, scoped via identity ID filter
+    (<code>id:"abc" OR id:"def"</code>). Each campaign is started immediately after creation.</li>
+</ol>
+
+<p>Campaign naming convention: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code></p>
+
+<h4>Scope Requirement</h4>
+
+<div class="callout callout-warning">
+    <strong>Important:</strong> <code>GET /v3/account-activities</code> requires
+    <code>sp:scopes:all</code> -- there is no granular scope for this endpoint. Use a browser
+    token (<code>-Token</code>) from the ISC admin console as a workaround, or configure a PAT
+    with <code>sp:scopes:all</code>.
+</div>
+
+<h4>Output Structure</h4>
+
+<pre><code>DeltaCert\
+    deltacert-audit.jsonl          # Append-only JSONL audit trail (one line per run)
+    deltacert-escalation.jsonl     # Escalation event log
+    reports\
+        delta-report-YYYY-MM-DD.html   # Daily delta report
+        delta-report-YYYY-MM-DD.jsonl  # Machine-readable report data</code></pre>
+
+<!-- ============================================================ -->
+<h3>CLI Reference: Invoke-SPADDeltaCert.ps1</h3>
+
+<p>The primary delta certification script. Creates daily campaigns for managers of identities
+who received new AD access.</p>
+
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId &lt;string[]&gt;
+    [-HoursBack &lt;int&gt;] [-DeadlineDays &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-CampaignNamePrefix &lt;string&gt;] [-MaxCampaignsPerRun &lt;int&gt;]
+    [-ReviewerMode &lt;string&gt;] [-RunCleanup]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Required Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SourceId</code></td>
+            <td>string[]</td>
+            <td>One or more SailPoint ISC source IDs to monitor for AD group add operations.
+            Obtain from: ISC Admin &gt; Sources &gt; select source &gt; URL contains the source ID.
+            Example: <code>-SourceId 'abc123def456'</code> or <code>@('src-1','src-2')</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Campaign Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-HoursBack</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Look-back window in hours. Increase to 48+ for catch-up after a missed run.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days from today until the campaign deadline. ISC enforces this deadline on the campaign.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Identity ID of the reviewer for identities with no manager in ISC. If omitted, manager-less identities are skipped with warnings.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>AD Delta Cert</td>
+            <td>Prefix for campaign names. Full name format: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>. Also configurable via <code>DeltaCert.CampaignNamePrefix</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxCampaignsPerRun</code></td>
+            <td>int</td>
+            <td>50</td>
+            <td>Safety guard -- abort before creating any campaigns if the number of manager groups exceeds this threshold. Also configurable via <code>DeltaCert.MaxCampaignsPerRun</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-ReviewerMode</code></td>
+            <td>string</td>
+            <td>Manager</td>
+            <td>Who reviews the campaigns. <code>Manager</code>: one SEARCH campaign per manager group. <code>SourceOwner</code>: one SOURCE_OWNER campaign per source ID. See <a href="#" onclick="event.preventDefault()">Reviewer Modes</a> below.</td>
+        </tr>
+        <tr>
+            <td><code>-RunCleanup</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Run <code>Invoke-SPDeltaCertCleanup</code> before creating new campaigns. Completes past-due campaigns older than <code>DeltaCert.CleanupDaysStale</code> (default: 3 days). Requires <code>Safety.AllowCompleteCampaign = true</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Pre-obtained JWT bearer token from the ISC admin console browser session. Bypasses OAuth <code>client_credentials</code>. Obtain via: F12 &gt; Network tab &gt; any ISC API call &gt; Authorization header value. The <code>Bearer </code> prefix is stripped automatically.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired. ISC browser tokens are typically valid for ~12 minutes.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Console summary format. Valid values: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. Shows what campaigns would be created without making any write API calls.</td>
+        </tr>
+        <tr>
+            <td><code>-Help</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Display full comment-based help and exit.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success -- campaigns created (or WhatIf completed)</td></tr>
+        <tr><td>1</td><td>No changes -- no AD grant events found in the time window (expected on quiet days)</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Campaign creation/activation error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Daily run: create campaigns for the last 24 hours
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123'
+
+# Dry-run: preview without making write calls
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -WhatIf
+
+# Catch-up run after a weekend (48-hour window, 3-day deadline)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId @('src-abc','src-def') -HoursBack 48 -DeadlineDays 3
+
+# With browser token and cleanup
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -Token 'eyJhbGciOiJSUzI1...' -RunCleanup
+
+# Fallback reviewer for manager-less identities
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -FallbackReviewerIdentityId 'mgr-fallback-id'
+
+# Source owner mode (one campaign per source, ISC routes to source owner)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -ReviewerMode SourceOwner</code></pre>
+
+<!-- ============================================================ -->
+<h3>Reviewer Modes</h3>
+
+<p>The <code>-ReviewerMode</code> parameter (or <code>DeltaCert.DefaultReviewerMode</code> in settings.json)
+controls how certification campaigns are routed to reviewers.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>Campaign Type</th>
+            <th>Grouping</th>
+            <th>Best For</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Manager</strong> (default)</td>
+            <td>SEARCH</td>
+            <td>One campaign per manager group. Each manager reviews only their direct reports who received new AD access.</td>
+            <td>Organizations where managers are accountable for their team's access.</td>
+        </tr>
+        <tr>
+            <td><strong>SourceOwner</strong></td>
+            <td>SOURCE_OWNER</td>
+            <td>One campaign per AD source ID. ISC automatically routes certification items to whoever owns each source.</td>
+            <td>Organizations where application/source owners control access decisions. Fewer API calls (skips identity resolution and manager grouping).</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Manager Mode Flow</h4>
+
+<pre><code>Get-SPDeltaGrantEvents (GRANT_ACCESS events)
+  -> Get-SPDeltaAffectedIdentities (resolve to active identities)
+    -> Group-SPDeltaByManager (one group per manager)
+      -> For each manager:
+           New-SPCampaign -Type SEARCH -SearchFilter 'id:"x" OR id:"y"' -CertifierIdentityId $managerId
+           Start-SPCampaign</code></pre>
+
+<h4>SourceOwner Mode Flow</h4>
+
+<pre><code>Get-SPDeltaGrantEvents (GRANT_ACCESS events)
+  -> For each unique SourceId:
+       New-SPCampaign -Type SOURCE_OWNER -SourceId $sourceId
+       Start-SPCampaign</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Cleanup</h3>
+
+<p>Over time, managers may neglect to act on their delta cert campaigns, causing campaign
+pile-up. <code>Invoke-SPDeltaCertCleanup</code> finds past-due delta cert campaigns and
+completes them, preventing stale campaigns from accumulating.</p>
+
+<h4>How Cleanup Works</h4>
+
+<ol>
+    <li>Searches for active campaigns matching the campaign name prefix via
+    <code>Search-SPCampaigns -Keyword $Prefix -Status @('ACTIVE')</code></li>
+    <li>For each campaign, checks if the deadline has passed or if the campaign
+    is older than <code>CleanupDaysStale</code> (default: 3 days)</li>
+    <li>Calls <code>Complete-SPCampaign -CampaignId $id</code> on past-due campaigns</li>
+    <li>Returns a summary: campaigns completed, campaigns still active, errors</li>
+</ol>
+
+<div class="callout callout-warning">
+    <strong>Safety Guard:</strong> <code>Complete-SPCampaign</code> is guarded by
+    <code>Safety.AllowCompleteCampaign</code> (default: <code>false</code>). You must set
+    this to <code>true</code> in settings.json for cleanup to work. When blocked, the function
+    returns <code>Success=$false</code> with a clear error message and makes no API calls.
+</div>
+
+<h4>Triggering Cleanup</h4>
+
+<p>Cleanup runs when you pass <code>-RunCleanup</code> to <code>Invoke-SPADDeltaCert.ps1</code>.
+It executes before creating new campaigns. Example:</p>
+
+<pre><code># Run cleanup then create new campaigns
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -RunCleanup -Token $token</code></pre>
+
+<h4>Configuration</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DeltaCert.CleanupDaysStale</code></td>
+            <td>3</td>
+            <td>Days before an active delta cert campaign is considered stale and eligible for completion.</td>
+        </tr>
+        <tr>
+            <td><code>Safety.AllowCompleteCampaign</code></td>
+            <td>false</td>
+            <td>Must be <code>true</code> for cleanup to call the ISC campaign-complete API.</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Escalation</h3>
+
+<p>When a reviewer does not act on a certification within a configurable threshold, the toolkit
+can escalate by reassigning the certification to the reviewer's manager in the ISC org tree.</p>
+
+<h4>Escalation Workflow</h4>
+
+<ol>
+    <li><strong>Stale Detection</strong> -- <code>Get-SPDeltaCertStaleCertifications</code>
+    finds active delta cert certifications where <code>signed</code> is null (not completed)
+    and <code>created</code> is older than <code>StaleHours</code> (default: 24).</li>
+
+    <li><strong>Org Tree Walk</strong> -- <code>Invoke-SPDeltaCertEscalate</code> looks up
+    each stale reviewer's manager via <code>Get-SPDeltaIdentityDetail</code>.</li>
+
+    <li><strong>Reassignment</strong> -- Calls <code>Invoke-SPReassign</code> to reassign
+    the certification to the reviewer's manager. The reassignment reason includes the
+    hours-open context: <code>"SLA escalation: 48 hours without action"</code>.</li>
+
+    <li><strong>ISC Notification</strong> -- ISC sends its own email notification to the
+    new reviewer when a certification is reassigned. No custom email logic is needed.</li>
+</ol>
+
+<h4>Escalation Safeguards</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Safeguard</th>
+            <th>Behavior</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>No manager</td>
+            <td>Reviewer with no manager in ISC is skipped with a WARN log (not an error).</td>
+        </tr>
+        <tr>
+            <td>Max escalation levels</td>
+            <td><code>MaxEscalationLevels</code> (default: 2) prevents infinite escalation loops. If the reviewer's manager was already the target from a previous escalation, the walk goes up one more level.</td>
+        </tr>
+        <tr>
+            <td>Large certifications</td>
+            <td>Certifications with &gt;50 review items automatically use <code>Invoke-SPReassignAsync</code> (max 500 items) instead of the synchronous endpoint (max 50).</td>
+        </tr>
+        <tr>
+            <td>Governance Groups</td>
+            <td>Reassignment does NOT work for Governance Group certifications (documented ISC exception). These are detected and skipped with a WARN log.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDeltaCertEscalate.ps1</h4>
+
+<p>Standalone escalation script, designed to run on a separate schedule from the main delta
+cert script (e.g., every 4 hours, or daily after business hours).</p>
+
+<pre><code>.\Scripts\Invoke-SPDeltaCertEscalate.ps1
+    [-CampaignNamePrefix &lt;string&gt;] [-StaleHours &lt;int&gt;] [-MaxEscalationLevels &lt;int&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>AD Delta Cert</td>
+            <td>Prefix used to find delta cert campaigns. Reads from <code>DeltaCert.Escalation.CampaignNamePrefix</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-StaleHours</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Hours with no reviewer action before a certification is considered stale. Reads from <code>DeltaCert.Escalation.DefaultStaleHours</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxEscalationLevels</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Maximum number of org-tree hops from the original reviewer. Reads from <code>DeltaCert.Escalation.MaxEscalationLevels</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token. Required for the reassignment API (<code>sp:scopes:all</code>).</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Show which certifications would be escalated without making API calls.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Escalation completed (or WhatIf)</td></tr>
+        <tr><td>1</td><td>No stale certifications found</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Escalation error (partial or full failure)</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Preview stale certifications without escalating
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
+
+# Escalate with browser token
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
+
+# Aggressive escalation: 12-hour threshold, single hop
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 12 -MaxEscalationLevels 1</code></pre>
+
+<!-- ============================================================ -->
+<h3>Delta Reports</h3>
+
+<p><code>Invoke-SPDeltaReport.ps1</code> generates a lightweight daily operations report showing
+what changed since the last run. This is not a full campaign audit -- it shows only access
+changes within the time window for quick daily review.</p>
+
+<h4>Report Contents</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Section</th>
+            <th>Data Source</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>New Grants</td>
+            <td>GRANT_ACCESS account-activity events</td>
+            <td>Identities that received new AD group memberships</td>
+        </tr>
+        <tr>
+            <td>Revocations</td>
+            <td>REVOKE_ACCESS account-activity events</td>
+            <td>AD group memberships that were removed</td>
+        </tr>
+        <tr>
+            <td>Campaigns Created</td>
+            <td>Delta cert campaign search</td>
+            <td>New campaigns created in this period</td>
+        </tr>
+        <tr>
+            <td>Pending Reviews</td>
+            <td>Active certification items</td>
+            <td>Items awaiting reviewer action</td>
+        </tr>
+        <tr>
+            <td>Anomalies</td>
+            <td>Cross-reference analysis</td>
+            <td>Unusual patterns (e.g., grants immediately followed by revocations)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDeltaReport.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId &lt;string[]&gt;
+    [-HoursBack &lt;int&gt;] [-OutputPath &lt;string&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SourceId</code></td>
+            <td>string[]</td>
+            <td>(required)</td>
+            <td>ISC source IDs to monitor for access events.</td>
+        </tr>
+        <tr>
+            <td><code>-HoursBack</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Look-back window in hours. Increase for catch-up after missed days.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>DeltaCert\reports\</td>
+            <td>Directory for HTML and JSONL output files. Created if absent.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token. Required for <code>sp:scopes:all</code> account-activity endpoint.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Daily delta report
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 24
+
+# Catch-up report for the last 48 hours to a custom directory
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 48 -OutputPath 'C:\Reports'
+
+# With browser token
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -Token 'eyJhbGciOiJSUzI1...'</code></pre>
+
+<!-- ============================================================ -->
+<h3>Daily Orchestrator</h3>
+
+<p><code>Invoke-SPDailyOrchestrator.ps1</code> consolidates the full daily governance workflow
+into a single coordinated invocation. It runs 10 dependency-aware steps in sequence, with each
+step isolated so that a failure in one does not prevent subsequent steps from executing.</p>
+
+<h4>Execution Steps</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Step</th>
+            <th>Operation</th>
+            <th>Function</th>
+            <th>Skip Switch</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Configuration Validation</td>
+            <td><code>Test-SPConfiguration</code></td>
+            <td><code>-SkipValidation</code></td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Campaign Cleanup</td>
+            <td><code>Invoke-SPDeltaCertCleanup</code></td>
+            <td><code>-SkipCleanup</code></td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Delta Cert Run</td>
+            <td><code>Invoke-SPDeltaCertRun</code></td>
+            <td><code>-SkipDeltaCert</code></td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Delta Report</td>
+            <td><code>Get-SPDeltaReportData</code> + <code>Export-SPDeltaReportHtml</code></td>
+            <td><code>-SkipDeltaReport</code></td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Escalation</td>
+            <td><code>Invoke-SPDeltaCertEscalate</code></td>
+            <td><code>-SkipEscalation</code></td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Health Check</td>
+            <td><code>Get-SPCampaignHealth</code></td>
+            <td><code>-SkipHealthCheck</code></td>
+        </tr>
+        <tr>
+            <td>7</td>
+            <td>Disconnected App Batch</td>
+            <td><code>Invoke-SPDisconnectedAppBatch</code></td>
+            <td rowspan="3"><code>-SkipDisconnectedApps</code></td>
+        </tr>
+        <tr>
+            <td>8</td>
+            <td>Decision Collection</td>
+            <td><code>Get-SPDisconnectedAppCampaignDecisions</code></td>
+        </tr>
+        <tr>
+            <td>9</td>
+            <td>Remediation Check</td>
+            <td><code>Update-SPRemediationStatus</code></td>
+        </tr>
+        <tr>
+            <td>10</td>
+            <td>Daily Summary</td>
+            <td>Consolidated output + JSONL audit trail</td>
+            <td>--</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPDailyOrchestrator.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDailyOrchestrator.ps1
+    [-SourceId &lt;string[]&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-HoursBack &lt;int&gt;] [-DeadlineDays &lt;int&gt;]
+    [-ReviewerMode &lt;string&gt;] [-StaleHours &lt;int&gt;] [-CampaignNamePrefix &lt;string&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-SkipValidation] [-SkipCleanup] [-SkipDeltaCert] [-SkipDeltaReport]
+    [-SkipEscalation] [-SkipHealthCheck] [-SkipDisconnectedApps]
+    [-WhatIf] [-Help]</code></pre>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>All steps succeeded</td></tr>
+        <tr><td>1</td><td>One or more non-critical steps had warnings</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration validation failed</td></tr>
+        <tr><td>5</td><td>Critical step failed</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Single daily command replacing separate script invocations
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $token
+
+# With parameter overrides
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -HoursBack 48 -StaleHours 12 -Token $token
+
+# Skip specific steps
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -SkipEscalation -SkipHealthCheck -Token $token
+
+# Dry run -- all sub-steps receive WhatIf
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -WhatIf</code></pre>
+
+<!-- ============================================================ -->
+<h3>Weekly Digest</h3>
+
+<p><code>Invoke-SPWeeklyDigest.ps1</code> generates a comprehensive weekly governance digest
+combining campaign activity, health status, identity risk, reviewer performance, remediation
+tracking, and orchestrator reliability into a single consolidated report.</p>
+
+<h4>Digest Sections</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Section</th>
+            <th>Data Source</th>
+            <th>Skip Switch</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Campaign Activity Summary</td>
+            <td><code>Get-SPAuditCampaigns</code>, <code>Measure-SPCampaignMetrics</code></td>
+            <td><code>-SkipCampaignSummary</code></td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Current Campaign Health</td>
+            <td><code>Get-SPCampaignHealth</code></td>
+            <td>--</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Identity Risk Highlights</td>
+            <td><code>Measure-SPIdentityRisk</code></td>
+            <td><code>-SkipIdentityRisk</code></td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Reviewer Performance</td>
+            <td><code>Measure-SPReviewerReputation</code></td>
+            <td><code>-SkipReviewerAnalysis</code></td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Remediation Tracking</td>
+            <td><code>Get-SPRemediationStatus</code></td>
+            <td><code>-SkipRemediationTracking</code></td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Orchestrator Health</td>
+            <td><code>Get-SPOrchestratorHistory</code></td>
+            <td><code>-SkipOrchestratorHealth</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>CLI Reference: Invoke-SPWeeklyDigest.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1
+    [-DaysBack &lt;int&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-SourceId &lt;string[]&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-SkipCampaignSummary] [-SkipIdentityRisk] [-SkipReviewerAnalysis]
+    [-SkipOrchestratorHealth] [-SkipRemediationTracking]
+    [-SendNotification] [-NotifyRecipients &lt;string[]&gt;]
+    [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>7</td>
+            <td>Number of days to include in the digest. Default produces a weekly view.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format. Valid values: <code>Console</code>, <code>HTML</code>, <code>JSON</code>, <code>Both</code> (console + HTML).</td>
+        </tr>
+        <tr>
+            <td><code>-SendNotification</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Send the digest via configured notification backends.</td>
+        </tr>
+        <tr>
+            <td><code>-NotifyRecipients</code></td>
+            <td>string[]</td>
+            <td>--</td>
+            <td>Email addresses for SMTP notification backend.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Weekly digest with default 7-day window
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token
+
+# Console + HTML output with email notification
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token -OutputMode Both -SendNotification
+
+# Two-week digest, skip identity risk section
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -DaysBack 14 -SkipIdentityRisk -Token $token</code></pre>
+
+<!-- ============================================================ -->
+<h3>Scheduling</h3>
+
+<p>The delta certification scripts are designed to run unattended on a schedule. The
+recommended setup uses Windows Task Scheduler for on-premise environments or cron
+for Linux/macOS.</p>
+
+<h4>Recommended Schedule</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Script</th>
+            <th>Schedule</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Invoke-SPDailyOrchestrator.ps1</code></td>
+            <td>Daily at 06:00</td>
+            <td>Full daily workflow: cleanup, delta cert, report, escalation, health check</td>
+        </tr>
+        <tr>
+            <td><code>Invoke-SPDeltaCertEscalate.ps1</code></td>
+            <td>Every 4 hours (business hours)</td>
+            <td>Catch stale certifications between daily runs</td>
+        </tr>
+        <tr>
+            <td><code>Invoke-SPWeeklyDigest.ps1</code></td>
+            <td>Monday at 07:00</td>
+            <td>Weekly governance summary for leadership</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Windows Task Scheduler</h4>
+
+<p>Create a scheduled task using PowerShell:</p>
+
+<pre><code># Daily orchestrator at 6:00 AM
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\GovernanceToolkit\Scripts\Invoke-SPDailyOrchestrator.ps1`" -SourceId 'src-ad-001'"
+$trigger = New-ScheduledTaskTrigger -Daily -At '06:00'
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
+Register-ScheduledTask -TaskName "SailPoint-DailyOrchestrator" `
+    -Action $action -Trigger $trigger -Settings $settings `
+    -User "DOMAIN\ServiceAccount" -Password "***"
+
+# Escalation every 4 hours during business hours (8 AM - 6 PM)
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"C:\GovernanceToolkit\Scripts\Invoke-SPDeltaCertEscalate.ps1`" -StaleHours 24"
+$trigger = New-ScheduledTaskTrigger -Daily -At '08:00'
+$repetition = New-TimeSpan -Hours 4
+$duration = New-TimeSpan -Hours 10
+$trigger.Repetition.Interval = $repetition
+$trigger.Repetition.Duration = $duration
+Register-ScheduledTask -TaskName "SailPoint-Escalation" `
+    -Action $action -Trigger $trigger -Settings $settings `
+    -User "DOMAIN\ServiceAccount" -Password "***"</code></pre>
+
+<h4>Linux/macOS Cron</h4>
+
+<pre><code># crontab -e
+
+# Daily orchestrator at 6:00 AM
+0 6 * * * /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' >> /var/log/sailpoint-orchestrator.log 2>&1
+
+# Escalation every 4 hours during business hours (8-18)
+0 8,12,16 * * 1-5 /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 >> /var/log/sailpoint-escalation.log 2>&1
+
+# Weekly digest every Monday at 7:00 AM
+0 7 * * 1 /usr/bin/pwsh -NoProfile -File /opt/governance-toolkit/Scripts/Invoke-SPWeeklyDigest.ps1 -OutputMode Both >> /var/log/sailpoint-digest.log 2>&1</code></pre>
+
+<!-- ============================================================ -->
+<h3>Configuration Reference</h3>
+
+<p>All DeltaCert settings in <code>Config/settings.json</code>:</p>
+
+<pre><code>{
+    "DeltaCert": {
+        "SourceIds": [],
+        "DefaultHoursBack": 24,
+        "DefaultDeadlineDays": 2,
+        "FallbackReviewerIdentityId": "",
+        "CampaignNamePrefix": "AD Delta Cert",
+        "MaxCampaignsPerRun": 50,
+        "CleanupDaysStale": 3,
+        "OutputPath": ".\\DeltaCert",
+        "DefaultReviewerMode": "Manager",
+        "ExcludeLifecycleStates": ["terminated", "inactive", "leaver", "prehire"],
+        "ExcludeDisplayNamePatterns": [],
+        "ExcludeIdentityIds": [],
+        "Escalation": {
+            "DefaultStaleHours": 24,
+            "MaxEscalationLevels": 2,
+            "CampaignNamePrefix": "AD Delta Cert"
+        }
+    }
+}</code></pre>
+
+<h4>Identity Exclusion Filters</h4>
+
+<p>Service accounts, admin accounts, and other non-human identities can be excluded from
+delta cert campaigns even if they receive AD group grants:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>ExcludeLifecycleStates</code></td>
+            <td>string[]</td>
+            <td>Identity lifecycle states to exclude. Default: <code>terminated</code>, <code>inactive</code>, <code>leaver</code>, <code>prehire</code>. Customize to add states like <code>dormant</code>.</td>
+        </tr>
+        <tr>
+            <td><code>ExcludeDisplayNamePatterns</code></td>
+            <td>string[]</td>
+            <td>Regex patterns matched against identity <code>displayName</code>. Examples: <code>^SVC-</code>, <code>^ADM-</code>, <code>Service Account</code>.</td>
+        </tr>
+        <tr>
+            <td><code>ExcludeIdentityIds</code></td>
+            <td>string[]</td>
+            <td>Explicit identity IDs to always skip regardless of other criteria.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>JSONL Audit Trail</h4>
+
+<p>Every delta cert run, escalation, and orchestrator execution appends a structured JSONL
+event to the output directory for compliance evidence and troubleshooting:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>File</th>
+            <th>Source</th>
+            <th>Key Fields</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>deltacert-audit.jsonl</code></td>
+            <td><code>Invoke-SPDeltaCertRun</code></td>
+            <td>Timestamp, CorrelationID, SourceIds, HoursBack, GrantEventsFound, CampaignsCreated, CampaignIds, Reason</td>
+        </tr>
+        <tr>
+            <td><code>deltacert-escalation.jsonl</code></td>
+            <td><code>Invoke-SPDeltaCertEscalate.ps1</code></td>
+            <td>Timestamp, CorrelationID, StaleCertsFound, Escalated, Skipped, StaleHours, MaxEscalationLevels</td>
+        </tr>
+        <tr>
+            <td><code>orchestrator-audit.jsonl</code></td>
+            <td><code>Invoke-SPDailyOrchestrator.ps1</code></td>
+            <td>Timestamp, CorrelationID, Steps (per-step status/detail/duration), ExitCode, DurationSeconds</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Each line is valid JSON parseable by <code>ConvertFrom-Json</code>. No-change runs
+(Reason=NoChanges) are also logged for a complete operational history.</p>
+
+<!-- ============================================================ -->
+<h3>SP.DeltaCert Module Functions</h3>
+
+<p>The SP.DeltaCert module exports 19 public functions across three sub-modules:</p>
+
+<details>
+    <summary><strong>SP.DeltaCertQueries (14 functions)</strong> -- Data retrieval and org tree</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPDeltaGrantEvents</code></td>
+                <td>Queries GRANT_ACCESS account-activity events within a time window.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaAffectedIdentities</code></td>
+                <td>Resolves grant events to active ISC identities with exclusion filtering.</td>
+            </tr>
+            <tr>
+                <td><code>Group-SPDeltaByManager</code></td>
+                <td>Groups affected identities by their ISC manager.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaCertStaleCertifications</code></td>
+                <td>Finds active certifications with no reviewer action past threshold.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDeltaIdentityDetail</code></td>
+                <td>Retrieves identity detail including manager, lifecycle state, and job level.</td>
+            </tr>
+            <tr>
+                <td><code>Build-SPOrgTree</code></td>
+                <td>Constructs a hierarchical org tree from campaign identities.</td>
+            </tr>
+            <tr>
+                <td><code>Import-SPOrgChartSupplement</code></td>
+                <td>Imports an org chart supplement CSV for band assignment and manager corrections.</td>
+            </tr>
+            <tr>
+                <td><code>Merge-SPOrgTreeWithSupplement</code></td>
+                <td>Merges supplement data into the org tree (band overrides, synthetic nodes).</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPOrgTree</code></td>
+                <td>Renders a text-based org tree to the console.</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPCampaignOrgPreview</code></td>
+                <td>Preview campaign distribution across the org tree.</td>
+            </tr>
+            <tr>
+                <td><code>Show-SPReportDistributionPreview</code></td>
+                <td>Preview leadership rollup report distribution.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPOrgChartHtml</code></td>
+                <td>Renders a self-contained HTML org chart (no JS/flexbox, Word-compatible).</td>
+            </tr>
+            <tr>
+                <td><code>Resolve-SPIdentityBand</code></td>
+                <td>Resolves identity band classification (A-E) from supplement, ISC attribute, or depth.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPOrgChartGaps</code></td>
+                <td>Detects org tree gaps: missing managers, shallow chains, orphaned branches, circular references.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DeltaCertRunner (3 functions)</strong> -- Campaign orchestration</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Invoke-SPDeltaCertRun</code></td>
+                <td>Full delta cert workflow: detect events, resolve identities, group by manager, create and start campaigns.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDeltaCertCleanup</code></td>
+                <td>Completes past-due delta cert campaigns older than the staleness threshold.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDeltaCertEscalate</code></td>
+                <td>Reassigns stale certifications up the org tree to the reviewer's manager.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DeltaCertReport (2 functions)</strong> -- Delta report generation</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPDeltaReportData</code></td>
+                <td>Gathers delta data: grants, revocations, campaigns, pending reviews, anomalies.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDeltaReportHtml</code></td>
+                <td>Renders a lightweight 1-2 page HTML report plus JSONL output.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>

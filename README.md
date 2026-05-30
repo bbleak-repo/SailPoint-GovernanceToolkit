@@ -3,6 +3,7 @@
 A PowerShell 5.1 toolkit for automated testing of SailPoint IdentityNow (ISC) certification campaign workflows. The toolkit creates, activates, and validates certification campaigns against the ISC REST API v3, producing structured JSONL evidence and HTML reports for UAT sign-off.
 
 For a 15-minute setup walkthrough, see [QUICKSTART.md](QUICKSTART.md).
+For the comprehensive interactive guide, open [USER-GUIDE.html](USER-GUIDE.html) in your browser.
 
 ---
 
@@ -982,6 +983,7 @@ JSONL format (one event per line):
 
 ```
 SailPoint-GovernanceToolkit/
+    USER-GUIDE.html                      # Interactive tabbed user guide (open in browser)
     Scripts/                             # Thin-wrapper CLI entry points
         Invoke-GovernanceTest.ps1        # Primary test runner
         Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting

@@ -1,0 +1,1057 @@
+<!-- section: campaign-audit -->
+<!-- title: Campaign Audit -->
+<!-- icon: 2 -->
+
+<h2>Campaign Audit</h2>
+
+<p>The Campaign Audit workflow produces post-campaign compliance reports with reviewer accountability,
+decision breakdowns, remediation proof, risk indicators, and leadership rollups. It queries completed
+or active ISC certification campaigns, retrieves all certifications and review items, and generates
+per-campaign HTML reports plus a combined summary and JSONL audit trail.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">18</div>
+        <div class="stat-label">Compliance Fields</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">7</div>
+        <div class="stat-label">Report Sections</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Risk Checks</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">5</div>
+        <div class="stat-label">Org Levels</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Campaign Audit Overview</h3>
+
+<p>Each audit run produces three types of output:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Output</th>
+            <th>Format</th>
+            <th>Purpose</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Per-campaign report</td>
+            <td>HTML + TXT</td>
+            <td>Detailed audit of a single campaign: executive dashboard, decision breakdown, reviewer metrics, remediation proof</td>
+        </tr>
+        <tr>
+            <td>Combined report</td>
+            <td>HTML</td>
+            <td>Multi-campaign summary covering all campaigns in a single run</td>
+        </tr>
+        <tr>
+            <td>Audit trail</td>
+            <td>JSONL</td>
+            <td>Machine-readable compliance evidence with 18 mandatory fields per decision</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>The per-campaign HTML report opens with an <strong>Executive Summary Dashboard</strong> containing a
+status badge, decision breakdown donut chart (SVG), remediation completion bar, risk scorecard, and
+reviewer response time summary. Below the dashboard, seven detailed sections follow:</p>
+
+<ol>
+    <li><strong>Campaign Summary</strong> -- name, status, dates, duration, certification count</li>
+    <li><strong>Reviewer Accountability</strong> -- primary certifiers and reassignments with sign-off proof</li>
+    <li><strong>Reviewer Performance</strong> -- time-to-decision metrics per reviewer, color-coded by response time</li>
+    <li><strong>Decision Summary</strong> -- approved, revoked, and pending items with identity and entitlement detail</li>
+    <li><strong>Campaign Reports</strong> -- Campaign Status Report and Certification Signoff Report from ISC</li>
+    <li><strong>Remediation and Reassignment Proof</strong> -- item-level completion status and reassignment chain</li>
+    <li><strong>Audit Metadata</strong> -- correlation ID, generation timestamp, and filters applied</li>
+</ol>
+
+<p>Output directory structure:</p>
+
+<pre><code>Audit\
+    &lt;CampaignName&gt;\
+        campaign-audit-&lt;CampaignName&gt;-&lt;timestamp&gt;.html    # Per-campaign HTML report
+        campaign-audit-&lt;CampaignName&gt;-&lt;timestamp&gt;.txt     # Per-campaign text summary
+    campaign-audit-combined-&lt;timestamp&gt;.html               # Combined multi-campaign HTML
+    audit-&lt;timestamp&gt;.jsonl                                # JSONL audit trail
+    leadership\                                            # (if -IncludeLeadershipRollup)
+        executive-summary.html
+        &lt;LevelLabel&gt;-&lt;LeaderName&gt;-&lt;timestamp&gt;.html</code></pre>
+
+<!-- ============================================================ -->
+<h3>CLI Reference: Invoke-SPCampaignAudit.ps1</h3>
+
+<p>The primary audit script. At least one campaign filter is required -- without a filter the script exits with code 2.</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 [-Status &lt;string[]&gt;] [-CampaignName &lt;string&gt;]
+    [-CampaignNameStartsWith &lt;string&gt;] [-CampaignNameContains &lt;string&gt;]
+    [-DaysBack &lt;int&gt;] [-IdentityEventDays &lt;int&gt;] [-DetailLevel &lt;string&gt;]
+    [-IncludeLeadershipRollup] [-LeadershipDepth &lt;int&gt;] [-LeadershipStartLevel &lt;int&gt;]
+    [-OutputPath &lt;string&gt;] [-OutputMode &lt;string&gt;] [-Token &lt;string&gt;]
+    [-CampaignReportCsvPath &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Campaign Filter Parameters</h4>
+
+<p>At least one of these is required. They can be combined (e.g., <code>-Status COMPLETED -CampaignNameContains 'quarterly'</code>).</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-CampaignName</code></td>
+            <td>string</td>
+            <td>Exact name match (case-insensitive). Maps to ISC filter <code>name eq "..."</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNameStartsWith</code></td>
+            <td>string</td>
+            <td>Prefix match. Maps to ISC filter <code>name sw "..."</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNameContains</code></td>
+            <td>string</td>
+            <td>Substring match anywhere in the name. Maps to ISC filter <code>name co "..."</code>. Recommended for keyword-based searching.</td>
+        </tr>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td>One or more campaign statuses. Valid values: <code>STAGED</code>, <code>ACTIVE</code>, <code>COMPLETING</code>, <code>COMPLETED</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Data Control Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Only include campaigns created within the last N days. Overridden by <code>Audit.DefaultDaysBack</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-IdentityEventDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days before campaign end date to search for identity lifecycle events for revoked identities.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignReportCsvPath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Path to a locally exported campaign report CSV. When provided, skips live campaign-report API calls.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td><code>.\Audit</code></td>
+            <td>Directory for audit output files. Created if absent. Overrides <code>Audit.OutputPath</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Console summary format. Valid values: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DetailLevel</code></td>
+            <td>string</td>
+            <td>Verbose</td>
+            <td>Identity-level detail in HTML reports. Valid values: <code>Summary</code>, <code>Detailed</code>, <code>Verbose</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Leadership Rollup Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-IncludeLeadershipRollup</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Generate leadership rollup reports. Requires SP.DeltaCert module. Also configurable via <code>Audit.IncludeLeadershipRollup</code> in settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipDepth</code></td>
+            <td>int</td>
+            <td>3</td>
+            <td>Maximum org levels to walk above reviewed identities. <code>3</code> = identity, manager, director, VP.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipStartLevel</code></td>
+            <td>int</td>
+            <td>-1</td>
+            <td>Highest level from which to begin generating per-level reports. <code>-1</code> = auto-detect (highest level found).</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT bearer token from the ISC admin console. Bypasses OAuth entirely. ~12 minute expiry.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>auto</td>
+            <td>Path to settings.json. Defaults to auto-resolved path relative to the Scripts directory.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>0</td>
+            <td>Audit completed successfully</td>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>No campaigns matched the filter criteria</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Parameter error (missing required filter or invalid combination)</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Authentication error (failed to acquire token)</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Configuration error (settings.json missing, invalid, or first-run placeholders)</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Leadership Rollup Reports</h3>
+
+<p>Leadership rollups aggregate campaign decisions up the organizational hierarchy, producing per-level
+reports for VPs, directors, and managers. Enable with <code>-IncludeLeadershipRollup</code> or set
+<code>Audit.IncludeLeadershipRollup = true</code> in settings.json.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li>The toolkit collects all unique identity IDs from campaign decisions</li>
+    <li><code>Build-SPOrgTree</code> walks each identity's ISC manager chain upward to <code>-LeadershipDepth</code> levels</li>
+    <li>Decisions are grouped by org level using <code>Group-SPAuditByLeadership</code></li>
+    <li>Per-level HTML reports are generated for each leader at each level</li>
+</ol>
+
+<h4>Org Level Labels</h4>
+
+<p>The toolkit assigns labels based on the absolute distance from individual contributors (level 0):</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Level</th>
+            <th>Label</th>
+            <th>Typical Role</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>0</td>
+            <td>Individual Contributors</td>
+            <td>End users whose access was reviewed</td>
+        </tr>
+        <tr>
+            <td>1</td>
+            <td>Managers</td>
+            <td>Direct managers who reviewed certifications</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Directors</td>
+            <td>Second-level leaders overseeing managers</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Vice Presidents</td>
+            <td>Third-level leaders overseeing directors</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Senior Vice Presidents</td>
+            <td>Fourth-level leaders</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>Executive Leadership</td>
+            <td>C-suite or equivalent</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Depth Control</h4>
+
+<p>The <code>-LeadershipDepth</code> parameter controls how far up the org tree to walk.
+The <code>-LeadershipStartLevel</code> parameter controls where report generation begins
+(<code>-1</code> = auto-detect, starting from the highest level found).</p>
+
+<pre><code># Walk 3 levels: identity -> manager -> director -> VP
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 30 -IncludeLeadershipRollup
+
+# Walk only 2 levels: identity -> manager -> director (no VP reports)
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -IncludeLeadershipRollup -LeadershipDepth 2
+
+# Walk 4 levels for a large org
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -IncludeLeadershipRollup -LeadershipDepth 4</code></pre>
+
+<h4>Executive Summary Report</h4>
+
+<p>The executive summary (<code>leadership/executive-summary.html</code>) provides a high-level view across
+all directors. It includes overall approval/revocation rates, an SVG donut chart, and a per-director
+summary table sorted by completion percentage ascending (worst-performing first). Completion cells are
+color-coded: green for >= 95%, orange for 80-95%, red for &lt; 80%.</p>
+
+<h4>Per-Leader Reports</h4>
+
+<p>Each leader at each level gets an individual report with:</p>
+<ul>
+    <li>Level-appropriate header (e.g., "VP Report: Alice Johnson")</li>
+    <li>Summary cards showing total items, approved, revoked, and pending counts</li>
+    <li>Subordinate table listing each direct report's decision statistics</li>
+    <li>Navigation links up to parent report and down to child reports</li>
+    <li>At the lowest generated level: full identity decision detail</li>
+</ul>
+
+<!-- ============================================================ -->
+<h3>Detail Levels</h3>
+
+<p>The <code>-DetailLevel</code> parameter controls how much identity-level information appears in the
+HTML reports. All three levels include the executive dashboard, reviewer accountability, and campaign
+metadata. The difference is in the decision detail tables.</p>
+
+<details>
+    <summary>Summary -- Counts and percentages only</summary>
+    <div class="detail-body">
+        <p>Shows aggregate statistics: total items, approval rate, revocation rate, completion
+        percentage, and reviewer count. No per-identity or per-entitlement detail. Best for
+        executive-level distribution where readers need the headline numbers only.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Summary</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Detailed -- Identity names and decisions</summary>
+    <div class="detail-body">
+        <p>Includes per-identity rows with name, account identifier, access name, decision, and
+        reviewer. Omits lifecycle events, remediation timestamps, and justification text. Good for
+        manager-level review where the focus is on who-decided-what.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Detailed</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Verbose -- Full compliance evidence (default)</summary>
+    <div class="detail-body">
+        <p>Everything in Detailed plus: justification comments, remediation status and dates, identity
+        lifecycle events, risk flags, and the full reassignment chain. This is the default and the
+        level required for SOX/SOC2 compliance evidence packages.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Verbose</code></pre>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>Compliance Features</h3>
+
+<h4>18 Mandatory Compliance Fields</h4>
+
+<p>Every access review decision is emitted as a <code>DecisionRecorded</code> event in the JSONL audit
+trail with exactly 18 fields. This structure supports SOX, SOC2, and NIST audit requirements:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Action</code></td>
+            <td>Always <code>DecisionRecorded</code></td>
+        </tr>
+        <tr>
+            <td><code>IdentityName</code></td>
+            <td>Display name of the identity whose access was reviewed</td>
+        </tr>
+        <tr>
+            <td><code>IdentityId</code></td>
+            <td>ISC identity ID</td>
+        </tr>
+        <tr>
+            <td><code>AccountId</code></td>
+            <td>ISC account ID linked to the identity</td>
+        </tr>
+        <tr>
+            <td><code>ApplicationSource</code></td>
+            <td>ISC source name (e.g., "Active Directory - Corp")</td>
+        </tr>
+        <tr>
+            <td><code>EntitlementName</code></td>
+            <td>Name of the entitlement or access profile reviewed</td>
+        </tr>
+        <tr>
+            <td><code>AccessType</code></td>
+            <td>Type of access (entitlement, access profile, role)</td>
+        </tr>
+        <tr>
+            <td><code>ReviewerName</code></td>
+            <td>Name of the reviewer who made the decision</td>
+        </tr>
+        <tr>
+            <td><code>ReviewerEmail</code></td>
+            <td>Email address of the reviewer</td>
+        </tr>
+        <tr>
+            <td><code>Decision</code></td>
+            <td><code>APPROVE</code>, <code>REVOKE</code>, or pending (no decision recorded)</td>
+        </tr>
+        <tr>
+            <td><code>DecisionDateTime</code></td>
+            <td>ISO 8601 timestamp of the decision</td>
+        </tr>
+        <tr>
+            <td><code>Justification</code></td>
+            <td>Reviewer's comment or justification text</td>
+        </tr>
+        <tr>
+            <td><code>CampaignName</code></td>
+            <td>Name of the certification campaign</td>
+        </tr>
+        <tr>
+            <td><code>CampaignStart</code></td>
+            <td>Campaign start date</td>
+        </tr>
+        <tr>
+            <td><code>CampaignDueDate</code></td>
+            <td>Campaign deadline</td>
+        </tr>
+        <tr>
+            <td><code>CampaignCompletion</code></td>
+            <td>Campaign completion date</td>
+        </tr>
+        <tr>
+            <td><code>RemediationStatus</code></td>
+            <td><code>Provisioned</code> (completed), <code>Pending</code>, or <code>N/A</code> (non-revoke)</td>
+        </tr>
+        <tr>
+            <td><code>RemediationDate</code></td>
+            <td>Date the revocation was provisioned (if applicable)</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <div class="callout-label">Note</div>
+    <p>Two additional fields (<code>ReassignmentChain</code> and <code>SystemTimestamp</code>) are also
+    included in the JSONL event, bringing the total to 20 fields per event. The 18 above are the
+    mandatory compliance fields referenced in the audit report headers.</p>
+</div>
+
+<h4>Anti-Rubber-Stamping Detection</h4>
+
+<p>The <code>Measure-SPAuditRubberStampRisk</code> function performs four SOX/SOC2 red-flag checks on
+reviewer behavior, producing a per-reviewer risk severity (None, Low, Medium, High):</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Check</th>
+            <th>What It Detects</th>
+            <th>Threshold</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Approval-only rate</td>
+            <td>Reviewer approved 100% of items without a single revocation</td>
+            <td>100% approval across &gt; 10 items</td>
+        </tr>
+        <tr>
+            <td>Decision velocity</td>
+            <td>Decisions made faster than humanly possible for the item count</td>
+            <td>&gt; 50 items decided in &lt; 60 seconds</td>
+        </tr>
+        <tr>
+            <td>Bulk decision clusters</td>
+            <td>Consecutive identical decisions within a narrow time window</td>
+            <td>&gt; 5 identical decisions within 30 seconds</td>
+        </tr>
+        <tr>
+            <td>Response latency</td>
+            <td>First decision made suspiciously soon after campaign assignment</td>
+            <td>&lt; 1 minute after assignment with &gt; 5 items</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Severity is calculated as: <strong>High</strong> = 2+ flags; <strong>Medium</strong> = 1 flag (velocity
+or approval-only); <strong>Low</strong> = 1 flag (other type); <strong>None</strong> = 0 flags.</p>
+
+<h4>Risk Indicators</h4>
+
+<p>The <code>Get-SPAuditRiskFlags</code> function adds risk flags to individual access review decisions.
+Each decision item can receive zero or more of the following flags:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Flag</th>
+            <th>Color</th>
+            <th>Trigger</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>STALE</code></td>
+            <td style="color:#FF8800;">Orange</td>
+            <td>Last login &gt; <code>StaleAccessDays</code> ago (default 90)</td>
+        </tr>
+        <tr>
+            <td><code>PRIVILEGED</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Entitlement name matches <code>PrivilegedPatterns</code> (Admin, Root, DBA, Domain Admins)</td>
+        </tr>
+        <tr>
+            <td><code>ORPHAN</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Identity has no manager assigned in ISC</td>
+        </tr>
+        <tr>
+            <td><code>TERMINATED</code></td>
+            <td style="color:#CC3333;">Red</td>
+            <td>Identity lifecycle state is <code>terminated</code></td>
+        </tr>
+        <tr>
+            <td><code>SVC-ACCOUNT</code></td>
+            <td style="color:#777777;">Gray</td>
+            <td>Identity name matches <code>ServiceAccountPatterns</code> (<code>^SVC-</code>, <code>^svc-</code>)</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Risk indicator thresholds are configurable in settings.json under <code>Audit.RiskIndicators</code>:</p>
+
+<pre><code>"Audit": {
+    "RiskIndicators": {
+        "StaleAccessDays": 90,
+        "PrivilegedPatterns": ["Admin", "Root", "DBA", "Domain Admins"],
+        "ServiceAccountPatterns": ["^SVC-", "^svc-"]
+    }
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Search</h3>
+
+<p><code>Invoke-SPCampaignSearch.ps1</code> is a unified campaign search and analysis tool. It combines
+keyword/type/status/date filtering with five analysis modes for deeper investigation.</p>
+
+<pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 [-Keyword &lt;string&gt;] [-Type &lt;string&gt;]
+    [-Status &lt;string[]&gt;] [-DaysBack &lt;int&gt;] [-CreatedAfter &lt;DateTime&gt;]
+    [-CreatedBefore &lt;DateTime&gt;] [-ShowDeadlines] [-ShowMetrics]
+    [-ReviewerIdentityId &lt;string&gt;] [-IdentityId &lt;string&gt;]
+    [-SourceCoverage] [-CompareIds &lt;string[]&gt;]
+    [-OutputMode &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-Token &lt;string&gt;] [-Help]</code></pre>
+
+<h4>Search Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Keyword</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Substring search against campaign names. Uses ISC <code>co</code> (contains) filter.</td>
+        </tr>
+        <tr>
+            <td><code>-Type</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Campaign type. Valid values: <code>MANAGER</code>, <code>SOURCE_OWNER</code>, <code>SEARCH</code>, <code>ROLE_COMPOSITION</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td>COMPLETED, ACTIVE</td>
+            <td>One or more statuses. Also accepts: <code>STAGED</code>, <code>ACTIVATING</code>, <code>COMPLETING</code>, <code>ERROR</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>90</td>
+            <td>Look-back window. Ignored when <code>-CreatedAfter</code> or <code>-CreatedBefore</code> is specified.</td>
+        </tr>
+        <tr>
+            <td><code>-CreatedAfter</code></td>
+            <td>DateTime</td>
+            <td>--</td>
+            <td>Lower bound for campaign creation date. Takes precedence over <code>-DaysBack</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-CreatedBefore</code></td>
+            <td>DateTime</td>
+            <td>--</td>
+            <td>Upper bound for campaign creation date. Takes precedence over <code>-DaysBack</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format. Valid values: <code>Console</code>, <code>JSON</code>, <code>CSV</code>, <code>HTML</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td><code>.\SearchResults</code></td>
+            <td>Directory for CSV/HTML output files. Created if absent.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Analysis Modes</h4>
+
+<p>Only one analysis mode can be active at a time. When none is specified, the default is a standard
+campaign search with optional deadline and metrics enrichment.</p>
+
+<details>
+    <summary>Deadline Urgency (-ShowDeadlines)</summary>
+    <div class="detail-body">
+        <p>Adds an urgency classification to each campaign result based on its deadline and status:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Classification</th>
+                    <th>Criteria</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Overdue</strong></td>
+                    <td>Deadline has passed AND campaign is still ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Critical</strong></td>
+                    <td>Deadline within 24 hours AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Warning</strong></td>
+                    <td>Deadline within 72 hours AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>OnTrack</strong></td>
+                    <td>Deadline more than 72 hours away AND ACTIVE</td>
+                </tr>
+                <tr>
+                    <td><strong>Completed</strong></td>
+                    <td>Campaign status is COMPLETED</td>
+                </tr>
+                <tr>
+                    <td><strong>NoDeadline</strong></td>
+                    <td>No deadline set on the campaign</td>
+                </tr>
+            </tbody>
+        </table>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Campaign Metrics (-ShowMetrics)</summary>
+    <div class="detail-body">
+        <p>Retrieves per-campaign KPIs including approval rate, completion rate, reviewer count,
+        and response time statistics (average, min, max, median hours). Also identifies the fastest
+        and slowest reviewers and calculates items-per-reviewer distribution.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -Status COMPLETED -DaysBack 90 -ShowMetrics -OutputMode CSV</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Reviewer Workload (-ReviewerIdentityId)</summary>
+    <div class="detail-body">
+        <p>Finds all campaigns and certifications assigned to a specific reviewer. Returns per-campaign
+        workload counts: items assigned, decided, and pending.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId 'id-mgr-001' -Status ACTIVE</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Identity Decision History (-IdentityId)</summary>
+    <div class="detail-body">
+        <p>Shows all access review decisions about a specific identity across all matching campaigns.
+        Returns per-campaign decision lists with access name, decision, reviewer, and date.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -IdentityId 'id-001' -Status COMPLETED -DaysBack 365</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Source Coverage (-SourceCoverage)</summary>
+    <div class="detail-body">
+        <p>Analyzes which ISC sources have been included in certification campaigns and which have not.
+        Returns covered sources, uncovered sources, and a coverage rate percentage.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -DaysBack 365</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Campaign Comparison (-CompareIds)</summary>
+    <div class="detail-body">
+        <p>Side-by-side metric comparison of two or more campaigns by ID. Produces a comparison table
+        with approval rates, revocation rates, reviewer counts, and response times.</p>
+        <pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode HTML</code></pre>
+    </div>
+</details>
+
+<!-- ============================================================ -->
+<h3>Report Distribution</h3>
+
+<p><code>Invoke-SPReportDistribution.ps1</code> generates leadership reports with optional SMTP email
+delivery. It combines campaign audit, leadership rollup, org tree building, band classification, and
+per-band filtering into a single CLI workflow. Default behavior is generate-only.</p>
+
+<pre><code>.\Scripts\Invoke-SPReportDistribution.ps1 -Status &lt;string[]&gt; [-DaysBack &lt;int&gt;]
+    [-LeadershipDepth &lt;int&gt;] [-TargetBands &lt;string[]&gt;] [-DetailLevel &lt;string&gt;]
+    [-OrgSupplementPath &lt;string&gt;] [-PreviewOnly] [-SendReports]
+    [-OutputPath &lt;string&gt;] [-OutputMode &lt;string&gt;] [-Token &lt;string&gt;] [-Help]</code></pre>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Status</code></td>
+            <td>string[]</td>
+            <td><em>Mandatory</em></td>
+            <td>Filter campaigns by status. Valid values: <code>STAGED</code>, <code>ACTIVE</code>, <code>COMPLETING</code>, <code>COMPLETED</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Only include campaigns created within the last N days.</td>
+        </tr>
+        <tr>
+            <td><code>-LeadershipDepth</code></td>
+            <td>int</td>
+            <td>4</td>
+            <td>Maximum org levels to walk above reviewed identities.</td>
+        </tr>
+        <tr>
+            <td><code>-TargetBands</code></td>
+            <td>string[]</td>
+            <td>all</td>
+            <td>Band letters to include (e.g., <code>@('B','C')</code>). Omit to include all bands.</td>
+        </tr>
+        <tr>
+            <td><code>-DetailLevel</code></td>
+            <td>string</td>
+            <td>Verbose</td>
+            <td>Identity-level detail in reports. Valid values: <code>Summary</code>, <code>Detailed</code>, <code>Verbose</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OrgSupplementPath</code></td>
+            <td>string</td>
+            <td>from config</td>
+            <td>Path to an org chart supplement CSV to fill gaps in ISC manager chain data.</td>
+        </tr>
+        <tr>
+            <td><code>-PreviewOnly</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Show distribution plan without generating reports or sending email. Exits after preview.</td>
+        </tr>
+        <tr>
+            <td><code>-SendReports</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Send generated reports to leaders via SMTP. Requires <code>Audit.Smtp</code> config.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Workflow</h4>
+
+<ol>
+    <li>Query campaigns matching the status and date filters</li>
+    <li>Collect all certifications, review items, and decisions per campaign</li>
+    <li>Build the org tree via <code>Build-SPOrgTree</code></li>
+    <li>If an org supplement CSV is configured: merge it with the API-derived org tree</li>
+    <li>Assign A-E band classifications via <code>Resolve-SPIdentityBand</code></li>
+    <li>Group decisions by leadership level and band</li>
+    <li>Generate per-band filtered HTML reports via <code>Export-SPLeadershipBandHtml</code></li>
+    <li>If <code>-SendReports</code>: match reports to leader emails and send via SMTP</li>
+</ol>
+
+<pre><code># Preview the distribution plan first
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -PreviewOnly
+
+# Generate reports for Band B and C leaders only
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -TargetBands B,C
+
+# Full distribution with SMTP delivery
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 30 -SendReports
+
+# Use org chart supplement to fill gaps
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -OrgSupplementPath '.\Config\org-chart-supplement.csv'</code></pre>
+
+<!-- ============================================================ -->
+<h3>Band Classification</h3>
+
+<p>The toolkit assigns A-E band letters to leaders in the org tree for report filtering and distribution.
+Band assignment uses a three-source priority system:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Priority</th>
+            <th>Source</th>
+            <th>How It Works</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1 (highest)</td>
+            <td>Org Chart Supplement CSV</td>
+            <td>Explicit <code>band</code> column in the supplement CSV, keyed by email address</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>ISC Identity Attribute</td>
+            <td>Reads the <code>jobLevel</code> attribute (or custom attribute from <code>Leadership.ISCBandAttribute</code>). If the value is already a valid band letter, uses it directly.</td>
+        </tr>
+        <tr>
+            <td>3 (fallback)</td>
+            <td>Auto-detect from Tree Depth</td>
+            <td>Uses <code>BandMapping</code> to map org level to band letter. Default: <code>0=E, 1=D, 2=C, 3=B, 4=A</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Band Definitions</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Band</th>
+            <th>Typical Level</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>A</strong></td>
+            <td>President / C-Suite</td>
+            <td>Top-level executives</td>
+        </tr>
+        <tr>
+            <td><strong>B</strong></td>
+            <td>VP / SVP</td>
+            <td>Vice presidents and senior vice presidents</td>
+        </tr>
+        <tr>
+            <td><strong>C</strong></td>
+            <td>Director</td>
+            <td>Second-level leaders</td>
+        </tr>
+        <tr>
+            <td><strong>D</strong></td>
+            <td>Manager</td>
+            <td>First-level people managers</td>
+        </tr>
+        <tr>
+            <td><strong>E</strong></td>
+            <td>Individual Contributor</td>
+            <td>End users</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Org Chart Supplement CSV</h4>
+
+<p>To override or fill gaps in ISC manager chain data, provide a CSV with the following columns:</p>
+
+<pre><code>identityEmail,managerEmail,level,title,band
+alice@example.com,bob@example.com,3,Vice President of Engineering,B
+bob@example.com,,4,CTO,A
+carol@example.com,alice@example.com,2,Director of Security,C</code></pre>
+
+<p>The supplement is configured in settings.json:</p>
+
+<pre><code>"Leadership": {
+    "OrgChartSupplementPath": ".\\Config\\org-chart-supplement.csv",
+    "UseSupplementForReports": true,
+    "DefaultBandMapping": { "0": "E", "1": "D", "2": "C", "3": "B", "4": "A" },
+    "ISCBandAttribute": "jobLevel"
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Example Workflows</h3>
+
+<details>
+    <summary>Quarterly Compliance Audit</summary>
+    <div class="detail-body">
+        <p>Run at the end of each quarter to generate a comprehensive audit package for all completed
+        campaigns within the quarter.</p>
+        <pre><code># Step 1: Dry-run to review matching campaigns
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 90 -WhatIf
+
+# Step 2: Generate full audit with leadership rollup
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 90 \
+    -IncludeLeadershipRollup -LeadershipDepth 3
+
+# Step 3: Distribute leadership reports to Band B and C leaders
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 90 \
+    -TargetBands B,C -PreviewOnly
+
+# Step 4: After reviewing preview, send reports
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 90 \
+    -TargetBands B,C -SendReports</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Annual Compliance Review</summary>
+    <div class="detail-body">
+        <p>Year-end review covering all campaigns with source coverage analysis to identify gaps.</p>
+        <pre><code># Step 1: Source coverage -- which apps were audited, which were not
+.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -DaysBack 365
+
+# Step 2: Full audit with verbose detail for the archive
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 365 \
+    -IncludeLeadershipRollup -LeadershipDepth 4
+
+# Step 3: Generate leadership reports for all bands
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -DaysBack 365 \
+    -LeadershipDepth 4</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Ad-Hoc Investigation</summary>
+    <div class="detail-body">
+        <p>Investigate a specific campaign or identity for an internal audit or incident response.</p>
+        <pre><code># Investigate a single campaign by name
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Privileged Access Review 2026-Q1'
+
+# Trace all decisions about a specific identity
+.\Scripts\Invoke-SPCampaignSearch.ps1 -IdentityId 'abc123def' -DaysBack 365
+
+# Check a reviewer's workload across active campaigns
+.\Scripts\Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId 'mgr-456' -Status ACTIVE
+
+# Compare two campaigns side by side
+.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-q1','camp-q2' -OutputMode HTML</code></pre>
+    </div>
+</details>
+
+<details>
+    <summary>Active Campaign Monitoring</summary>
+    <div class="detail-body">
+        <p>Monitor in-flight campaigns for deadline risks and reviewer bottlenecks.</p>
+        <pre><code># Show all active campaigns with deadline urgency
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines
+
+# Show active campaigns with full metrics
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowMetrics
+
+# Export active campaign data to CSV for executive review
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines -ShowMetrics -OutputMode CSV</code></pre>
+    </div>
+</details>
