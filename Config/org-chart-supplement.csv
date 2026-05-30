@@ -1,0 +1,6 @@
+identityEmail,managerEmail,level,title,band
+john.smith@corp.com,jane.manager@corp.com,IC,Software Engineer,E
+jane.manager@corp.com,bob.director@corp.com,Manager,Engineering Manager,D
+bob.director@corp.com,alice.vp@corp.com,Director,Director of Engineering,C
+alice.vp@corp.com,richard.pres@corp.com,VP,VP of Technology,B
+richard.pres@corp.com,,President,President & CEO,A

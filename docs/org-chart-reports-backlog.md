@@ -26,23 +26,23 @@ campaigns or sending emails.
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| OC-01 | Org Chart Supplement Import (CSV override) | none | PENDING |
-| OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | PENDING |
-| OC-03 | Campaign Org Chart Preview | OC-02 | PENDING |
-| OC-04 | Report Distribution Preview | OC-03 | PENDING |
-| OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | PENDING |
-| OC-06 | Band/Level Classification Engine | OC-01 | PENDING |
-| OC-07 | Per-Band Leadership Reports | OC-06 | PENDING |
-| OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | PENDING |
-| OC-09 | Org Chart Gap Detector | OC-01 | PENDING |
-| OC-10 | Pester Tests | OC-09 | PENDING |
+| OC-01 | Org Chart Supplement Import (CSV override) | none | DONE |
+| OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | DONE |
+| OC-03 | Campaign Org Chart Preview | OC-02 | DONE |
+| OC-04 | Report Distribution Preview | OC-03 | DONE |
+| OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | DONE |
+| OC-06 | Band/Level Classification Engine | OC-01 | DONE |
+| OC-07 | Per-Band Leadership Reports | OC-06 | DONE |
+| OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | DONE |
+| OC-09 | Org Chart Gap Detector | OC-01 | DONE |
+| OC-10 | Pester Tests | OC-09 | DONE |
 
 ---
 
 ## OC-01: Org Chart Supplement Import
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -106,8 +106,8 @@ richard.pres@corp.com,,President,President & CEO,A
 
 ## OC-02: ASCII Org Tree Renderer
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**
@@ -164,8 +164,8 @@ function Show-SPOrgTree {
 
 ## OC-03: Campaign Org Chart Preview
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-02
 
 **Description:**
@@ -214,8 +214,8 @@ Campaigns that would be created: 8 (one per manager with affected reports)
 
 ## OC-04: Report Distribution Preview
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-03
 
 **Description:**
@@ -270,8 +270,8 @@ SMTP Status: NOT CONFIGURED (reports will be generated but not emailed)
 
 ## OC-05: Org Chart HTML Export
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-02
 
 **Description:**
@@ -297,8 +297,8 @@ Unlike the ASCII renderer (terminal), this produces a printable/shareable docume
 
 ## OC-06: Band/Level Classification Engine
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-01
 
 **Description:**
@@ -338,8 +338,8 @@ function Resolve-SPIdentityBand {
 
 ## OC-07: Per-Band Leadership Reports
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-06
 
 **Description:**
@@ -369,8 +369,8 @@ This extends the existing `Export-SPLeadershipLevelHtml` to filter by band.
 
 ## OC-08: Report Distribution CLI
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-04
 
 **Description:**
@@ -410,8 +410,8 @@ Combines: campaign audit + leadership rollup + report generation + email distrib
 
 ## OC-09: Org Chart Gap Detector
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-01
 
 **Description:**
@@ -454,8 +454,8 @@ Produces an actionable list of issues for the governance team to fix.
 
 ## OC-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-09
 
 **Description:**

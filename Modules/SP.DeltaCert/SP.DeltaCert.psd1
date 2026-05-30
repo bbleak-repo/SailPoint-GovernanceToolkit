@@ -37,6 +37,14 @@
         'Get-SPDeltaCertStaleCertifications'
         'Get-SPDeltaIdentityDetail'
         'Build-SPOrgTree'
+        'Import-SPOrgChartSupplement'
+        'Merge-SPOrgTreeWithSupplement'
+        'Show-SPOrgTree'
+        'Show-SPCampaignOrgPreview'
+        'Show-SPReportDistributionPreview'
+        'Export-SPOrgChartHtml'
+        'Resolve-SPIdentityBand'
+        'Get-SPOrgChartGaps'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

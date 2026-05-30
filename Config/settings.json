@@ -168,6 +168,18 @@
             }
         ]
     },
+    "Leadership": {
+        "OrgChartSupplementPath": "",
+        "UseSupplementForReports": false,
+        "DefaultBandMapping": {
+            "0": "E",
+            "1": "D",
+            "2": "C",
+            "3": "B",
+            "4": "A"
+        },
+        "ISCBandAttribute": "jobLevel"
+    },
     "DeltaCert": {
         "SourceIds": [],
         "DefaultHoursBack": 24,
