@@ -937,6 +937,49 @@ elseif ($errorCount -gt 0 -or $blockedCount -gt 0) {
 
 #endregion
 
+#region DA-28: Escalation (post-step)
+
+Write-Host '  Post-step: Escalation (reassigning stale certifications)...' -ForegroundColor Cyan
+
+$escalationResult = $null
+try {
+    $escalationParams = @{
+        DefaultStaleHours   = 24
+        MaxEscalationLevels = 2
+        CorrelationID       = $batchCorrelationID
+    }
+    if ($ConfigPath) { $escalationParams['ConfigPath'] = $ConfigPath }
+    if ($AppNames -and $AppNames.Count -gt 0) { $escalationParams['AppNames'] = $AppNames }
+    if ($WhatIfPreference -eq $true) { $escalationParams['WhatIf'] = $true }
+
+    $escalationResult = Invoke-SPDisconnectedAppEscalation @escalationParams
+
+    if ($escalationResult.Success) {
+        $escEscalated = $escalationResult.Data.TotalEscalated
+        $escStale     = $escalationResult.Data.TotalStaleCerts
+        $escSkipped   = $escalationResult.Data.TotalSkipped
+        if ($escStale -gt 0) {
+            Write-Host "    Found $escStale stale cert(s): escalated $escEscalated, skipped $escSkipped." -ForegroundColor Green
+        }
+        else {
+            Write-Host "    No stale certifications to escalate." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "    Escalation skipped: $($escalationResult.Error)" -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "    Escalation failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-SPLog -Message "Escalation failed (non-blocking): $($_.Exception.Message)" `
+        -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Escalation' `
+        -CorrelationID $batchCorrelationID
+}
+
+Write-Host ''
+
+#endregion
+
 #region Exit Code
 
 # 0=all success, 1=partial, 2=all failed, 3=auth error (handled earlier)

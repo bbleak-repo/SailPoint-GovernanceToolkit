@@ -32,7 +32,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 | 5 | DA-25 | Operational Alerting (Wire Notifications) | none | DONE |
 | 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | DONE |
 | 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | DONE |
-| 8 | DA-28 | Disconnected App Escalation | none | PENDING |
+| 8 | DA-28 | Disconnected App Escalation | none | DONE |
 | 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | PENDING |
 | 10 | DA-30 | Pester Tests | DA-29 | PENDING |
 
@@ -342,8 +342,8 @@ reporting. Package all evidence for a specific audit period.
 
 ## DA-28: Disconnected App Escalation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-28
 - **Depends On:** none
 
 **Description:**

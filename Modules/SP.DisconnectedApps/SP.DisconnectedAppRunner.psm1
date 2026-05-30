@@ -25,6 +25,7 @@
        14. Get-SPDisconnectedAppCampaignDecisions - harvests campaign decisions from ISC
        15. Export-SPDisconnectedAppDecisionHarvestHtml - decision harvest HTML report
        16. Send-SPDisconnectedAppAlert - operational alerting for pipeline events
+       17. Invoke-SPDisconnectedAppEscalation - escalates stale disconnected app certs
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -35,7 +36,7 @@
 
 .NOTES
     Module: SP.DisconnectedAppRunner
-    Version: 1.7.0
+    Version: 1.8.0
 #>
 
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
@@ -5334,8 +5335,8 @@ function Send-SPDisconnectedAppAlert {
     param(
         [Parameter(Mandatory)]
         [ValidateSet('ValidationFailed', 'ThresholdBlocked', 'DeliveryMissing',
-                     'RemediationOverdue', 'BatchAllFailed', 'BatchPartialFailure',
-                     'BatchSummary')]
+                     'RemediationOverdue', 'EscalationTriggered', 'BatchAllFailed',
+                     'BatchPartialFailure', 'BatchSummary')]
         [string]$AlertType,
 
         [Parameter(Mandatory)]
@@ -6496,6 +6497,318 @@ function Export-SPDisconnectedAppCompliancePackage {
 
 #endregion
 
+#region DA-28: Disconnected App Escalation
+
+function Invoke-SPDisconnectedAppEscalation {
+    <#
+    .SYNOPSIS
+        Escalates stale disconnected app certifications by reassigning up the org tree.
+    .DESCRIPTION
+        Applies the existing escalation pattern (Get-SPDeltaCertStaleCertifications +
+        Invoke-SPDeltaCertEscalate) to disconnected app campaigns, filtered by each
+        app's CampaignNamePrefix.
+
+        For each registered app:
+        1. Searches for ACTIVE campaigns matching the app's CampaignNamePrefix
+        2. Detects stale certifications (unsigned past StaleHours threshold)
+        3. Escalates to the reviewer's manager via Invoke-SPDeltaCertEscalate
+        4. Logs escalation actions to per-app JSONL audit trail
+
+        Per-app StaleHours is configurable via the app registration config
+        (EscalationStaleHours field). Falls back to 24 hours if not set.
+        MaxEscalationLevels defaults to 2.
+
+        Delegates all reassignment logic to SP.DeltaCert module functions.
+    .PARAMETER AppNames
+        Optional filter: only escalate for these app names.
+        If omitted, all enabled registered apps are checked.
+    .PARAMETER DefaultStaleHours
+        Default hours before a certification is considered stale.
+        Overridden by per-app EscalationStaleHours config. Default: 24.
+    .PARAMETER MaxEscalationLevels
+        Maximum escalation hops from the original reviewer. Default: 2.
+    .PARAMETER ConfigPath
+        Path to settings.json. Uses Resolve-SPConfigPath if omitted.
+    .PARAMETER ReportPath
+        Base output path for per-app JSONL audit files.
+        Default: .\DisconnectedApps\Reports.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                AppsChecked       = [int]
+                TotalStaleCerts   = [int]
+                TotalEscalated    = [int]
+                TotalSkipped      = [int]
+                TotalErrors       = [int]
+                PerApp = @(
+                    @{
+                        AppName; StaleHours; StaleCertsFound;
+                        Escalated; Skipped; Errors
+                    }
+                )
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        Invoke-SPDisconnectedAppEscalation
+    .EXAMPLE
+        Invoke-SPDisconnectedAppEscalation -AppNames @('PEP-Plus') -DefaultStaleHours 12 -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$AppNames,
+
+        [Parameter()]
+        [int]$DefaultStaleHours = 24,
+
+        [Parameter()]
+        [int]$MaxEscalationLevels = 2,
+
+        [Parameter()]
+        [string]$ConfigPath,
+
+        [Parameter()]
+        [string]$ReportPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Invoke-SPDisconnectedAppEscalation'
+
+    Write-SPLog -Message "Invoke-SPDisconnectedAppEscalation: DefaultStaleHours=$DefaultStaleHours MaxEscalationLevels=$MaxEscalationLevels WhatIf=$(($WhatIfPreference -eq $true))" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        # Load registered apps
+        $loadParams = @{}
+        if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+            $loadParams['ConfigPath'] = $ConfigPath
+        }
+        $appsResult = Get-SPRegisteredApps @loadParams
+        if (-not $appsResult.Success) {
+            return @{ Success = $false; Data = $null; Error = "Failed to load registered apps: $($appsResult.Error)" }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    AppsChecked     = 0
+                    TotalStaleCerts = 0
+                    TotalEscalated  = 0
+                    TotalSkipped    = 0
+                    TotalErrors     = 0
+                    PerApp          = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # Filter by AppNames if specified
+        if ($AppNames -and $AppNames.Count -gt 0) {
+            $apps = @($apps | Where-Object { $_.Name -in $AppNames })
+        }
+
+        $totalStaleCerts = 0
+        $totalEscalated  = 0
+        $totalSkipped    = 0
+        $totalErrors     = 0
+        $perAppResults   = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+
+            # Determine per-app StaleHours (fall back to parameter default)
+            $appStaleHours = $DefaultStaleHours
+            if ($app.PSObject.Properties.Name -contains 'EscalationStaleHours' -and
+                $null -ne $app.EscalationStaleHours) {
+                $parsed = 0
+                if ([int]::TryParse([string]$app.EscalationStaleHours, [ref]$parsed) -and $parsed -gt 0) {
+                    $appStaleHours = $parsed
+                }
+            }
+
+            # Determine per-app MaxEscalationLevels (fall back to parameter default)
+            $appMaxLevels = $MaxEscalationLevels
+            if ($app.PSObject.Properties.Name -contains 'MaxEscalationLevels' -and
+                $null -ne $app.MaxEscalationLevels) {
+                $parsedLvl = 0
+                if ([int]::TryParse([string]$app.MaxEscalationLevels, [ref]$parsedLvl) -and $parsedLvl -gt 0) {
+                    $appMaxLevels = $parsedLvl
+                }
+            }
+
+            # Determine the campaign name prefix for this app
+            $appPrefix = $null
+            if ($null -ne $app.PSObject.Properties['CampaignNamePrefix'] -and
+                -not [string]::IsNullOrWhiteSpace($app.CampaignNamePrefix)) {
+                $appPrefix = $app.CampaignNamePrefix
+            }
+            else {
+                $appPrefix = "$appName Delta Cert"
+            }
+
+            Write-SPLog -Message "Checking escalation for app '$appName': prefix='$appPrefix' staleHours=$appStaleHours maxLevels=$appMaxLevels" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+            # Step 1: Find stale certifications for this app's campaigns
+            $staleResult = Get-SPDeltaCertStaleCertifications `
+                -CampaignNamePrefix $appPrefix `
+                -StaleHours $appStaleHours `
+                -CorrelationID $CorrelationID
+
+            if (-not $staleResult.Success) {
+                $errMsg = "Stale cert detection failed for app '$appName': $($staleResult.Error)"
+                Write-SPLog -Message $errMsg -Severity WARN -Component $component -Action $action `
+                    -CorrelationID $CorrelationID
+                $totalErrors++
+                $perAppResults.Add(@{
+                    AppName        = $appName
+                    StaleHours     = $appStaleHours
+                    StaleCertsFound = 0
+                    Escalated      = @()
+                    Skipped        = @()
+                    Errors         = @($errMsg)
+                })
+                continue
+            }
+
+            $staleCerts = @($staleResult.Data)
+            $totalStaleCerts += $staleCerts.Count
+
+            if ($staleCerts.Count -eq 0) {
+                Write-SPLog -Message "No stale certifications for app '$appName'" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                $perAppResults.Add(@{
+                    AppName        = $appName
+                    StaleHours     = $appStaleHours
+                    StaleCertsFound = 0
+                    Escalated      = @()
+                    Skipped        = @()
+                    Errors         = @()
+                })
+                continue
+            }
+
+            Write-SPLog -Message "Found $($staleCerts.Count) stale certification(s) for app '$appName' -- escalating" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+            # Step 2: Escalate via existing SP.DeltaCert function
+            $escalateParams = @{
+                StaleCertifications = $staleCerts
+                MaxEscalationLevels = $appMaxLevels
+                CorrelationID       = $CorrelationID
+            }
+
+            if ($WhatIfPreference -eq $true) {
+                $escalateResult = Invoke-SPDeltaCertEscalate @escalateParams -WhatIf
+            }
+            else {
+                $escalateResult = Invoke-SPDeltaCertEscalate @escalateParams
+            }
+
+            $appEscalated = @()
+            $appSkipped   = @()
+            $appErrors    = @()
+
+            if ($escalateResult.Success -or $null -ne $escalateResult.Data) {
+                $appEscalated = @($escalateResult.Data.Escalated)
+                $appSkipped   = @($escalateResult.Data.Skipped)
+                $appErrors    = @($escalateResult.Data.Errors)
+            }
+            else {
+                $appErrors = @("Escalation failed for app '$appName': $($escalateResult.Error)")
+            }
+
+            $totalEscalated += $appEscalated.Count
+            $totalSkipped   += $appSkipped.Count
+            $totalErrors    += $appErrors.Count
+
+            $perAppResults.Add(@{
+                AppName         = $appName
+                StaleHours      = $appStaleHours
+                StaleCertsFound = $staleCerts.Count
+                Escalated       = $appEscalated
+                Skipped         = $appSkipped
+                Errors          = $appErrors
+            })
+
+            # Step 3: Write per-app escalation audit event to JSONL
+            try {
+                $appOutputPath = Join-Path -Path $ReportPath -ChildPath $appName
+                if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+                    New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+                }
+
+                $auditEvent = [ordered]@{
+                    Timestamp       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                    CorrelationID   = $CorrelationID
+                    Action          = 'DisconnectedAppEscalation'
+                    AppName         = $appName
+                    StaleHours      = $appStaleHours
+                    MaxEscalationLevels = $appMaxLevels
+                    StaleCertsFound = $staleCerts.Count
+                    Escalated       = $appEscalated.Count
+                    Skipped         = $appSkipped.Count
+                    Errors          = $appErrors
+                    WhatIf          = ($WhatIfPreference -eq $true)
+                }
+
+                $jsonLine = $auditEvent | ConvertTo-Json -Depth 5 -Compress
+                $filePath = Join-Path -Path $appOutputPath -ChildPath 'disconnected-app-escalation.jsonl'
+                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                [System.IO.File]::AppendAllText($filePath, "$jsonLine`n", $utf8NoBom)
+
+                Write-SPLog -Message "Escalation audit event written to $filePath" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                Write-SPLog -Message "Failed to write escalation audit JSONL for '$appName': $($_.Exception.Message)" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPDisconnectedAppEscalation complete: Apps=$($apps.Count) StaleCerts=$totalStaleCerts Escalated=$totalEscalated Skipped=$totalSkipped Errors=$totalErrors" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = ($totalErrors -eq 0)
+            Data    = @{
+                AppsChecked     = $apps.Count
+                TotalStaleCerts = $totalStaleCerts
+                TotalEscalated  = $totalEscalated
+                TotalSkipped    = $totalSkipped
+                TotalErrors     = $totalErrors
+                PerApp          = $perAppResults.ToArray()
+            }
+            Error   = if ($totalErrors -gt 0) {
+                $allErrors = @($perAppResults | ForEach-Object { $_.Errors } | Where-Object { $_.Count -gt 0 } | ForEach-Object { $_ })
+                $allErrors -join '; '
+            } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDisconnectedAppEscalation failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -6519,5 +6832,6 @@ Export-ModuleMember -Function @(
     'Send-SPDisconnectedAppAlert',
     'Invoke-SPDisconnectedAppCleanup',
     'Get-SPDisconnectedAppTrend',
-    'Export-SPDisconnectedAppCompliancePackage'
+    'Export-SPDisconnectedAppCompliancePackage',
+    'Invoke-SPDisconnectedAppEscalation'
 )
