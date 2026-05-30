@@ -2,6 +2,8 @@
 
 A PowerShell 5.1 toolkit for automated testing of SailPoint IdentityNow (ISC) certification campaign workflows. The toolkit creates, activates, and validates certification campaigns against the ISC REST API v3, producing structured JSONL evidence and HTML reports for UAT sign-off.
 
+For a 15-minute setup walkthrough, see [QUICKSTART.md](QUICKSTART.md).
+
 ---
 
 ## Prerequisites
@@ -110,7 +112,7 @@ The toolkit uses a single `Config\settings.json` file. A complete annotated stru
   },
   "Audit": {
     "OutputPath": ".\\Audit",
-    "DefaultDaysBack": 30,
+    "DefaultDaysBack": 365,
     "DefaultIdentityEventDays": 2,
     "DefaultStatuses": ["COMPLETED", "ACTIVE"],
     "IncludeCampaignReports": true,
@@ -120,6 +122,8 @@ The toolkit uses a single `Config\settings.json` file. A complete annotated stru
 ```
 
 For production environments, set `Authentication.Mode` to `Vault` and store credentials using `New-SPVault.ps1` (see Vault section below).
+
+For the complete list of all configuration keys including Logging, Notification, Retention, and advanced API settings, see `Config/settings.json`.
 
 ---
 
@@ -267,7 +271,7 @@ summary. The detailed sections follow:
 ```json
 "Audit": {
     "OutputPath": ".\\Audit",
-    "DefaultDaysBack": 30,
+    "DefaultDaysBack": 365,
     "DefaultIdentityEventDays": 2,
     "DefaultStatuses": ["COMPLETED", "ACTIVE"],
     "IncludeCampaignReports": true,
@@ -381,6 +385,159 @@ Escalates stale delta cert certifications by reassigning them up the org tree. F
 }
 ```
 
+### Campaign Search: Invoke-SPCampaignSearch.ps1
+
+Unified campaign search and analysis tool. Combines keyword, type, status, and date filtering with deadline urgency classification, reviewer workload analysis, identity decision history, source coverage analysis, and side-by-side campaign comparison into a single CLI.
+
+At least one filter or analysis parameter is required. Without any filter the script exits with code 2.
+
+```powershell
+# Find all MANAGER campaigns from Q1
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Type MANAGER -CreatedAfter '2026-01-01' -CreatedBefore '2026-03-31'
+
+# Show deadline urgency for all active campaigns
+.\Scripts\Invoke-SPCampaignSearch.ps1 -Status ACTIVE -ShowDeadlines
+
+# Find all decisions about a specific identity in the last year
+.\Scripts\Invoke-SPCampaignSearch.ps1 -IdentityId 'id-001' -Status COMPLETED -DaysBack 365
+
+# Side-by-side campaign comparison as HTML
+.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode HTML
+
+# Reviewer workload analysis
+.\Scripts\Invoke-SPCampaignSearch.ps1 -ReviewerIdentityId 'id-reviewer-001' -DaysBack 90
+
+# Source coverage analysis -- which sources have been audited
+.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -DaysBack 180
+```
+
+**Key parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-Keyword` | Substring search against campaign names (ISC `co` filter) |
+| `-Type` | Campaign type: MANAGER, SOURCE_OWNER, SEARCH, ROLE_COMPOSITION |
+| `-Status` | One or more statuses. Default: COMPLETED, ACTIVE |
+| `-CreatedAfter` / `-CreatedBefore` | Date range filter (ISO 8601) |
+| `-DaysBack` | Look-back window in days. Default: 90 |
+| `-ShowDeadlines` | Include deadline urgency classification |
+| `-ShowMetrics` | Include per-campaign KPIs |
+| `-ReviewerIdentityId` | Workload analysis for a specific reviewer |
+| `-IdentityId` | Decision history for a specific identity |
+| `-SourceCoverage` | Source coverage gap analysis |
+| `-CompareIds` | Side-by-side comparison of two or more campaigns |
+| `-OutputMode` | Console (default), JSON, CSV, HTML |
+
+### Daily Orchestrator: Invoke-SPDailyOrchestrator.ps1
+
+Runs the full daily governance workflow as a single coordinated operation, replacing four separate script invocations. Designed for scheduled task or cron execution.
+
+**Execution steps (in order):**
+
+1. Configuration validation
+2. Campaign cleanup (completes stale campaigns)
+3. Delta cert run (creates campaigns for new AD access)
+4. Delta report (generates daily change report)
+5. Escalation (reassigns unactioned certifications)
+6. Health check (campaign health status)
+7. Daily summary (consolidated output + JSONL audit trail)
+
+Each step is isolated -- a failure in one step does not prevent subsequent steps from executing. Individual steps can be skipped with `-Skip*` parameters.
+
+**Scope requirement:** Steps 2-5 require `sp:scopes:all` or a browser token.
+
+```powershell
+# Single daily command replacing 4 separate script invocations
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $token
+
+# With parameter overrides
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -HoursBack 48 -StaleHours 12 -Token $token
+
+# Skip specific steps
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -SkipEscalation -SkipHealthCheck -Token $token
+
+# Dry run -- all sub-steps receive -WhatIf
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -WhatIf
+```
+
+**Key parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-SourceId` | One or more ISC source IDs to monitor (required) |
+| `-HoursBack` | Override look-back window for delta cert and report |
+| `-DeadlineDays` | Override deadline for new delta cert campaigns |
+| `-StaleHours` | Override stale threshold for escalation |
+| `-ReviewerMode` | Manager (default) or SourceOwner |
+| `-SkipValidation` / `-SkipCleanup` / `-SkipDeltaCert` / `-SkipDeltaReport` / `-SkipEscalation` / `-SkipHealthCheck` | Skip individual steps |
+
+### Delta Report: Invoke-SPDeltaReport.ps1
+
+Generates a daily delta certification report showing new grants, revocations, pending certifications, and anomalies within a configurable time window. Produces a lightweight 1-2 page HTML report and a JSONL audit trail for SIEM ingestion. This is not a full campaign audit -- it shows only changes in the time window for quick daily operations review.
+
+**Scope requirement:** `GET /v3/account-activities` requires `sp:scopes:all` or a browser token.
+
+```powershell
+# Daily delta report for the last 24 hours
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 24
+
+# Catch-up report for the last 48 hours, output to a custom directory
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -HoursBack 48 -OutputPath 'C:\Reports'
+
+# Use a browser token instead of OAuth credentials
+.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -Token 'eyJhbGciOiJSUzI1...'
+```
+
+**Key parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-SourceId` | One or more ISC source IDs to monitor (required) |
+| `-HoursBack` | Look-back window in hours. Default: 24 |
+| `-OutputPath` | Directory for HTML + JSONL output files |
+| `-Token` | Browser JWT token (bypasses OAuth) |
+| `-OutputMode` | Console (default), JSON, or Both |
+
+### Weekly Digest: Invoke-SPWeeklyDigest.ps1
+
+Generates a comprehensive weekly governance digest combining campaign activity, health status, identity risk, reviewer performance, remediation tracking, and orchestrator reliability into one report. Designed for weekly distribution to governance leadership.
+
+**Report sections:**
+
+1. Campaign Activity Summary
+2. Current Campaign Health
+3. Identity Risk Highlights
+4. Reviewer Performance
+5. Remediation Tracking
+6. Orchestrator Health
+
+Each section can be individually skipped with `-Skip*` parameters.
+
+```powershell
+# Weekly digest with default 7-day window
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token
+
+# Console + HTML output with notification dispatch
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -Token $token -OutputMode Both -SendNotification
+
+# Two-week digest, skip identity risk section
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -DaysBack 14 -SkipIdentityRisk -Token $token
+
+# Dry run -- shows what sections would be generated
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -WhatIf
+```
+
+**Key parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `-DaysBack` | Number of days to include. Default: 7 |
+| `-Token` | Browser JWT token (bypasses OAuth) |
+| `-SourceId` | One or more ISC source IDs for context |
+| `-SkipCampaignSummary` / `-SkipIdentityRisk` / `-SkipReviewerAnalysis` / `-SkipRemediationTracking` / `-SkipOrchestratorHealth` | Skip individual sections |
+| `-OutputMode` | Console (default), HTML, JSON, or Both |
+| `-SendNotification` | Dispatch digest via configured notification backends |
+
 ### Delta Cert GUI Tab
 
 The Delta Cert tab in the WPF dashboard provides a streamlined interface for running and monitoring delta certifications. The tab layout after the Phase 7 declutter:
@@ -466,7 +623,7 @@ Two CSV template files are provided in `Config\Templates\`:
 | `displayName` | Yes | Human-readable name shown to reviewers during certification |
 | `description` | Yes | Description shown to reviewers (max 2000 characters) |
 
-See `Config\Templates\ONBOARDING-GUIDE.md` for detailed instructions to hand off to application teams.
+See `Config\Templates\v2\ONBOARDING-GUIDE.md` for detailed instructions to hand off to application teams.
 
 **CLI usage:**
 
@@ -828,8 +985,12 @@ SailPoint-GovernanceToolkit/
     Scripts/                             # Thin-wrapper CLI entry points
         Invoke-GovernanceTest.ps1        # Primary test runner
         Invoke-SPCampaignAudit.ps1       # Post-campaign audit reporting
+        Invoke-SPCampaignSearch.ps1      # Unified campaign search and analysis
         Invoke-SPADDeltaCert.ps1         # Daily AD delta certification
         Invoke-SPDeltaCertEscalate.ps1   # Stale certification escalation
+        Invoke-SPDeltaReport.ps1         # Daily delta certification report
+        Invoke-SPDailyOrchestrator.ps1   # Full daily governance workflow
+        Invoke-SPWeeklyDigest.ps1        # Weekly governance digest report
         Invoke-SPDisconnectedAppCert.ps1 # Disconnected app flat file certification (single app)
         Invoke-SPDisconnectedAppRegistry.ps1  # App registry management (Register/Unregister/List/Test)
         Invoke-SPDisconnectedAppBatch.ps1     # Batch orchestrator for all registered apps
@@ -851,8 +1012,11 @@ SailPoint-GovernanceToolkit/
             SP.Decisions.psm1            # Bulk decide, reassignment, and sign-off operations
 
         SP.Testing/                      # Test orchestration layer
+            SP.Testing.psd1              # Module manifest
             SP.TestLoader.psm1           # CSV ingestion and cross-validation
-            (SP.TestRunner.psm1)         # Test suite execution engine
+            SP.Assertions.psm1           # Test assertion helpers
+            SP.BatchRunner.psm1          # Test suite execution engine
+            SP.Evidence.psm1             # Evidence collection and formatting
 
         SP.Audit/                        # Post-campaign audit reporting layer
             SP.AuditQueries.psm1         # Campaign/cert/item/event API queries
@@ -860,10 +1024,9 @@ SailPoint-GovernanceToolkit/
 
         SP.DeltaCert/                    # AD delta certification layer
             SP.DeltaCert.psd1            # Module manifest
-            SP.DeltaCert.Core.psm1       # Grant event query + identity grouping
-            SP.DeltaCert.Campaign.psm1   # Campaign creation + activation
-            SP.DeltaCert.Cleanup.psm1    # Stale campaign completion
-            SP.DeltaCert.Escalation.psm1 # Stale certification reassignment
+            SP.DeltaCertQueries.psm1     # Grant event query + identity grouping
+            SP.DeltaCertRunner.psm1      # Campaign creation + activation + cleanup
+            SP.DeltaCertReport.psm1      # Delta report generation + HTML export
 
         SP.DisconnectedApps/             # Flat file disconnected app integration
             SP.DisconnectedAppValidator.psm1  # CSV structure + data validation
@@ -891,6 +1054,9 @@ SailPoint-GovernanceToolkit/
         test-identities.csv              # Test identity definitions
         test-campaigns.csv               # Campaign test cases
         Templates/                       # Disconnected app onboarding templates
+            v1/                                 # Original template (8 account + 4 entitlement columns)
+            v2/                                 # Current template (adds accountType, created, lastLogin, owner, type, riskLevel)
+            VERSION-HISTORY.md                  # Template version changelog
             disconnected-app-accounts.csv       # Account CSV template with sample data
             disconnected-app-entitlements.csv   # Entitlement CSV template with sample data
             ONBOARDING-GUIDE.md                 # Instructions for application teams

@@ -194,7 +194,7 @@ application processes access on weekends).
 Before your first production delivery, validate your files using the self-service test command:
 
 ```powershell
-.\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName "YourAppName"
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName "YourAppName"
 ```
 
 This checks:

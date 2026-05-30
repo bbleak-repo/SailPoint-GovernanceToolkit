@@ -316,7 +316,7 @@ If Step 3 fails: verify your API Base URL (must include `/v3`).
 
 | Control | Setting | Notes |
 |---------|---------|-------|
-| **Never commit secrets** | `settings.json` is in `.gitignore` | Client secret is plaintext in ConfigFile mode |
+| **Never commit secrets** | `settings.json` is committed with CHANGE_ME placeholders. Replace values locally; do not commit real credentials. | Client secret is plaintext in ConfigFile mode |
 | **Use Vault for shared envs** | `Authentication.Mode = "Vault"` | AES-256-CBC encrypted, passphrase never on disk |
 | **Safety guards are ON** | `Safety.AllowCompleteCampaign = false` | Prevents accidental campaign completion |
 | **WhatIf on prod** | `Safety.RequireWhatIfOnProd = true` | Forces confirmation before running against production |
