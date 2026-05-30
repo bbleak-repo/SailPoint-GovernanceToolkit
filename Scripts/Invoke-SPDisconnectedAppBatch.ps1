@@ -980,6 +980,50 @@ Write-Host ''
 
 #endregion
 
+#region DA-29: Team Dashboards (per-app HTML status pages)
+
+Write-Host '  Post-step: Generating team dashboards...' -ForegroundColor Cyan
+
+$dashboardCount = 0
+foreach ($app in $apps) {
+    try {
+        $dashParams = @{
+            AppName       = $app.Name
+            OutputPath    = $effectiveOutputPath
+            SnapshotDir   = $effectiveSnapshotDir
+            CorrelationID = $batchCorrelationID
+        }
+        if ($ConfigPath) { $dashParams['ConfigPath'] = $ConfigPath }
+
+        $dashResult = Export-SPDisconnectedAppTeamDashboard @dashParams
+
+        if ($dashResult.Success) {
+            $dashboardCount++
+            Write-Host "    $($app.Name): $($dashResult.Data.FilePath)" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "    $($app.Name): Dashboard failed: $($dashResult.Error)" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "    $($app.Name): Dashboard failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Team dashboard failed for '$($app.Name)' (non-blocking): $($_.Exception.Message)" `
+            -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'TeamDashboard' `
+            -CorrelationID $batchCorrelationID
+    }
+}
+
+if ($dashboardCount -gt 0) {
+    Write-Host "    Generated $dashboardCount team dashboard(s)." -ForegroundColor Green
+}
+else {
+    Write-Host "    No team dashboards generated." -ForegroundColor DarkGray
+}
+
+Write-Host ''
+
+#endregion
+
 #region Exit Code
 
 # 0=all success, 1=partial, 2=all failed, 3=auth error (handled earlier)

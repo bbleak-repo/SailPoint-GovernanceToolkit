@@ -6809,6 +6809,664 @@ function Invoke-SPDisconnectedAppEscalation {
 
 #endregion
 
+#region DA-29: Self-Service App Team Dashboard
+
+function Export-SPDisconnectedAppTeamDashboard {
+    <#
+    .SYNOPSIS
+        Generates a per-app HTML status page for app team self-service review.
+    .DESCRIPTION
+        Produces a self-contained HTML dashboard for a single disconnected app
+        that app teams can view in any browser without PowerShell access. The
+        dashboard consolidates:
+
+        1. Delivery Status -- today's file received? validation passed?
+        2. Delta Summary -- what changed today (adds, removes, grants, revokes)
+        3. Campaign Status -- campaigns created today, pending, completed
+        4. Remediation Queue -- revocations awaiting confirmation (from DA-22)
+        5. SLA Compliance -- 30-day delivery calendar (green/red/gray)
+        6. Trend Sparkline -- 90-day access count trend (CSS bar chart)
+
+        The report uses 100% inline CSS for Microsoft Word paste compatibility.
+        No external resources, no JavaScript dependencies.
+
+    .PARAMETER AppName
+        Application name. Used to locate audit trail, remediation tracker,
+        and snapshots.
+    .PARAMETER OutputPath
+        Base directory for reports. Dashboard is saved to
+        {OutputPath}/{AppName}/team-dashboard.html.
+    .PARAMETER SnapshotDir
+        Root snapshot directory for SLA calendar data.
+        Defaults to .\DisconnectedApps\Snapshots.
+    .PARAMETER ConfigPath
+        Path to settings.json. Used to get app registration details.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=@{FilePath=[string]}; Error=[string]}
+    .EXAMPLE
+        Export-SPDisconnectedAppTeamDashboard -AppName 'PEP-Plus' -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$SnapshotDir = '.\DisconnectedApps\Snapshots',
+
+        [Parameter()]
+        [string]$ConfigPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Export-SPDisconnectedAppTeamDashboard'
+
+    Write-SPLog -Message "Generating team dashboard for app '$AppName'" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+            New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+        }
+        $filePath = Join-Path -Path $appOutputPath -ChildPath 'team-dashboard.html'
+
+        $reportDate = Get-Date -Format 'yyyy-MM-dd'
+        $reportTime = (Get-Date).ToUniversalTime().ToString('HH:mm:ss')
+
+        # ---------------------------------------------------------------
+        # Data Gathering: Delivery Status
+        # ---------------------------------------------------------------
+        $deliveryStatus = 'Unknown'
+        $deliveryDetail = ''
+        $deliveryRowCount = 0
+        $deliveryFileSize = 0
+        $deliveryLastMod  = ''
+
+        # Get app registration to find AccountFilePath
+        $appReg = $null
+        try {
+            $configParams = @{}
+            if ($ConfigPath) { $configParams['ConfigPath'] = $ConfigPath }
+            $appsResult = Get-SPRegisteredApps @configParams
+            if ($appsResult.Success) {
+                $appReg = @($appsResult.Data) | Where-Object { $_.Name -eq $AppName } | Select-Object -First 1
+            }
+        }
+        catch { }
+
+        if ($null -ne $appReg -and -not [string]::IsNullOrWhiteSpace($appReg.AccountFilePath)) {
+            $acctPath = $appReg.AccountFilePath
+            if (Test-Path -Path $acctPath -PathType Leaf) {
+                $fileInfo = Get-Item -Path $acctPath
+                $deliveryFileSize = $fileInfo.Length
+                $deliveryLastMod  = $fileInfo.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss')
+                $hoursSinceModified = ((Get-Date).ToUniversalTime() - $fileInfo.LastWriteTimeUtc).TotalHours
+
+                if ($hoursSinceModified -le 24) {
+                    $deliveryStatus = 'Delivered'
+                    $deliveryDetail = "File received today ($deliveryLastMod UTC)"
+                }
+                else {
+                    $deliveryStatus = 'Stale'
+                    $deliveryDetail = "Last modified: $deliveryLastMod UTC ($([math]::Round($hoursSinceModified, 0))h ago)"
+                }
+
+                # Quick row count
+                try {
+                    $rows = @(Import-Csv -Path $acctPath -ErrorAction SilentlyContinue)
+                    $deliveryRowCount = $rows.Count
+                }
+                catch { }
+            }
+            else {
+                $deliveryStatus = 'Missing'
+                $deliveryDetail = "Expected at: $acctPath"
+            }
+        }
+        else {
+            $deliveryDetail = 'App registration not found or AccountFilePath not configured.'
+        }
+
+        # ---------------------------------------------------------------
+        # Data Gathering: Delta Summary (from per-app audit JSONL)
+        # ---------------------------------------------------------------
+        $deltaAdded   = 0
+        $deltaRemoved = 0
+        $deltaEnabled = 0
+        $deltaGranted = 0
+        $deltaRevoked = 0
+        $deltaDate    = '-'
+        $latestCertRunFound = $false
+
+        $auditTrailPath = Join-Path -Path $appOutputPath -ChildPath 'disconnected-app-audit.jsonl'
+        if (Test-Path -Path $auditTrailPath -PathType Leaf) {
+            $auditLines = @(Get-Content -Path $auditTrailPath -Encoding UTF8 -ErrorAction SilentlyContinue)
+
+            # Walk backward to find the latest DisconnectedAppCertRun
+            for ($i = $auditLines.Count - 1; $i -ge 0; $i--) {
+                $trimmed = $auditLines[$i].Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+                try {
+                    $evt = $trimmed | ConvertFrom-Json
+                }
+                catch { continue }
+
+                if ($evt.Action -eq 'DisconnectedAppCertRun') {
+                    $latestCertRunFound = $true
+                    if ($null -ne $evt.Timestamp) {
+                        $deltaDate = ([string]$evt.Timestamp).Substring(0, 10)
+                    }
+                    if ($null -ne $evt.PSObject.Properties['DeltaSummary'] -and $null -ne $evt.DeltaSummary) {
+                        $ds = $evt.DeltaSummary
+                        if ($null -ne $ds.PSObject.Properties['Added'])               { $deltaAdded   = [int]$ds.Added }
+                        if ($null -ne $ds.PSObject.Properties['Removed'])              { $deltaRemoved = [int]$ds.Removed }
+                        if ($null -ne $ds.PSObject.Properties['Enabled'])              { $deltaEnabled = [int]$ds.Enabled }
+                        if ($null -ne $ds.PSObject.Properties['EntitlementsGranted'])  { $deltaGranted = [int]$ds.EntitlementsGranted }
+                        if ($null -ne $ds.PSObject.Properties['EntitlementsRevoked'])  { $deltaRevoked = [int]$ds.EntitlementsRevoked }
+                    }
+                    break
+                }
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Data Gathering: Campaign Status (from audit trail)
+        # ---------------------------------------------------------------
+        $campaignsToday     = 0
+        $campaignsActive    = 0
+        $campaignsCompleted = 0
+        $totalCampaigns7d   = 0
+
+        $sevenDaysAgo = (Get-Date).ToUniversalTime().AddDays(-7)
+
+        if (Test-Path -Path $auditTrailPath -PathType Leaf) {
+            foreach ($line in $auditLines) {
+                $trimmed = $line.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+                try { $evt = $trimmed | ConvertFrom-Json } catch { continue }
+
+                $eventTime = $null
+                if (-not [string]::IsNullOrWhiteSpace($evt.Timestamp)) {
+                    try { $eventTime = [datetime]::Parse($evt.Timestamp).ToUniversalTime() }
+                    catch { }
+                }
+                if ($null -eq $eventTime -or $eventTime -lt $sevenDaysAgo) { continue }
+
+                if ($evt.Action -eq 'DisconnectedAppCertRun') {
+                    $createdCount = 0
+                    if ($null -ne $evt.PSObject.Properties['CampaignsCreated']) {
+                        $createdCount = [int]$evt.CampaignsCreated
+                    }
+                    $totalCampaigns7d += $createdCount
+                    if ($eventTime.Date -eq (Get-Date).ToUniversalTime().Date) {
+                        $campaignsToday += $createdCount
+                    }
+                }
+                elseif ($evt.Action -eq 'DecisionHarvest') {
+                    if ($null -ne $evt.PSObject.Properties['Completed']) {
+                        $campaignsCompleted += [int]$evt.Completed
+                    }
+                    if ($null -ne $evt.PSObject.Properties['Active']) {
+                        $campaignsActive = [int]$evt.Active  # latest value (not cumulative)
+                    }
+                }
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Data Gathering: Remediation Queue
+        # ---------------------------------------------------------------
+        $remPending   = 0
+        $remOverdue   = 0
+        $remConfirmed = 0
+        $remEscalated = 0
+        $remTotal     = 0
+        $overdueRecords = @()
+
+        try {
+            $remReport = Get-SPRemediationReport -AppName $AppName -OutputPath $OutputPath `
+                -CorrelationID $CorrelationID
+            if ($remReport.Success -and $null -ne $remReport.Data) {
+                $remPending   = $remReport.Data.Summary.Pending
+                $remOverdue   = $remReport.Data.Summary.Overdue
+                $remConfirmed = $remReport.Data.Summary.Confirmed
+                $remEscalated = $remReport.Data.Summary.Escalated
+                $remTotal     = $remReport.Data.Summary.Total
+                $overdueRecords = @($remReport.Data.OverdueRecords)
+            }
+        }
+        catch { }
+
+        # ---------------------------------------------------------------
+        # Data Gathering: SLA 30-day Calendar
+        # ---------------------------------------------------------------
+        $slaDeliveryRate = 0.0
+        $slaCompliant    = $false
+        $slaDaysDelivered = @()
+        $slaDaysMissing   = @()
+
+        $appSnapshotDir = Join-Path -Path $SnapshotDir -ChildPath $AppName
+        $today = (Get-Date).Date
+        $calendarStart = $today.AddDays(-29)
+
+        # Build 30-day date list
+        $calendarDates = @()
+        for ($d = 0; $d -lt 30; $d++) {
+            $calendarDates += $calendarStart.AddDays($d).ToString('yyyy-MM-dd')
+        }
+
+        $deliveredSet = [System.Collections.Generic.HashSet[string]]::new()
+        if (Test-Path -Path $appSnapshotDir -PathType Container) {
+            $snapshotFiles = @(Get-ChildItem -Path $appSnapshotDir -Filter '*-accounts.csv' -File -ErrorAction SilentlyContinue)
+            foreach ($sf in $snapshotFiles) {
+                $datePart = $sf.Name.Substring(0, 10)
+                if ($datePart -match '^\d{4}-\d{2}-\d{2}$') {
+                    [void]$deliveredSet.Add($datePart)
+                }
+            }
+        }
+
+        foreach ($cd in $calendarDates) {
+            if ($deliveredSet.Contains($cd)) {
+                $slaDaysDelivered += $cd
+            }
+            else {
+                $slaDaysMissing += $cd
+            }
+        }
+
+        $deliveredInWindow = $slaDaysDelivered.Count
+        $slaDeliveryRate = if ($calendarDates.Count -gt 0) {
+            [math]::Round(($deliveredInWindow / $calendarDates.Count) * 100, 1)
+        } else { 0.0 }
+        $slaCompliant = ($slaDaysMissing.Count -eq 0)
+
+        # ---------------------------------------------------------------
+        # Data Gathering: 90-day Trend (account counts from cert run events)
+        # ---------------------------------------------------------------
+        $trendData = [System.Collections.Generic.List[hashtable]]::new()
+        $ninetyDaysAgo = (Get-Date).ToUniversalTime().AddDays(-90)
+
+        if (Test-Path -Path $auditTrailPath -PathType Leaf) {
+            foreach ($line in $auditLines) {
+                $trimmed = $line.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+                try { $evt = $trimmed | ConvertFrom-Json } catch { continue }
+
+                if ($evt.Action -ne 'DisconnectedAppCertRun') { continue }
+
+                $eventTime = $null
+                if (-not [string]::IsNullOrWhiteSpace($evt.Timestamp)) {
+                    try { $eventTime = [datetime]::Parse($evt.Timestamp).ToUniversalTime() }
+                    catch { }
+                }
+                if ($null -eq $eventTime -or $eventTime -lt $ninetyDaysAgo) { continue }
+
+                $accountCount = 0
+                if ($null -ne $evt.PSObject.Properties['TotalAccounts']) {
+                    $accountCount = [int]$evt.TotalAccounts
+                }
+                elseif ($null -ne $evt.PSObject.Properties['IdentitiesProcessed']) {
+                    $accountCount = [int]$evt.IdentitiesProcessed
+                }
+
+                $trendData.Add(@{
+                    Date  = $eventTime.ToString('yyyy-MM-dd')
+                    Count = $accountCount
+                })
+            }
+        }
+
+        # ---------------------------------------------------------------
+        # Build HTML
+        # ---------------------------------------------------------------
+        $sectionHeadingStyle = 'font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;'
+        $labelTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; font-weight:bold; width:220px; background:#f4f4f4; vertical-align:top;'
+        $valueTdStyle        = 'padding:7px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;'
+        $tableStyle          = 'width:100%; border-collapse:collapse; margin-bottom:18px; font-size:13px; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif;'
+        $badgeGreen          = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;'
+        $badgeRed            = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;'
+        $badgeOrange         = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#FF8800;'
+        $badgeGray           = 'display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#999999;'
+
+        $html = [System.Text.StringBuilder]::new(16384)
+
+        # Document shell
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en">')
+        [void]$html.AppendLine('<head>')
+        [void]$html.AppendLine('    <meta charset="UTF-8">')
+        [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
+        [void]$html.AppendLine("    <title>$(ConvertTo-DisconnectedHtmlSafe $AppName) - Team Dashboard</title>")
+        [void]$html.AppendLine('</head>')
+        [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
+        [void]$html.AppendLine('<div style="max-width:900px; margin:0 auto; background:#fff; padding:32px 40px;">')
+
+        # Header
+        $safeAppName = ConvertTo-DisconnectedHtmlSafe $AppName
+        [void]$html.AppendLine("<h1 style=`"font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; margin-top:0; margin-bottom:4px; font-size:22px;`">$safeAppName - Team Dashboard</h1>")
+        [void]$html.AppendLine("<p style=`"color:#777; font-size:13px; margin-top:0; margin-bottom:20px;`">Generated: $reportDate $reportTime UTC</p>")
+
+        # ---------------------------------------------------------------
+        # Section 1: Delivery Status (prominent)
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Today's Delivery Status</h2>")
+
+        $deliveryBadge = switch ($deliveryStatus) {
+            'Delivered' { "<span style=`"$badgeGreen`">DELIVERED</span>" }
+            'Stale'     { "<span style=`"$badgeOrange`">STALE</span>" }
+            'Missing'   { "<span style=`"$badgeRed`">MISSING</span>" }
+            default     { "<span style=`"$badgeGray`">UNKNOWN</span>" }
+        }
+
+        [void]$html.AppendLine("<p style=`"margin-bottom:12px; font-size:18px;`">$deliveryBadge</p>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+        $deliveryRows = @(
+            @('Status',        $deliveryStatus)
+            @('Detail',        $deliveryDetail)
+            @('Accounts',      $(if ($deliveryRowCount -gt 0) { $deliveryRowCount } else { '-' }))
+            @('File Size',     $(if ($deliveryFileSize -gt 0) { "$([math]::Round($deliveryFileSize / 1KB, 1)) KB" } else { '-' }))
+            @('Last Modified', $(if (-not [string]::IsNullOrWhiteSpace($deliveryLastMod)) { "$deliveryLastMod UTC" } else { '-' }))
+        )
+        foreach ($row in $deliveryRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 2: Delta Summary
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Delta Summary (Latest Run: $deltaDate)</h2>")
+
+        if ($latestCertRunFound) {
+            $totalChanges = $deltaAdded + $deltaRemoved + $deltaEnabled + $deltaGranted + $deltaRevoked
+            $changeBadge = if ($totalChanges -gt 0) {
+                "<span style=`"$badgeOrange`">$totalChanges CHANGE(S)</span>"
+            } else {
+                "<span style=`"$badgeGreen`">NO CHANGES</span>"
+            }
+            [void]$html.AppendLine("<p style=`"margin-bottom:12px;`">$changeBadge</p>")
+
+            [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+            $deltaRows = @(
+                @('Accounts Added',         $deltaAdded)
+                @('Accounts Removed',       $deltaRemoved)
+                @('Accounts Enabled',       $deltaEnabled)
+                @('Entitlements Granted',   $deltaGranted)
+                @('Entitlements Revoked',   $deltaRevoked)
+            )
+            foreach ($row in $deltaRows) {
+                $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+                $rawVal = $row[1]
+                $valueColor = if ([int]$rawVal -gt 0) { 'color:#CC3333; font-weight:bold;' } else { '' }
+                $value = ConvertTo-DisconnectedHtmlSafe $rawVal
+                [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle $valueColor`">$value</td></tr>")
+            }
+            [void]$html.AppendLine('</table>')
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#999;`">No certification runs recorded yet.</p>")
+        }
+
+        # ---------------------------------------------------------------
+        # Section 3: Campaign Status (7-day window)
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Campaign Status (Last 7 Days)</h2>")
+
+        [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+        $campaignRows = @(
+            @('Created Today',      $campaignsToday)
+            @('Total (7 days)',     $totalCampaigns7d)
+            @('Pending Review',     $campaignsActive)
+            @('Completed',          $campaignsCompleted)
+        )
+        foreach ($row in $campaignRows) {
+            $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+            $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+            [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+        }
+        [void]$html.AppendLine('</table>')
+
+        # ---------------------------------------------------------------
+        # Section 4: Remediation Queue
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Remediation Queue</h2>")
+
+        if ($remTotal -gt 0) {
+            # Summary badges
+            $remBadges = @()
+            if ($remPending -gt 0)   { $remBadges += "<span style=`"$badgeOrange`">$remPending PENDING</span>" }
+            if ($remOverdue -gt 0)   { $remBadges += "<span style=`"$badgeRed`">$remOverdue OVERDUE</span>" }
+            if ($remEscalated -gt 0) { $remBadges += "<span style=`"$badgeRed`">$remEscalated ESCALATED</span>" }
+            if ($remConfirmed -gt 0) { $remBadges += "<span style=`"$badgeGreen`">$remConfirmed CONFIRMED</span>" }
+            if ($remBadges.Count -eq 0) { $remBadges += "<span style=`"$badgeGray`">$remTotal TOTAL</span>" }
+            [void]$html.AppendLine("<p style=`"margin-bottom:12px;`">$($remBadges -join ' ')</p>")
+
+            # Summary table
+            [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+            $remRows = @(
+                @('Pending',    $remPending)
+                @('Overdue',    $remOverdue)
+                @('Escalated',  $remEscalated)
+                @('Confirmed',  $remConfirmed)
+                @('Total',      $remTotal)
+            )
+            foreach ($row in $remRows) {
+                $label = ConvertTo-DisconnectedHtmlSafe $row[0]
+                $value = ConvertTo-DisconnectedHtmlSafe $row[1]
+                [void]$html.AppendLine("<tr><td style=`"$labelTdStyle`">$label</td><td style=`"$valueTdStyle`">$value</td></tr>")
+            }
+            [void]$html.AppendLine('</table>')
+
+            # Overdue details table (red highlight)
+            if ($overdueRecords.Count -gt 0) {
+                [void]$html.AppendLine("<h3 style=`"color:#CC3333; font-size:14px; margin-top:16px; margin-bottom:8px;`">Overdue Remediations ($($overdueRecords.Count))</h3>")
+                [void]$html.AppendLine("<table style=`"$tableStyle`">")
+                [void]$html.AppendLine((Build-DisconnectedHtmlHeader -Headers @('Identity', 'Entitlement', 'Decision Date', 'Days Overdue')))
+
+                $odIdx = 0
+                foreach ($od in $overdueRecords) {
+                    $identity = if ($null -ne $od.IdentityName) { ConvertTo-DisconnectedHtmlSafe $od.IdentityName }
+                                elseif ($null -ne $od.AccountId) { ConvertTo-DisconnectedHtmlSafe $od.AccountId }
+                                else { '-' }
+                    $entitlement = if ($null -ne $od.Entitlement) { ConvertTo-DisconnectedHtmlSafe $od.Entitlement } else { '-' }
+                    $decDate = if ($null -ne $od.DecisionDate) { ConvertTo-DisconnectedHtmlSafe ([string]$od.DecisionDate).Substring(0, 10) } else { '-' }
+                    $daysOverdue = '-'
+                    if ($null -ne $od.DaysOverdue) { $daysOverdue = ConvertTo-DisconnectedHtmlSafe $od.DaysOverdue }
+                    elseif ($null -ne $od.DecisionDate) {
+                        try {
+                            $ddParsed = [datetime]::Parse([string]$od.DecisionDate).ToUniversalTime()
+                            $daysOverdue = [math]::Max(0, [int]((Get-Date).ToUniversalTime() - $ddParsed).TotalDays)
+                        }
+                        catch { }
+                    }
+
+                    $odBg = if (($odIdx % 2) -eq 1) { 'background:#f9f9f9;' } else { '' }
+                    $odTdStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; $odBg"
+                    $odTdRedStyle = "padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top; color:#CC3333; font-weight:bold; $odBg"
+
+                    [void]$html.AppendLine("<tr>")
+                    [void]$html.AppendLine("  <td style=`"$odTdStyle`">$identity</td>")
+                    [void]$html.AppendLine("  <td style=`"$odTdStyle`">$entitlement</td>")
+                    [void]$html.AppendLine("  <td style=`"$odTdStyle`">$decDate</td>")
+                    [void]$html.AppendLine("  <td style=`"$odTdRedStyle`">$daysOverdue</td>")
+                    [void]$html.AppendLine('</tr>')
+                    $odIdx++
+                }
+                [void]$html.AppendLine('</table>')
+            }
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#999;`">No remediation records. Revocations from completed campaigns will appear here.</p>")
+        }
+
+        # ---------------------------------------------------------------
+        # Section 5: SLA Compliance (30-day delivery calendar)
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">SLA Compliance - 30 Day Delivery</h2>")
+
+        $slaBadge = if ($slaCompliant) {
+            "<span style=`"$badgeGreen`">COMPLIANT</span>"
+        } else {
+            "<span style=`"$badgeRed`">NON-COMPLIANT</span>"
+        }
+        [void]$html.AppendLine("<p style=`"margin-bottom:8px;`">$slaBadge Delivery Rate: <strong>${slaDeliveryRate}%</strong> ($deliveredInWindow / $($calendarDates.Count) days)</p>")
+
+        # Calendar grid: 7 columns x ~5 rows using a table
+        [void]$html.AppendLine("<table style=`"border-collapse:collapse; margin-bottom:18px;`">")
+        # Weekday headers
+        [void]$html.AppendLine('<tr>')
+        $weekdays = @('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+        foreach ($wd in $weekdays) {
+            [void]$html.AppendLine("  <td style=`"width:36px; padding:2px 4px; text-align:center; font-size:10px; color:#999; font-weight:bold;`">$wd</td>")
+        }
+        [void]$html.AppendLine('</tr>')
+
+        # Determine starting day-of-week offset for first date
+        $firstDate = [datetime]::ParseExact($calendarDates[0], 'yyyy-MM-dd', $null)
+        # Monday=0 ... Sunday=6
+        $startDow = ([int]$firstDate.DayOfWeek + 6) % 7
+
+        # Pad leading empty cells
+        [void]$html.AppendLine('<tr>')
+        for ($pad = 0; $pad -lt $startDow; $pad++) {
+            [void]$html.AppendLine("  <td style=`"width:36px; height:28px;`"></td>")
+        }
+
+        $cellIdx = $startDow
+        foreach ($cd in $calendarDates) {
+            $dayNum = $cd.Substring(8, 2)
+            $isToday = ($cd -eq $today.ToString('yyyy-MM-dd'))
+
+            if ($deliveredSet.Contains($cd)) {
+                $cellBg = '#339933'
+                $cellColor = '#fff'
+            }
+            elseif ([datetime]::ParseExact($cd, 'yyyy-MM-dd', $null) -gt $today) {
+                $cellBg = '#e9ecef'
+                $cellColor = '#999'
+            }
+            else {
+                $cellBg = '#CC3333'
+                $cellColor = '#fff'
+            }
+
+            $borderStyle = if ($isToday) { 'border:2px solid #336699;' } else { 'border:1px solid #dee2e6;' }
+
+            [void]$html.AppendLine("  <td style=`"width:36px; height:28px; text-align:center; font-size:11px; background:$cellBg; color:$cellColor; $borderStyle`">$dayNum</td>")
+
+            $cellIdx++
+            if ($cellIdx % 7 -eq 0) {
+                [void]$html.AppendLine('</tr>')
+                [void]$html.AppendLine('<tr>')
+            }
+        }
+
+        # Close trailing row
+        $remainingCells = 7 - ($cellIdx % 7)
+        if ($remainingCells -lt 7) {
+            for ($pad = 0; $pad -lt $remainingCells; $pad++) {
+                [void]$html.AppendLine("  <td style=`"width:36px; height:28px;`"></td>")
+            }
+        }
+        [void]$html.AppendLine('</tr>')
+        [void]$html.AppendLine('</table>')
+
+        # Calendar legend
+        [void]$html.AppendLine("<p style=`"font-size:11px; color:#777; margin-top:2px;`">")
+        [void]$html.AppendLine("  <span style=`"display:inline-block; width:12px; height:12px; background:#339933; vertical-align:middle;`"></span> Delivered ")
+        [void]$html.AppendLine("  <span style=`"display:inline-block; width:12px; height:12px; background:#CC3333; vertical-align:middle; margin-left:8px;`"></span> Missing ")
+        [void]$html.AppendLine("  <span style=`"display:inline-block; width:12px; height:12px; background:#e9ecef; vertical-align:middle; margin-left:8px;`"></span> Future")
+        [void]$html.AppendLine('</p>')
+
+        # ---------------------------------------------------------------
+        # Section 6: 90-Day Trend Sparkline (CSS bar chart)
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">90-Day Account Trend</h2>")
+
+        if ($trendData.Count -gt 0) {
+            $maxCount = ($trendData | ForEach-Object { $_.Count } | Measure-Object -Maximum).Maximum
+            if ($maxCount -eq 0) { $maxCount = 1 }
+
+            $chartHeight = 80
+
+            [void]$html.AppendLine("<div style=`"display:table; width:100%; height:${chartHeight}px; margin-bottom:4px; border-bottom:1px solid #dee2e6;`">")
+
+            $barWidth = [math]::Max(2, [math]::Floor(700 / [math]::Max(1, $trendData.Count)))
+            if ($barWidth -gt 12) { $barWidth = 12 }
+
+            foreach ($point in $trendData) {
+                $barHeightPx = [math]::Max(2, [math]::Round(($point.Count / $maxCount) * $chartHeight))
+                $topPad = $chartHeight - $barHeightPx
+
+                [void]$html.AppendLine("  <div style=`"display:table-cell; vertical-align:bottom; width:${barWidth}px; padding:0 1px;`"><div style=`"width:${barWidth}px; height:${barHeightPx}px; background:#336699;`" title=`"$(ConvertTo-DisconnectedHtmlSafe $point.Date): $($point.Count) accounts`"></div></div>")
+            }
+
+            [void]$html.AppendLine('</div>')
+
+            # Labels: first and last date
+            $firstTrendDate = $trendData[0].Date
+            $lastTrendDate  = $trendData[$trendData.Count - 1].Date
+            $latestCount    = $trendData[$trendData.Count - 1].Count
+            [void]$html.AppendLine("<p style=`"font-size:11px; color:#777; margin-top:2px;`">$firstTrendDate to $lastTrendDate | Latest: <strong>$latestCount</strong> accounts | Peak: <strong>$maxCount</strong></p>")
+        }
+        else {
+            [void]$html.AppendLine("<p style=`"color:#999;`">No trend data available. Account counts will appear after certification runs are recorded.</p>")
+        }
+
+        # ---------------------------------------------------------------
+        # Footer
+        # ---------------------------------------------------------------
+        [void]$html.AppendLine("<hr style=`"border:none; border-top:1px solid #dee2e6; margin-top:32px;`">")
+        [void]$html.AppendLine("<p style=`"color:#999; font-size:11px; margin-top:8px;`">Generated by SailPoint Governance Toolkit - Team Dashboard | $reportDate $reportTime UTC | CorrelationID: $(ConvertTo-DisconnectedHtmlSafe $CorrelationID)</p>")
+        [void]$html.AppendLine("<p style=`"color:#bbb; font-size:10px;`">This dashboard refreshes after each batch run. Open in any browser -- no PowerShell required.</p>")
+
+        # Close document
+        [void]$html.AppendLine('</div>')
+        [void]$html.AppendLine('</body>')
+        [void]$html.AppendLine('</html>')
+
+        # Write file (UTF-8 no BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+
+        Write-SPLog -Message "Team dashboard generated for '$AppName' at $filePath" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{ FilePath = $filePath }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppTeamDashboard failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -6833,5 +7491,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPDisconnectedAppCleanup',
     'Get-SPDisconnectedAppTrend',
     'Export-SPDisconnectedAppCompliancePackage',
-    'Invoke-SPDisconnectedAppEscalation'
+    'Invoke-SPDisconnectedAppEscalation',
+    'Export-SPDisconnectedAppTeamDashboard'
 )

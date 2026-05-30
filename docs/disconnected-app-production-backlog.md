@@ -33,7 +33,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 | 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | DONE |
 | 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | DONE |
 | 8 | DA-28 | Disconnected App Escalation | none | DONE |
-| 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | PENDING |
+| 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | DONE |
 | 10 | DA-30 | Pester Tests | DA-29 | PENDING |
 
 ---
@@ -374,8 +374,8 @@ campaigns by each app's CampaignNamePrefix.
 
 ## DA-29: Self-Service App Team Dashboard
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-29
 - **Depends On:** DA-21, DA-22
 
 **Description:**
