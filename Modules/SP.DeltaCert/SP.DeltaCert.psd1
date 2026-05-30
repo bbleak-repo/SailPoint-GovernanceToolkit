@@ -40,6 +40,7 @@
         'Import-SPOrgChartSupplement'
         'Merge-SPOrgTreeWithSupplement'
         'Show-SPOrgTree'
+        'Show-SPCampaignOrgPreview'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

@@ -1795,6 +1795,223 @@ function Show-SPOrgTree {
     }
 }
 
+function Show-SPCampaignOrgPreview {
+    <#
+    .SYNOPSIS
+        Previews the org tree for a campaign scope, showing which managers would
+        receive campaigns and which identities they would review.
+    .DESCRIPTION
+        Takes an array of identity IDs (campaign subjects), builds an org tree via
+        Build-SPOrgTree, then renders an ASCII preview showing:
+        - Which managers would receive campaigns
+        - Which identities each manager would review
+        - Unmanaged identities that would not receive campaigns
+        - Total campaign count
+
+        This is a dry-run/preview tool -- it does not create campaigns.
+    .PARAMETER IdentityIds
+        Array of SailPoint ISC identity IDs representing the campaign subjects
+        (identities whose access would be reviewed).
+    .PARAMETER MaxDepth
+        Maximum org tree depth to walk above the leaf identities. Default 3.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [string[]] Lines forming the ASCII campaign preview, written to the output stream.
+    .EXAMPLE
+        Show-SPCampaignOrgPreview -IdentityIds @('id-1','id-2','id-3') -MaxDepth 3
+    .EXAMPLE
+        $ids = (Get-SPDeltaAffectedIdentities -Events $events).Data.IdentityId
+        Show-SPCampaignOrgPreview -IdentityIds $ids
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$IdentityIds,
+
+        [Parameter()]
+        [int]$MaxDepth = 3,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Build the org tree from the provided identity IDs
+    $treeResult = Build-SPOrgTree -IdentityIds $IdentityIds -MaxDepth $MaxDepth `
+        -CorrelationID $CorrelationID
+
+    if (-not $treeResult.Success) {
+        Write-Warning "Show-SPCampaignOrgPreview: Failed to build org tree: $($treeResult.Error)"
+        Write-Output "Campaign Org Preview -- ERROR: $($treeResult.Error)"
+        return
+    }
+
+    $nodes = $treeResult.Data.Nodes
+    if ($null -eq $nodes -or $nodes.Count -eq 0) {
+        Write-Output 'Campaign Org Preview -- no identities found'
+        return
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    # Identify leaf identities (level 0) -- these are the campaign subjects
+    $leafIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($nodeId in $nodes.Keys) {
+        if ($nodes[$nodeId].Level -eq 0) {
+            $leafIds.Add($nodeId)
+        }
+    }
+
+    # Build manager -> leaf mapping: direct managers (level 1) and their level-0 children
+    # A campaign is created per direct manager who has at least one level-0 child.
+    $managerLeafMap = @{}  # managerId -> list of leaf identity names
+    $unmanagedLeaves = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($leafId in $leafIds) {
+        $leaf    = $nodes[$leafId]
+        $mgrId   = $leaf.ManagerId
+        $leafName = $leaf.Identity.Name
+        if ([string]::IsNullOrWhiteSpace($leafName)) { $leafName = $leaf.Identity.Id }
+
+        if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) {
+            # No manager in the tree -- unmanaged
+            $unmanagedLeaves.Add($leafName)
+            continue
+        }
+
+        if (-not $managerLeafMap.ContainsKey($mgrId)) {
+            $managerLeafMap[$mgrId] = [System.Collections.Generic.List[string]]::new()
+        }
+        $managerLeafMap[$mgrId].Add($leafName)
+    }
+
+    # Group managers by their highest-level ancestor (VP branch)
+    # Walk each manager up the tree to find the top-level branch root
+    function Get-BranchRoot {
+        param([string]$NodeId)
+        $current = $NodeId
+        $visited = @{}
+        while ($true) {
+            $visited[$current] = $true
+            $node  = $nodes[$current]
+            $parent = $node.ManagerId
+            if ([string]::IsNullOrWhiteSpace($parent) -or
+                -not $nodes.ContainsKey($parent) -or
+                $visited.ContainsKey($parent)) {
+                return $current
+            }
+            $current = $parent
+        }
+    }
+
+    # Build branch -> managers mapping
+    $branchManagers = @{}  # branchRootId -> list of managerIds
+    foreach ($mgrId in $managerLeafMap.Keys) {
+        $rootId = Get-BranchRoot -NodeId $mgrId
+        if (-not $branchManagers.ContainsKey($rootId)) {
+            $branchManagers[$rootId] = [System.Collections.Generic.List[string]]::new()
+        }
+        $branchManagers[$rootId].Add($mgrId)
+    }
+
+    # Count VP branches (top-level roots at level >= 3)
+    $vpBranchCount = 0
+    foreach ($rootId in $branchManagers.Keys) {
+        if ($nodes[$rootId].Level -ge 3) { $vpBranchCount++ }
+    }
+    $branchCount = if ($vpBranchCount -gt 0) { $vpBranchCount } else { $branchManagers.Count }
+    $branchNoun  = if ($branchCount -eq 1) { 'branch' } else { 'branches' }
+    $branchQual  = if ($vpBranchCount -gt 0) { 'VP ' } else { '' }
+    $branchLabel = "$branchCount ${branchQual}$branchNoun"
+
+    # Header
+    $totalLeaves = $leafIds.Count
+    $lines.Add("Campaign Org Preview -- $totalLeaves identities across $branchLabel")
+    $lines.Add('')
+
+    # Sort branch roots: highest level first, then by name
+    $sortedBranchRoots = @(
+        $branchManagers.Keys | Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+    )
+
+    # Render each branch
+    foreach ($rootId in $sortedBranchRoots) {
+        $rootNode = $nodes[$rootId]
+        $rootName = $rootNode.Identity.Name
+        if ([string]::IsNullOrWhiteSpace($rootName)) { $rootName = $rootNode.Identity.Id }
+
+        # Count total identities under this branch
+        $branchMgrIds  = $branchManagers[$rootId]
+        $branchTotal   = 0
+        foreach ($mid in $branchMgrIds) {
+            $branchTotal += $managerLeafMap[$mid].Count
+        }
+
+        $rootTitle = ''
+        if ($rootNode.ContainsKey('Title') -and -not [string]::IsNullOrWhiteSpace($rootNode.Title)) {
+            $rootTitle = " ($($rootNode.Title))"
+        }
+
+        $lines.Add("$rootName$rootTitle -- $branchTotal identities to review")
+
+        # Get managers under this branch, sorted by level (desc) then name
+        $sortedMgrs = @(
+            $branchMgrIds | Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+        )
+
+        for ($m = 0; $m -lt $sortedMgrs.Count; $m++) {
+            $mgrId   = $sortedMgrs[$m]
+            $mgrNode = $nodes[$mgrId]
+            $mgrName = $mgrNode.Identity.Name
+            if ([string]::IsNullOrWhiteSpace($mgrName)) { $mgrName = $mgrNode.Identity.Id }
+
+            $mgrTitle = ''
+            if ($mgrNode.ContainsKey('Title') -and -not [string]::IsNullOrWhiteSpace($mgrNode.Title)) {
+                $mgrTitle = " ($($mgrNode.Title))"
+            }
+
+            $leafNames   = $managerLeafMap[$mgrId]
+            $leafCount   = $leafNames.Count
+            $countNoun   = if ($leafCount -eq 1) { 'identity' } else { 'identities' }
+            $isLastMgr   = ($m -eq ($sortedMgrs.Count - 1))
+
+            # Skip rendering the branch root as a child of itself if it IS the manager
+            if ($mgrId -eq $rootId) {
+                # Root IS the direct manager -- list identities under the header
+                $lines.Add("  Manager for: $($leafNames -join ', ')")
+            } else {
+                $lines.Add("  +-- $mgrName$mgrTitle -- $leafCount $countNoun")
+
+                $continuation = if ($isLastMgr) { '      ' } else { '  |   ' }
+                $lines.Add("${continuation}Manager for: $($leafNames -join ', ')")
+            }
+        }
+
+        $lines.Add('')
+    }
+
+    # Unmanaged identities
+    if ($unmanagedLeaves.Count -gt 0) {
+        $sortedUnmanaged = @($unmanagedLeaves | Sort-Object)
+        $lines.Add("Unmanaged (no campaign): $($sortedUnmanaged -join ', ')")
+        $lines.Add('')
+    }
+
+    # Campaign count = number of unique direct managers with leaf children
+    $campaignCount = $managerLeafMap.Count
+    $lines.Add("Campaigns that would be created: $campaignCount (one per manager with affected reports)")
+
+    # Write all lines to the output stream
+    foreach ($line in $lines) {
+        Write-Output $line
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1806,5 +2023,6 @@ Export-ModuleMember -Function @(
     'Build-SPOrgTree',
     'Import-SPOrgChartSupplement',
     'Merge-SPOrgTreeWithSupplement',
-    'Show-SPOrgTree'
+    'Show-SPOrgTree',
+    'Show-SPCampaignOrgPreview'
 )
