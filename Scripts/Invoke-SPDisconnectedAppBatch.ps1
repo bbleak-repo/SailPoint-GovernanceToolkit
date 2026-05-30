@@ -300,6 +300,47 @@ if (($WhatIfPreference -eq $true)) {
 
 #endregion
 
+#region DA-26: Campaign Cleanup (pre-step)
+
+Write-Host '  Step 0: Campaign cleanup (completing stale campaigns)...' -ForegroundColor Cyan
+
+$cleanupResult = $null
+try {
+    $cleanupParams = @{
+        DaysStale     = 3
+        CorrelationID = $batchCorrelationID
+    }
+    if ($ConfigPath) { $cleanupParams['ConfigPath'] = $ConfigPath }
+    if ($AppNames -and $AppNames.Count -gt 0) { $cleanupParams['AppNames'] = $AppNames }
+    if ($WhatIfPreference -eq $true) { $cleanupParams['WhatIf'] = $true }
+
+    $cleanupResult = Invoke-SPDisconnectedAppCleanup @cleanupParams
+
+    if ($cleanupResult.Success) {
+        $completedCount = $cleanupResult.Data.TotalCompleted
+        $activeCount    = $cleanupResult.Data.TotalStillActive
+        if ($completedCount -gt 0) {
+            Write-Host "    Completed $completedCount stale campaign(s), $activeCount still active." -ForegroundColor Green
+        }
+        else {
+            Write-Host "    No stale campaigns to clean up ($activeCount active)." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "    Cleanup skipped: $($cleanupResult.Error)" -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "    Cleanup failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-SPLog -Message "Campaign cleanup failed (non-blocking): $($_.Exception.Message)" `
+        -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'CampaignCleanup' `
+        -CorrelationID $batchCorrelationID
+}
+
+Write-Host ''
+
+#endregion
+
 #region Batch Processing
 
 $batchResults = [System.Collections.Generic.List[hashtable]]::new()

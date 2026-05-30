@@ -5508,6 +5508,308 @@ $(if (-not [string]::IsNullOrWhiteSpace($AppName)) { "<tr><td style='padding: 4p
 
 #endregion
 
+#region DA-26: Campaign Lifecycle Management (Cleanup)
+
+function Invoke-SPDisconnectedAppCleanup {
+    <#
+    .SYNOPSIS
+        Completes past-due disconnected app campaigns to prevent ISC campaign pile-up.
+    .DESCRIPTION
+        Ports the AD delta cert cleanup pattern to disconnected app campaigns.
+        For each registered app, searches for ACTIVE campaigns matching the app's
+        CampaignNamePrefix, evaluates deadline/staleness, and completes past-due
+        campaigns via Complete-SPCampaign.
+
+        Guarded by Safety.AllowCompleteCampaign (default false).
+
+        Intended to run as a pre-step before new campaign creation in the batch
+        orchestrator, preventing duplicate/stale campaign accumulation.
+    .PARAMETER AppNames
+        Optional filter: only clean up campaigns for these app names.
+        If omitted, all enabled registered apps are checked.
+    .PARAMETER DaysStale
+        Days after creation (without a deadline) before a campaign is considered
+        stale. Default: 3.
+    .PARAMETER ConfigPath
+        Path to settings.json. Uses Resolve-SPConfigPath if omitted.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                AppsChecked = [int]
+                TotalCompleted = [int]
+                TotalStillActive = [int]
+                TotalErrors = [int]
+                PerApp = @(
+                    @{ AppName; Completed; StillActive; Errors }
+                )
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        Invoke-SPDisconnectedAppCleanup -DaysStale 3
+    .EXAMPLE
+        Invoke-SPDisconnectedAppCleanup -AppNames @('PEP-Plus') -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$AppNames,
+
+        [Parameter()]
+        [int]$DaysStale = 3,
+
+        [Parameter()]
+        [string]$ConfigPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Invoke-SPDisconnectedAppCleanup'
+
+    Write-SPLog -Message "Invoke-SPDisconnectedAppCleanup: DaysStale=$DaysStale WhatIf=$(($WhatIfPreference -eq $true))" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        # Safety guard: check AllowCompleteCampaign before any API calls
+        $config = Get-SPConfig
+        $allowComplete = $false
+        if ($null -ne $config -and
+            $null -ne $config.PSObject.Properties['Safety'] -and
+            $null -ne $config.Safety -and
+            $config.Safety.PSObject.Properties.Name -contains 'AllowCompleteCampaign') {
+            $allowComplete = [bool]$config.Safety.AllowCompleteCampaign
+        }
+        if (-not $allowComplete) {
+            $errMsg = "Invoke-SPDisconnectedAppCleanup blocked: Safety.AllowCompleteCampaign is false in settings.json. " +
+                      "Set to true to allow campaign completion."
+            Write-SPLog -Message $errMsg -Severity WARN -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        # Load registered apps
+        $loadParams = @{}
+        if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+            $loadParams['ConfigPath'] = $ConfigPath
+        }
+        $appsResult = Get-SPRegisteredApps @loadParams
+        if (-not $appsResult.Success) {
+            return @{ Success = $false; Data = $null; Error = "Failed to load registered apps: $($appsResult.Error)" }
+        }
+
+        $apps = @($appsResult.Data)
+        if ($apps.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    AppsChecked      = 0
+                    TotalCompleted   = 0
+                    TotalStillActive = 0
+                    TotalErrors      = 0
+                    PerApp           = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # Filter by AppNames if specified
+        if ($AppNames -and $AppNames.Count -gt 0) {
+            $apps = @($apps | Where-Object { $_.Name -in $AppNames })
+        }
+
+        $nowUtc         = (Get-Date).ToUniversalTime()
+        $staleThreshold = $nowUtc.AddDays(-$DaysStale)
+
+        $totalCompleted   = 0
+        $totalStillActive = 0
+        $totalErrors      = 0
+        $perAppResults    = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($app in $apps) {
+            $appName = $app.Name
+
+            # Determine the campaign name prefix for this app
+            $appPrefix = $null
+            if ($null -ne $app.PSObject.Properties['CampaignNamePrefix'] -and
+                -not [string]::IsNullOrWhiteSpace($app.CampaignNamePrefix)) {
+                $appPrefix = $app.CampaignNamePrefix
+            }
+            else {
+                $appPrefix = "$appName Delta Cert"
+            }
+
+            Write-SPLog -Message "Checking app '$appName' with prefix '$appPrefix'" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+            # Search for active campaigns matching this app's prefix
+            $searchResult = Search-SPCampaigns -Keyword $appPrefix -Status @('ACTIVE') `
+                -CorrelationID $CorrelationID
+
+            if (-not $searchResult.Success) {
+                $errMsg = "Campaign search failed for app '$appName': $($searchResult.Error)"
+                Write-SPLog -Message $errMsg -Severity WARN -Component $component -Action $action `
+                    -CorrelationID $CorrelationID
+                $totalErrors++
+                $perAppResults.Add(@{
+                    AppName     = $appName
+                    Completed   = @()
+                    StillActive = @()
+                    Errors      = @($errMsg)
+                })
+                continue
+            }
+
+            $activeCampaigns = @($searchResult.Data)
+
+            if ($activeCampaigns.Count -eq 0) {
+                $perAppResults.Add(@{
+                    AppName     = $appName
+                    Completed   = @()
+                    StillActive = @()
+                    Errors      = @()
+                })
+                continue
+            }
+
+            $completed   = [System.Collections.Generic.List[string]]::new()
+            $stillActive = [System.Collections.Generic.List[string]]::new()
+            $errors      = [System.Collections.Generic.List[string]]::new()
+
+            foreach ($campaign in $activeCampaigns) {
+                $campaignId   = $campaign.id
+                $campaignName = $campaign.name
+                $isStale      = $false
+
+                # Check if deadline has passed
+                $deadlineStr = $null
+                if ($campaign -is [PSCustomObject] -and $campaign.PSObject.Properties.Name -contains 'deadline') {
+                    $deadlineStr = $campaign.deadline
+                }
+                elseif ($campaign -is [hashtable] -and $campaign.ContainsKey('deadline')) {
+                    $deadlineStr = $campaign['deadline']
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
+                    try {
+                        $deadline = [datetime]::Parse([string]$deadlineStr).ToUniversalTime()
+                        if ($deadline -lt $nowUtc) {
+                            $isStale = $true
+                        }
+                    }
+                    catch {
+                        Write-SPLog -Message "Failed to parse deadline for campaign '$campaignName': $($_.Exception.Message)" `
+                            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                    }
+                }
+
+                # Fallback: check if created date is older than DaysStale
+                if (-not $isStale) {
+                    $createdStr = $null
+                    if ($campaign -is [PSCustomObject] -and $campaign.PSObject.Properties.Name -contains 'created') {
+                        $createdStr = $campaign.created
+                    }
+                    elseif ($campaign -is [hashtable] -and $campaign.ContainsKey('created')) {
+                        $createdStr = $campaign['created']
+                    }
+
+                    if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+                        try {
+                            $created = [datetime]::Parse([string]$createdStr).ToUniversalTime()
+                            if ($created -lt $staleThreshold) {
+                                $isStale = $true
+                            }
+                        }
+                        catch {
+                            Write-SPLog -Message "Failed to parse created date for campaign '$campaignName': $($_.Exception.Message)" `
+                                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+                        }
+                    }
+                }
+
+                if (-not $isStale) {
+                    $stillActive.Add($campaignId)
+                    continue
+                }
+
+                # WhatIf: describe without completing
+                if (($WhatIfPreference -eq $true)) {
+                    Write-SPLog -Message "WhatIf: Would complete stale campaign '$campaignName' ($campaignId) for app '$appName'" `
+                        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                    $completed.Add($campaignId)
+                    continue
+                }
+
+                # Complete the stale campaign
+                Write-SPLog -Message "Completing stale campaign '$campaignName' ($campaignId) for app '$appName'" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+                $completeResult = Complete-SPCampaign -CampaignId $campaignId -CorrelationID $CorrelationID
+
+                if ($completeResult.Success) {
+                    $completed.Add($campaignId)
+                }
+                else {
+                    $errMsg = "Failed to complete campaign '$campaignName' ($campaignId): $($completeResult.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR -Component $component -Action $action `
+                        -CorrelationID $CorrelationID
+                    $errors.Add($errMsg)
+                }
+            }
+
+            $totalCompleted   += $completed.Count
+            $totalStillActive += $stillActive.Count
+            $totalErrors      += $errors.Count
+
+            $perAppResults.Add(@{
+                AppName     = $appName
+                Completed   = $completed.ToArray()
+                StillActive = $stillActive.ToArray()
+                Errors      = $errors.ToArray()
+            })
+
+            if ($completed.Count -gt 0) {
+                Write-SPLog -Message "App '$appName': completed $($completed.Count) stale campaign(s), $($stillActive.Count) still active" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPDisconnectedAppCleanup complete: Apps=$($apps.Count) Completed=$totalCompleted StillActive=$totalStillActive Errors=$totalErrors" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        $allErrors = @($perAppResults | ForEach-Object { $_.Errors } | Where-Object { $_.Count -gt 0 } | ForEach-Object { $_ })
+
+        return @{
+            Success = $true
+            Data    = @{
+                AppsChecked      = $apps.Count
+                TotalCompleted   = $totalCompleted
+                TotalStillActive = $totalStillActive
+                TotalErrors      = $totalErrors
+                PerApp           = @($perAppResults)
+            }
+            Error   = if ($allErrors.Count -gt 0) { $allErrors -join '; ' } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDisconnectedAppCleanup failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -5528,5 +5830,6 @@ Export-ModuleMember -Function @(
     'Update-SPRemediationStatus',
     'Get-SPRemediationReport',
     'Push-SPDisconnectedAppToISC',
-    'Send-SPDisconnectedAppAlert'
+    'Send-SPDisconnectedAppAlert',
+    'Invoke-SPDisconnectedAppCleanup'
 )
