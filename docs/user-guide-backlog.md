@@ -74,7 +74,7 @@ Agent loop: `UG-01 -> UG-02 -> UG-03 -> UG-04 -> UG-05 -> UG-06 -> UG-07 -> UG-0
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | UG-01 | Framework Shell Template (HTML+CSS+JS) | none | DONE |
-| UG-02 | Framework Python Generator | UG-01 | PENDING |
+| UG-02 | Framework Python Generator | UG-01 | DONE |
 | UG-03 | Framework Themes (light + dark) | UG-01 | PENDING |
 | UG-04 | Getting Started Section Content | none | PENDING |
 | UG-05 | Campaign Audit Section Content | none | PENDING |
@@ -186,8 +186,8 @@ JavaScript for section switching.
 
 ## UG-02: Framework Python Generator
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-01
 
 **Description:**
