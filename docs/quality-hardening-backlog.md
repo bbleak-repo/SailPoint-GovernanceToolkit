@@ -18,7 +18,7 @@ Critical items first, then high, medium, low.
 | # | Priority | Feature | Size | Status |
 |---|----------|---------|------|--------|
 | QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | DONE |
-| QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | PENDING |
+| QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | DONE |
 | QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | PENDING |
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | PENDING |
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | PENDING |
@@ -58,7 +58,7 @@ SP.DeltaCert.psd1 pattern. List all 4 psm1 files as NestedModules. Export all pu
 
 ## QH-02: Implement Send-SPReport SMTP (Replace Stub)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Send-SPReport` logs "SMTP stub -- would send" but never sends email.

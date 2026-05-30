@@ -5280,14 +5280,14 @@ function Export-SPLeadershipBandHtml {
 function Send-SPReport {
     <#
     .SYNOPSIS
-        Logs the intent to send a leadership report to a recipient via email.
+        Sends a leadership report to a recipient via SMTP email.
     .DESCRIPTION
-        Stub function for future SMTP email distribution. Resolves the recipient
-        email, checks the SMTP configuration, and logs the intended send action.
-        Does NOT make any SMTP calls -- logs only.
+        Reads SMTP configuration from Audit.Smtp and sends the report file
+        as an attachment to the specified recipient. Requires Server, From,
+        and Enabled fields in the Audit.Smtp config section.
 
-        When Audit.Smtp.Enabled is false, logs at DEBUG level.
-        When Audit.Smtp.Enabled is true, logs at INFO level (future: actual send).
+        When Audit.Smtp.Enabled is false, logs at DEBUG level and returns without sending.
+        When Audit.Smtp.Enabled is true, sends the report via Send-MailMessage.
     .PARAMETER ReportPath
         Full path to the HTML report file to send.
     .PARAMETER RecipientEmail
@@ -5391,32 +5391,131 @@ function Send-SPReport {
         }
     }
 
-    # SMTP enabled but this is a stub -- log at INFO, no actual send
-    $logMsg = "SMTP stub -- would send '$fileName' to $RecipientEmail ($RecipientName) with subject '$Subject'"
-    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
-        Write-SPLog -Message $logMsg `
-            -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
-            -CorrelationID $CorrelationID `
-            -AdditionalFields @{
+    # SMTP enabled -- read connection settings and send
+    $smtpServer = ''
+    $smtpPort   = 587
+    $smtpFrom   = ''
+    $smtpUseSsl = $true
+
+    if ($null -ne $smtpConfig) {
+        if ($smtpConfig.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConfig.Server }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'Port')   { $smtpPort   = $smtpConfig.Port }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'From')   { $smtpFrom   = $smtpConfig.From }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConfig.UseSsl -eq $true }
+    }
+
+    # Validate required SMTP fields
+    if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
+        $warnMsg = "SMTP enabled but Server or From is empty -- cannot send '$fileName' to $RecipientEmail"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                -Action 'Send-SPReport' -CorrelationID $CorrelationID
+        }
+        Write-Warning $warnMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
                 Recipient = $RecipientEmail
                 File      = $ReportPath
                 Subject   = $Subject
-                SmtpState = 'Stub'
-                Server    = if ($null -ne $smtpConfig -and $smtpConfig.PSObject.Properties.Name -contains 'Server') { $smtpConfig.Server } else { '' }
-                Port      = if ($null -ne $smtpConfig -and $smtpConfig.PSObject.Properties.Name -contains 'Port') { $smtpConfig.Port } else { 587 }
             }
-    }
-    Write-Verbose $logMsg
-
-    return @{
-        Success = $true
-        Data    = @{
-            Action    = 'Logged'
-            Recipient = $RecipientEmail
-            File      = $ReportPath
-            Subject   = $Subject
+            Error   = $warnMsg
         }
-        Error   = $null
+    }
+
+    # Validate report file exists
+    if (-not (Test-Path -Path $ReportPath -PathType Leaf)) {
+        $errMsg = "Report file not found: $ReportPath"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+                -Action 'Send-SPReport' -CorrelationID $CorrelationID
+        }
+        Write-Warning $errMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $errMsg
+        }
+    }
+
+    try {
+        $mailParams = @{
+            SmtpServer    = $smtpServer
+            Port          = $smtpPort
+            From          = $smtpFrom
+            To            = $RecipientEmail
+            Subject       = $Subject
+            Body          = "Please find the attached leadership report for $RecipientName."
+            BodyAsHtml    = $false
+            UseSsl        = $smtpUseSsl
+            Attachments   = @($ReportPath)
+            ErrorAction   = 'Stop'
+            WarningAction = 'SilentlyContinue'
+        }
+
+        Send-MailMessage @mailParams
+
+        $logMsg = "Report '$fileName' sent to $RecipientEmail ($RecipientName)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $logMsg `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient = $RecipientEmail
+                    File      = $ReportPath
+                    Subject   = $Subject
+                    Server    = $smtpServer
+                    Port      = $smtpPort
+                }
+        }
+        Write-Verbose $logMsg
+
+        return @{
+            Success = $true
+            Data    = @{
+                Action    = 'Sent'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "SMTP send failed for '$fileName' to ${RecipientEmail}: $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg `
+                -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient  = $RecipientEmail
+                    File       = $ReportPath
+                    Subject    = $Subject
+                    Server     = $smtpServer
+                    Port       = $smtpPort
+                    ErrorDetail = $_.Exception.Message
+                }
+        }
+        Write-Warning $errMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $errMsg
+        }
     }
 }
 
