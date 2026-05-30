@@ -23,7 +23,7 @@ Critical items first, then high, medium, low.
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | DONE |
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | DONE |
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | DONE |
-| QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | PENDING |
+| QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | DONE |
 | QH-08 | HIGH | Document settings.local.json override in README | S | PENDING |
 | QH-09 | HIGH | Document Audit-Mock directory | S | PENDING |
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | PENDING |
@@ -143,7 +143,7 @@ sections. Tests using this fixture don't exercise validation for these sections.
 
 ## QH-07: Create Invoke-SPRetention.ps1 CLI Script
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Invoke-SPLogRetention` function exists but no standalone CLI entry point.
