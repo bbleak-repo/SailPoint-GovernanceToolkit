@@ -5283,11 +5283,17 @@ function Send-SPReport {
         Sends a leadership report to a recipient via SMTP email.
     .DESCRIPTION
         Reads SMTP configuration from Audit.Smtp and sends the report file
-        as an attachment to the specified recipient. Requires Server, From,
-        and Enabled fields in the Audit.Smtp config section.
+        as an attachment to the specified recipient. Requires Enabled field
+        in the Audit.Smtp config section.
 
         When Audit.Smtp.Enabled is false, logs at DEBUG level and returns without sending.
         When Audit.Smtp.Enabled is true, sends the report via Send-MailMessage.
+
+        SMTP fallback: if Audit.Smtp connection fields (Server, Port, From,
+        UseSsl) are empty, they are inherited from Notification.Smtp. This
+        allows a single SMTP config in the Notification section to serve both
+        notification delivery and report distribution. Audit.Smtp.Enabled and
+        Audit.Smtp.SubjectPrefix remain exclusive to this function.
     .PARAMETER ReportPath
         Full path to the HTML report file to send.
     .PARAMETER RecipientEmail
@@ -5330,14 +5336,20 @@ function Send-SPReport {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    # Load SMTP config
+    # Load SMTP config -- primary: Audit.Smtp, fallback: Notification.Smtp
     $smtpConfig = $null
+    $notifSmtpConfig = $null
     try {
         $config = Get-SPConfig
-        if ($null -ne $config -and
-            $config.PSObject.Properties.Name -contains 'Audit' -and
-            $config.Audit.PSObject.Properties.Name -contains 'Smtp') {
-            $smtpConfig = $config.Audit.Smtp
+        if ($null -ne $config) {
+            if ($config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'Smtp') {
+                $smtpConfig = $config.Audit.Smtp
+            }
+            if ($config.PSObject.Properties.Name -contains 'Notification' -and
+                $config.Notification.PSObject.Properties.Name -contains 'Smtp') {
+                $notifSmtpConfig = $config.Notification.Smtp
+            }
         }
     }
     catch {
@@ -5391,11 +5403,12 @@ function Send-SPReport {
         }
     }
 
-    # SMTP enabled -- read connection settings and send
+    # SMTP enabled -- read connection settings from Audit.Smtp
     $smtpServer = ''
     $smtpPort   = 587
     $smtpFrom   = ''
     $smtpUseSsl = $true
+    $smtpSource = 'Audit.Smtp'
 
     if ($null -ne $smtpConfig) {
         if ($smtpConfig.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConfig.Server }
@@ -5404,9 +5417,46 @@ function Send-SPReport {
         if ($smtpConfig.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConfig.UseSsl -eq $true }
     }
 
-    # Validate required SMTP fields
+    # Fallback to Notification.Smtp when Audit.Smtp connection fields are empty
+    if (([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) -and
+        $null -ne $notifSmtpConfig) {
+        if ([string]::IsNullOrWhiteSpace($smtpServer) -and
+            $notifSmtpConfig.PSObject.Properties.Name -contains 'Server' -and
+            -not [string]::IsNullOrWhiteSpace($notifSmtpConfig.Server)) {
+            $smtpServer = $notifSmtpConfig.Server
+            $smtpSource = 'Notification.Smtp'
+        }
+        if ([string]::IsNullOrWhiteSpace($smtpFrom) -and
+            $notifSmtpConfig.PSObject.Properties.Name -contains 'From' -and
+            -not [string]::IsNullOrWhiteSpace($notifSmtpConfig.From)) {
+            $smtpFrom = $notifSmtpConfig.From
+            $smtpSource = 'Notification.Smtp'
+        }
+        # Inherit Port and UseSsl from fallback only if Server came from there
+        if ($smtpSource -eq 'Notification.Smtp') {
+            if ($null -ne $smtpConfig -and
+                -not ($smtpConfig.PSObject.Properties.Name -contains 'Port') -and
+                $notifSmtpConfig.PSObject.Properties.Name -contains 'Port') {
+                $smtpPort = $notifSmtpConfig.Port
+            }
+            if ($null -ne $smtpConfig -and
+                -not ($smtpConfig.PSObject.Properties.Name -contains 'UseSsl') -and
+                $notifSmtpConfig.PSObject.Properties.Name -contains 'UseSsl') {
+                $smtpUseSsl = $notifSmtpConfig.UseSsl -eq $true
+            }
+            $fallbackMsg = "Audit.Smtp connection fields empty -- using Notification.Smtp as fallback"
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $fallbackMsg `
+                    -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                    -CorrelationID $CorrelationID
+            }
+            Write-Verbose $fallbackMsg
+        }
+    }
+
+    # Validate required SMTP fields (after fallback)
     if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
-        $warnMsg = "SMTP enabled but Server or From is empty -- cannot send '$fileName' to $RecipientEmail"
+        $warnMsg = "SMTP enabled but Server or From is empty in both Audit.Smtp and Notification.Smtp -- cannot send '$fileName' to $RecipientEmail"
         if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
             Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
                 -Action 'Send-SPReport' -CorrelationID $CorrelationID
@@ -5463,17 +5513,18 @@ function Send-SPReport {
 
         Send-MailMessage @mailParams
 
-        $logMsg = "Report '$fileName' sent to $RecipientEmail ($RecipientName)"
+        $logMsg = "Report '$fileName' sent to $RecipientEmail ($RecipientName) via $smtpSource"
         if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
             Write-SPLog -Message $logMsg `
                 -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
                 -CorrelationID $CorrelationID `
                 -AdditionalFields @{
-                    Recipient = $RecipientEmail
-                    File      = $ReportPath
-                    Subject   = $Subject
-                    Server    = $smtpServer
-                    Port      = $smtpPort
+                    Recipient  = $RecipientEmail
+                    File       = $ReportPath
+                    Subject    = $Subject
+                    Server     = $smtpServer
+                    Port       = $smtpPort
+                    SmtpSource = $smtpSource
                 }
         }
         Write-Verbose $logMsg

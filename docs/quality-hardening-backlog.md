@@ -26,7 +26,7 @@ Critical items first, then high, medium, low.
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | DONE |
 | QH-08 | HIGH | Document settings.local.json override in README | S | DONE |
 | QH-09 | HIGH | Document Audit-Mock directory | S | DONE |
-| QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | PENDING |
+| QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | DONE |
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | PENDING |
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | PENDING |
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | PENDING |
@@ -187,7 +187,7 @@ Users don't know it can serve as an offline demo.
 
 ## QH-10: Consolidate Duplicate SMTP Config
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-02
 
 **Problem:** Two SMTP configs: `Audit.Smtp` (for Send-SPReport) and `Notification.Smtp`
@@ -197,7 +197,14 @@ Users don't know it can serve as an offline demo.
 make `Send-SPReport` read from `Notification.Smtp` as fallback when `Audit.Smtp` is empty,
 and document that `Notification.Smtp` is the primary SMTP config.
 
-**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Config/settings.json`, docs
+**Resolution:** `Send-SPReport` now falls back to `Notification.Smtp` connection fields
+(Server, From, Port, UseSsl) when `Audit.Smtp` fields are empty. `Audit.Smtp.Enabled`
+and `Audit.Smtp.SubjectPrefix` remain exclusive to report delivery. Logs the source
+config used. `_note` fields added to both SMTP sections in settings.json. Script
+documentation updated to reflect the fallback behavior.
+
+**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Config/settings.json`,
+`Scripts/Invoke-SPReportDistribution.ps1`
 
 ---
 

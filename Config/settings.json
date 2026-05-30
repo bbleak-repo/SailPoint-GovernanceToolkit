@@ -78,6 +78,7 @@
             ]
         },
         "Smtp": {
+            "_note": "Report-specific SMTP. When Server/From are empty, falls back to Notification.Smtp.",
             "Enabled": false,
             "Server": "",
             "Port": 587,
@@ -91,6 +92,7 @@
             "Log"
         ],
         "Smtp": {
+            "_note": "Primary SMTP config. Also serves as fallback for Audit.Smtp report delivery.",
             "Server": "",
             "Port": 587,
             "From": "",
