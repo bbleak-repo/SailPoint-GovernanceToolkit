@@ -226,6 +226,23 @@ if ([string]::IsNullOrWhiteSpace($effectiveFallback)) {
     }
 }
 
+# ISC upload config (DA-24)
+$iscUploadMethod = 'API'
+$iscFileDropPath = ''
+$iscWaitSeconds  = 120
+if ($null -ne $daConfig.PSObject.Properties['ISC'] -and $null -ne $daConfig.ISC) {
+    if ($null -ne $daConfig.ISC.PSObject.Properties['UploadMethod']) {
+        $iscUploadMethod = [string]$daConfig.ISC.UploadMethod
+    }
+    if ($null -ne $daConfig.ISC.PSObject.Properties['FileDropBasePath']) {
+        $iscFileDropPath = [string]$daConfig.ISC.FileDropBasePath
+    }
+    if ($null -ne $daConfig.ISC.PSObject.Properties['WaitForAggregationSeconds'] -and
+        [int]$daConfig.ISC.WaitForAggregationSeconds -gt 0) {
+        $iscWaitSeconds = [int]$daConfig.ISC.WaitForAggregationSeconds
+    }
+}
+
 Write-SPLog -Message "Invoke-SPDisconnectedAppBatch started: CorrelationID=$batchCorrelationID" `
     -Severity INFO -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Start' -CorrelationID $batchCorrelationID
 
@@ -308,6 +325,7 @@ foreach ($app in $apps) {
         IdentityCount   = 0
         DeltaSummary    = @{}
         ReportPath      = $null
+        ISCUpload       = $null
         Error           = $null
         Reason          = $null
     }
@@ -361,6 +379,40 @@ foreach ($app in $apps) {
             (Test-Path -Path $appEntitlementPath -PathType Leaf)) {
             Save-SPDisconnectedAppSnapshot -FilePath $appEntitlementPath `
                 -AppName $appName -FileType 'entitlements' -SnapshotDir $effectiveSnapshotDir | Out-Null
+        }
+
+        # --- Step B2: ISC source upload (DA-24) ---
+        $appISCSourceId = if ($null -ne $app.PSObject.Properties['ISCSourceId']) { $app.ISCSourceId } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($appISCSourceId)) {
+            Write-Host '    b2. Uploading to ISC source...' -ForegroundColor DarkCyan
+
+            $iscUploadParams = @{
+                AppName            = $appName
+                AccountFilePath    = $appAccountPath
+                ISCSourceId        = $appISCSourceId
+                UploadMethod       = $iscUploadMethod
+                WaitTimeoutSeconds = $iscWaitSeconds
+                CorrelationID      = $appCorrelationID
+            }
+            if (-not [string]::IsNullOrWhiteSpace($appEntitlementPath)) {
+                $iscUploadParams['EntitlementFilePath'] = $appEntitlementPath
+            }
+            if ($iscUploadMethod -eq 'FileDrop' -and -not [string]::IsNullOrWhiteSpace($iscFileDropPath)) {
+                $iscUploadParams['FileDropPath'] = $iscFileDropPath
+            }
+
+            $iscResult = Push-SPDisconnectedAppToISC @iscUploadParams
+            $appResult.ISCUpload = $iscResult.Data
+
+            if (-not $iscResult.Success) {
+                Write-Host "       ISC upload failed (non-blocking): $($iscResult.Error)" -ForegroundColor Yellow
+                Write-SPLog -Message "ISC upload failed for '$appName' (non-blocking): $($iscResult.Error)" `
+                    -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ISCUpload' `
+                    -CorrelationID $appCorrelationID
+            }
+            else {
+                Write-Host "       Uploaded ($($iscResult.Data.Method), Task=$($iscResult.Data.TaskId))" -ForegroundColor DarkGray
+            }
         }
 
         # --- Step C: Find previous snapshot ---

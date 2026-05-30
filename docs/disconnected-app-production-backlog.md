@@ -28,7 +28,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 | 1 | DA-21 | Post-Campaign Decision Collection | none | DONE |
 | 2 | DA-22 | Disconnected App Remediation Tracker | DA-21 | DONE |
 | 3 | DA-23 | Unified Daily Orchestrator Integration | none | DONE |
-| 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | PENDING |
+| 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | DONE |
 | 5 | DA-25 | Operational Alerting (Wire Notifications) | none | PENDING |
 | 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | PENDING |
 | 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | PENDING |
@@ -180,8 +180,8 @@ Also add:
 
 ## DA-24: ISC Source Aggregation (CSV Upload)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-24
 - **Depends On:** none
 
 **Description:**

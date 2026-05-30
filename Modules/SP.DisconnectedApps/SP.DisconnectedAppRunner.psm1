@@ -4853,6 +4853,438 @@ function Get-SPRemediationReport {
 
 #endregion
 
+#region DA-24: ISC Source Aggregation (CSV Upload)
+
+function Push-SPDisconnectedAppToISC {
+    <#
+    .SYNOPSIS
+        Pushes validated CSV files to ISC for source aggregation.
+    .DESCRIPTION
+        Uploads account (and optionally entitlement) CSV files to an ISC source
+        so that ISC's data model reflects the disconnected app's current state.
+        Supports two methods: API upload (multipart/form-data to the load-accounts
+        endpoint) and FileDrop (copy to a VA-accessible path).
+        Gracefully skips if ISCSourceId is not configured.
+    .PARAMETER AppName
+        Name of the disconnected app.
+    .PARAMETER AccountFilePath
+        Path to the validated account CSV file.
+    .PARAMETER EntitlementFilePath
+        Optional path to the entitlement CSV file.
+    .PARAMETER ISCSourceId
+        ISC source ID to upload to. If empty, upload is skipped.
+    .PARAMETER UploadMethod
+        Upload method: API (default) or FileDrop.
+    .PARAMETER FileDropPath
+        Destination directory for FileDrop method (VA-accessible share).
+    .PARAMETER WaitForAggregation
+        Poll ISC task status until aggregation completes.
+    .PARAMETER WaitTimeoutSeconds
+        Maximum seconds to wait for aggregation completion. Default: 120.
+    .PARAMETER CorrelationID
+        Unique ID for log correlation.
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=[hashtable]; Error=[string]}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [string]$AccountFilePath,
+
+        [Parameter()]
+        [string]$EntitlementFilePath,
+
+        [Parameter()]
+        [string]$ISCSourceId,
+
+        [Parameter()]
+        [ValidateSet('API', 'FileDrop')]
+        [string]$UploadMethod = 'API',
+
+        [Parameter()]
+        [string]$FileDropPath,
+
+        [Parameter()]
+        [switch]$WaitForAggregation,
+
+        [Parameter()]
+        [int]$WaitTimeoutSeconds = 120,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Push-SPDisconnectedAppToISC'
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Skip gracefully if no ISCSourceId configured
+    if ([string]::IsNullOrWhiteSpace($ISCSourceId)) {
+        Write-SPLog -Message "ISC upload skipped for '$AppName': no ISCSourceId configured" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                AppName           = $AppName
+                Method            = 'Skipped'
+                TaskId            = $null
+                EntitlementTaskId = $null
+                UploadedAt        = $null
+                AggregationStatus = 'Skipped'
+                Reason            = 'NoISCSourceId'
+            }
+            Error   = $null
+        }
+    }
+
+    # Validate account file exists
+    if (-not (Test-Path -Path $AccountFilePath -PathType Leaf)) {
+        $errMsg = "Account file not found: $AccountFilePath"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+
+    try {
+        if ($UploadMethod -eq 'FileDrop') {
+            return Invoke-SPISCFileDrop -AppName $AppName `
+                -AccountFilePath $AccountFilePath `
+                -EntitlementFilePath $EntitlementFilePath `
+                -FileDropPath $FileDropPath `
+                -CorrelationID $CorrelationID
+        }
+
+        # --- API Upload Method ---
+        $authResult = Get-SPAuthToken -CorrelationID $CorrelationID
+        if (-not $authResult.Success) {
+            throw "Auth token acquisition failed: $($authResult.Error)"
+        }
+
+        $config  = Get-SPConfig
+        $baseUrl = $config.Api.BaseUrl.TrimEnd('/')
+        $timeout = if ($config.Api.TimeoutSeconds) { $config.Api.TimeoutSeconds } else { 120 }
+
+        # Upload accounts CSV
+        $accountTaskId = Invoke-SPISCMultipartUpload `
+            -BaseUrl $baseUrl `
+            -SourceId $ISCSourceId `
+            -FilePath $AccountFilePath `
+            -FileType 'accounts' `
+            -AuthHeaders $authResult.Data.Headers `
+            -TimeoutSeconds $timeout `
+            -CorrelationID $CorrelationID
+
+        Write-SPLog -Message "Account CSV uploaded for '$AppName' to source '$ISCSourceId'. TaskId=$accountTaskId" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        # Upload entitlements CSV if provided
+        $entitlementTaskId = $null
+        if (-not [string]::IsNullOrWhiteSpace($EntitlementFilePath) -and
+            (Test-Path -Path $EntitlementFilePath -PathType Leaf)) {
+
+            $entitlementTaskId = Invoke-SPISCMultipartUpload `
+                -BaseUrl $baseUrl `
+                -SourceId $ISCSourceId `
+                -FilePath $EntitlementFilePath `
+                -FileType 'entitlements' `
+                -AuthHeaders $authResult.Data.Headers `
+                -TimeoutSeconds $timeout `
+                -CorrelationID $CorrelationID
+
+            Write-SPLog -Message "Entitlement CSV uploaded for '$AppName'. TaskId=$entitlementTaskId" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+
+        $uploadedAt = (Get-Date).ToUniversalTime()
+        $aggStatus  = 'QUEUED'
+
+        # Poll aggregation status if requested
+        if ($WaitForAggregation -and -not [string]::IsNullOrWhiteSpace($accountTaskId)) {
+            $aggStatus = Wait-SPISCAggregation `
+                -TaskId $accountTaskId `
+                -AuthHeaders $authResult.Data.Headers `
+                -BaseUrl $baseUrl `
+                -TimeoutSeconds $WaitTimeoutSeconds `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success = $true
+            Data    = @{
+                AppName           = $AppName
+                Method            = 'API'
+                TaskId            = $accountTaskId
+                EntitlementTaskId = $entitlementTaskId
+                UploadedAt        = $uploadedAt.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                AggregationStatus = $aggStatus
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Push-SPDisconnectedAppToISC failed for '$AppName': $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+
+function Invoke-SPISCMultipartUpload {
+    <#
+    .SYNOPSIS
+        Sends a CSV file to ISC via multipart/form-data upload (PS 5.1 compatible).
+    .DESCRIPTION
+        Constructs a multipart body as a byte array and posts to the ISC beta
+        load-accounts or load-entitlements endpoint. Returns the task ID from
+        the ISC response.
+    .OUTPUTS
+        [string] Task ID returned by ISC, or $null if not provided.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$BaseUrl,
+        [Parameter(Mandatory)][string]$SourceId,
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][ValidateSet('accounts', 'entitlements')][string]$FileType,
+        [Parameter(Mandatory)][hashtable]$AuthHeaders,
+        [Parameter()][int]$TimeoutSeconds = 120,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Invoke-SPISCMultipartUpload'
+
+    $endpoint  = if ($FileType -eq 'accounts') { 'load-accounts' } else { 'load-entitlements' }
+    $uploadUrl = "$BaseUrl/beta/sources/$SourceId/$endpoint"
+
+    # Build PS 5.1-compatible multipart/form-data body
+    $boundary    = [guid]::NewGuid().ToString()
+    $fileName    = [System.IO.Path]::GetFileName($FilePath)
+    $fileContent = [System.IO.File]::ReadAllBytes($FilePath)
+    $enc         = [System.Text.Encoding]::UTF8
+
+    $headerStr = "--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"$fileName`"`r`nContent-Type: text/csv`r`n`r`n"
+    $footerStr = "`r`n--$boundary--`r`n"
+
+    $headerBytes = $enc.GetBytes($headerStr)
+    $footerBytes = $enc.GetBytes($footerStr)
+
+    $bodyBytes = New-Object byte[] ($headerBytes.Length + $fileContent.Length + $footerBytes.Length)
+    [System.Buffer]::BlockCopy($headerBytes, 0, $bodyBytes, 0, $headerBytes.Length)
+    [System.Buffer]::BlockCopy($fileContent, 0, $bodyBytes, $headerBytes.Length, $fileContent.Length)
+    [System.Buffer]::BlockCopy($footerBytes, 0, $bodyBytes, ($headerBytes.Length + $fileContent.Length), $footerBytes.Length)
+
+    Write-SPLog -Message "Uploading $FileType CSV to ISC: $uploadUrl ($($fileContent.Length) bytes)" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    $headers = @{}
+    foreach ($key in $AuthHeaders.Keys) {
+        $headers[$key] = $AuthHeaders[$key]
+    }
+
+    $response = Invoke-RestMethod -Method POST -Uri $uploadUrl `
+        -Headers $headers `
+        -ContentType "multipart/form-data; boundary=$boundary" `
+        -Body $bodyBytes `
+        -TimeoutSec $TimeoutSeconds `
+        -ErrorAction Stop
+
+    # Extract task ID from response (handles both {task:{id:...}} and {id:...})
+    $taskId = $null
+    if ($null -ne $response) {
+        if ($response -is [hashtable]) {
+            if ($response.ContainsKey('task')) {
+                $taskId = if ($response.task -is [hashtable]) { $response.task['id'] } else { $response.task.id }
+            }
+            elseif ($response.ContainsKey('id')) {
+                $taskId = $response['id']
+            }
+        }
+        elseif ($null -ne $response.PSObject) {
+            if ($response.PSObject.Properties.Name -contains 'task') {
+                $taskId = $response.task.id
+            }
+            elseif ($response.PSObject.Properties.Name -contains 'id') {
+                $taskId = $response.id
+            }
+        }
+    }
+
+    Write-SPLog -Message "Upload complete: $FileType -> TaskId=$taskId" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return $taskId
+}
+
+
+function Invoke-SPISCFileDrop {
+    <#
+    .SYNOPSIS
+        Copies CSV files to a VA-accessible path for file-based aggregation.
+    .DESCRIPTION
+        Copies account (and optionally entitlement) CSV files to a configured
+        directory that a Virtual Appliance monitors for aggregation. Creates
+        per-app subdirectories automatically.
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=[hashtable]; Error=[string]}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$AppName,
+        [Parameter(Mandatory)][string]$AccountFilePath,
+        [Parameter()][string]$EntitlementFilePath,
+        [Parameter()][string]$FileDropPath,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Invoke-SPISCFileDrop'
+
+    if ([string]::IsNullOrWhiteSpace($FileDropPath)) {
+        $errMsg = "FileDropPath is required for FileDrop upload method"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+
+    try {
+        # Ensure per-app destination directory exists
+        $appDropDir = Join-Path $FileDropPath $AppName
+        if (-not (Test-Path -Path $appDropDir)) {
+            New-Item -Path $appDropDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Copy account file
+        $acctDest = Join-Path $appDropDir 'accounts.csv'
+        Copy-Item -Path $AccountFilePath -Destination $acctDest -Force
+        Write-SPLog -Message "Account CSV copied to file drop: $acctDest" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        # Copy entitlement file if provided
+        $entDest = $null
+        if (-not [string]::IsNullOrWhiteSpace($EntitlementFilePath) -and
+            (Test-Path -Path $EntitlementFilePath -PathType Leaf)) {
+            $entDest = Join-Path $appDropDir 'entitlements.csv'
+            Copy-Item -Path $EntitlementFilePath -Destination $entDest -Force
+            Write-SPLog -Message "Entitlement CSV copied to file drop: $entDest" `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success = $true
+            Data    = @{
+                AppName           = $AppName
+                Method            = 'FileDrop'
+                TaskId            = $null
+                EntitlementTaskId = $null
+                UploadedAt        = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                AggregationStatus = 'FileDropped'
+                AccountPath       = $acctDest
+                EntitlementPath   = $entDest
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "FileDrop failed for '$AppName': $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+
+function Wait-SPISCAggregation {
+    <#
+    .SYNOPSIS
+        Polls ISC task status until aggregation completes or times out.
+    .DESCRIPTION
+        Checks the ISC beta task-status endpoint at 5-second intervals until
+        the task reaches a terminal state (SUCCESS, ERROR) or the timeout expires.
+    .OUTPUTS
+        [string] Final status: COMPLETED, FAILED, or TIMEOUT.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$TaskId,
+        [Parameter(Mandatory)][hashtable]$AuthHeaders,
+        [Parameter(Mandatory)][string]$BaseUrl,
+        [Parameter()][int]$TimeoutSeconds = 120,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Wait-SPISCAggregation'
+
+    Write-SPLog -Message "Waiting for aggregation task '$TaskId' (timeout: ${TimeoutSeconds}s)" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    $pollUrl   = "$BaseUrl/beta/task-status/$TaskId"
+    $deadline  = (Get-Date).AddSeconds($TimeoutSeconds)
+    $pollDelay = 5
+
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds $pollDelay
+
+        try {
+            $headers = @{}
+            foreach ($key in $AuthHeaders.Keys) {
+                $headers[$key] = $AuthHeaders[$key]
+            }
+
+            $status = Invoke-RestMethod -Method GET -Uri $pollUrl `
+                -Headers $headers -TimeoutSec 30 -ErrorAction Stop
+
+            $completionStatus = $null
+            if ($null -ne $status) {
+                if ($status -is [hashtable]) {
+                    $completionStatus = $status['completionStatus']
+                }
+                elseif ($null -ne $status.PSObject) {
+                    $completionStatus = $status.completionStatus
+                }
+            }
+
+            if ($completionStatus -eq 'SUCCESS') {
+                Write-SPLog -Message "Aggregation task '$TaskId' completed successfully" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                return 'COMPLETED'
+            }
+
+            if ($completionStatus -in @('ERROR', 'FAILED')) {
+                Write-SPLog -Message "Aggregation task '$TaskId' failed: $completionStatus" `
+                    -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+                return 'FAILED'
+            }
+
+            Write-SPLog -Message "Aggregation task '$TaskId' status: $completionStatus -- polling..." `
+                -Severity DEBUG -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Error polling aggregation task '$TaskId': $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+    }
+
+    Write-SPLog -Message "Aggregation task '$TaskId' timed out after ${TimeoutSeconds}s" `
+        -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return 'TIMEOUT'
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -4871,5 +5303,6 @@ Export-ModuleMember -Function @(
     'Export-SPDisconnectedAppDecisionHarvestHtml',
     'New-SPRemediationRecord',
     'Update-SPRemediationStatus',
-    'Get-SPRemediationReport'
+    'Get-SPRemediationReport',
+    'Push-SPDisconnectedAppToISC'
 )
