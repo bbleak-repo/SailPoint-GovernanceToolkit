@@ -41,6 +41,7 @@
         'Merge-SPOrgTreeWithSupplement'
         'Show-SPOrgTree'
         'Show-SPCampaignOrgPreview'
+        'Show-SPReportDistributionPreview'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

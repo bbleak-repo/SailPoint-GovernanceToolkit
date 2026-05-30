@@ -2012,6 +2012,268 @@ function Show-SPCampaignOrgPreview {
     }
 }
 
+function Show-SPReportDistributionPreview {
+    <#
+    .SYNOPSIS
+        Previews which leadership reports would be generated and who would receive them.
+    .DESCRIPTION
+        Shows the full distribution plan for leadership reports without generating or
+        sending anything. For each org tree level that has leaders in the LeadershipData,
+        lists the recipient, their content summary (subordinate count, completion %),
+        and optionally their email address.
+
+        Displays SMTP status at the bottom so the caller knows whether email delivery
+        is configured.
+
+        This is a dry-run preview -- no reports are generated, no emails are sent.
+    .PARAMETER OrgTree
+        Org tree Data hashtable (the .Data property from Build-SPOrgTree or
+        Merge-SPOrgTreeWithSupplement). Must contain Nodes and LevelLabels.
+    .PARAMETER LeadershipData
+        Hashtable from Group-SPAuditByLeadership containing Levels, TopLevel,
+        LevelLabels, Directors, and Executive rollups.
+    .PARAMETER IncludeEmail
+        When specified, resolves each leader's email address from ISC via
+        Resolve-SPAuditIdentityAccounts and includes it in the output.
+    .OUTPUTS
+        [string[]] Lines forming the ASCII distribution preview, written to the output stream.
+    .EXAMPLE
+        $tree = Build-SPOrgTree -IdentityIds $ids -MaxDepth 4
+        $leadership = Group-SPAuditByLeadership -Decisions $decisions -OrgTree $tree.Data
+        Show-SPReportDistributionPreview -OrgTree $tree.Data -LeadershipData $leadership
+    .EXAMPLE
+        Show-SPReportDistributionPreview -OrgTree $tree.Data -LeadershipData $leadership -IncludeEmail
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [hashtable]$LeadershipData,
+
+        [Parameter()]
+        [switch]$IncludeEmail
+    )
+
+    $nodes = $OrgTree.Nodes
+    if ($null -eq $nodes -or $nodes.Count -eq 0) {
+        Write-Output 'Report Distribution Preview -- no org tree nodes'
+        return
+    }
+
+    $levels      = $LeadershipData.Levels
+    $topLevel    = $LeadershipData.TopLevel
+    $levelLabels = $LeadershipData.LevelLabels
+
+    if ($null -eq $levels -or $levels.Count -eq 0) {
+        Write-Output 'Report Distribution Preview -- no leadership data'
+        return
+    }
+
+    # Band auto-detect from tree level
+    $bandFromLevel = @{ 0 = 'E'; 1 = 'D'; 2 = 'C'; 3 = 'B' }
+
+    # Resolve band letter for a node
+    function Get-NodeBandLocal {
+        param([hashtable]$Node)
+        if ($Node.ContainsKey('Band') -and -not [string]::IsNullOrWhiteSpace($Node.Band)) {
+            return $Node.Band
+        }
+        $lvl = $Node.Level
+        if ($lvl -ge 4) { return 'A' }
+        if ($bandFromLevel.ContainsKey($lvl)) { return $bandFromLevel[$lvl] }
+        return 'E'
+    }
+
+    # Resolve email addresses if requested
+    $emailMap = @{}  # identityId -> email string
+    if ($IncludeEmail) {
+        # Collect all leader identity IDs across all levels
+        $leaderIds = [System.Collections.Generic.List[string]]::new()
+        foreach ($lvl in $levels.Keys) {
+            $lvlLeaders = $levels[$lvl].Leaders
+            if ($null -eq $lvlLeaders) { continue }
+            foreach ($leaderId in $lvlLeaders.Keys) {
+                if ($leaderId -ne '__unmanaged__' -and
+                    -not $leaderId.StartsWith('supplement-') -and
+                    -not $leaderIds.Contains($leaderId)) {
+                    $leaderIds.Add($leaderId)
+                }
+            }
+        }
+
+        if ($leaderIds.Count -gt 0) {
+            try {
+                $acctResult = Resolve-SPAuditIdentityAccounts -IdentityIds @($leaderIds.ToArray())
+                if ($null -ne $acctResult -and $acctResult.Success -and $null -ne $acctResult.Data) {
+                    foreach ($id in $acctResult.Data.Keys) {
+                        $acct = $acctResult.Data[$id]
+                        $email = ''
+                        if ($null -ne $acct) {
+                            if (-not [string]::IsNullOrWhiteSpace($acct.Email)) {
+                                $email = $acct.Email
+                            }
+                            elseif (-not [string]::IsNullOrWhiteSpace($acct.UserPrincipalName)) {
+                                $email = $acct.UserPrincipalName
+                            }
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($email)) {
+                            $emailMap[$id] = $email
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Show-SPReportDistributionPreview: Could not resolve emails: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('Report Distribution Preview')
+    $lines.Add('============================')
+    $lines.Add('')
+
+    $totalReports    = 0
+    $totalRecipients = 0
+
+    # Walk levels from top down (highest level first)
+    $sortedLevels = @($levels.Keys | Sort-Object { -$_ })
+
+    foreach ($lvl in $sortedLevels) {
+        $lvlData    = $levels[$lvl]
+        $lvlLeaders = $lvlData.Leaders
+        if ($null -eq $lvlLeaders -or $lvlLeaders.Count -eq 0) { continue }
+
+        # Determine level label
+        $levelLabel = $lvlData.Label
+        if ([string]::IsNullOrWhiteSpace($levelLabel)) {
+            $levelLabel = if ($null -ne $levelLabels -and $levelLabels.ContainsKey($lvl)) {
+                $levelLabels[$lvl]
+            } else { "Level $lvl" }
+        }
+
+        # Filter out unmanaged bucket from report count
+        $reportLeaders = @{}
+        foreach ($leaderId in $lvlLeaders.Keys) {
+            if ($leaderId -ne '__unmanaged__') {
+                $reportLeaders[$leaderId] = $lvlLeaders[$leaderId]
+            }
+        }
+
+        if ($reportLeaders.Count -eq 0) { continue }
+
+        # Determine section label
+        $reportNoun  = if ($reportLeaders.Count -eq 1) { 'report' } else { 'reports' }
+
+        # Top level is the executive summary
+        $sectionTitle = if ($lvl -eq $topLevel -and $reportLeaders.Count -eq 1) {
+            "Executive Summary (1 report)"
+        } else {
+            "$levelLabel Reports ($($reportLeaders.Count) $reportNoun)"
+        }
+        $lines.Add($sectionTitle)
+
+        # Sort leaders by name
+        $sortedLeaderIds = @(
+            $reportLeaders.Keys | Sort-Object { $reportLeaders[$_].Name }
+        )
+
+        foreach ($leaderId in $sortedLeaderIds) {
+            $leader = $reportLeaders[$leaderId]
+            $name   = $leader.Name
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = $leaderId }
+
+            # Build the "To:" line with optional email and band
+            $toLine = "  To: $name"
+
+            if ($IncludeEmail) {
+                $email = if ($emailMap.ContainsKey($leaderId)) { $emailMap[$leaderId] } else { 'no email' }
+                $toLine += " ($email)"
+            }
+
+            # Resolve band from org tree node if available
+            if ($nodes.ContainsKey($leaderId)) {
+                $node  = $nodes[$leaderId]
+                $band  = Get-NodeBandLocal -Node $node
+                $title = ''
+                if ($node.ContainsKey('Title') -and -not [string]::IsNullOrWhiteSpace($node.Title)) {
+                    $title = $node.Title + ', '
+                }
+                $toLine += " [${title}Band $band]"
+            }
+
+            $lines.Add($toLine)
+
+            # Content summary: subordinate/manager counts and completion
+            $contentParts = [System.Collections.Generic.List[string]]::new()
+
+            # Count subordinates (for level 3+ leaders)
+            if ($null -ne $leader['Subordinates'] -and $leader.Subordinates.Count -gt 0) {
+                $subCount = $leader.Subordinates.Count
+                $subNoun  = if ($subCount -eq 1) { 'direct report' } else { 'direct reports' }
+                $contentParts.Add("$subCount $subNoun")
+            }
+
+            # Count managers (for level 2 directors)
+            if ($null -ne $leader['Managers'] -and $leader.Managers.Count -gt 0) {
+                $mgrCount = $leader.Managers.Count
+                $mgrNoun  = if ($mgrCount -eq 1) { 'manager' } else { 'managers' }
+                $contentParts.Add("$mgrCount $mgrNoun")
+            }
+
+            # Total items and completion
+            if ($leader.TotalItems -gt 0) {
+                $contentParts.Add("$($leader.TotalItems) items")
+                $contentParts.Add("$($leader.CompletionPct)% completion")
+            }
+
+            if ($contentParts.Count -gt 0) {
+                $lines.Add("      Content: $($contentParts -join ', ')")
+            }
+
+            $totalReports++
+            $totalRecipients++
+        }
+
+        $lines.Add('')
+    }
+
+    # Total summary
+    $lines.Add("Total: $totalReports reports to $totalRecipients recipients")
+
+    # SMTP status
+    $smtpStatus = 'NOT CONFIGURED (reports will be generated but not emailed)'
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg -and
+            $null -ne $cfg.PSObject.Properties['Audit'] -and
+            $null -ne $cfg.Audit -and
+            $null -ne $cfg.Audit.PSObject.Properties['Smtp'] -and
+            $null -ne $cfg.Audit.Smtp -and
+            $null -ne $cfg.Audit.Smtp.PSObject.Properties['Enabled'] -and
+            $cfg.Audit.Smtp.Enabled -eq $true) {
+            $server = $cfg.Audit.Smtp.Server
+            if (-not [string]::IsNullOrWhiteSpace($server)) {
+                $smtpStatus = "CONFIGURED (Server: $server)"
+            } else {
+                $smtpStatus = 'ENABLED but no server configured'
+            }
+        }
+    }
+    catch {
+        # Config read failed -- default to NOT CONFIGURED
+    }
+
+    $lines.Add("SMTP Status: $smtpStatus")
+
+    foreach ($line in $lines) {
+        Write-Output $line
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2024,5 +2286,6 @@ Export-ModuleMember -Function @(
     'Import-SPOrgChartSupplement',
     'Merge-SPOrgTreeWithSupplement',
     'Show-SPOrgTree',
-    'Show-SPCampaignOrgPreview'
+    'Show-SPCampaignOrgPreview',
+    'Show-SPReportDistributionPreview'
 )

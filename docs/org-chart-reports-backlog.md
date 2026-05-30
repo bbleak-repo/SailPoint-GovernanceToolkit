@@ -29,7 +29,7 @@ campaigns or sending emails.
 | OC-01 | Org Chart Supplement Import (CSV override) | none | DONE |
 | OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | DONE |
 | OC-03 | Campaign Org Chart Preview | OC-02 | DONE |
-| OC-04 | Report Distribution Preview | OC-03 | PENDING |
+| OC-04 | Report Distribution Preview | OC-03 | DONE |
 | OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | PENDING |
 | OC-06 | Band/Level Classification Engine | OC-01 | PENDING |
 | OC-07 | Per-Band Leadership Reports | OC-06 | PENDING |
@@ -214,8 +214,8 @@ Campaigns that would be created: 8 (one per manager with affected reports)
 
 ## OC-04: Report Distribution Preview
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-03
 
 **Description:**
