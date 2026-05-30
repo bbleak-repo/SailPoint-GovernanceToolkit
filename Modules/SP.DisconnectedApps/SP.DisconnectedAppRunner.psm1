@@ -4257,6 +4257,602 @@ function Export-SPDisconnectedAppDecisionHarvestHtml {
 
 #endregion
 
+#region DA-22: Remediation Tracker
+
+function New-SPRemediationRecord {
+    <#
+    .SYNOPSIS
+        Creates PENDING remediation records from revocation decisions.
+    .DESCRIPTION
+        Takes the RevocationDetails array from Get-SPDisconnectedAppCampaignDecisions
+        and creates (or updates) a per-app remediation-tracker.json file. Each revocation
+        decision becomes a PENDING remediation record that must be confirmed by observing
+        the entitlement's absence in a subsequent CSV delivery.
+
+        Duplicate detection: if a record already exists for the same AccountId +
+        Entitlement + CampaignId combination, it is not re-added.
+    .PARAMETER RevocationDetails
+        Array of hashtables from Get-SPDisconnectedAppCampaignDecisions .Data.RevocationDetails.
+        Each must contain: AppName, CampaignId, IdentityName, AccountId, Entitlement,
+        ReviewerName, DecisionDate.
+    .PARAMETER AppName
+        Application name. Used to locate the remediation tracker file.
+    .PARAMETER OutputPath
+        Base directory for reports. Tracker stored at {OutputPath}/{AppName}/remediation-tracker.json.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Created; Skipped; Total}; Error}
+    .EXAMPLE
+        $decisions = (Get-SPDisconnectedAppCampaignDecisions -AppName 'PEP-Plus').Data
+        New-SPRemediationRecord -RevocationDetails $decisions.RevocationDetails -AppName 'PEP-Plus'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$RevocationDetails,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'New-SPRemediationRecord'
+
+    try {
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        if (-not (Test-Path -Path $appOutputPath -PathType Container)) {
+            New-Item -Path $appOutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $trackerPath = Join-Path -Path $appOutputPath -ChildPath 'remediation-tracker.json'
+
+        # Load existing tracker or create new
+        $tracker = @()
+        if (Test-Path -Path $trackerPath -PathType Leaf) {
+            $raw = Get-Content -Path $trackerPath -Encoding UTF8 -Raw
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $parsed = $raw | ConvertFrom-Json
+                $tracker = @($parsed)
+            }
+        }
+
+        # Build a set of existing keys for duplicate detection
+        $existingKeys = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+        foreach ($rec in $tracker) {
+            $key = "$($rec.AccountId)|$($rec.Entitlement)|$($rec.CampaignId)"
+            [void]$existingKeys.Add($key)
+        }
+
+        $createdCount = 0
+        $skippedCount = 0
+        $newRecords   = [System.Collections.Generic.List[hashtable]]::new()
+
+        foreach ($rev in $RevocationDetails) {
+            $accountId   = if ($null -ne $rev['AccountId'])   { [string]$rev['AccountId'] }   else { '' }
+            $entitlement = if ($null -ne $rev['Entitlement']) { [string]$rev['Entitlement'] } else { '' }
+            $campaignId  = if ($null -ne $rev['CampaignId'])  { [string]$rev['CampaignId'] }  else { '' }
+
+            if ([string]::IsNullOrWhiteSpace($accountId) -and [string]::IsNullOrWhiteSpace($entitlement)) {
+                $skippedCount++
+                continue
+            }
+
+            $key = "$accountId|$entitlement|$campaignId"
+            if ($existingKeys.Contains($key)) {
+                $skippedCount++
+                continue
+            }
+
+            $record = [ordered]@{
+                RecordId       = [guid]::NewGuid().ToString()
+                AppName        = $AppName
+                AccountId      = $accountId
+                Entitlement    = $entitlement
+                IdentityName   = if ($null -ne $rev['IdentityName'])  { [string]$rev['IdentityName'] }  else { '' }
+                ReviewerName   = if ($null -ne $rev['ReviewerName'])  { [string]$rev['ReviewerName'] }  else { '' }
+                CampaignId     = $campaignId
+                CertificationId = if ($null -ne $rev['CertificationId']) { [string]$rev['CertificationId'] } else { '' }
+                DecisionDate   = if ($null -ne $rev['DecisionDate'])  { [string]$rev['DecisionDate'] }  else { '' }
+                Status         = 'PENDING'
+                CreatedAt      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                ConfirmedAt    = $null
+                DaysOverdue    = 0
+                EscalatedAt    = $null
+                CorrelationID  = $CorrelationID
+            }
+
+            $newRecords.Add($record)
+            [void]$existingKeys.Add($key)
+            $createdCount++
+        }
+
+        # Merge and write
+        if ($createdCount -gt 0) {
+            # Convert existing PSCustomObjects to ordered hashtables for uniform serialization
+            $allRecords = [System.Collections.Generic.List[object]]::new()
+            foreach ($existing in $tracker) {
+                $allRecords.Add($existing)
+            }
+            foreach ($nr in $newRecords) {
+                $allRecords.Add($nr)
+            }
+
+            $json = $allRecords | ConvertTo-Json -Depth 5
+            # Single-item arrays lose their array wrapper in PS -- force array syntax
+            if ($allRecords.Count -eq 1) {
+                $json = "[$json]"
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($trackerPath, $json, $utf8NoBom)
+        }
+
+        Write-SPLog -Message "Remediation records for '$AppName': $createdCount created, $skippedCount skipped, $($tracker.Count + $createdCount) total" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Created = $createdCount
+                Skipped = $skippedCount
+                Total   = $tracker.Count + $createdCount
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "New-SPRemediationRecord failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Update-SPRemediationStatus {
+    <#
+    .SYNOPSIS
+        Checks today's CSV to confirm or flag overdue remediations.
+    .DESCRIPTION
+        Reads the remediation-tracker.json for an app, then inspects the current
+        account CSV to verify whether revoked entitlements have been removed by the
+        app team. Updates remediation status:
+
+        - PENDING -> CONFIRMED: the entitlement is absent from today's CSV for that account
+        - PENDING -> OVERDUE: the entitlement is still present and OverdueDays threshold exceeded
+        - OVERDUE stays OVERDUE with incremented DaysOverdue counter
+        - CONFIRMED and ESCALATED records are not modified
+
+        This function should be called AFTER today's CSV snapshot has been saved.
+    .PARAMETER AppName
+        Application name. Used to locate the remediation tracker and CSV.
+    .PARAMETER AccountFilePath
+        Path to today's account CSV file (the same file used for delta detection).
+    .PARAMETER OutputPath
+        Base directory for reports. Tracker at {OutputPath}/{AppName}/remediation-tracker.json.
+    .PARAMETER OverdueDays
+        Number of days after the decision date before a remediation is marked OVERDUE.
+        Default: 3.
+    .PARAMETER GroupsColumn
+        Column name in the CSV containing comma-separated entitlement IDs. Default: 'groups'.
+    .PARAMETER IdColumn
+        Column name in the CSV used as the unique account identifier. Default: 'id'.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Confirmed; Overdue; Pending; Escalated; Total}; Error}
+    .EXAMPLE
+        Update-SPRemediationStatus -AppName 'PEP-Plus' -AccountFilePath '.\Imports\PEP-Plus\accounts.csv'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AccountFilePath,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [ValidateRange(1, 365)]
+        [int]$OverdueDays = 3,
+
+        [Parameter()]
+        [string]$GroupsColumn = 'groups',
+
+        [Parameter()]
+        [string]$IdColumn = 'id',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Update-SPRemediationStatus'
+
+    try {
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        $trackerPath   = Join-Path -Path $appOutputPath -ChildPath 'remediation-tracker.json'
+
+        if (-not (Test-Path -Path $trackerPath -PathType Leaf)) {
+            Write-SPLog -Message "No remediation tracker found for '$AppName'. Nothing to update." `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{ Confirmed = 0; Overdue = 0; Pending = 0; Escalated = 0; Total = 0 }
+                Error   = $null
+            }
+        }
+
+        if (-not (Test-Path -Path $AccountFilePath -PathType Leaf)) {
+            $errMsg = "Account file not found: $AccountFilePath"
+            Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+                -Action $action -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        # Load tracker
+        $raw = Get-Content -Path $trackerPath -Encoding UTF8 -Raw
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return @{
+                Success = $true
+                Data    = @{ Confirmed = 0; Overdue = 0; Pending = 0; Escalated = 0; Total = 0 }
+                Error   = $null
+            }
+        }
+        $tracker = @(ConvertFrom-Json -InputObject $raw)
+
+        # Parse today's CSV into a lookup: AccountId -> Set of entitlements
+        $csvData = Import-Csv -Path $AccountFilePath -Encoding UTF8
+        $accountEntitlements = @{}
+        foreach ($row in $csvData) {
+            $acctId = $row.$IdColumn
+            if ([string]::IsNullOrWhiteSpace($acctId)) { continue }
+
+            $groups = @()
+            $groupVal = $row.$GroupsColumn
+            if (-not [string]::IsNullOrWhiteSpace($groupVal)) {
+                $groups = @($groupVal -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+            }
+
+            $groupSet = @{}
+            foreach ($g in $groups) { $groupSet[$g] = $true }
+            $accountEntitlements[$acctId] = $groupSet
+        }
+
+        $nowUtc        = (Get-Date).ToUniversalTime()
+        $confirmedCount = 0
+        $overdueCount   = 0
+        $pendingCount   = 0
+        $escalatedCount = 0
+        $modified       = $false
+
+        for ($i = 0; $i -lt $tracker.Count; $i++) {
+            $rec = $tracker[$i]
+            $status = if ($null -ne $rec.Status) { [string]$rec.Status } else { 'PENDING' }
+
+            # Skip already-confirmed or escalated records
+            if ($status -eq 'CONFIRMED') {
+                $confirmedCount++
+                continue
+            }
+            if ($status -eq 'ESCALATED') {
+                $escalatedCount++
+                continue
+            }
+
+            $recAccountId   = if ($null -ne $rec.AccountId)   { [string]$rec.AccountId }   else { '' }
+            $recEntitlement = if ($null -ne $rec.Entitlement) { [string]$rec.Entitlement } else { '' }
+
+            # Check if the entitlement still exists in today's CSV
+            $stillPresent = $false
+            if ($accountEntitlements.ContainsKey($recAccountId)) {
+                $acctGroups = $accountEntitlements[$recAccountId]
+                if ($acctGroups.ContainsKey($recEntitlement)) {
+                    $stillPresent = $true
+                }
+            }
+            # Account removed entirely also counts as confirmed (access gone)
+
+            if (-not $stillPresent) {
+                # Entitlement removed or account gone -- remediation confirmed
+                $rec.Status      = 'CONFIRMED'
+                $rec.ConfirmedAt = $nowUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                $tracker[$i]     = $rec
+                $confirmedCount++
+                $modified = $true
+            }
+            else {
+                # Still present -- check if overdue
+                $decisionDateStr = if ($null -ne $rec.DecisionDate) { [string]$rec.DecisionDate } else { '' }
+                $daysElapsed = 0
+
+                if (-not [string]::IsNullOrWhiteSpace($decisionDateStr)) {
+                    try {
+                        $decisionDate = [datetime]::Parse($decisionDateStr).ToUniversalTime()
+                        $daysElapsed  = [int][math]::Floor(($nowUtc - $decisionDate).TotalDays)
+                    }
+                    catch {
+                        # Cannot parse decision date -- use CreatedAt as fallback
+                        $createdAtStr = if ($null -ne $rec.CreatedAt) { [string]$rec.CreatedAt } else { '' }
+                        if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
+                            try {
+                                $createdAt   = [datetime]::Parse($createdAtStr).ToUniversalTime()
+                                $daysElapsed = [int][math]::Floor(($nowUtc - $createdAt).TotalDays)
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                else {
+                    # No decision date -- fall back to CreatedAt
+                    $createdAtStr = if ($null -ne $rec.CreatedAt) { [string]$rec.CreatedAt } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
+                        try {
+                            $createdAt   = [datetime]::Parse($createdAtStr).ToUniversalTime()
+                            $daysElapsed = [int][math]::Floor(($nowUtc - $createdAt).TotalDays)
+                        }
+                        catch { }
+                    }
+                }
+
+                $rec.DaysOverdue = $daysElapsed
+
+                if ($daysElapsed -ge $OverdueDays) {
+                    $rec.Status = 'OVERDUE'
+                    $overdueCount++
+                }
+                else {
+                    $pendingCount++
+                }
+
+                $tracker[$i] = $rec
+                $modified = $true
+            }
+        }
+
+        # Write back if anything changed
+        if ($modified) {
+            $json = $tracker | ConvertTo-Json -Depth 5
+            if ($tracker.Count -eq 1) {
+                $json = "[$json]"
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($trackerPath, $json, $utf8NoBom)
+        }
+
+        # Write audit event
+        $auditEvent = [ordered]@{
+            Timestamp    = $nowUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            CorrelationID = $CorrelationID
+            Action       = 'RemediationStatusUpdate'
+            AppName      = $AppName
+            Confirmed    = $confirmedCount
+            Overdue      = $overdueCount
+            Pending      = $pendingCount
+            Escalated    = $escalatedCount
+            Total        = $tracker.Count
+        }
+
+        try {
+            $auditPath = Join-Path -Path $appOutputPath -ChildPath 'disconnected-app-audit.jsonl'
+            $jsonLine  = $auditEvent | ConvertTo-Json -Depth 5 -Compress
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::AppendAllText($auditPath, "$jsonLine`n", $utf8NoBom)
+        }
+        catch {
+            Write-SPLog -Message "Failed to write remediation audit event: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Remediation update for '$AppName': Confirmed=$confirmedCount Overdue=$overdueCount Pending=$pendingCount Escalated=$escalatedCount Total=$($tracker.Count)" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Confirmed = $confirmedCount
+                Overdue   = $overdueCount
+                Pending   = $pendingCount
+                Escalated = $escalatedCount
+                Total     = $tracker.Count
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Update-SPRemediationStatus failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPRemediationReport {
+    <#
+    .SYNOPSIS
+        Reads the remediation tracker and returns a structured status report.
+    .DESCRIPTION
+        Loads the per-app remediation-tracker.json and groups records by status.
+        Returns summary counts plus detailed lists for PENDING, OVERDUE, and
+        recently CONFIRMED records (within the last 7 days).
+
+        This is a read-only function -- it does not modify the tracker file.
+    .PARAMETER AppName
+        Application name. Used to locate the remediation tracker file.
+    .PARAMETER OutputPath
+        Base directory for reports. Tracker at {OutputPath}/{AppName}/remediation-tracker.json.
+    .PARAMETER RecentDays
+        Number of days to include in the "recently confirmed" list. Default: 7.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Summary; PendingRecords; OverdueRecords;
+            RecentlyConfirmed; EscalatedRecords}; Error}
+    .EXAMPLE
+        $report = Get-SPRemediationReport -AppName 'PEP-Plus'
+        $report.Data.OverdueRecords  # items needing follow-up
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$AppName,
+
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [ValidateRange(1, 365)]
+        [int]$RecentDays = 7,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Get-SPRemediationReport'
+
+    try {
+        $appOutputPath = Join-Path -Path $OutputPath -ChildPath $AppName
+        $trackerPath   = Join-Path -Path $appOutputPath -ChildPath 'remediation-tracker.json'
+
+        if (-not (Test-Path -Path $trackerPath -PathType Leaf)) {
+            Write-SPLog -Message "No remediation tracker found for '$AppName'." `
+                -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    Summary           = @{ Pending = 0; Overdue = 0; Confirmed = 0; Escalated = 0; Total = 0 }
+                    PendingRecords    = @()
+                    OverdueRecords    = @()
+                    RecentlyConfirmed = @()
+                    EscalatedRecords  = @()
+                }
+                Error   = $null
+            }
+        }
+
+        $raw = Get-Content -Path $trackerPath -Encoding UTF8 -Raw
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Summary           = @{ Pending = 0; Overdue = 0; Confirmed = 0; Escalated = 0; Total = 0 }
+                    PendingRecords    = @()
+                    OverdueRecords    = @()
+                    RecentlyConfirmed = @()
+                    EscalatedRecords  = @()
+                }
+                Error   = $null
+            }
+        }
+
+        $tracker = @(ConvertFrom-Json -InputObject $raw)
+
+        $pending   = [System.Collections.Generic.List[object]]::new()
+        $overdue   = [System.Collections.Generic.List[object]]::new()
+        $confirmed = [System.Collections.Generic.List[object]]::new()
+        $escalated = [System.Collections.Generic.List[object]]::new()
+
+        $nowUtc        = (Get-Date).ToUniversalTime()
+        $recentCutoff  = $nowUtc.AddDays(-$RecentDays)
+
+        foreach ($rec in $tracker) {
+            $status = if ($null -ne $rec.Status) { [string]$rec.Status } else { 'PENDING' }
+
+            switch ($status) {
+                'PENDING' {
+                    $pending.Add($rec)
+                }
+                'OVERDUE' {
+                    $overdue.Add($rec)
+                }
+                'CONFIRMED' {
+                    # Include in recently confirmed if within RecentDays
+                    $confirmedAtStr = if ($null -ne $rec.ConfirmedAt) { [string]$rec.ConfirmedAt } else { '' }
+                    $includeRecent  = $false
+                    if (-not [string]::IsNullOrWhiteSpace($confirmedAtStr)) {
+                        try {
+                            $confirmedAt = [datetime]::Parse($confirmedAtStr).ToUniversalTime()
+                            if ($confirmedAt -ge $recentCutoff) {
+                                $includeRecent = $true
+                            }
+                        }
+                        catch { $includeRecent = $true }
+                    }
+                    else {
+                        $includeRecent = $true
+                    }
+                    if ($includeRecent) {
+                        $confirmed.Add($rec)
+                    }
+                }
+                'ESCALATED' {
+                    $escalated.Add($rec)
+                }
+            }
+        }
+
+        $confirmedTotal = @($tracker | Where-Object { $_.Status -eq 'CONFIRMED' }).Count
+
+        $resultData = @{
+            Summary = @{
+                Pending   = $pending.Count
+                Overdue   = $overdue.Count
+                Confirmed = $confirmedTotal
+                Escalated = $escalated.Count
+                Total     = $tracker.Count
+            }
+            PendingRecords    = $pending.ToArray()
+            OverdueRecords    = $overdue.ToArray()
+            RecentlyConfirmed = $confirmed.ToArray()
+            EscalatedRecords  = $escalated.ToArray()
+        }
+
+        Write-SPLog -Message "Remediation report for '$AppName': Pending=$($pending.Count) Overdue=$($overdue.Count) Confirmed=$confirmedTotal Escalated=$($escalated.Count)" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $resultData; Error = $null }
+    }
+    catch {
+        $errMsg = "Get-SPRemediationReport failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -4272,5 +4868,8 @@ Export-ModuleMember -Function @(
     'Get-SPDisconnectedAppSlaStatus',
     'Export-SPDisconnectedAppSlaHtml',
     'Get-SPDisconnectedAppCampaignDecisions',
-    'Export-SPDisconnectedAppDecisionHarvestHtml'
+    'Export-SPDisconnectedAppDecisionHarvestHtml',
+    'New-SPRemediationRecord',
+    'Update-SPRemediationStatus',
+    'Get-SPRemediationReport'
 )
