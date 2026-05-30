@@ -32,7 +32,7 @@ Critical items first, then high, medium, low.
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | DONE |
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | DONE |
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | DONE |
-| QH-16 | LOW | Add Power BI-optimized CSV export | M | PENDING |
+| QH-16 | LOW | Add Power BI-optimized CSV export | M | DONE |
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | PENDING |
 | QH-18 | LOW | Update SP.Testing module for newer workflows | M | PENDING |
 | QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | PENDING |
@@ -320,7 +320,7 @@ fallback logic: Escalation prefix -> main prefix -> hardcoded default.
 
 ## QH-16: Power BI-Optimized CSV Export
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** No flat denormalized CSV optimized for Power BI / Tableau consumption.
@@ -330,7 +330,17 @@ Existing `Export-SPAuditCsv` exports raw audit data but not in a BI-ready format
 per decision: campaign, identity, access, reviewer, decision, date, remediation status,
 org level, app name. Ready for Power BI import.
 
-**Files:** `Modules/SP.Audit/SP.AuditReport.psm1` or new file
+**Resolution:** Created `Export-SPGovernanceBIData` function producing a single flat
+`bi-governance-{correlationId}.csv` with 41 columns per row. Each row is one access
+review decision enriched with: campaign metadata (id, name, type, status, dates,
+completion%), reviewer performance (avg response hours, items decided, approval rate,
+rubber stamp risk), campaign aggregates (approved/revoked/pending counts, reviewer
+count, avg/median response hours), leadership org level (director, executive -- when
+`LeadershipData` parameter is provided), and days-to-remediate for revoked items.
+Returns `@{Success; Data = @{File; RowCount; Columns}; Error}`. Added to
+`Export-ModuleMember` and `SP.Audit.psd1` FunctionsToExport.
+
+**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Modules/SP.Audit/SP.Audit.psd1`
 
 ---
 

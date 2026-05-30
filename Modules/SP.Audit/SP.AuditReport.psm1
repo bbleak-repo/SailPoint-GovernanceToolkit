@@ -12239,6 +12239,417 @@ function Invoke-SPLogRetention {
 
 #endregion
 
+#region ===== QH-16: Power BI-Optimized CSV Export =====
+
+function Export-SPGovernanceBIData {
+    <#
+    .SYNOPSIS
+        Exports a flat, denormalized CSV optimized for Power BI / Tableau consumption.
+    .DESCRIPTION
+        Produces a single CSV file with one row per access review decision, enriched
+        with campaign metadata, reviewer performance metrics, rubber stamp risk, and
+        optional leadership org level data. All values are inlined (denormalized) so
+        the output can be loaded directly into Power BI or Tableau without joins.
+
+        Column set (40 columns):
+        - Campaign: Id, Name, Type, Status, Created, Deadline, Completed,
+          TotalItems, CompletionPct
+        - Decision: IdentityName, IdentityId, AccountName, SourceName,
+          EntitlementName, AccessType, Decision, DecisionDate, Justification,
+          RemediationStatus, RemediationDate, DaysToRemediate, RiskFlags
+        - Reviewer: ReviewerName, ReviewerEmail, ReviewerAvgResponseHours,
+          ReviewerItemsDecided, ReviewerApprovalRate, ReviewerRubberStampRisk
+        - Campaign Aggregate: CampaignApproved, CampaignRevoked, CampaignPending,
+          CampaignReviewerCount, CampaignAvgResponseHours, CampaignMedianResponseHours
+        - Leadership: OrgDirector, OrgExecutive, OrgLevel (populated when
+          LeadershipData is provided)
+        - Metadata: CampaignStartDate, CampaignDueDate, SystemTimestamp, ExportTimestamp
+
+        Uses Export-Csv -NoTypeInformation for PS 5.1 compatibility.
+        Date columns are ISO 8601. Risk flags are semicolon-delimited.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables as produced by the campaign audit pipeline.
+        Each must contain: CampaignName, Decisions, ReviewerMetrics, RubberStampRisk.
+    .PARAMETER OutputPath
+        Directory in which to write the CSV file. Created if absent.
+    .PARAMETER LeadershipData
+        Optional hashtable from Group-SPAuditByLeadership. When provided, each decision
+        row is enriched with director and executive names from the org tree.
+    .PARAMETER CorrelationID
+        Unique ID for tracing and file naming. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = @{ File; RowCount; Columns }; Error = $null }
+    .EXAMPLE
+        $result = Export-SPGovernanceBIData -CampaignAudits $audits -OutputPath 'C:\BI'
+        $result.Data.File  # => C:\BI\bi-governance-{correlationId}.csv
+    .EXAMPLE
+        $result = Export-SPGovernanceBIData -CampaignAudits $audits -OutputPath 'C:\BI' -LeadershipData $leadership
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [hashtable]$LeadershipData,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting Power BI governance data for $($CampaignAudits.Count) campaign(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPGovernanceBIData' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- Helper: safe string extraction from hashtable or PSCustomObject ---
+    function _BIVal ($obj, [string]$key, [string]$default = '') {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return [string]$obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return [string]$v }
+        }
+        return $default
+    }
+
+    # --- Build leadership lookup: identity name -> (Director, Executive) ---
+    $leadershipLookup = @{}
+    if ($null -ne $LeadershipData -and $LeadershipData -is [hashtable] -and
+        $LeadershipData.ContainsKey('Directors')) {
+        foreach ($dirKey in $LeadershipData['Directors'].Keys) {
+            $dirEntry = $LeadershipData['Directors'][$dirKey]
+            $dirName  = _BIVal $dirEntry 'Name'
+            $execName = ''
+            if ($null -ne $dirEntry -and $dirEntry -is [hashtable] -and
+                $dirEntry.ContainsKey('ExecutiveName')) {
+                $execName = [string]$dirEntry['ExecutiveName']
+            }
+
+            # Walk managers under this director
+            $managers = $null
+            if ($dirEntry -is [hashtable] -and $dirEntry.ContainsKey('Managers')) {
+                $managers = $dirEntry['Managers']
+            }
+            if ($null -ne $managers -and $managers -is [hashtable]) {
+                foreach ($mgrKey in $managers.Keys) {
+                    $mgrEntry = $managers[$mgrKey]
+                    $identities = $null
+                    if ($mgrEntry -is [hashtable] -and $mgrEntry.ContainsKey('Identities')) {
+                        $identities = $mgrEntry['Identities']
+                    }
+                    if ($null -ne $identities) {
+                        foreach ($identity in @($identities)) {
+                            $iName = ''
+                            if ($null -ne $identity -and $null -ne $identity.IdentityName) {
+                                $iName = [string]$identity.IdentityName
+                            }
+                            if (-not [string]::IsNullOrWhiteSpace($iName) -and
+                                -not $leadershipLookup.ContainsKey($iName)) {
+                                $leadershipLookup[$iName] = @{
+                                    Director  = $dirName
+                                    Executive = $execName
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $hasLeadership = $leadershipLookup.Count -gt 0
+
+    $exportTimestamp = (Get-Date).ToUniversalTime().ToString('o')
+    $biRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($audit in $CampaignAudits) {
+        $campName   = _BIVal $audit 'CampaignName'
+        $campId     = _BIVal $audit 'CampaignId'
+        $campType   = _BIVal $audit 'CampaignType'
+        $campStatus = _BIVal $audit 'Status'
+        $campCreated  = _BIVal $audit 'Created'
+        $campDeadline = _BIVal $audit 'Deadline'
+        $campCompleted = _BIVal $audit 'Completed'
+
+        # --- Count items from decisions for campaign-level metrics ---
+        $decisions = $null
+        if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+            $decisions = $audit['Decisions']
+        } elseif ($null -ne $audit.PSObject -and $null -ne $audit.PSObject.Properties['Decisions']) {
+            $decisions = $audit.Decisions
+        }
+
+        $approvedCt = 0; $revokedCt = 0; $pendingCt = 0
+        if ($null -ne $decisions -and $decisions -is [hashtable]) {
+            if ($decisions.ContainsKey('Approved') -and $null -ne $decisions['Approved']) {
+                $approvedCt = @($decisions['Approved']).Count
+            }
+            if ($decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                $revokedCt = @($decisions['Revoked']).Count
+            }
+            if ($decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                $pendingCt = @($decisions['Pending']).Count
+            }
+        }
+        $totalItems = $approvedCt + $revokedCt + $pendingCt
+        $completionPct = if ($totalItems -gt 0) {
+            [Math]::Round((($approvedCt + $revokedCt) / $totalItems) * 100, 1)
+        } else { 0.0 }
+
+        # --- Reviewer metrics: campaign-level aggregates ---
+        $reviewerCount     = 0
+        $campAvgHours      = ''
+        $campMedianHours   = ''
+        $reviewerMetrics   = $null
+        if ($audit -is [hashtable] -and $audit.ContainsKey('ReviewerMetrics')) {
+            $reviewerMetrics = $audit['ReviewerMetrics']
+        }
+        if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable]) {
+            if ($reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+                $reviewerCount = @($reviewerMetrics['ReviewerMetrics']).Count
+            }
+            if ($reviewerMetrics.ContainsKey('CampaignAvgHours') -and $null -ne $reviewerMetrics['CampaignAvgHours']) {
+                $campAvgHours = $reviewerMetrics['CampaignAvgHours']
+            }
+            if ($reviewerMetrics.ContainsKey('CampaignMedianHours') -and $null -ne $reviewerMetrics['CampaignMedianHours']) {
+                $campMedianHours = $reviewerMetrics['CampaignMedianHours']
+            }
+        }
+
+        # --- Per-reviewer lookup: name -> (AvgHours, ItemsDecided, ApprovalRate) ---
+        $reviewerLookup = @{}
+        if ($null -ne $reviewerMetrics -and $reviewerMetrics -is [hashtable] -and
+            $reviewerMetrics.ContainsKey('ReviewerMetrics') -and $null -ne $reviewerMetrics['ReviewerMetrics']) {
+            foreach ($rm in @($reviewerMetrics['ReviewerMetrics'])) {
+                $rmName = if ($null -ne $rm.Name) { [string]$rm.Name } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($rmName)) {
+                    $reviewerLookup[$rmName] = $rm
+                }
+            }
+        }
+
+        # --- Per-reviewer decision counts for approval rate ---
+        $reviewerApprovedCt = @{}
+        $reviewerRevokedCt  = @{}
+        if ($null -ne $decisions -and $decisions -is [hashtable]) {
+            foreach ($cat in @('Approved', 'Revoked')) {
+                if (-not $decisions.ContainsKey($cat) -or $null -eq $decisions[$cat]) { continue }
+                foreach ($item in @($decisions[$cat])) {
+                    $rn = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { 'Unknown' }
+                    switch ($cat) {
+                        'Approved' {
+                            if ($reviewerApprovedCt.ContainsKey($rn)) { $reviewerApprovedCt[$rn]++ } else { $reviewerApprovedCt[$rn] = 1 }
+                        }
+                        'Revoked' {
+                            if ($reviewerRevokedCt.ContainsKey($rn)) { $reviewerRevokedCt[$rn]++ } else { $reviewerRevokedCt[$rn] = 1 }
+                        }
+                    }
+                }
+            }
+        }
+
+        # --- Rubber stamp risk lookup ---
+        $riskLookup = @{}
+        $rubberStampRisk = $null
+        if ($audit -is [hashtable] -and $audit.ContainsKey('RubberStampRisk')) {
+            $rubberStampRisk = $audit['RubberStampRisk']
+        }
+        if ($null -ne $rubberStampRisk -and $rubberStampRisk -is [hashtable] -and
+            $rubberStampRisk.ContainsKey('ReviewerRisks') -and $null -ne $rubberStampRisk['ReviewerRisks']) {
+            foreach ($rr in @($rubberStampRisk['ReviewerRisks'])) {
+                $rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($rrName)) {
+                    $riskLookup[$rrName] = if ($null -ne $rr.Severity) { [string]$rr.Severity } else { 'None' }
+                }
+            }
+        }
+
+        # --- Iterate all decisions and produce one row per item ---
+        if ($null -eq $decisions) { continue }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            } elseif ($null -ne $decisions.PSObject -and $null -ne $decisions.PSObject.Properties[$category]) {
+                $items = @($decisions.$category)
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                # Risk flags
+                $riskFlags = ''
+                $rf = $null
+                if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['RiskFlags']) {
+                    $rf = $item.RiskFlags
+                }
+                if ($null -ne $rf -and $rf -is [array] -and $rf.Count -gt 0) {
+                    $riskFlags = ($rf | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+                } elseif ($null -ne $rf -and $rf -is [string] -and -not [string]::IsNullOrWhiteSpace($rf)) {
+                    $riskFlags = $rf
+                }
+
+                # Days to remediate (revoked items only)
+                $daysToRemediate = ''
+                $decDateStr = if ($null -ne $item.DecisionDate)    { [string]$item.DecisionDate }    else { '' }
+                $remDateStr = if ($null -ne $item.RemediationDate) { [string]$item.RemediationDate } else { '' }
+                if ($category -eq 'Revoked' -and
+                    -not [string]::IsNullOrWhiteSpace($decDateStr) -and
+                    -not [string]::IsNullOrWhiteSpace($remDateStr)) {
+                    try {
+                        $dtDec = [datetime]::Parse($decDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $dtRem = [datetime]::Parse($remDateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $daysToRemediate = [Math]::Round(($dtRem - $dtDec).TotalDays, 3)
+                    } catch { }
+                }
+
+                # Per-reviewer enrichment
+                $revName = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+                $revAvgHours    = ''
+                $revItemsDecided = ''
+                $revApprovalRate = ''
+                if (-not [string]::IsNullOrWhiteSpace($revName) -and $reviewerLookup.ContainsKey($revName)) {
+                    $rl = $reviewerLookup[$revName]
+                    if ($null -ne $rl.AvgHours) { $revAvgHours = $rl.AvgHours }
+                    if ($null -ne $rl.DecisionsMade) { $revItemsDecided = $rl.DecisionsMade }
+                }
+                # Compute reviewer approval rate from decision counts
+                $revAppr = if ($reviewerApprovedCt.ContainsKey($revName)) { $reviewerApprovedCt[$revName] } else { 0 }
+                $revRev  = if ($reviewerRevokedCt.ContainsKey($revName))  { $reviewerRevokedCt[$revName] }  else { 0 }
+                $revTotal = $revAppr + $revRev
+                if ($revTotal -gt 0) {
+                    $revApprovalRate = [Math]::Round(($revAppr / $revTotal) * 100, 1)
+                }
+
+                $revRubberStamp = if ($riskLookup.ContainsKey($revName)) { $riskLookup[$revName] } else { 'None' }
+
+                # Leadership enrichment
+                $orgDirector  = ''
+                $orgExecutive = ''
+                $orgLevel     = ''
+                $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+                if ($hasLeadership -and -not [string]::IsNullOrWhiteSpace($identityName) -and
+                    $leadershipLookup.ContainsKey($identityName)) {
+                    $lk = $leadershipLookup[$identityName]
+                    $orgDirector  = $lk['Director']
+                    $orgExecutive = $lk['Executive']
+                    if (-not [string]::IsNullOrWhiteSpace($orgExecutive)) { $orgLevel = 'Executive' }
+                    elseif (-not [string]::IsNullOrWhiteSpace($orgDirector)) { $orgLevel = 'Director' }
+                    else { $orgLevel = 'Unknown' }
+                }
+
+                $biRows.Add([PSCustomObject]@{
+                    CampaignId                   = $campId
+                    CampaignName                 = $campName
+                    CampaignType                 = $campType
+                    CampaignStatus               = $campStatus
+                    CampaignCreated              = $campCreated
+                    CampaignDeadline             = $campDeadline
+                    CampaignCompleted            = $campCompleted
+                    CampaignTotalItems           = $totalItems
+                    CampaignCompletionPct        = $completionPct
+                    IdentityName                 = $identityName
+                    IdentityId                   = if ($null -ne $item.IdentityId)        { [string]$item.IdentityId }        else { '' }
+                    AccountName                  = if ($null -ne $item.AccountName)       { [string]$item.AccountName }       else { '' }
+                    SourceName                   = if ($null -ne $item.SourceName)        { [string]$item.SourceName }        else { '' }
+                    EntitlementName              = if ($null -ne $item.AccessName)        { [string]$item.AccessName }        else { '' }
+                    AccessType                   = if ($null -ne $item.AccessType)        { [string]$item.AccessType }        else { '' }
+                    Decision                     = if ($null -ne $item.Decision)          { [string]$item.Decision }          else { $category }
+                    DecisionDate                 = $decDateStr
+                    Justification                = if ($null -ne $item.Justification)     { [string]$item.Justification }     else { '' }
+                    RemediationStatus            = if ($null -ne $item.RemediationStatus) { [string]$item.RemediationStatus } else { '' }
+                    RemediationDate              = $remDateStr
+                    DaysToRemediate              = $daysToRemediate
+                    RiskFlags                    = $riskFlags
+                    ReviewerName                 = $revName
+                    ReviewerEmail                = if ($null -ne $item.ReviewerEmail)     { [string]$item.ReviewerEmail }     else { '' }
+                    ReviewerAvgResponseHours     = $revAvgHours
+                    ReviewerItemsDecided         = $revItemsDecided
+                    ReviewerApprovalRate         = $revApprovalRate
+                    ReviewerRubberStampRisk      = $revRubberStamp
+                    CampaignApproved             = $approvedCt
+                    CampaignRevoked              = $revokedCt
+                    CampaignPending              = $pendingCt
+                    CampaignReviewerCount        = $reviewerCount
+                    CampaignAvgResponseHours     = $campAvgHours
+                    CampaignMedianResponseHours  = $campMedianHours
+                    OrgDirector                  = $orgDirector
+                    OrgExecutive                 = $orgExecutive
+                    OrgLevel                     = $orgLevel
+                    CampaignStartDate            = if ($null -ne $item.CampaignStartDate) { [string]$item.CampaignStartDate } else { $campCreated }
+                    CampaignDueDate              = if ($null -ne $item.CampaignDueDate)   { [string]$item.CampaignDueDate }   else { $campDeadline }
+                    SystemTimestamp              = if ($null -ne $item.SystemTimestamp)   { [string]$item.SystemTimestamp }   else { '' }
+                    ExportTimestamp               = $exportTimestamp
+                })
+            }
+        }
+    }
+
+    # --- Write CSV ---
+    $csvPath = Join-Path $OutputPath "bi-governance-${CorrelationID}.csv"
+
+    $columnNames = @(
+        'CampaignId','CampaignName','CampaignType','CampaignStatus',
+        'CampaignCreated','CampaignDeadline','CampaignCompleted',
+        'CampaignTotalItems','CampaignCompletionPct',
+        'IdentityName','IdentityId','AccountName','SourceName',
+        'EntitlementName','AccessType','Decision','DecisionDate',
+        'Justification','RemediationStatus','RemediationDate',
+        'DaysToRemediate','RiskFlags',
+        'ReviewerName','ReviewerEmail','ReviewerAvgResponseHours',
+        'ReviewerItemsDecided','ReviewerApprovalRate','ReviewerRubberStampRisk',
+        'CampaignApproved','CampaignRevoked','CampaignPending',
+        'CampaignReviewerCount','CampaignAvgResponseHours','CampaignMedianResponseHours',
+        'OrgDirector','OrgExecutive','OrgLevel',
+        'CampaignStartDate','CampaignDueDate','SystemTimestamp','ExportTimestamp'
+    )
+
+    if ($biRows.Count -gt 0) {
+        $biRows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+    } else {
+        # Write header-only CSV
+        $emptyRow = [ordered]@{}
+        foreach ($col in $columnNames) { $emptyRow[$col] = '' }
+        [PSCustomObject]$emptyRow | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+    }
+
+    Write-SPLog -Message "Power BI CSV written ($($biRows.Count) rows, $($columnNames.Count) columns): $csvPath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPGovernanceBIData' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            File     = $csvPath
+            RowCount = $biRows.Count
+            Columns  = $columnNames.Count
+        }
+        Error   = $null
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -12278,5 +12689,6 @@ Export-ModuleMember -Function @(
     'Get-SPOrchestratorHistory',
     'Export-SPOrchestratorHistoryHtml',
     'Invoke-SPLogRetention',
-    'Export-SPAccessProfileInventoryHtml'
+    'Export-SPAccessProfileInventoryHtml',
+    'Export-SPGovernanceBIData'
 )
