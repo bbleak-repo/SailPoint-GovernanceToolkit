@@ -35,7 +35,7 @@ campaigns or sending emails.
 | OC-07 | Per-Band Leadership Reports | OC-06 | DONE |
 | OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | DONE |
 | OC-09 | Org Chart Gap Detector | OC-01 | DONE |
-| OC-10 | Pester Tests | OC-09 | PENDING |
+| OC-10 | Pester Tests | OC-09 | DONE |
 
 ---
 
@@ -454,8 +454,8 @@ Produces an actionable list of issues for the governance team to fix.
 
 ## OC-10: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-09
 
 **Description:**
