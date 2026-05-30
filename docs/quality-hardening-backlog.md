@@ -29,7 +29,7 @@ Critical items first, then high, medium, low.
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | DONE |
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | DONE |
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | DONE |
-| QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | PENDING |
+| QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | DONE |
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | PENDING |
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | PENDING |
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | PENDING |
@@ -249,13 +249,19 @@ for OutputMode, and read-only script negative check. Uses ForEach data-driven te
 
 ## QH-13: Config Template Migration Guidance
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** v1 and v2 templates exist but no migration script or diff for upgrade.
 
 **Fix:** Add migration notes to `Config/Templates/VERSION-HISTORY.md` with exact
 column additions and a one-liner diff command.
+
+**Resolution:** Added "Migrating v1 to v2" section to VERSION-HISTORY.md with: quick
+diff commands to compare headers, step-by-step column additions for both accounts (3
+new columns) and entitlements (3 new columns), PowerShell one-liners to bulk-append
+v2 columns to existing v1 files, and onboarding guide upgrade note. Confirms no code
+changes required -- v1 files continue to work.
 
 **Files:** `Config/Templates/VERSION-HISTORY.md`
 
