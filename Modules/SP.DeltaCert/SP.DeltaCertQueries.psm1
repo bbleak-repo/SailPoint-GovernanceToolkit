@@ -2885,6 +2885,408 @@ function Resolve-SPIdentityBand {
 
 #endregion
 
+#region OC-09: Org Chart Gap Detector
+
+function Get-SPOrgChartGaps {
+    <#
+    .SYNOPSIS
+        Analyzes the org tree and identifies gaps that prevent complete leadership reporting.
+    .DESCRIPTION
+        Scans the org tree for six types of structural gaps:
+        - NoManager: identity has no manager (ISC or supplement)
+        - ShallowChain: manager chain is less than 3 levels deep
+        - MissingEmail: leader (level >= 1) has no email address
+        - OrphanedBranch: manager has no manager themselves (chain ends prematurely)
+        - SupplementConflict: supplement and ISC disagree on manager
+        - CircularReference: cycle detected in the manager chain
+
+        Produces an actionable list of issues and recommendations for the governance
+        team. Intended as a pre-flight check before report generation.
+    .PARAMETER OrgTree
+        Org tree Data hashtable from Build-SPOrgTree or Merge-SPOrgTreeWithSupplement
+        (the .Data property, containing Nodes, TopLeaders, etc.).
+    .PARAMETER Supplement
+        Optional supplement entries hashtable from Import-SPOrgChartSupplement
+        (.Data.Entries property). Used to detect supplement-specific conflicts.
+    .PARAMETER MinChainDepth
+        Minimum expected chain depth (levels above leaf). Chains shorter than this
+        are flagged as ShallowChain. Default: 3.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = [bool]
+            Data    = @{
+                Gaps            = [hashtable[]]  # array of gap records
+                Summary         = @{ Total; Complete; Gaps; GapRate }
+                Recommendations = [string[]]
+            }
+            Error   = $null | [string]
+        }
+    .EXAMPLE
+        $tree = Build-SPOrgTree -IdentityIds $ids -MaxDepth 4
+        $gaps = Get-SPOrgChartGaps -OrgTree $tree.Data
+        $gaps.Data.Gaps | Where-Object { $_.Type -eq 'NoManager' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter()]
+        [hashtable]$Supplement,
+
+        [Parameter()]
+        [int]$MinChainDepth = 3,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPOrgChartGaps: Analyzing org tree with $($OrgTree.Nodes.Count) nodes for structural gaps" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPOrgChartGaps' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $nodes = $OrgTree.Nodes
+        if ($null -eq $nodes -or $nodes.Count -eq 0) {
+            return @{
+                Success = $true
+                Data    = @{
+                    Gaps            = @()
+                    Summary         = @{ Total = 0; Complete = 0; Gaps = 0; GapRate = 0.0 }
+                    Recommendations = @('No nodes in org tree to analyze')
+                }
+                Error   = $null
+            }
+        }
+
+        $gaps = [System.Collections.Generic.List[hashtable]]::new()
+
+        # Determine the top level in the tree to distinguish intentional roots from orphans
+        $topLevel = 0
+        if ($OrgTree.ContainsKey('TopLevel')) {
+            $topLevel = [int]$OrgTree.TopLevel
+        }
+        else {
+            foreach ($nodeId in $nodes.Keys) {
+                if ($nodes[$nodeId].Level -gt $topLevel) { $topLevel = $nodes[$nodeId].Level }
+            }
+        }
+
+        # Build a set of intentional root IDs (TopLeaders at the highest level)
+        $intentionalRoots = [System.Collections.Generic.HashSet[string]]::new()
+        if ($OrgTree.ContainsKey('TopLeaders')) {
+            foreach ($tlId in $OrgTree.TopLeaders) {
+                if ($nodes.ContainsKey($tlId) -and $nodes[$tlId].Level -ge $topLevel) {
+                    [void]$intentionalRoots.Add($tlId)
+                }
+            }
+        }
+
+        # Track which nodes have gaps to avoid double-counting
+        $nodeIdsWithGaps = [System.Collections.Generic.HashSet[string]]::new()
+
+        # --- Gap Type 1: NoManager ---
+        # Identity has no manager in ISC and no supplement override.
+        # Applies to leaf nodes (Level 0) without a manager.
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -ne 0) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($node.ManagerId) -and
+                $nodes.ContainsKey($node.ManagerId)) { continue }
+
+            $nodeName = if ($node.Identity) { $node.Identity.Name } else { $nodeId }
+            $gaps.Add(@{
+                Type       = 'NoManager'
+                IdentityId = $nodeId
+                Name       = $nodeName
+                Impact     = 'No campaign, excluded from reports'
+            })
+            [void]$nodeIdsWithGaps.Add($nodeId)
+        }
+
+        # --- Gap Type 2: ShallowChain ---
+        # Walk up from each leaf node and count the chain depth.
+        # Flag if chain depth < MinChainDepth.
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -ne 0) { continue }
+
+            # Walk the manager chain from this leaf
+            $depth   = 0
+            $current = $nodeId
+            $visited = [System.Collections.Generic.HashSet[string]]::new()
+            [void]$visited.Add($current)
+
+            while ($true) {
+                $cn = $nodes[$current]
+                $mgrId = $cn.ManagerId
+                if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) {
+                    break
+                }
+                if (-not $visited.Add($mgrId)) {
+                    break  # cycle -- handled separately
+                }
+                $depth++
+                $current = $mgrId
+            }
+
+            if ($depth -gt 0 -and $depth -lt $MinChainDepth) {
+                # Only flag if the chain top is NOT an intentional root at the highest level
+                # (a short chain is expected if the org only has 2 levels)
+                $chainTop = $current
+                if (-not $intentionalRoots.Contains($chainTop)) {
+                    $nodeName = if ($nodes[$chainTop].Identity) { $nodes[$chainTop].Identity.Name } else { $chainTop }
+                    $gaps.Add(@{
+                        Type       = 'ShallowChain'
+                        IdentityId = $chainTop
+                        Name       = $nodeName
+                        Depth      = $depth
+                        Impact     = "Reports stop at depth $depth (expected $MinChainDepth+)"
+                    })
+                    [void]$nodeIdsWithGaps.Add($chainTop)
+                }
+            }
+        }
+
+        # Deduplicate ShallowChain gaps (multiple leaves may trace to the same chain top)
+        $seenShallow = [System.Collections.Generic.HashSet[string]]::new()
+        $dedupedGaps = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($gap in $gaps) {
+            if ($gap.Type -eq 'ShallowChain') {
+                $key = "ShallowChain:$($gap.IdentityId)"
+                if (-not $seenShallow.Add($key)) { continue }
+            }
+            $dedupedGaps.Add($gap)
+        }
+        $gaps = $dedupedGaps
+
+        # --- Gap Type 3: MissingEmail ---
+        # Leaders (Level >= 1) who have no email address in the identity cache.
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -lt 1) { continue }
+
+            $hasEmail = $false
+
+            # Check synthetic nodes for Email property
+            if ($node.ContainsKey('Synthetic') -and $node.Synthetic -eq $true) {
+                if ($node.ContainsKey('Email') -and
+                    -not [string]::IsNullOrWhiteSpace($node.Email)) {
+                    $hasEmail = $true
+                }
+            }
+            else {
+                # Check identity cache for real nodes
+                if ($script:IdentityCache.ContainsKey($nodeId)) {
+                    $cached = $script:IdentityCache[$nodeId]
+                    if (-not [string]::IsNullOrWhiteSpace($cached.Email)) {
+                        $hasEmail = $true
+                    }
+                }
+            }
+
+            if (-not $hasEmail) {
+                $nodeName = if ($node.Identity) { $node.Identity.Name } else { $nodeId }
+                $levelLabel = if ($OrgTree.ContainsKey('LevelLabels') -and
+                                  $OrgTree.LevelLabels.ContainsKey($node.Level)) {
+                    $OrgTree.LevelLabels[$node.Level]
+                } else { "Level $($node.Level)" }
+
+                $gaps.Add(@{
+                    Type       = 'MissingEmail'
+                    IdentityId = $nodeId
+                    Name       = $nodeName
+                    Level      = $levelLabel
+                    Impact     = "Cannot email $levelLabel report"
+                })
+                [void]$nodeIdsWithGaps.Add($nodeId)
+            }
+        }
+
+        # --- Gap Type 4: OrphanedBranch ---
+        # Manager (Level >= 1) has no manager themselves, but is NOT an intentional root.
+        # Their branch ends prematurely.
+        foreach ($nodeId in $nodes.Keys) {
+            $node = $nodes[$nodeId]
+            if ($node.Level -lt 1) { continue }
+            if ($intentionalRoots.Contains($nodeId)) { continue }
+
+            $hasManager = (-not [string]::IsNullOrWhiteSpace($node.ManagerId)) -and
+                          $nodes.ContainsKey($node.ManagerId)
+
+            if (-not $hasManager) {
+                $nodeName = if ($node.Identity) { $node.Identity.Name } else { $nodeId }
+                $childCount = @($node.Children).Count
+                $gaps.Add(@{
+                    Type        = 'OrphanedBranch'
+                    IdentityId  = $nodeId
+                    Name        = $nodeName
+                    ChildCount  = $childCount
+                    Impact      = "Branch ends prematurely -- $childCount report(s) under this node lack full chain"
+                })
+                [void]$nodeIdsWithGaps.Add($nodeId)
+            }
+        }
+
+        # --- Gap Type 5: SupplementConflict ---
+        # If the merged tree has conflict records, surface them as gaps.
+        if ($OrgTree.ContainsKey('Conflicts') -and $OrgTree.Conflicts.Count -gt 0) {
+            foreach ($conflict in $OrgTree.Conflicts) {
+                $nodeName = $conflict.IdentityEmail
+                if ($conflict.ContainsKey('NodeId') -and $nodes.ContainsKey($conflict.NodeId)) {
+                    $cNode = $nodes[$conflict.NodeId]
+                    if ($cNode.Identity) { $nodeName = $cNode.Identity.Name }
+                }
+                $gaps.Add(@{
+                    Type            = 'SupplementConflict'
+                    IdentityId      = if ($conflict.ContainsKey('NodeId')) { $conflict.NodeId } else { $conflict.IdentityEmail }
+                    Name            = $nodeName
+                    ISCManager      = $conflict.ISCManagerId
+                    SupplementManager = $conflict.SupplementMgr
+                    Resolution      = $conflict.Resolution
+                    Impact          = "ISC and supplement disagree on manager (resolved: $($conflict.Resolution))"
+                })
+                if ($conflict.ContainsKey('NodeId')) {
+                    [void]$nodeIdsWithGaps.Add($conflict.NodeId)
+                }
+            }
+        }
+
+        # --- Gap Type 6: CircularReference ---
+        # Re-walk chains to detect any cycles not caught by Build-SPOrgTree.
+        $checkedForCycles = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($nodeId in $nodes.Keys) {
+            if ($checkedForCycles.Contains($nodeId)) { continue }
+
+            $current = $nodeId
+            $path    = [System.Collections.Generic.List[string]]::new()
+
+            while ($true) {
+                if ($path.Contains($current)) {
+                    # Cycle found -- report the node where the cycle starts
+                    $nodeName = if ($nodes[$current].Identity) { $nodes[$current].Identity.Name } else { $current }
+                    $gaps.Add(@{
+                        Type       = 'CircularReference'
+                        IdentityId = $current
+                        Name       = $nodeName
+                        Impact     = 'Infinite loop in manager chain -- reports cannot be generated'
+                    })
+                    [void]$nodeIdsWithGaps.Add($current)
+                    break
+                }
+
+                $path.Add($current)
+                [void]$checkedForCycles.Add($current)
+
+                $cn = $nodes[$current]
+                $mgrId = $cn.ManagerId
+                if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) {
+                    break
+                }
+                $current = $mgrId
+            }
+        }
+
+        # --- Build Summary ---
+        $totalNodes   = $nodes.Count
+        $gapNodeCount = $nodeIdsWithGaps.Count
+        $completeCount = $totalNodes - $gapNodeCount
+        $gapRate = if ($totalNodes -gt 0) {
+            [math]::Round(($gapNodeCount / $totalNodes) * 100, 1)
+        } else { 0.0 }
+
+        $summary = @{
+            Total    = $totalNodes
+            Complete = $completeCount
+            Gaps     = $gapNodeCount
+            GapRate  = $gapRate
+        }
+
+        # --- Build Recommendations ---
+        $recommendations = [System.Collections.Generic.List[string]]::new()
+
+        $noMgrGaps = @($gaps | Where-Object { $_.Type -eq 'NoManager' })
+        if ($noMgrGaps.Count -gt 0) {
+            $recommendations.Add("Provide org chart supplement CSV for $($noMgrGaps.Count) identit$(if ($noMgrGaps.Count -eq 1) { 'y' } else { 'ies' }) with no manager")
+            foreach ($g in $noMgrGaps) {
+                $recommendations.Add("  - Contact HR to populate manager field for $($g.Name) ($($g.IdentityId))")
+            }
+        }
+
+        $shallowGaps = @($gaps | Where-Object { $_.Type -eq 'ShallowChain' })
+        if ($shallowGaps.Count -gt 0) {
+            $recommendations.Add("$($shallowGaps.Count) manager chain(s) are too shallow for full leadership reporting")
+            foreach ($g in $shallowGaps) {
+                $recommendations.Add("  - Extend chain above $($g.Name) (current depth: $($g.Depth), needed: $MinChainDepth)")
+            }
+        }
+
+        $emailGaps = @($gaps | Where-Object { $_.Type -eq 'MissingEmail' })
+        if ($emailGaps.Count -gt 0) {
+            $recommendations.Add("$($emailGaps.Count) leader(s) have no email address -- reports cannot be emailed")
+            foreach ($g in $emailGaps) {
+                $recommendations.Add("  - Add email for $($g.Name) ($($g.IdentityId))")
+            }
+        }
+
+        $orphanGaps = @($gaps | Where-Object { $_.Type -eq 'OrphanedBranch' })
+        if ($orphanGaps.Count -gt 0) {
+            $recommendations.Add("$($orphanGaps.Count) orphaned branch(es) -- managers without a manager above them")
+            foreach ($g in $orphanGaps) {
+                $recommendations.Add("  - Assign a manager for $($g.Name) ($($g.IdentityId)) or add to supplement CSV")
+            }
+        }
+
+        $conflictGaps = @($gaps | Where-Object { $_.Type -eq 'SupplementConflict' })
+        if ($conflictGaps.Count -gt 0) {
+            $recommendations.Add("$($conflictGaps.Count) supplement conflict(s) -- ISC and supplement disagree on manager assignments")
+            $recommendations.Add("  - Review Config/org-chart-supplement.csv and reconcile with ISC data")
+        }
+
+        $cycleGaps = @($gaps | Where-Object { $_.Type -eq 'CircularReference' })
+        if ($cycleGaps.Count -gt 0) {
+            $recommendations.Add("$($cycleGaps.Count) circular reference(s) detected -- fix manager assignments immediately")
+            foreach ($g in $cycleGaps) {
+                $recommendations.Add("  - Break cycle at $($g.Name) ($($g.IdentityId))")
+            }
+        }
+
+        if ($gaps.Count -eq 0) {
+            $recommendations.Add('No gaps detected -- org tree is complete for leadership reporting')
+        }
+
+        Write-SPLog -Message "Get-SPOrgChartGaps: Found $($gaps.Count) gap(s) across $gapNodeCount node(s) ($gapRate% gap rate)" `
+            -Severity $(if ($gaps.Count -gt 0) { 'WARN' } else { 'INFO' }) `
+            -Component 'SP.DeltaCertQueries' -Action 'Get-SPOrgChartGaps' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Gaps            = @($gaps.ToArray())
+                Summary         = $summary
+                Recommendations = @($recommendations.ToArray())
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPOrgChartGaps failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Get-SPOrgChartGaps' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPDeltaGrantEvents',
     'Get-SPDeltaAffectedIdentities',
@@ -2898,5 +3300,6 @@ Export-ModuleMember -Function @(
     'Show-SPCampaignOrgPreview',
     'Show-SPReportDistributionPreview',
     'Export-SPOrgChartHtml',
-    'Resolve-SPIdentityBand'
+    'Resolve-SPIdentityBand',
+    'Get-SPOrgChartGaps'
 )

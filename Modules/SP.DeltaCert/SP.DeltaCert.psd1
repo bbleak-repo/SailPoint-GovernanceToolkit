@@ -44,6 +44,7 @@
         'Show-SPReportDistributionPreview'
         'Export-SPOrgChartHtml'
         'Resolve-SPIdentityBand'
+        'Get-SPOrgChartGaps'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

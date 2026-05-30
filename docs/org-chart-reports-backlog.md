@@ -34,7 +34,7 @@ campaigns or sending emails.
 | OC-06 | Band/Level Classification Engine | OC-01 | DONE |
 | OC-07 | Per-Band Leadership Reports | OC-06 | DONE |
 | OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | DONE |
-| OC-09 | Org Chart Gap Detector | OC-01 | PENDING |
+| OC-09 | Org Chart Gap Detector | OC-01 | DONE |
 | OC-10 | Pester Tests | OC-09 | PENDING |
 
 ---
@@ -410,8 +410,8 @@ Combines: campaign audit + leadership rollup + report generation + email distrib
 
 ## OC-09: Org Chart Gap Detector
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-01
 
 **Description:**
