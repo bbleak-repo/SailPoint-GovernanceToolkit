@@ -26,7 +26,7 @@ campaigns or sending emails.
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| OC-01 | Org Chart Supplement Import (CSV override) | none | PENDING |
+| OC-01 | Org Chart Supplement Import (CSV override) | none | DONE |
 | OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | PENDING |
 | OC-03 | Campaign Org Chart Preview | OC-02 | PENDING |
 | OC-04 | Report Distribution Preview | OC-03 | PENDING |
@@ -41,8 +41,8 @@ campaigns or sending emails.
 
 ## OC-01: Org Chart Supplement Import
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

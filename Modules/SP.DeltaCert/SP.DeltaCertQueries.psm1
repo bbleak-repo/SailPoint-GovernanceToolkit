@@ -1130,6 +1130,458 @@ function Build-SPOrgTree {
     }
 }
 
+function Import-SPOrgChartSupplement {
+    <#
+    .SYNOPSIS
+        Imports an org chart supplement CSV that fills gaps in ISC manager chain data.
+    .DESCRIPTION
+        Reads a CSV file with columns: identityEmail, managerEmail, level, title, band.
+        Validates email format, required columns, and checks for circular references.
+        The supplement provides FALLBACK data for report generation only -- it does
+        not modify ISC identity records.
+
+        Band convention: A=President/C-suite, B=VP/SVP, C=Director, D=Manager, E=IC
+    .PARAMETER FilePath
+        Path to the supplement CSV file.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{ Entries; Conflicts; Gaps }
+            Error   = $null | [string]
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FilePath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Import-SPOrgChartSupplement: Importing supplement from '$FilePath'" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Import-SPOrgChartSupplement' `
+        -CorrelationID $CorrelationID
+
+    try {
+        if (-not (Test-Path -LiteralPath $FilePath)) {
+            return @{ Success = $false; Data = $null; Error = "Supplement file not found: $FilePath" }
+        }
+
+        $csv = Import-Csv -LiteralPath $FilePath
+
+        if ($csv.Count -eq 0) {
+            return @{ Success = $false; Data = $null; Error = "Supplement CSV is empty" }
+        }
+
+        # Validate required columns
+        $requiredCols = @('identityEmail', 'managerEmail', 'level', 'title', 'band')
+        $actualCols = $csv[0].PSObject.Properties.Name
+        $missingCols = @()
+        foreach ($col in $requiredCols) {
+            if ($col -notin $actualCols) {
+                $missingCols += $col
+            }
+        }
+        if ($missingCols.Count -gt 0) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Supplement CSV missing required columns: $($missingCols -join ', ')"
+            }
+        }
+
+        # Valid band values
+        $validBands = @('A', 'B', 'C', 'D', 'E')
+
+        # Email regex (simple but sufficient for validation)
+        $emailRegex = '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+
+        # Build entries hashtable keyed by email (lowercase)
+        $entries  = @{}
+        $errors   = [System.Collections.Generic.List[string]]::new()
+        $rowNum   = 1
+
+        foreach ($row in $csv) {
+            $rowNum++
+            $email = ($row.identityEmail -as [string]).Trim().ToLower()
+            $mgrEmail = ($row.managerEmail -as [string]).Trim().ToLower()
+            $level = ($row.level -as [string]).Trim()
+            $title = ($row.title -as [string]).Trim()
+            $band  = ($row.band -as [string]).Trim().ToUpper()
+
+            # Validate identity email
+            if ([string]::IsNullOrWhiteSpace($email)) {
+                $errors.Add("Row $rowNum`: identityEmail is empty")
+                continue
+            }
+            if ($email -notmatch $emailRegex) {
+                $errors.Add("Row $rowNum`: invalid identityEmail format '$email'")
+                continue
+            }
+
+            # Validate manager email (optional for root/president)
+            if (-not [string]::IsNullOrWhiteSpace($mgrEmail) -and $mgrEmail -notmatch $emailRegex) {
+                $errors.Add("Row $rowNum`: invalid managerEmail format '$mgrEmail'")
+                continue
+            }
+
+            # Validate band
+            if (-not [string]::IsNullOrWhiteSpace($band) -and $band -notin $validBands) {
+                $errors.Add("Row $rowNum`: invalid band '$band' (must be A-E)")
+                continue
+            }
+
+            # Duplicate check
+            if ($entries.ContainsKey($email)) {
+                $errors.Add("Row $rowNum`: duplicate identityEmail '$email'")
+                continue
+            }
+
+            $entries[$email] = @{
+                IdentityEmail = $email
+                ManagerEmail  = if ([string]::IsNullOrWhiteSpace($mgrEmail)) { $null } else { $mgrEmail }
+                Level         = $level
+                Title         = $title
+                Band          = if ([string]::IsNullOrWhiteSpace($band)) { $null } else { $band }
+            }
+        }
+
+        if ($errors.Count -gt 0) {
+            $errSummary = "Supplement CSV has $($errors.Count) validation error(s): $($errors[0])"
+            if ($errors.Count -gt 1) { $errSummary += " (and $($errors.Count - 1) more)" }
+            Write-SPLog -Message "Import-SPOrgChartSupplement: $errSummary" `
+                -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Import-SPOrgChartSupplement' `
+                -CorrelationID $CorrelationID
+            return @{ Success = $false; Data = $null; Error = $errSummary }
+        }
+
+        # Circular reference detection
+        foreach ($email in $entries.Keys) {
+            $visited = [System.Collections.Generic.HashSet[string]]::new()
+            [void]$visited.Add($email)
+            $current = $entries[$email].ManagerEmail
+
+            while ($null -ne $current -and $entries.ContainsKey($current)) {
+                if (-not $visited.Add($current)) {
+                    return @{
+                        Success = $false
+                        Data    = $null
+                        Error   = "Circular reference detected: '$email' chain revisits '$current'"
+                    }
+                }
+                $current = $entries[$current].ManagerEmail
+            }
+        }
+
+        # Identify gaps -- entries whose manager is not in supplement and not empty
+        $gaps = [System.Collections.Generic.List[string]]::new()
+        foreach ($email in $entries.Keys) {
+            $mgrEmail = $entries[$email].ManagerEmail
+            if ($null -ne $mgrEmail -and -not $entries.ContainsKey($mgrEmail)) {
+                $gaps.Add($email)
+            }
+        }
+
+        # Identify conflicts (logged for awareness -- will matter when merging with ISC)
+        $conflicts = [System.Collections.Generic.List[string]]::new()
+
+        Write-SPLog -Message "Import-SPOrgChartSupplement: Imported $($entries.Count) entries, $($gaps.Count) gap(s), $($conflicts.Count) conflict(s)" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Import-SPOrgChartSupplement' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Entries   = $entries
+                Conflicts = @($conflicts.ToArray())
+                Gaps      = @($gaps.ToArray())
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Import-SPOrgChartSupplement failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Import-SPOrgChartSupplement' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Merge-SPOrgTreeWithSupplement {
+    <#
+    .SYNOPSIS
+        Enriches an org tree with supplement data, filling gaps in ISC manager chains.
+    .DESCRIPTION
+        For each identity in the org tree: if ISC has no manager but the supplement does,
+        use the supplement's manager. For identities in the supplement but not in the org
+        tree, add them as synthetic nodes.
+
+        ISC data takes PRECEDENCE when both exist -- the supplement is a fallback only.
+        The supplement does not modify ISC identity records.
+    .PARAMETER OrgTree
+        Org tree Data hashtable from Build-SPOrgTree (the .Data property).
+    .PARAMETER Supplement
+        Supplement entries hashtable from Import-SPOrgChartSupplement (the .Data.Entries property).
+    .PARAMETER IdentityEmailMap
+        Optional hashtable mapping identity ID -> email address for matching org tree
+        nodes to supplement entries. If not provided, matching is attempted via node
+        Identity.Name lookups.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{ Nodes; TopLeaders; Directors; Managers; ... ; SupplementApplied; SyntheticNodes }
+            Error   = $null | [string]
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Supplement,
+
+        [Parameter()]
+        [hashtable]$IdentityEmailMap,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Merge-SPOrgTreeWithSupplement: Merging $($Supplement.Count) supplement entries into org tree with $($OrgTree.Nodes.Count) nodes" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Merge-SPOrgTreeWithSupplement' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Deep-copy the org tree to avoid mutating the original
+        $mergedNodes = @{}
+        foreach ($nodeId in $OrgTree.Nodes.Keys) {
+            $src = $OrgTree.Nodes[$nodeId]
+            $mergedNodes[$nodeId] = @{
+                Identity  = @{
+                    Id          = $src.Identity.Id
+                    Name        = $src.Identity.Name
+                    ManagerId   = $src.Identity.ManagerId
+                    ManagerName = $src.Identity.ManagerName
+                    Found       = $src.Identity.Found
+                }
+                ManagerId = $src.ManagerId
+                Level     = $src.Level
+                Children  = @() + $src.Children
+            }
+        }
+
+        # Build reverse map: email -> node ID (for matching supplement to tree)
+        $emailToNodeId = @{}
+        if ($null -ne $IdentityEmailMap) {
+            foreach ($id in $IdentityEmailMap.Keys) {
+                $email = $IdentityEmailMap[$id].ToLower()
+                $emailToNodeId[$email] = $id
+            }
+        }
+
+        $supplementApplied = 0
+        $syntheticNodes    = [System.Collections.Generic.List[string]]::new()
+        $conflicts         = [System.Collections.Generic.List[hashtable]]::new()
+
+        # Phase 1: For each supplement entry, check if the identity exists in the tree
+        # If the identity exists but has no manager, fill from supplement
+        foreach ($email in $Supplement.Keys) {
+            $suppEntry = $Supplement[$email]
+            $nodeId    = $null
+
+            # Try email map first
+            if ($emailToNodeId.ContainsKey($email)) {
+                $nodeId = $emailToNodeId[$email]
+            }
+
+            if ($null -ne $nodeId -and $mergedNodes.ContainsKey($nodeId)) {
+                $node = $mergedNodes[$nodeId]
+
+                # ISC has manager -> ISC wins; log conflict if supplement disagrees
+                if (-not [string]::IsNullOrWhiteSpace($node.ManagerId)) {
+                    if ($null -ne $suppEntry.ManagerEmail) {
+                        $conflicts.Add(@{
+                            IdentityEmail = $email
+                            NodeId        = $nodeId
+                            ISCManagerId  = $node.ManagerId
+                            SupplementMgr = $suppEntry.ManagerEmail
+                            Resolution    = 'ISC wins'
+                        })
+                    }
+                    continue
+                }
+
+                # ISC has NO manager -> supplement fills the gap
+                $mgrNodeId = $null
+                if ($null -ne $suppEntry.ManagerEmail -and $emailToNodeId.ContainsKey($suppEntry.ManagerEmail)) {
+                    $mgrNodeId = $emailToNodeId[$suppEntry.ManagerEmail]
+                }
+
+                if ($null -ne $mgrNodeId -and $mergedNodes.ContainsKey($mgrNodeId)) {
+                    $node.ManagerId = $mgrNodeId
+                    $node.Identity.ManagerId = $mgrNodeId
+                    $node.Identity.ManagerName = $mergedNodes[$mgrNodeId].Identity.Name
+
+                    # Add as child of manager
+                    $existingChildren = @($mergedNodes[$mgrNodeId].Children)
+                    if ($nodeId -notin $existingChildren) {
+                        $mergedNodes[$mgrNodeId].Children = $existingChildren + @($nodeId)
+                    }
+                    $supplementApplied++
+                }
+            }
+            else {
+                # Identity is in supplement but NOT in the org tree -> add as synthetic node
+                $syntheticId = "supplement-$email"
+                $mgrSyntheticId = $null
+
+                if ($null -ne $suppEntry.ManagerEmail) {
+                    # Check if manager is already in tree via email map
+                    if ($emailToNodeId.ContainsKey($suppEntry.ManagerEmail)) {
+                        $mgrSyntheticId = $emailToNodeId[$suppEntry.ManagerEmail]
+                    }
+                    elseif ($Supplement.ContainsKey($suppEntry.ManagerEmail)) {
+                        $mgrSyntheticId = "supplement-$($suppEntry.ManagerEmail)"
+                    }
+                }
+
+                # Determine level from band
+                $synthLevel = switch ($suppEntry.Band) {
+                    'A' { 4 }
+                    'B' { 3 }
+                    'C' { 2 }
+                    'D' { 1 }
+                    'E' { 0 }
+                    default { 0 }
+                }
+
+                $mergedNodes[$syntheticId] = @{
+                    Identity  = @{
+                        Id          = $syntheticId
+                        Name        = $suppEntry.Title
+                        ManagerId   = $mgrSyntheticId
+                        ManagerName = ''
+                        Found       = $false
+                    }
+                    ManagerId = $mgrSyntheticId
+                    Level     = $synthLevel
+                    Children  = @()
+                    Synthetic = $true
+                    Email     = $email
+                    Band      = $suppEntry.Band
+                    Title     = $suppEntry.Title
+                }
+
+                $syntheticNodes.Add($syntheticId)
+                $supplementApplied++
+            }
+        }
+
+        # Phase 2: Wire up synthetic node parent-child relationships
+        foreach ($synId in $syntheticNodes) {
+            $synNode = $mergedNodes[$synId]
+            $mgrId   = $synNode.ManagerId
+            if ($null -ne $mgrId -and $mergedNodes.ContainsKey($mgrId)) {
+                $existingChildren = @($mergedNodes[$mgrId].Children)
+                if ($synId -notin $existingChildren) {
+                    $mergedNodes[$mgrId].Children = $existingChildren + @($synId)
+                }
+                # Update manager name on synthetic node
+                $synNode.Identity.ManagerName = $mergedNodes[$mgrId].Identity.Name
+            }
+        }
+
+        # Phase 3: Rebuild classification lists
+        $topLeaders = [System.Collections.Generic.List[string]]::new()
+        $directors  = [System.Collections.Generic.List[string]]::new()
+        $managers   = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($nodeId in $mergedNodes.Keys) {
+            $node  = $mergedNodes[$nodeId]
+            $level = $node.Level
+
+            $isTopOfChain = [string]::IsNullOrWhiteSpace($node.ManagerId) -or
+                            (-not $mergedNodes.ContainsKey($node.ManagerId) -and $level -gt 0)
+
+            if ($level -ge 3 -or ($isTopOfChain -and $level -ge 2)) {
+                if (-not $topLeaders.Contains($nodeId)) {
+                    $topLeaders.Add($nodeId)
+                }
+            }
+            elseif ($level -eq 2) {
+                if (-not $directors.Contains($nodeId)) {
+                    $directors.Add($nodeId)
+                }
+            }
+            elseif ($level -eq 1) {
+                if (-not $managers.Contains($nodeId)) {
+                    $managers.Add($nodeId)
+                }
+            }
+        }
+
+        # Rebuild LevelNodes
+        $levelNodes = @{}
+        $topLevel   = 0
+        foreach ($nodeId in $mergedNodes.Keys) {
+            $level = $mergedNodes[$nodeId].Level
+            if ($level -eq 0) { continue }
+            if ($level -gt $topLevel) { $topLevel = $level }
+            if (-not $levelNodes.ContainsKey($level)) {
+                $levelNodes[$level] = [System.Collections.Generic.List[string]]::new()
+            }
+            $levelNodes[$level].Add($nodeId)
+        }
+        $levelNodesArrays = @{}
+        foreach ($level in $levelNodes.Keys) {
+            $levelNodesArrays[[int]$level] = @($levelNodes[$level].ToArray())
+        }
+
+        $mergedTree = @{
+            Nodes             = $mergedNodes
+            TopLeaders        = @($topLeaders.ToArray())
+            Directors         = @($directors.ToArray())
+            Managers          = @($managers.ToArray())
+            LevelLabels       = $OrgTree.LevelLabels
+            LevelNodes        = $levelNodesArrays
+            TopLevel          = $topLevel
+            LeafCount         = $OrgTree.LeafCount
+            MaxDepthHit       = $OrgTree.MaxDepthHit
+            SupplementApplied = $supplementApplied
+            SyntheticNodes    = @($syntheticNodes.ToArray())
+            Conflicts         = @($conflicts.ToArray())
+        }
+
+        Write-SPLog -Message "Merge-SPOrgTreeWithSupplement: Complete -- $supplementApplied supplement entries applied, $($syntheticNodes.Count) synthetic nodes, $($conflicts.Count) conflict(s)" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Merge-SPOrgTreeWithSupplement' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $mergedTree; Error = $null }
+    }
+    catch {
+        $errMsg = "Merge-SPOrgTreeWithSupplement failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Merge-SPOrgTreeWithSupplement' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1138,5 +1590,7 @@ Export-ModuleMember -Function @(
     'Group-SPDeltaByManager',
     'Get-SPDeltaCertStaleCertifications',
     'Get-SPDeltaIdentityDetail',
-    'Build-SPOrgTree'
+    'Build-SPOrgTree',
+    'Import-SPOrgChartSupplement',
+    'Merge-SPOrgTreeWithSupplement'
 )
