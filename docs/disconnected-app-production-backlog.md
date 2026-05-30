@@ -31,7 +31,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 | 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | DONE |
 | 5 | DA-25 | Operational Alerting (Wire Notifications) | none | DONE |
 | 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | DONE |
-| 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | PENDING |
+| 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | DONE |
 | 8 | DA-28 | Disconnected App Escalation | none | PENDING |
 | 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | PENDING |
 | 10 | DA-30 | Pester Tests | DA-29 | PENDING |
@@ -307,8 +307,8 @@ ISC's campaign list becomes unmanageable.
 
 ## DA-27: Historical Trending + Compliance Packaging
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-27
 - **Depends On:** DA-21
 
 **Description:**

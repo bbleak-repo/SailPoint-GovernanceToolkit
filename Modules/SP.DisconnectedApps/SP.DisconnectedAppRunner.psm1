@@ -5808,6 +5808,692 @@ function Invoke-SPDisconnectedAppCleanup {
     }
 }
 
+function Get-SPDisconnectedAppTrend {
+    <#
+    .SYNOPSIS
+        Aggregates disconnected app governance data for quarterly/annual trending.
+    .DESCRIPTION
+        Reads JSONL audit trails (DisconnectedAppCertRun, DecisionHarvest,
+        RemediationStatusUpdate events) across all registered apps and calculates
+        per-app per-quarter metrics: total accounts processed, delta counts,
+        campaign completion rate, revocation rate, remediation closure rate,
+        and average review time.
+
+        Results are returned as structured data suitable for charting or
+        compliance reporting.
+    .PARAMETER OutputPath
+        Base directory for reports. Reads from {OutputPath}/{AppName}/disconnected-app-audit.jsonl.
+    .PARAMETER StartDate
+        Start of the reporting period (inclusive). Defaults to 90 days ago.
+    .PARAMETER EndDate
+        End of the reporting period (inclusive). Defaults to today.
+    .PARAMETER AppName
+        Optional. If specified, returns trend data for a single app only.
+        If omitted, returns data for all registered apps found in OutputPath.
+    .PARAMETER QuarterGrouping
+        If set, groups metrics by calendar quarter (Q1-Q4). Default: $true.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Apps=@([hashtable]); Summary=[hashtable]}; Error}
+    .EXAMPLE
+        $trend = Get-SPDisconnectedAppTrend -OutputPath '.\Reports' -StartDate '2026-01-01' -EndDate '2026-03-31'
+        $trend.Data.Apps | ForEach-Object { "$($_.AppName): $($_.Quarters.Count) quarters" }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [datetime]$StartDate,
+
+        [Parameter()]
+        [datetime]$EndDate,
+
+        [Parameter()]
+        [string]$AppName,
+
+        [Parameter()]
+        [bool]$QuarterGrouping = $true,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Get-SPDisconnectedAppTrend'
+
+    if ($null -eq $EndDate -or $EndDate -eq [datetime]::MinValue) {
+        $EndDate = (Get-Date).Date
+    }
+    if ($null -eq $StartDate -or $StartDate -eq [datetime]::MinValue) {
+        $StartDate = $EndDate.AddDays(-90)
+    }
+
+    Write-SPLog -Message "Starting trend analysis: $($StartDate.ToString('yyyy-MM-dd')) to $($EndDate.ToString('yyyy-MM-dd'))" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Discover app directories
+        # -----------------------------------------------------------
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            return @{ Success = $false; Data = $null; Error = "Output path not found: $OutputPath" }
+        }
+
+        $appDirs = @()
+        if (-not [string]::IsNullOrWhiteSpace($AppName)) {
+            $appDir = Join-Path -Path $OutputPath -ChildPath $AppName
+            if (Test-Path -Path $appDir -PathType Container) {
+                $appDirs = @(@{ Name = $AppName; Path = $appDir })
+            }
+            else {
+                return @{ Success = $false; Data = $null; Error = "App directory not found: $appDir" }
+            }
+        }
+        else {
+            $subdirs = Get-ChildItem -Path $OutputPath -Directory -ErrorAction SilentlyContinue
+            foreach ($dir in $subdirs) {
+                $auditFile = Join-Path -Path $dir.FullName -ChildPath 'disconnected-app-audit.jsonl'
+                if (Test-Path -Path $auditFile -PathType Leaf) {
+                    $appDirs += @{ Name = $dir.Name; Path = $dir.FullName }
+                }
+            }
+        }
+
+        if ($appDirs.Count -eq 0) {
+            Write-SPLog -Message "No app audit trails found in '$OutputPath'" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{ Apps = @(); Summary = @{ TotalApps = 0 } }
+                Error   = $null
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 2: Parse JSONL events per app
+        # -----------------------------------------------------------
+        $startUtc = $StartDate.ToUniversalTime()
+        $endUtc   = $EndDate.Date.AddDays(1).ToUniversalTime()  # end of day inclusive
+
+        $allAppResults = [System.Collections.Generic.List[hashtable]]::new()
+        $grandTotalCertRuns    = 0
+        $grandTotalDecisions   = 0
+        $grandTotalRevocations = 0
+
+        foreach ($app in $appDirs) {
+            $auditPath = Join-Path -Path $app.Path -ChildPath 'disconnected-app-audit.jsonl'
+            $lines = @(Get-Content -Path $auditPath -Encoding UTF8 -ErrorAction SilentlyContinue)
+
+            # Buckets: keyed by quarter label (e.g., "2026-Q1") or "all" if not grouping
+            $quarterBuckets = [ordered]@{}
+
+            # Per-app totals
+            $appCertRuns           = 0
+            $appIdentitiesTotal    = 0
+            $appCampaignsCreated   = 0
+            $appCampaignsCompleted = 0
+            $appCampaignsChecked   = 0
+            $appApproved           = 0
+            $appRevoked            = 0
+            $appPendingDecisions   = 0
+            $appRemediationConfirmed = 0
+            $appRemediationOverdue   = 0
+            $appRemediationTotal     = 0
+
+            foreach ($line in $lines) {
+                $trimmed = $line.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+
+                try {
+                    $event = $trimmed | ConvertFrom-Json
+                }
+                catch { continue }
+
+                # Parse timestamp
+                $eventTime = $null
+                if (-not [string]::IsNullOrWhiteSpace($event.Timestamp)) {
+                    try {
+                        $eventTime = [datetime]::Parse($event.Timestamp).ToUniversalTime()
+                    }
+                    catch { continue }
+                }
+                if ($null -eq $eventTime) { continue }
+
+                # Apply date filter
+                if ($eventTime -lt $startUtc -or $eventTime -ge $endUtc) { continue }
+
+                # Determine quarter key
+                $qKey = 'all'
+                if ($QuarterGrouping) {
+                    $qNum = [math]::Ceiling($eventTime.Month / 3)
+                    $qKey = "$($eventTime.Year)-Q$qNum"
+                }
+
+                if (-not $quarterBuckets.Contains($qKey)) {
+                    $quarterBuckets[$qKey] = @{
+                        Quarter              = $qKey
+                        CertRuns             = 0
+                        IdentitiesProcessed  = 0
+                        CampaignsCreated     = 0
+                        CampaignsChecked     = 0
+                        CampaignsCompleted   = 0
+                        Approved             = 0
+                        Revoked              = 0
+                        PendingDecisions     = 0
+                        RemediationConfirmed = 0
+                        RemediationOverdue   = 0
+                        RemediationTotal     = 0
+                    }
+                }
+                $bucket = $quarterBuckets[$qKey]
+
+                # Aggregate by event type
+                $eventAction = if ($null -ne $event.Action) { [string]$event.Action } else { '' }
+
+                switch ($eventAction) {
+                    'DisconnectedAppCertRun' {
+                        $bucket.CertRuns++
+                        $appCertRuns++
+                        $grandTotalCertRuns++
+
+                        $identities = 0
+                        if ($null -ne $event.PSObject.Properties['IdentitiesProcessed']) {
+                            $identities = [int]$event.IdentitiesProcessed
+                        }
+                        $bucket.IdentitiesProcessed += $identities
+                        $appIdentitiesTotal += $identities
+
+                        $campaigns = 0
+                        if ($null -ne $event.PSObject.Properties['CampaignsCreated']) {
+                            $campaigns = [int]$event.CampaignsCreated
+                        }
+                        $bucket.CampaignsCreated += $campaigns
+                        $appCampaignsCreated += $campaigns
+                    }
+                    'DecisionHarvest' {
+                        $checked = 0
+                        if ($null -ne $event.PSObject.Properties['CampaignsChecked']) {
+                            $checked = [int]$event.CampaignsChecked
+                        }
+                        $bucket.CampaignsChecked += $checked
+                        $appCampaignsChecked += $checked
+
+                        $completed = 0
+                        if ($null -ne $event.PSObject.Properties['Completed']) {
+                            $completed = [int]$event.Completed
+                        }
+                        $bucket.CampaignsCompleted += $completed
+                        $appCampaignsCompleted += $completed
+
+                        $approved = 0
+                        if ($null -ne $event.PSObject.Properties['Approved']) {
+                            $approved = [int]$event.Approved
+                        }
+                        $bucket.Approved += $approved
+                        $appApproved += $approved
+
+                        $revoked = 0
+                        if ($null -ne $event.PSObject.Properties['Revoked']) {
+                            $revoked = [int]$event.Revoked
+                        }
+                        $bucket.Revoked += $revoked
+                        $appRevoked += $revoked
+                        $grandTotalRevocations += $revoked
+
+                        $pending = 0
+                        if ($null -ne $event.PSObject.Properties['Pending']) {
+                            $pending = [int]$event.Pending
+                        }
+                        $bucket.PendingDecisions += $pending
+                        $appPendingDecisions += $pending
+
+                        $grandTotalDecisions += ($approved + $revoked + $pending)
+                    }
+                    'RemediationStatusUpdate' {
+                        $confirmed = 0
+                        if ($null -ne $event.PSObject.Properties['Confirmed']) {
+                            $confirmed = [int]$event.Confirmed
+                        }
+                        # Use latest snapshot values (not cumulative -- each update is a point-in-time)
+                        $bucket.RemediationConfirmed = $confirmed
+                        $appRemediationConfirmed = $confirmed
+
+                        $overdue = 0
+                        if ($null -ne $event.PSObject.Properties['Overdue']) {
+                            $overdue = [int]$event.Overdue
+                        }
+                        $bucket.RemediationOverdue = $overdue
+                        $appRemediationOverdue = $overdue
+
+                        $total = 0
+                        if ($null -ne $event.PSObject.Properties['Total']) {
+                            $total = [int]$event.Total
+                        }
+                        $bucket.RemediationTotal = $total
+                        $appRemediationTotal = $total
+                    }
+                }
+            }
+
+            # Calculate derived metrics
+            $completionRate   = if ($appCampaignsChecked -gt 0) {
+                [math]::Round(($appCampaignsCompleted / $appCampaignsChecked) * 100, 1)
+            } else { 0.0 }
+
+            $totalDecisions   = $appApproved + $appRevoked + $appPendingDecisions
+            $revocationRate   = if ($totalDecisions -gt 0) {
+                [math]::Round(($appRevoked / $totalDecisions) * 100, 1)
+            } else { 0.0 }
+
+            $remediationClosureRate = if ($appRemediationTotal -gt 0) {
+                [math]::Round(($appRemediationConfirmed / $appRemediationTotal) * 100, 1)
+            } else { 0.0 }
+
+            $appResult = @{
+                AppName                = $app.Name
+                PeriodStart            = $StartDate.ToString('yyyy-MM-dd')
+                PeriodEnd              = $EndDate.ToString('yyyy-MM-dd')
+                CertRuns               = $appCertRuns
+                IdentitiesProcessed    = $appIdentitiesTotal
+                CampaignsCreated       = $appCampaignsCreated
+                CampaignsChecked       = $appCampaignsChecked
+                CampaignsCompleted     = $appCampaignsCompleted
+                CompletionRatePct      = $completionRate
+                Approved               = $appApproved
+                Revoked                = $appRevoked
+                PendingDecisions       = $appPendingDecisions
+                RevocationRatePct      = $revocationRate
+                RemediationConfirmed   = $appRemediationConfirmed
+                RemediationOverdue     = $appRemediationOverdue
+                RemediationTotal       = $appRemediationTotal
+                RemediationClosurePct  = $remediationClosureRate
+                Quarters               = @($quarterBuckets.Values)
+            }
+
+            $allAppResults.Add($appResult)
+        }
+
+        $summary = @{
+            TotalApps         = $allAppResults.Count
+            PeriodStart       = $StartDate.ToString('yyyy-MM-dd')
+            PeriodEnd         = $EndDate.ToString('yyyy-MM-dd')
+            TotalCertRuns     = $grandTotalCertRuns
+            TotalDecisions    = $grandTotalDecisions
+            TotalRevocations  = $grandTotalRevocations
+        }
+
+        Write-SPLog -Message "Trend analysis complete: $($allAppResults.Count) apps, $grandTotalCertRuns cert runs, $grandTotalDecisions decisions" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Apps    = @($allAppResults)
+                Summary = $summary
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Get-SPDisconnectedAppTrend failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Export-SPDisconnectedAppCompliancePackage {
+    <#
+    .SYNOPSIS
+        Packages all disconnected app governance evidence for a date range into a ZIP.
+    .DESCRIPTION
+        Bundles delta reports, batch summaries, decision harvests, remediation
+        confirmations, audit trails, and snapshots for all apps within the
+        specified date range. Generates a SHA256 manifest for integrity
+        verification and a cover page describing the scope and methodology.
+
+        The output is a single ZIP file ready for auditor handoff.
+    .PARAMETER OutputPath
+        Base directory for reports. Scans {OutputPath}/{AppName}/ for evidence files.
+    .PARAMETER SnapshotPath
+        Base directory for snapshots. Scans {SnapshotPath}/{AppName}/ for CSV files.
+    .PARAMETER StartDate
+        Start of the audit period (inclusive).
+    .PARAMETER EndDate
+        End of the audit period (inclusive).
+    .PARAMETER PackageOutputPath
+        Directory where the ZIP file is created. Defaults to OutputPath.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{PackagePath; FileCount; ManifestPath}; Error}
+    .EXAMPLE
+        Export-SPDisconnectedAppCompliancePackage -OutputPath '.\Reports' `
+            -StartDate '2026-01-01' -EndDate '2026-03-31'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$OutputPath = '.\DisconnectedApps\Reports',
+
+        [Parameter()]
+        [string]$SnapshotPath = '.\DisconnectedApps\Snapshots',
+
+        [Parameter(Mandatory)]
+        [datetime]$StartDate,
+
+        [Parameter(Mandatory)]
+        [datetime]$EndDate,
+
+        [Parameter()]
+        [string]$PackageOutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PackageOutputPath)) {
+        $PackageOutputPath = $OutputPath
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Export-SPDisconnectedAppCompliancePackage'
+    $startStr  = $StartDate.ToString('yyyy-MM-dd')
+    $endStr    = $EndDate.ToString('yyyy-MM-dd')
+
+    Write-SPLog -Message "Starting compliance package: $startStr to $endStr" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Create staging directory
+        # -----------------------------------------------------------
+        $packageName = "DisconnectedApp-Compliance-${startStr}_to_${endStr}"
+        $stagingDir  = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath $packageName
+        if (Test-Path -Path $stagingDir) {
+            Remove-Item -Path $stagingDir -Recurse -Force
+        }
+        New-Item -Path $stagingDir -ItemType Directory -Force | Out-Null
+
+        $manifest   = [System.Collections.Generic.List[hashtable]]::new()
+        $fileCount  = 0
+
+        # Helper: copy file to staging and add to manifest
+        $copyToStaging = {
+            param([string]$SourcePath, [string]$RelativePath)
+            $destPath = Join-Path -Path $stagingDir -ChildPath $RelativePath
+            $destDir  = Split-Path -Path $destPath -Parent
+            if (-not (Test-Path -Path $destDir -PathType Container)) {
+                New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+            }
+            Copy-Item -Path $SourcePath -Destination $destPath -Force
+
+            $hash = (Get-FileHash -Path $SourcePath -Algorithm SHA256).Hash
+            $manifest.Add(@{
+                File   = $RelativePath
+                SHA256 = $hash
+                Size   = (Get-Item -Path $SourcePath).Length
+            })
+        }
+
+        # Helper: check if a date-stamped filename falls within range
+        $isInDateRange = {
+            param([string]$FileName)
+            # Match patterns: delta-2026-01-15.html, batch-summary-2026-01-15.html,
+            # decision-harvest-2026-01-15.html, sla-report-2026-01-15.html,
+            # 2026-01-15-accounts.csv
+            if ($FileName -match '(\d{4}-\d{2}-\d{2})') {
+                $fileDate = $null
+                try { $fileDate = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', $null) }
+                catch { return $false }
+                return ($fileDate -ge $StartDate.Date -and $fileDate -le $EndDate.Date)
+            }
+            return $false
+        }
+
+        # -----------------------------------------------------------
+        # Step 2: Collect per-app evidence
+        # -----------------------------------------------------------
+        if (Test-Path -Path $OutputPath -PathType Container) {
+            $appDirs = Get-ChildItem -Path $OutputPath -Directory -ErrorAction SilentlyContinue
+            foreach ($appDir in $appDirs) {
+                $appName = $appDir.Name
+
+                # Collect date-stamped HTML reports
+                $htmlFiles = Get-ChildItem -Path $appDir.FullName -Filter '*.html' -File `
+                    -ErrorAction SilentlyContinue
+                foreach ($file in $htmlFiles) {
+                    if (& $isInDateRange $file.Name) {
+                        & $copyToStaging $file.FullName "reports/$appName/$($file.Name)"
+                        $fileCount++
+                    }
+                }
+
+                # Collect JSONL audit trail (always included -- contains full history)
+                $auditFile = Join-Path -Path $appDir.FullName -ChildPath 'disconnected-app-audit.jsonl'
+                if (Test-Path -Path $auditFile -PathType Leaf) {
+                    & $copyToStaging $auditFile "reports/$appName/disconnected-app-audit.jsonl"
+                    $fileCount++
+                }
+
+                # Collect remediation tracker
+                $trackerFile = Join-Path -Path $appDir.FullName -ChildPath 'remediation-tracker.json'
+                if (Test-Path -Path $trackerFile -PathType Leaf) {
+                    & $copyToStaging $trackerFile "reports/$appName/remediation-tracker.json"
+                    $fileCount++
+                }
+            }
+        }
+
+        # Collect global reports (batch summaries, SLA reports)
+        if (Test-Path -Path $OutputPath -PathType Container) {
+            $globalHtmlFiles = Get-ChildItem -Path $OutputPath -Filter '*.html' -File `
+                -ErrorAction SilentlyContinue
+            foreach ($file in $globalHtmlFiles) {
+                if (& $isInDateRange $file.Name) {
+                    & $copyToStaging $file.FullName "reports/$($file.Name)"
+                    $fileCount++
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 3: Collect snapshots
+        # -----------------------------------------------------------
+        if (Test-Path -Path $SnapshotPath -PathType Container) {
+            $snapshotAppDirs = Get-ChildItem -Path $SnapshotPath -Directory `
+                -ErrorAction SilentlyContinue
+            foreach ($snapDir in $snapshotAppDirs) {
+                $csvFiles = Get-ChildItem -Path $snapDir.FullName -Filter '*.csv' -File `
+                    -ErrorAction SilentlyContinue
+                foreach ($file in $csvFiles) {
+                    if (& $isInDateRange $file.Name) {
+                        & $copyToStaging $file.FullName "snapshots/$($snapDir.Name)/$($file.Name)"
+                        $fileCount++
+                    }
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 4: Generate trend summary for the period
+        # -----------------------------------------------------------
+        $trendResult = Get-SPDisconnectedAppTrend -OutputPath $OutputPath `
+            -StartDate $StartDate -EndDate $EndDate -CorrelationID $CorrelationID
+        if ($trendResult.Success -and $null -ne $trendResult.Data) {
+            $trendJson = $trendResult.Data | ConvertTo-Json -Depth 10
+            $trendPath = Join-Path -Path $stagingDir -ChildPath 'trend-summary.json'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($trendPath, $trendJson, $utf8NoBom)
+
+            $hash = (Get-FileHash -Path $trendPath -Algorithm SHA256).Hash
+            $manifest.Add(@{
+                File   = 'trend-summary.json'
+                SHA256 = $hash
+                Size   = (Get-Item -Path $trendPath).Length
+            })
+            $fileCount++
+        }
+
+        # -----------------------------------------------------------
+        # Step 5: Generate SHA256 manifest
+        # -----------------------------------------------------------
+        $manifestLines = [System.Collections.Generic.List[string]]::new()
+        $manifestLines.Add("# SHA256 Integrity Manifest")
+        $manifestLines.Add("# Generated: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+        $manifestLines.Add("# Period: $startStr to $endStr")
+        $manifestLines.Add("# Files: $fileCount")
+        $manifestLines.Add("")
+
+        foreach ($entry in ($manifest | Sort-Object { $_.File })) {
+            $manifestLines.Add("$($entry.SHA256)  $($entry.File)  ($($entry.Size) bytes)")
+        }
+
+        $manifestFilePath = Join-Path -Path $stagingDir -ChildPath 'SHA256MANIFEST.txt'
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($manifestFilePath, ($manifestLines -join "`n"), $utf8NoBom)
+
+        # -----------------------------------------------------------
+        # Step 6: Generate cover page
+        # -----------------------------------------------------------
+        $coverLines = [System.Collections.Generic.List[string]]::new()
+        $coverLines.Add("DISCONNECTED APPLICATION GOVERNANCE -- COMPLIANCE EVIDENCE PACKAGE")
+        $coverLines.Add("=" * 72)
+        $coverLines.Add("")
+        $coverLines.Add("Audit Period:     $startStr to $endStr")
+        $coverLines.Add("Generated:        $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')) UTC")
+        $coverLines.Add("Total Files:      $fileCount")
+        $coverLines.Add("Integrity:        SHA256MANIFEST.txt (SHA-256 checksums for all files)")
+        $coverLines.Add("")
+        $coverLines.Add("SCOPE")
+        $coverLines.Add("-" * 72)
+        $coverLines.Add("This package contains all governance evidence for disconnected")
+        $coverLines.Add("applications managed by the SailPoint Governance Toolkit during")
+        $coverLines.Add("the specified audit period.")
+        $coverLines.Add("")
+        $coverLines.Add("CONTENTS")
+        $coverLines.Add("-" * 72)
+        $coverLines.Add("  reports/               Per-app and global governance reports")
+        $coverLines.Add("    {AppName}/            Delta reports, decision harvests, remediation trackers")
+        $coverLines.Add("    batch-summary-*.html  Daily batch run summaries")
+        $coverLines.Add("    sla-report-*.html     SLA compliance reports")
+        $coverLines.Add("  snapshots/             Daily CSV snapshots of app account/entitlement data")
+        $coverLines.Add("  trend-summary.json     Aggregated metrics for the audit period")
+        $coverLines.Add("  SHA256MANIFEST.txt     Integrity verification checksums")
+        $coverLines.Add("  COVER.txt              This file")
+        $coverLines.Add("")
+        $coverLines.Add("METHODOLOGY")
+        $coverLines.Add("-" * 72)
+        $coverLines.Add("1. Daily CSV files are delivered by each application team.")
+        $coverLines.Add("2. The toolkit validates, snapshots, and computes deltas against")
+        $coverLines.Add("   the previous day's data.")
+        $coverLines.Add("3. Access changes trigger ISC certification campaigns assigned")
+        $coverLines.Add("   to each identity's manager for review.")
+        $coverLines.Add("4. Campaign decisions (APPROVE/REVOKE) are harvested daily.")
+        $coverLines.Add("5. Revocation decisions create remediation records tracked until")
+        $coverLines.Add("   the entitlement is confirmed removed from subsequent CSVs.")
+        $coverLines.Add("6. All events are recorded in per-app JSONL audit trails.")
+        $coverLines.Add("")
+        $coverLines.Add("VERIFICATION")
+        $coverLines.Add("-" * 72)
+        $coverLines.Add("To verify file integrity:")
+        $coverLines.Add("  PowerShell:  Get-FileHash -Algorithm SHA256 <file>")
+        $coverLines.Add("  Linux/Mac:   sha256sum <file>")
+        $coverLines.Add("Compare output against SHA256MANIFEST.txt entries.")
+        $coverLines.Add("")
+
+        # Add per-app summary if trend data available
+        if ($trendResult.Success -and $null -ne $trendResult.Data -and
+            $null -ne $trendResult.Data.Apps) {
+            $coverLines.Add("PER-APPLICATION SUMMARY")
+            $coverLines.Add("-" * 72)
+            foreach ($appTrend in $trendResult.Data.Apps) {
+                $coverLines.Add("  $($appTrend.AppName):")
+                $coverLines.Add("    Cert Runs:            $($appTrend.CertRuns)")
+                $coverLines.Add("    Identities Processed: $($appTrend.IdentitiesProcessed)")
+                $coverLines.Add("    Campaigns Created:    $($appTrend.CampaignsCreated)")
+                $coverLines.Add("    Completion Rate:      $($appTrend.CompletionRatePct)%")
+                $coverLines.Add("    Decisions:            $($appTrend.Approved) approved, $($appTrend.Revoked) revoked")
+                $coverLines.Add("    Revocation Rate:      $($appTrend.RevocationRatePct)%")
+                $coverLines.Add("    Remediation Closure:  $($appTrend.RemediationClosurePct)%")
+                $coverLines.Add("")
+            }
+        }
+
+        $coverFilePath = Join-Path -Path $stagingDir -ChildPath 'COVER.txt'
+        [System.IO.File]::WriteAllText($coverFilePath, ($coverLines -join "`n"), $utf8NoBom)
+
+        # -----------------------------------------------------------
+        # Step 7: Create ZIP
+        # -----------------------------------------------------------
+        if (-not (Test-Path -Path $PackageOutputPath -PathType Container)) {
+            New-Item -Path $PackageOutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $zipFileName = "${packageName}.zip"
+        $zipPath     = Join-Path -Path $PackageOutputPath -ChildPath $zipFileName
+
+        # Remove existing ZIP if present
+        if (Test-Path -Path $zipPath) {
+            Remove-Item -Path $zipPath -Force
+        }
+
+        # Use .NET compression (available in PS 5.1+)
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $stagingDir,
+            $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false  # do not include base directory name
+        )
+
+        # -----------------------------------------------------------
+        # Step 8: Cleanup staging
+        # -----------------------------------------------------------
+        Remove-Item -Path $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+
+        Write-SPLog -Message "Compliance package created: $zipPath ($fileCount files)" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                PackagePath  = $zipPath
+                FileCount    = $fileCount
+                ManifestPath = 'SHA256MANIFEST.txt'
+                PeriodStart  = $startStr
+                PeriodEnd    = $endStr
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPDisconnectedAppCompliancePackage failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+
+        # Cleanup staging on error
+        if ($null -ne $stagingDir -and (Test-Path -Path $stagingDir)) {
+            Remove-Item -Path $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -5831,5 +6517,7 @@ Export-ModuleMember -Function @(
     'Get-SPRemediationReport',
     'Push-SPDisconnectedAppToISC',
     'Send-SPDisconnectedAppAlert',
-    'Invoke-SPDisconnectedAppCleanup'
+    'Invoke-SPDisconnectedAppCleanup',
+    'Get-SPDisconnectedAppTrend',
+    'Export-SPDisconnectedAppCompliancePackage'
 )
