@@ -27,7 +27,7 @@ campaigns or sending emails.
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | OC-01 | Org Chart Supplement Import (CSV override) | none | DONE |
-| OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | PENDING |
+| OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | DONE |
 | OC-03 | Campaign Org Chart Preview | OC-02 | PENDING |
 | OC-04 | Report Distribution Preview | OC-03 | PENDING |
 | OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | PENDING |
@@ -106,8 +106,8 @@ richard.pres@corp.com,,President,President & CEO,A
 
 ## OC-02: ASCII Org Tree Renderer
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** none
 
 **Description:**

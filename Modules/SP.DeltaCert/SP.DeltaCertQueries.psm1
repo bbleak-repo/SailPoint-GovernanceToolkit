@@ -1582,6 +1582,219 @@ function Merge-SPOrgTreeWithSupplement {
     }
 }
 
+function Show-SPOrgTree {
+    <#
+    .SYNOPSIS
+        Renders an org tree as ASCII art in the terminal.
+    .DESCRIPTION
+        Takes an org tree structure (from Build-SPOrgTree or Merge-SPOrgTreeWithSupplement)
+        and renders it as a hierarchical ASCII tree. Uses PS 5.1-compatible box-drawing
+        characters (+-- and | for branches).
+
+        Supports child truncation (-MaxChildrenShown), band display (-ShowBands), and
+        a summary footer with node counts per level.
+    .PARAMETER OrgTree
+        Org tree Data hashtable (the .Data property from Build-SPOrgTree or
+        Merge-SPOrgTreeWithSupplement). Must contain a Nodes hashtable.
+    .PARAMETER MaxChildrenShown
+        Maximum children to display per node before truncating with an "(N more)"
+        indicator. Default: 5.
+    .PARAMETER ShowBands
+        Display band classification (A-E) for each node. Band is resolved from
+        supplement data first, then auto-detected from tree depth.
+    .PARAMETER Full
+        Show all children without truncation (overrides MaxChildrenShown).
+    .OUTPUTS
+        [string[]] Lines forming the ASCII tree, written to the output stream.
+    .EXAMPLE
+        $tree = Build-SPOrgTree -IdentityIds $ids -MaxDepth 4
+        Show-SPOrgTree -OrgTree $tree.Data -ShowBands
+    .EXAMPLE
+        $merged = Merge-SPOrgTreeWithSupplement -OrgTree $tree.Data -Supplement $supp
+        Show-SPOrgTree -OrgTree $merged.Data -ShowBands -MaxChildrenShown 3
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter()]
+        [int]$MaxChildrenShown = 5,
+
+        [Parameter()]
+        [switch]$ShowBands,
+
+        [Parameter()]
+        [switch]$Full
+    )
+
+    $nodes = $OrgTree.Nodes
+    if ($null -eq $nodes -or $nodes.Count -eq 0) {
+        Write-Output '  (empty org tree)'
+        return
+    }
+
+    # Band auto-detect from tree level (fallback when node has no explicit Band)
+    $bandFromLevel = @{ 0 = 'E'; 1 = 'D'; 2 = 'C'; 3 = 'B' }
+
+    # Output collector -- List so nested Render-Children can .Add() across scope
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    # Resolve band letter for a node
+    function Get-NodeBand {
+        param([hashtable]$Node)
+        if ($Node.ContainsKey('Band') -and -not [string]::IsNullOrWhiteSpace($Node.Band)) {
+            return $Node.Band
+        }
+        $lvl = $Node.Level
+        if ($lvl -ge 4) { return 'A' }
+        if ($bandFromLevel.ContainsKey($lvl)) { return $bandFromLevel[$lvl] }
+        return 'E'
+    }
+
+    # Format a single node for display
+    function Format-NodeDisplay {
+        param([hashtable]$Node, [bool]$IncludeBand)
+        $name = $Node.Identity.Name
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $Node.Identity.Id }
+        $display = $name
+        if ($Node.ContainsKey('Title') -and -not [string]::IsNullOrWhiteSpace($Node.Title)) {
+            $display += " ($($Node.Title))"
+        }
+        if ($IncludeBand) {
+            $band = Get-NodeBand -Node $Node
+            $display += " [Band $band]"
+        }
+        return $display
+    }
+
+    # Recursively render a node's children as ASCII tree branches
+    function Render-Children {
+        param(
+            [string]$NodeId,
+            [string]$Continuation
+        )
+
+        $node     = $nodes[$NodeId]
+        $children = @($node.Children | Where-Object { $nodes.ContainsKey($_) })
+        if ($children.Count -eq 0) { return }
+
+        # Sort: higher level first, then alphabetically by name
+        $sorted = @(
+            $children |
+                Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+        )
+
+        $showCount = if ($Full.IsPresent) {
+            $sorted.Count
+        } else {
+            [Math]::Min($MaxChildrenShown, $sorted.Count)
+        }
+        $remaining = $sorted.Count - $showCount
+
+        for ($i = 0; $i -lt $showCount; $i++) {
+            $childId     = $sorted[$i]
+            $isLastEntry = ($i -eq ($showCount - 1)) -and ($remaining -eq 0)
+
+            $childDisplay = Format-NodeDisplay -Node $nodes[$childId] `
+                -IncludeBand $ShowBands.IsPresent
+            $lines.Add("$Continuation+-- $childDisplay")
+
+            $childCont = if ($isLastEntry) {
+                "$Continuation    "
+            } else {
+                "$Continuation|   "
+            }
+
+            Render-Children -NodeId $childId -Continuation $childCont
+        }
+
+        if ($remaining -gt 0) {
+            $lines.Add("$Continuation+-- ... ($remaining more)")
+        }
+    }
+
+    # --- Find root nodes (manager absent or not in the tree) ---
+    $rootIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($nodeId in $nodes.Keys) {
+        $node  = $nodes[$nodeId]
+        $mgrId = $node.ManagerId
+        if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) {
+            $rootIds.Add($nodeId)
+        }
+    }
+
+    # Sort roots: highest level first, then by name
+    $sortedRoots = @(
+        $rootIds | Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+    )
+
+    # --- Render each root subtree ---
+    foreach ($rootId in $sortedRoots) {
+        $rootDisplay = Format-NodeDisplay -Node $nodes[$rootId] `
+            -IncludeBand $ShowBands.IsPresent
+        $lines.Add($rootDisplay)
+        Render-Children -NodeId $rootId -Continuation ''
+    }
+
+    # --- Summary footer ---
+    $lines.Add('')
+
+    # Count nodes per level
+    $levelCounts = @{}
+    foreach ($nodeId in $nodes.Keys) {
+        $lvl = $nodes[$nodeId].Level
+        if (-not $levelCounts.ContainsKey($lvl)) { $levelCounts[$lvl] = 0 }
+        $levelCounts[$lvl]++
+    }
+
+    # Count unmanaged (level-0 nodes that are also roots)
+    $unmanagedCount = 0
+    foreach ($rootId in $sortedRoots) {
+        if ($nodes[$rootId].Level -eq 0) { $unmanagedCount++ }
+    }
+
+    # Level names for summary (singular form; append 's' for plural)
+    $levelNames = @{
+        0 = 'IC'
+        1 = 'Manager'
+        2 = 'Director'
+        3 = 'VP'
+        4 = 'SVP'
+        5 = 'Executive'
+    }
+
+    $summaryParts = [System.Collections.Generic.List[string]]::new()
+    $sortedLevels = @($levelCounts.Keys | Sort-Object { -[int]$_ })
+    foreach ($lvl in $sortedLevels) {
+        $count = $levelCounts[$lvl]
+        $name  = if ($levelNames.ContainsKey([int]$lvl)) {
+            $levelNames[[int]$lvl]
+        } else {
+            'Executive'
+        }
+        if ($count -ne 1) { $name += 's' }
+        $summaryParts.Add("$count $name")
+    }
+    $lines.Add("Summary: $($summaryParts -join ', ')")
+
+    # Depth and unmanaged
+    $depth = if ($sortedLevels.Count -gt 0) {
+        ([int]($sortedLevels | Measure-Object -Maximum).Maximum) + 1
+    } else { 0 }
+    $depthLine = "Depth: $depth levels"
+    if ($unmanagedCount -gt 0) {
+        $depthLine += " | Unmanaged: $unmanagedCount"
+    }
+    $lines.Add($depthLine)
+
+    # Write all lines to the output stream
+    foreach ($line in $lines) {
+        Write-Output $line
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1592,5 +1805,6 @@ Export-ModuleMember -Function @(
     'Get-SPDeltaIdentityDetail',
     'Build-SPOrgTree',
     'Import-SPOrgChartSupplement',
-    'Merge-SPOrgTreeWithSupplement'
+    'Merge-SPOrgTreeWithSupplement',
+    'Show-SPOrgTree'
 )
