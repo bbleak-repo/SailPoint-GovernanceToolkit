@@ -141,6 +141,11 @@ function Get-SPConfigDefaults {
             DefaultDeadlineDays        = 2
             CorrelationAttribute       = 'e-mail'
             AccountDeletionThresholdPct = 20
+            ISC = @{
+                UploadMethod              = 'API'
+                FileDropBasePath          = ''
+                WaitForAggregationSeconds = 120
+            }
             RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
             RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
             Applications               = @()
@@ -395,6 +400,11 @@ function Get-SPConfigTemplate {
             DefaultDeadlineDays        = 2
             CorrelationAttribute       = 'e-mail'
             AccountDeletionThresholdPct = 20
+            ISC = [ordered]@{
+                UploadMethod              = 'API'
+                FileDropBasePath          = ''
+                WaitForAggregationSeconds = 120
+            }
             RequiredAccountColumns     = @('id', 'name', 'givenName', 'familyName', 'e-mail', 'groups', 'IIQDisabled')
             RequiredEntitlementColumns = @('id', 'name', 'displayName', 'description')
             Applications               = @()

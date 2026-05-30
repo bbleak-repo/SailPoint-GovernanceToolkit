@@ -20,7 +20,7 @@ Critical items first, then high, medium, low.
 | QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | DONE |
 | QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | DONE |
 | QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | DONE |
-| QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | PENDING |
+| QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | DONE |
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | PENDING |
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | PENDING |
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | PENDING |
@@ -91,7 +91,7 @@ Output directories grow without bound on daily runs.
 
 ## QH-04: Add DisconnectedApps.ISC to Config Defaults
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `settings.json` has `DisconnectedApps.ISC` section but `Get-SPConfigDefaults()`
