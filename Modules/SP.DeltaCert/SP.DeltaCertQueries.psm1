@@ -67,6 +67,8 @@ function Get-SPDeltaIdentityDetail {
         IsActive            = $false
         Found               = $false
         CloudLifecycleState = ''
+        Email               = ''
+        JobLevel            = ''
     }
 
     if ($script:IdentityCache.ContainsKey($IdentityId)) {
@@ -136,6 +138,33 @@ function Get-SPDeltaIdentityDetail {
             }
         }
 
+        # Extract email for downstream consumers (band classification, reports)
+        $email = ''
+        if ($null -ne $identity.PSObject.Properties['email'] -and
+            -not [string]::IsNullOrWhiteSpace($identity.email)) {
+            $email = [string]$identity.email
+        }
+        elseif ($null -ne $identity.PSObject.Properties['attributes'] -and
+                $null -ne $identity.attributes -and
+                $null -ne $identity.attributes.PSObject.Properties['email'] -and
+                -not [string]::IsNullOrWhiteSpace($identity.attributes.email)) {
+            $email = [string]$identity.attributes.email
+        }
+
+        # Extract job level / band attribute for band classification (OC-06)
+        $jobLevel = ''
+        if ($null -ne $identity.PSObject.Properties['attributes'] -and
+            $null -ne $identity.attributes) {
+            $bandAttrs = $identity.attributes
+            foreach ($attrName in @('jobLevel', 'band')) {
+                if ($null -ne $bandAttrs.PSObject.Properties[$attrName] -and
+                    -not [string]::IsNullOrWhiteSpace($bandAttrs.$attrName)) {
+                    $jobLevel = [string]$bandAttrs.$attrName
+                    break
+                }
+            }
+        }
+
         $resolved = @{
             IdentityId          = $IdentityId
             DisplayName         = $displayName
@@ -144,6 +173,8 @@ function Get-SPDeltaIdentityDetail {
             IsActive            = $isActive
             Found               = $true
             CloudLifecycleState = $cloudLifecycleState
+            Email               = $email
+            JobLevel            = $jobLevel
         }
 
         $script:IdentityCache[$IdentityId] = $resolved
@@ -2670,6 +2701,188 @@ $footerHtml
     }
 }
 
+function Resolve-SPIdentityBand {
+    <#
+    .SYNOPSIS
+        Assigns band classifications (A-E) to each identity in the org tree.
+    .DESCRIPTION
+        Three sources of band data, checked in priority order:
+        1. Supplement CSV (OC-01) -- explicit band column (highest priority)
+        2. ISC identity attributes -- jobLevel or band attribute from the identity cache
+        3. Auto-detect from depth -- fallback using BandMapping (tree Level -> band letter)
+
+        Band convention: A=President/C-suite, B=VP/SVP, C=Director, D=Manager, E=IC.
+        Every identity receives a band assignment (no nulls).
+    .PARAMETER OrgTree
+        Org tree Data hashtable from Build-SPOrgTree or Merge-SPOrgTreeWithSupplement
+        (the .Data property, containing Nodes, TopLeaders, etc.).
+    .PARAMETER Supplement
+        Optional supplement entries hashtable from Import-SPOrgChartSupplement
+        (.Data.Entries property). Keyed by lowercase email address.
+    .PARAMETER BandMapping
+        Optional hashtable mapping tree depth to band letter. Keys may be integers or
+        strings (e.g. @{ 0='E'; 1='D' } or @{ '0'='E'; '1'='D' }).
+        Defaults to @{ 0='E'; 1='D'; 2='C'; 3='B'; 4='A' }.
+    .PARAMETER ISCBandAttribute
+        Name of the ISC identity attribute to check for band/level data.
+        Defaults to 'jobLevel'. Falls back to 'band' if the primary attribute is empty.
+    .OUTPUTS
+        [hashtable] @{
+            Success = [bool]
+            Data    = @{
+                Bands   = @{ identityId -> [string] band letter (A-E) }
+                Sources = @{ identityId -> [string] 'Supplement'|'ISC'|'Depth' }
+                Summary = @{ A=[int]; B=[int]; C=[int]; D=[int]; E=[int] }
+            }
+            Error   = $null | [string]
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter()]
+        [hashtable]$Supplement,
+
+        [Parameter()]
+        [hashtable]$BandMapping,
+
+        [Parameter()]
+        [string]$ISCBandAttribute = 'jobLevel'
+    )
+
+    # Default band mapping: depth -> band letter
+    if ($null -eq $BandMapping -or $BandMapping.Count -eq 0) {
+        $BandMapping = @{ 0 = 'E'; 1 = 'D'; 2 = 'C'; 3 = 'B'; 4 = 'A' }
+    }
+
+    # Normalise BandMapping keys to integers for consistent lookups
+    $normalizedMapping = @{}
+    foreach ($key in $BandMapping.Keys) {
+        $intKey = 0
+        if ([int]::TryParse("$key", [ref]$intKey)) {
+            $normalizedMapping[$intKey] = [string]$BandMapping[$key]
+        }
+    }
+
+    $validBands = @('A', 'B', 'C', 'D', 'E')
+
+    $nodes = $OrgTree.Nodes
+    if ($null -eq $nodes -or $nodes.Count -eq 0) {
+        return @{
+            Success = $true
+            Data    = @{
+                Bands   = @{}
+                Sources = @{}
+                Summary = @{ A = 0; B = 0; C = 0; D = 0; E = 0 }
+            }
+            Error   = $null
+        }
+    }
+
+    $bands   = @{}
+    $sources = @{}
+    $summary = @{ A = 0; B = 0; C = 0; D = 0; E = 0 }
+
+    foreach ($nodeId in $nodes.Keys) {
+        $node   = $nodes[$nodeId]
+        $band   = $null
+        $source = $null
+
+        # --- Source 1: Supplement CSV (highest priority) ---
+        if ($null -eq $band -and $null -ne $Supplement -and $Supplement.Count -gt 0) {
+            $nodeEmail = $null
+
+            # Synthetic nodes carry Email directly
+            if ($node.ContainsKey('Email') -and
+                -not [string]::IsNullOrWhiteSpace($node.Email)) {
+                $nodeEmail = $node.Email.ToLower()
+            }
+            # Real nodes: resolve email from identity cache
+            elseif ($script:IdentityCache.ContainsKey($nodeId)) {
+                $cached = $script:IdentityCache[$nodeId]
+                if (-not [string]::IsNullOrWhiteSpace($cached.Email)) {
+                    $nodeEmail = $cached.Email.ToLower()
+                }
+            }
+
+            if ($null -ne $nodeEmail -and $Supplement.ContainsKey($nodeEmail)) {
+                $suppEntry = $Supplement[$nodeEmail]
+                if (-not [string]::IsNullOrWhiteSpace($suppEntry.Band) -and
+                    $suppEntry.Band.ToUpper() -in $validBands) {
+                    $band   = $suppEntry.Band.ToUpper()
+                    $source = 'Supplement'
+                }
+            }
+        }
+
+        # Source 1b: Node explicit Band key (set by Merge-SPOrgTreeWithSupplement on
+        # synthetic nodes -- still supplement-sourced data)
+        if ($null -eq $band -and $node.ContainsKey('Band') -and
+            -not [string]::IsNullOrWhiteSpace($node.Band)) {
+            if ($node.Band.ToUpper() -in $validBands) {
+                $band   = $node.Band.ToUpper()
+                $source = 'Supplement'
+            }
+        }
+
+        # --- Source 2: ISC identity attribute (jobLevel / band) ---
+        if ($null -eq $band -and $script:IdentityCache.ContainsKey($nodeId)) {
+            $cached = $script:IdentityCache[$nodeId]
+            if ($cached.Found -and -not [string]::IsNullOrWhiteSpace($cached.JobLevel)) {
+                $iscValue = $cached.JobLevel.Trim()
+
+                # If it is already a valid band letter, use directly
+                if ($iscValue.ToUpper() -in $validBands) {
+                    $band   = $iscValue.ToUpper()
+                    $source = 'ISC'
+                }
+                else {
+                    # Try to interpret as numeric level and map via BandMapping
+                    $numericLevel = 0
+                    if ([int]::TryParse($iscValue, [ref]$numericLevel) -and
+                        $normalizedMapping.ContainsKey($numericLevel)) {
+                        $band   = $normalizedMapping[$numericLevel]
+                        $source = 'ISC'
+                    }
+                }
+            }
+        }
+
+        # --- Source 3: Auto-detect from tree depth (fallback) ---
+        if ($null -eq $band) {
+            $lvl = [int]$node.Level
+            if ($normalizedMapping.ContainsKey($lvl)) {
+                $band = $normalizedMapping[$lvl]
+            }
+            elseif ($lvl -ge 4) {
+                # Levels beyond the mapping ceiling default to top band
+                $band = 'A'
+            }
+            else {
+                $band = 'E'
+            }
+            $source = 'Depth'
+        }
+
+        $bands[$nodeId]   = $band
+        $sources[$nodeId] = $source
+        $summary[$band]++
+    }
+
+    return @{
+        Success = $true
+        Data    = @{
+            Bands   = $bands
+            Sources = $sources
+            Summary = $summary
+        }
+        Error   = $null
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2684,5 +2897,6 @@ Export-ModuleMember -Function @(
     'Show-SPOrgTree',
     'Show-SPCampaignOrgPreview',
     'Show-SPReportDistributionPreview',
-    'Export-SPOrgChartHtml'
+    'Export-SPOrgChartHtml',
+    'Resolve-SPIdentityBand'
 )

@@ -43,6 +43,7 @@
         'Show-SPCampaignOrgPreview'
         'Show-SPReportDistributionPreview'
         'Export-SPOrgChartHtml'
+        'Resolve-SPIdentityBand'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'
