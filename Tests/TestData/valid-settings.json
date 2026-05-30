@@ -154,7 +154,7 @@
         "Escalation": {
             "DefaultStaleHours": 24,
             "MaxEscalationLevels": 2,
-            "CampaignNamePrefix": "AD Delta Cert"
+            "CampaignNamePrefix": ""
         }
     }
 }

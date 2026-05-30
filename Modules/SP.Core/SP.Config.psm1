@@ -165,7 +165,7 @@ function Get-SPConfigDefaults {
             Escalation = @{
                 DefaultStaleHours      = 24
                 MaxEscalationLevels    = 2
-                CampaignNamePrefix     = 'AD Delta Cert'
+                CampaignNamePrefix     = ''  # Falls back to DeltaCert.CampaignNamePrefix when empty
             }
         }
         Leadership = @{
@@ -429,7 +429,7 @@ function Get-SPConfigTemplate {
             Escalation = [ordered]@{
                 DefaultStaleHours   = 24
                 MaxEscalationLevels = 2
-                CampaignNamePrefix  = 'AD Delta Cert'
+                CampaignNamePrefix  = ''  # Falls back to DeltaCert.CampaignNamePrefix when empty
             }
         }
         Leadership = [ordered]@{
@@ -723,10 +723,10 @@ function Test-SPConfiguration {
     try {
         $mainPrefix = $config.DeltaCert.CampaignNamePrefix
         $escPrefix  = $config.DeltaCert.Escalation.CampaignNamePrefix
-        if (-not [string]::IsNullOrEmpty($mainPrefix) -and
-            -not [string]::IsNullOrEmpty($escPrefix) -and
+        if (-not [string]::IsNullOrEmpty($escPrefix) -and
+            -not [string]::IsNullOrEmpty($mainPrefix) -and
             $mainPrefix -ne $escPrefix) {
-            $warnings.Add("DeltaCert.CampaignNamePrefix ('$mainPrefix') differs from DeltaCert.Escalation.CampaignNamePrefix ('$escPrefix')")
+            $warnings.Add("DeltaCert.Escalation.CampaignNamePrefix ('$escPrefix') differs from DeltaCert.CampaignNamePrefix ('$mainPrefix'). Escalation will use its own prefix instead of inheriting the main prefix.")
         }
     } catch { }
 

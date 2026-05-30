@@ -158,6 +158,8 @@ function Invoke-SPDeltaCertRun {
     .PARAMETER CampaignNamePrefix
         Prefix for campaign names. Default: 'AD Delta Cert'.
         Full name format: "{Prefix} {YYYY-MM-DD} - {ManagerName}"
+        Escalation and cleanup scripts inherit this prefix unless
+        DeltaCert.Escalation.CampaignNamePrefix is explicitly set.
     .PARAMETER FallbackManagerId
         Identity ID used as reviewer for identities who have no manager in ISC.
         If omitted, manager-less identities are skipped.
@@ -1001,6 +1003,9 @@ function Invoke-SPDeltaCertCleanup {
         is false, cleanup returns an error without making any API calls.
     .PARAMETER CampaignNamePrefix
         Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
+        Callers should resolve from DeltaCert.CampaignNamePrefix in config.
+        DeltaCert.Escalation.CampaignNamePrefix, when set, overrides this
+        for escalation workflows only.
     .PARAMETER DaysStale
         Number of days after which a campaign without a deadline is considered
         stale based on its created date. Default: 3.

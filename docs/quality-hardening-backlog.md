@@ -31,7 +31,7 @@ Critical items first, then high, medium, low.
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | DONE |
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | DONE |
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | DONE |
-| QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | PENDING |
+| QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | DONE |
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | PENDING |
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | PENDING |
 | QH-18 | LOW | Update SP.Testing module for newer workflows | M | PENDING |
@@ -294,7 +294,7 @@ GUI file (`SP.MainWindow.psm1`) not modified per project conventions.
 
 ## QH-15: Fix Duplicate DeltaCert.CampaignNamePrefix
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `DeltaCert.CampaignNamePrefix` and `DeltaCert.Escalation.CampaignNamePrefix`
@@ -303,7 +303,18 @@ are both "AD Delta Cert". Intent is unclear. Document or consolidate.
 **Fix:** Document that Escalation prefix defaults to the main prefix if not specified.
 Update escalation code to fall back to main prefix when its own is empty.
 
-**Files:** `Config/settings.json`, docs, `Modules/SP.DeltaCert/SP.DeltaCertRunner.psm1`
+**Resolution:** Set `DeltaCert.Escalation.CampaignNamePrefix` to empty string in config
+defaults (`Get-SPConfigDefaults` -- both copies), `Config/settings.json`, and
+`Tests/TestData/valid-settings.json`. Empty value signals "inherit from
+`DeltaCert.CampaignNamePrefix`". Added `_note` in settings.json explaining the fallback.
+Updated `Test-SPConfiguration` warning message to clarify the override semantics.
+Updated `.PARAMETER CampaignNamePrefix` documentation in `Invoke-SPDeltaCertRun` and
+`Invoke-SPDeltaCertCleanup` to document the inheritance chain. CLI scripts
+(`Invoke-SPDeltaCertEscalate.ps1`, `Invoke-SPDailyOrchestrator.ps1`) already had correct
+fallback logic: Escalation prefix -> main prefix -> hardcoded default.
+
+**Files:** `Config/settings.json`, `Modules/SP.Core/SP.Config.psm1`,
+`Modules/SP.DeltaCert/SP.DeltaCertRunner.psm1`, `Tests/TestData/valid-settings.json`
 
 ---
 
