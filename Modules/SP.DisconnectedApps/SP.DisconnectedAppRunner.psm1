@@ -24,6 +24,7 @@
        13. Export-SPDisconnectedAppSlaHtml - SLA compliance HTML report with delivery grid
        14. Get-SPDisconnectedAppCampaignDecisions - harvests campaign decisions from ISC
        15. Export-SPDisconnectedAppDecisionHarvestHtml - decision harvest HTML report
+       16. Send-SPDisconnectedAppAlert - operational alerting for pipeline events
 
     Dependencies:
         - SP.Api (Invoke-SPApiRequest)
@@ -5285,6 +5286,228 @@ function Wait-SPISCAggregation {
 
 #endregion
 
+#region DA-25: Operational Alerting
+
+function Send-SPDisconnectedAppAlert {
+    <#
+    .SYNOPSIS
+        Sends operational alerts for the disconnected app pipeline.
+    .DESCRIPTION
+        Dispatches formatted alerts through the toolkit's notification backends
+        (SMTP, Webhook) for pipeline events: validation failures, threshold blocks,
+        chronic delivery misses, overdue remediations, and batch-level failures.
+
+        Delegates to Send-SPNotification from SP.AuditReport when available.
+        Falls back to Write-SPLog if notification backends are not configured
+        or the SP.Audit module is not loaded.
+
+        Alert severity mapping:
+        - WARN    -> Send-SPNotification -Severity Warning
+        - CRITICAL -> Send-SPNotification -Severity Critical
+        - INFO    -> Send-SPNotification -Severity Info
+
+    .PARAMETER AlertType
+        The type of alert event. Used to build the subject line and classify the alert.
+        Valid values: ValidationFailed, ThresholdBlocked, DeliveryMissing,
+        RemediationOverdue, BatchAllFailed, BatchPartialFailure, BatchSummary.
+    .PARAMETER Severity
+        Alert severity: INFO, WARN, or CRITICAL.
+    .PARAMETER AppName
+        Application name related to this alert. Omit for batch-level alerts.
+    .PARAMETER Message
+        Human-readable description of the alert condition.
+    .PARAMETER Details
+        Hashtable of structured details included in the alert body and webhook metadata.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Backend; Dispatched}; Error}
+    .EXAMPLE
+        Send-SPDisconnectedAppAlert -AlertType ThresholdBlocked -Severity CRITICAL `
+            -AppName 'PEP-Plus' -Message '42% accounts removed (threshold: 20%)'
+    .EXAMPLE
+        Send-SPDisconnectedAppAlert -AlertType BatchAllFailed -Severity CRITICAL `
+            -Message 'All 5 apps failed processing' -Details @{ErrorCount=5; Apps=@('A','B','C','D','E')}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('ValidationFailed', 'ThresholdBlocked', 'DeliveryMissing',
+                     'RemediationOverdue', 'BatchAllFailed', 'BatchPartialFailure',
+                     'BatchSummary')]
+        [string]$AlertType,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('INFO', 'WARN', 'CRITICAL')]
+        [string]$Severity,
+
+        [Parameter()]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Message,
+
+        [Parameter()]
+        [hashtable]$Details,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.DisconnectedAppRunner'
+    $action    = 'Send-SPDisconnectedAppAlert'
+
+    # Build subject line
+    $severityTag = switch ($Severity) {
+        'CRITICAL' { 'CRITICAL' }
+        'WARN'     { 'WARNING' }
+        default    { 'INFO' }
+    }
+    $appTag = if (-not [string]::IsNullOrWhiteSpace($AppName)) { " - $AppName" } else { '' }
+    $subject = "[SailPoint DisconnectedApps] [$severityTag] $AlertType$appTag"
+
+    # Build plain-text body for logging
+    $bodyLines = [System.Collections.Generic.List[string]]::new()
+    $bodyLines.Add("Alert Type: $AlertType")
+    $bodyLines.Add("Severity:   $Severity")
+    if (-not [string]::IsNullOrWhiteSpace($AppName)) {
+        $bodyLines.Add("App:        $AppName")
+    }
+    $bodyLines.Add("Message:    $Message")
+    $bodyLines.Add("Timestamp:  $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+    $bodyLines.Add("CorrelationID: $CorrelationID")
+
+    if ($null -ne $Details -and $Details.Count -gt 0) {
+        $bodyLines.Add('')
+        $bodyLines.Add('Details:')
+        foreach ($key in $Details.Keys | Sort-Object) {
+            $val = $Details[$key]
+            if ($val -is [array]) {
+                $val = ($val -join ', ')
+            }
+            $bodyLines.Add("  $key = $val")
+        }
+    }
+
+    # Build HTML body for email
+    $htmlBody = @"
+<html><body style="font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;">
+<h2 style="color: $(switch ($Severity) { 'CRITICAL' { '#CC3333' } 'WARN' { '#FF6600' } default { '#336699' } });">$([System.Net.WebUtility]::HtmlEncode($subject))</h2>
+<table style="border-collapse: collapse; margin: 16px 0;">
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Alert Type</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($AlertType))</td></tr>
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Severity</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($Severity))</td></tr>
+$(if (-not [string]::IsNullOrWhiteSpace($AppName)) { "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>Application</td><td style='padding: 4px 0;'>$([System.Net.WebUtility]::HtmlEncode($AppName))</td></tr>" })
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Message</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($Message))</td></tr>
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Timestamp</td><td style="padding: 4px 0;">$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))</td></tr>
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">CorrelationID</td><td style="padding: 4px 0;">$CorrelationID</td></tr>
+</table>
+"@
+
+    if ($null -ne $Details -and $Details.Count -gt 0) {
+        $htmlBody += "<h3 style='margin-top: 16px;'>Details</h3>`n<table style='border-collapse: collapse;'>`n"
+        foreach ($key in $Details.Keys | Sort-Object) {
+            $val = $Details[$key]
+            if ($val -is [array]) {
+                $val = ($val -join ', ')
+            }
+            $htmlBody += "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>$([System.Net.WebUtility]::HtmlEncode($key))</td>"
+            $htmlBody += "<td style='padding: 4px 0;'>$([System.Net.WebUtility]::HtmlEncode([string]$val))</td></tr>`n"
+        }
+        $htmlBody += "</table>`n"
+    }
+
+    $htmlBody += @"
+<hr style="margin-top: 24px; border: none; border-top: 1px solid #ccc;" />
+<p style="font-size: 12px; color: #999;">SailPoint ISC Governance Toolkit -- Disconnected App Pipeline</p>
+</body></html>
+"@
+
+    # Map severity for Send-SPNotification
+    $notifySeverity = switch ($Severity) {
+        'CRITICAL' { 'Critical' }
+        'WARN'     { 'Warning' }
+        default    { 'Info' }
+    }
+
+    # Always log the alert
+    $logSeverity = switch ($Severity) {
+        'CRITICAL' { 'ERROR' }
+        'WARN'     { 'WARN' }
+        default    { 'INFO' }
+    }
+    Write-SPLog -Message "ALERT [$AlertType] $Message" `
+        -Severity $logSeverity -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Try to dispatch via Send-SPNotification
+    $dispatched = $false
+    $notifyError = $null
+
+    $notifyCmdAvailable = $null -ne (Get-Command -Name 'Send-SPNotification' -ErrorAction SilentlyContinue)
+
+    if ($notifyCmdAvailable) {
+        try {
+            $notifyParams = @{
+                Subject       = $subject
+                Body          = $htmlBody
+                Severity      = $notifySeverity
+                Category      = 'DisconnectedApp'
+                CorrelationID = $CorrelationID
+                Metadata      = @{
+                    AlertType = $AlertType
+                    AppName   = if ($AppName) { $AppName } else { '' }
+                }
+            }
+            if ($null -ne $Details) {
+                foreach ($key in $Details.Keys) {
+                    $notifyParams.Metadata[$key] = $Details[$key]
+                }
+            }
+
+            $notifyResult = Send-SPNotification @notifyParams
+
+            if ($notifyResult.Success) {
+                $dispatched = $true
+                Write-SPLog -Message "Alert dispatched via Send-SPNotification: $subject" `
+                    -Severity DEBUG -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            else {
+                $notifyError = "Notification dispatch returned failure"
+                Write-SPLog -Message "Send-SPNotification returned failure for alert '$AlertType'" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+        catch {
+            $notifyError = $_.Exception.Message
+            Write-SPLog -Message "Send-SPNotification failed: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
+    }
+    else {
+        Write-SPLog -Message "Send-SPNotification not available; alert logged only: $subject" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    return @{
+        Success = $true
+        Data    = @{
+            Backend    = if ($dispatched) { 'Notification' } else { 'LogOnly' }
+            Dispatched = $dispatched
+            Subject    = $subject
+            Severity   = $Severity
+            AlertType  = $AlertType
+        }
+        Error   = $notifyError
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Resolve-SPDisconnectedAppIdentities',
     'Invoke-SPDisconnectedAppCertRun',
@@ -5304,5 +5527,6 @@ Export-ModuleMember -Function @(
     'New-SPRemediationRecord',
     'Update-SPRemediationStatus',
     'Get-SPRemediationReport',
-    'Push-SPDisconnectedAppToISC'
+    'Push-SPDisconnectedAppToISC',
+    'Send-SPDisconnectedAppAlert'
 )

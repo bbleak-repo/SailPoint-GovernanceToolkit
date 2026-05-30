@@ -1147,6 +1147,20 @@ if (-not $SkipDisconnectedApps -and $daRegisteredApps.Count -gt 0) {
             Set-StepResult -Step 'DARemediation' -Status 'Warning' -Detail $detail -Duration $stepDuration
             Write-Host "  Step 9: WARN - $detail" -ForegroundColor Yellow
             if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+
+            # DA-25: Alert on overdue remediations
+            if ($totalOverdue -gt 0) {
+                $remSeverity = if ($totalOverdue -gt 5) { 'CRITICAL' } else { 'WARN' }
+                Send-SPDisconnectedAppAlert -AlertType RemediationOverdue -Severity $remSeverity `
+                    -Message "$totalOverdue remediation(s) overdue across all disconnected apps." `
+                    -Details @{
+                        OverdueCount   = $totalOverdue
+                        PendingCount   = $totalPending
+                        ConfirmedCount = $totalConfirmed
+                        Action         = 'App teams must remove revoked access. Check per-app remediation-tracker.json.'
+                    } `
+                    -CorrelationID $correlationID
+            }
         }
         else {
             Set-StepResult -Step 'DARemediation' -Status 'Success' -Detail $detail -Duration $stepDuration

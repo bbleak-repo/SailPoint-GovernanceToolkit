@@ -29,7 +29,7 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 | 2 | DA-22 | Disconnected App Remediation Tracker | DA-21 | DONE |
 | 3 | DA-23 | Unified Daily Orchestrator Integration | none | DONE |
 | 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | DONE |
-| 5 | DA-25 | Operational Alerting (Wire Notifications) | none | PENDING |
+| 5 | DA-25 | Operational Alerting (Wire Notifications) | none | DONE |
 | 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | PENDING |
 | 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | PENDING |
 | 8 | DA-28 | Disconnected App Escalation | none | PENDING |
@@ -236,8 +236,8 @@ function Push-SPDisconnectedAppToISC {
 
 ## DA-25: Operational Alerting (Wire Notifications)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-25
 - **Depends On:** none
 
 **Description:**

@@ -116,6 +116,7 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 $moduleChain = @(
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';                       Name = 'SP.Core';             Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1';                         Name = 'SP.Api';               Required = $true  }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1';                     Name = 'SP.Audit';             Required = $false }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1';             Name = 'SP.DeltaCert';         Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'; Name = 'SP.DisconnectedApps'; Required = $true  }
 )
@@ -466,6 +467,18 @@ foreach ($app in $apps) {
                 -Severity ERROR -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ThresholdCheck' `
                 -CorrelationID $appCorrelationID
 
+            # DA-25: Alert on threshold block
+            Send-SPDisconnectedAppAlert -AlertType ThresholdBlocked -Severity CRITICAL `
+                -AppName $appName `
+                -Message "$($thresholdResult.RemovedPct)% accounts removed (threshold: $($thresholdResult.ThresholdPct)%). Batch blocked for $appName." `
+                -Details @{
+                    RemovedPct   = $thresholdResult.RemovedPct
+                    ThresholdPct = $thresholdResult.ThresholdPct
+                    RemovedCount = $removedCount
+                    Action       = 'Review CSV file for unexpected mass deletions. Use -Force to override.'
+                } `
+                -CorrelationID $appCorrelationID
+
             # Still generate report for blocked apps
             $reportResult = Export-SPDisconnectedAppDeltaHtml -DeltaResult $delta `
                 -AppName $appName -OutputPath $effectiveOutputPath
@@ -619,6 +632,16 @@ foreach ($app in $apps) {
         Write-SPLog -Message "App '$appName' failed: $($_.Exception.Message)" `
             -Severity ERROR -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ProcessApp' `
             -CorrelationID $appCorrelationID
+
+        # DA-25: Alert on per-app failure
+        Send-SPDisconnectedAppAlert -AlertType ValidationFailed -Severity WARN `
+            -AppName $appName `
+            -Message "App '$appName' failed processing: $($_.Exception.Message)" `
+            -Details @{
+                ErrorMessage = $_.Exception.Message
+                Action       = 'Investigate the error and re-run the batch for this app.'
+            } `
+            -CorrelationID $appCorrelationID
     }
 
     $appEndTime = Get-Date
@@ -641,6 +664,22 @@ $blockedCount    = @($batchResults | Where-Object { $_.Status -eq 'ThresholdBloc
 $errorCount      = @($batchResults | Where-Object { $_.Status -eq 'Error' }).Count
 $totalCampaigns  = ($batchResults | ForEach-Object { $_.CampaignsCreated } | Measure-Object -Sum).Sum
 $totalIdentities = ($batchResults | ForEach-Object { $_.IdentityCount } | Measure-Object -Sum).Sum
+
+# DA-25: Detect missing file delivery (errors containing "not found")
+$missingFileApps = @($batchResults | Where-Object {
+    $_.Status -eq 'Error' -and $_.Error -match 'not found|file .* missing'
+} | ForEach-Object { $_.App })
+
+if ($missingFileApps.Count -ge 3) {
+    Send-SPDisconnectedAppAlert -AlertType DeliveryMissing -Severity WARN `
+        -Message "$($missingFileApps.Count) apps have missing account files." `
+        -Details @{
+            MissingApps = $missingFileApps
+            AppCount    = $missingFileApps.Count
+            Action      = 'Verify file delivery pipeline. Multiple apps are not receiving CSV files.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
 
 # --- JSONL Batch Audit Trail ---
 try {
@@ -818,6 +857,42 @@ switch ($OutputMode) {
 
 Write-SPLog -Message "Invoke-SPDisconnectedAppBatch completed: $($batchResults.Count) app(s), $successCount success, $errorCount error(s), $totalCampaigns campaign(s)" `
     -Severity INFO -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Complete' -CorrelationID $batchCorrelationID
+
+# DA-25: Batch-level alerts
+$failedAppNames = @($batchResults | Where-Object { $_.Status -eq 'Error' } | ForEach-Object { $_.App })
+$blockedAppNames = @($batchResults | Where-Object { $_.Status -eq 'ThresholdBlocked' } | ForEach-Object { $_.App })
+
+if ($errorCount -gt 0 -and ($successCount + $noChangesCount) -eq 0) {
+    # All apps failed
+    Send-SPDisconnectedAppAlert -AlertType BatchAllFailed -Severity CRITICAL `
+        -Message "All $($batchResults.Count) app(s) failed processing." `
+        -Details @{
+            ErrorCount     = $errorCount
+            BlockedCount   = $blockedCount
+            FailedApps     = $failedAppNames
+            BlockedApps    = $blockedAppNames
+            DurationSeconds = $batchDuration
+            Action         = 'Investigate batch failures immediately. No campaigns were created.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
+elseif ($errorCount -gt 0 -or $blockedCount -gt 0) {
+    # Partial failure
+    Send-SPDisconnectedAppAlert -AlertType BatchPartialFailure -Severity WARN `
+        -Message "$errorCount error(s) and $blockedCount threshold block(s) out of $($batchResults.Count) app(s)." `
+        -Details @{
+            SuccessCount    = $successCount
+            NoChangesCount  = $noChangesCount
+            ErrorCount      = $errorCount
+            BlockedCount    = $blockedCount
+            FailedApps      = $failedAppNames
+            BlockedApps     = $blockedAppNames
+            TotalCampaigns  = $totalCampaigns
+            DurationSeconds = $batchDuration
+            Action          = 'Review failed/blocked apps. Successful apps processed normally.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
 
 #endregion
 
