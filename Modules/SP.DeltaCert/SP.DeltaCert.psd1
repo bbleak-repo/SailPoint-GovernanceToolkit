@@ -42,6 +42,7 @@
         'Show-SPOrgTree'
         'Show-SPCampaignOrgPreview'
         'Show-SPReportDistributionPreview'
+        'Export-SPOrgChartHtml'
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'

@@ -2274,6 +2274,402 @@ function Show-SPReportDistributionPreview {
     }
 }
 
+function Export-SPOrgChartHtml {
+    <#
+    .SYNOPSIS
+        Generates a visual org chart as a self-contained HTML file.
+    .DESCRIPTION
+        Renders the org tree as a top-down HTML document with nested div elements and
+        CSS borders for visual hierarchy. Each node displays name, title, band, and
+        direct report count. Nodes are color-coded by band classification:
+
+        A (purple) = President / C-suite
+        B (blue)   = VP / SVP
+        C (green)  = Director
+        D (orange) = Manager
+        E (gray)   = Individual Contributor
+
+        All CSS is inline on elements for Word copy-paste compatibility.
+        No JavaScript, no flexbox, no grid, no external resources.
+
+        When ReportsPath is provided, nodes link to corresponding leadership reports
+        if the report HTML file exists in that directory.
+    .PARAMETER OrgTree
+        Org tree Data hashtable (the .Data property from Build-SPOrgTree or
+        Merge-SPOrgTreeWithSupplement). Must contain a Nodes hashtable.
+    .PARAMETER OutputPath
+        File path or directory for the HTML output. If a directory, generates
+        a file named org-chart-{yyyy-MM-dd}.html inside it.
+    .PARAMETER Title
+        Title displayed at the top of the report. Default: 'Organization Chart'.
+    .PARAMETER ReportsPath
+        Optional directory containing leadership reports. When provided, nodes
+        with matching report files get clickable links.
+    .PARAMETER CorrelationID
+        Correlation ID embedded in the report footer. Auto-generated if omitted.
+    .OUTPUTS
+        Hashtable with Success, Data (@{FilePath; NodeCount}), and Error keys.
+    .EXAMPLE
+        $tree = Build-SPOrgTree -IdentityIds $ids -MaxDepth 4
+        $result = Export-SPOrgChartHtml -OrgTree $tree.Data -OutputPath 'C:\Reports'
+    .EXAMPLE
+        $merged = Merge-SPOrgTreeWithSupplement -OrgTree $tree.Data -Supplement $supp
+        Export-SPOrgChartHtml -OrgTree $merged.Data -OutputPath 'C:\Reports\org-chart.html' `
+            -ReportsPath 'C:\Reports\leadership' -Title 'Q1 Org Chart'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$Title = 'Organization Chart',
+
+        [Parameter()]
+        [string]$ReportsPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    # --- Validate input ---
+    $nodes = $OrgTree.Nodes
+    if ($null -eq $nodes -or $nodes.Count -eq 0) {
+        return @{ Success = $false; Data = $null; Error = 'OrgTree contains no nodes' }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # --- Resolve output file path ---
+    if (Test-Path -Path $OutputPath -PathType Container) {
+        $dateStr = (Get-Date).ToString('yyyy-MM-dd')
+        $OutputPath = Join-Path $OutputPath "org-chart-$dateStr.html"
+    } else {
+        $outputDir = Split-Path -Path $OutputPath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($outputDir) -and
+            -not (Test-Path -Path $outputDir -PathType Container)) {
+            New-Item -Path $outputDir -ItemType Directory -Force | Out-Null
+        }
+    }
+
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $fontFamily  = "-apple-system,'Segoe UI',system-ui,sans-serif"
+
+    # --- Band colors ---
+    # A=purple, B=blue (toolkit #336699), C=green (toolkit #339933),
+    # D=orange (toolkit #FF8800), E=gray (toolkit #777777)
+    $bandColors = @{
+        'A' = @{ Border = '#7b2d8e'; Background = '#f8f5fa'; Text = '#7b2d8e' }
+        'B' = @{ Border = '#336699'; Background = '#f0f4f8'; Text = '#336699' }
+        'C' = @{ Border = '#339933'; Background = '#f0f8f0'; Text = '#339933' }
+        'D' = @{ Border = '#FF8800'; Background = '#fff8f0'; Text = '#FF8800' }
+        'E' = @{ Border = '#777777'; Background = '#f5f5f5'; Text = '#777777' }
+    }
+
+    $bandFromLevel = @{ 0 = 'E'; 1 = 'D'; 2 = 'C'; 3 = 'B' }
+
+    $bandLabels = @{
+        'A' = 'President / C-suite'
+        'B' = 'VP / SVP'
+        'C' = 'Director'
+        'D' = 'Manager'
+        'E' = 'Individual Contributor'
+    }
+
+    # --- Helper: resolve band for a node ---
+    function Get-NodeBand {
+        param([hashtable]$Node)
+        if ($Node.ContainsKey('Band') -and -not [string]::IsNullOrWhiteSpace($Node.Band)) {
+            return $Node.Band.ToUpper()
+        }
+        $lvl = $Node.Level
+        if ($lvl -ge 4) { return 'A' }
+        if ($bandFromLevel.ContainsKey($lvl)) { return $bandFromLevel[$lvl] }
+        return 'E'
+    }
+
+    # --- Helper: HTML-encode ---
+    function Encode-Html {
+        param([string]$Text)
+        if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+        return [System.Net.WebUtility]::HtmlEncode($Text)
+    }
+
+    # --- Helper: resolve leadership report link for a node ---
+    function Get-ReportLink {
+        param([hashtable]$Node, [string]$NodeId)
+        if ([string]::IsNullOrWhiteSpace($ReportsPath)) { return $null }
+        if (-not (Test-Path -Path $ReportsPath -PathType Container)) { return $null }
+
+        $name = if ($null -ne $Node.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($Node.Identity.Name)) {
+            $Node.Identity.Name
+        } else { $NodeId }
+
+        $safeName = ($name -replace '[^a-zA-Z0-9_-]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($safeName)) {
+            $safeName = $NodeId -replace '[^a-zA-Z0-9_-]', ''
+        }
+
+        $levelPrefixes = @{
+            1 = 'manager'
+            2 = 'director'
+            3 = 'vice-president'
+            4 = 'senior-vice-president'
+            5 = 'executive-leadership'
+        }
+        $lvl = $Node.Level
+
+        if ($levelPrefixes.ContainsKey($lvl)) {
+            $prefix   = $levelPrefixes[$lvl]
+            $fileName = "$prefix-$safeName.html"
+            $filePath = Join-Path $ReportsPath $fileName
+            if (Test-Path $filePath) { return $fileName }
+        }
+
+        # Top-of-tree leaders may have an executive-summary report
+        $mgrId = $Node.ManagerId
+        $isRoot = [string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)
+        if ($isRoot -and $lvl -ge 3) {
+            $execPath = Join-Path $ReportsPath 'executive-summary.html'
+            if (Test-Path $execPath) { return 'executive-summary.html' }
+        }
+
+        return $null
+    }
+
+    # --- Find root nodes ---
+    $rootIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($nodeId in $nodes.Keys) {
+        $node  = $nodes[$nodeId]
+        $mgrId = $node.ManagerId
+        if ([string]::IsNullOrWhiteSpace($mgrId) -or -not $nodes.ContainsKey($mgrId)) {
+            $rootIds.Add($nodeId)
+        }
+    }
+    $sortedRoots = @(
+        $rootIds | Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+    )
+
+    # --- Build node HTML recursively ---
+    function Build-NodeHtml {
+        param([string]$NodeId)
+
+        $node  = $nodes[$NodeId]
+        $band  = Get-NodeBand -Node $node
+        $style = if ($bandColors.ContainsKey($band)) { $bandColors[$band] } else { $bandColors['E'] }
+
+        $name = if ($null -ne $node.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($node.Identity.Name)) {
+            $node.Identity.Name
+        } else { $NodeId }
+        $safeName = Encode-Html $name
+
+        $titleText = ''
+        if ($node.ContainsKey('Title') -and -not [string]::IsNullOrWhiteSpace($node.Title)) {
+            $titleText = Encode-Html $node.Title
+        }
+
+        $children = @()
+        if ($null -ne $node.Children) {
+            $children = @($node.Children | Where-Object { $nodes.ContainsKey($_) })
+        }
+        $childCount = $children.Count
+
+        $reportLink = Get-ReportLink -Node $node -NodeId $NodeId
+
+        $sb = [System.Text.StringBuilder]::new()
+
+        # Node wrapper
+        [void]$sb.Append("<div style=""margin-bottom:6px;"">")
+
+        # Node card with colored left border
+        [void]$sb.Append("<div style=""border-left:4px solid $($style.Border); background:$($style.Background); padding:8px 12px; font-family:$fontFamily;"">")
+
+        # Name (optionally linked to leadership report)
+        if ($null -ne $reportLink) {
+            [void]$sb.Append("<a href=""$reportLink"" style=""color:$($style.Text); text-decoration:none; font-weight:bold; font-size:14px; font-family:$fontFamily;"">$safeName</a>")
+        } else {
+            [void]$sb.Append("<span style=""font-weight:bold; font-size:14px; color:#2c3e50; font-family:$fontFamily;"">$safeName</span>")
+        }
+
+        # Title
+        if (-not [string]::IsNullOrWhiteSpace($titleText)) {
+            [void]$sb.Append(" &mdash; <span style=""color:#555; font-size:13px;"">$titleText</span>")
+        }
+
+        # Band badge
+        [void]$sb.Append(" <span style=""color:$($style.Text); font-size:12px; font-weight:bold;"">[Band $band]</span>")
+
+        # Direct report count
+        if ($childCount -gt 0) {
+            $reportLabel = if ($childCount -eq 1) { '1 direct report' } else { "$childCount direct reports" }
+            [void]$sb.Append(" <span style=""color:#777; font-size:12px;"">($reportLabel)</span>")
+        }
+
+        [void]$sb.Append('</div>')
+
+        # Children container with connecting border
+        if ($childCount -gt 0) {
+            $sortedChildren = @(
+                $children | Sort-Object { -$nodes[$_].Level }, { $nodes[$_].Identity.Name }
+            )
+            [void]$sb.Append("<div style=""margin-left:24px; border-left:2px solid #ddd; padding-left:16px; padding-top:4px;"">")
+            foreach ($childId in $sortedChildren) {
+                [void]$sb.Append((Build-NodeHtml -NodeId $childId))
+            }
+            [void]$sb.Append('</div>')
+        }
+
+        [void]$sb.Append('</div>')
+        return $sb.ToString()
+    }
+
+    # --- Compute summary statistics ---
+    $levelCounts = @{}
+    $bandCounts  = @{}
+    foreach ($nodeId in $nodes.Keys) {
+        $node = $nodes[$nodeId]
+        $lvl  = $node.Level
+        if (-not $levelCounts.ContainsKey($lvl)) { $levelCounts[$lvl] = 0 }
+        $levelCounts[$lvl]++
+
+        $band = Get-NodeBand -Node $node
+        if (-not $bandCounts.ContainsKey($band)) { $bandCounts[$band] = 0 }
+        $bandCounts[$band]++
+    }
+
+    $totalNodes = $nodes.Count
+    $maxDepth   = if ($levelCounts.Count -gt 0) {
+        ([int]($levelCounts.Keys | Measure-Object -Maximum).Maximum) + 1
+    } else { 0 }
+
+    # --- Build summary cards HTML (table layout for Word compat) ---
+    $summaryCardsHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-family:$fontFamily;">
+<tr>
+<td style="width:25%; padding:12px 16px; background:#f0f2f5; text-align:center; border:1px solid #e0e0e0;">
+<div style="font-size:28px; font-weight:bold; color:#2c3e50;">$totalNodes</div>
+<div style="font-size:12px; color:#777;">Total Nodes</div>
+</td>
+<td style="width:25%; padding:12px 16px; background:#f0f2f5; text-align:center; border:1px solid #e0e0e0;">
+<div style="font-size:28px; font-weight:bold; color:#2c3e50;">$maxDepth</div>
+<div style="font-size:12px; color:#777;">Levels Deep</div>
+</td>
+<td style="width:25%; padding:12px 16px; background:#f0f2f5; text-align:center; border:1px solid #e0e0e0;">
+<div style="font-size:28px; font-weight:bold; color:#2c3e50;">$($sortedRoots.Count)</div>
+<div style="font-size:12px; color:#777;">Root Nodes</div>
+</td>
+<td style="width:25%; padding:12px 16px; background:#f0f2f5; text-align:center; border:1px solid #e0e0e0;">
+<div style="font-size:28px; font-weight:bold; color:#2c3e50;">$(if ($levelCounts.ContainsKey(0)) { $totalNodes - $levelCounts[0] } else { $totalNodes })</div>
+<div style="font-size:12px; color:#777;">Leaders</div>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Build band legend HTML (table layout) ---
+    $legendCells = [System.Text.StringBuilder]::new()
+    foreach ($b in @('A','B','C','D','E')) {
+        $style = $bandColors[$b]
+        $label = $bandLabels[$b]
+        $count = if ($bandCounts.ContainsKey($b)) { $bandCounts[$b] } else { 0 }
+        [void]$legendCells.Append(@"
+<td style="padding:6px 10px; border-left:4px solid $($style.Border); background:$($style.Background); font-family:$fontFamily; font-size:12px;">
+<strong style="color:$($style.Text);">Band $b</strong> $([System.Net.WebUtility]::HtmlEncode($label)) <span style="color:#777;">($count)</span>
+</td>
+"@)
+    }
+    $legendHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:24px; font-family:$fontFamily;">
+<tr>
+$($legendCells.ToString())
+</tr>
+</table>
+"@
+
+    # --- Build org tree HTML ---
+    $treeHtml = [System.Text.StringBuilder]::new()
+    foreach ($rootId in $sortedRoots) {
+        [void]$treeHtml.Append((Build-NodeHtml -NodeId $rootId))
+    }
+
+    # --- Footer ---
+    $safeTitle     = [System.Net.WebUtility]::HtmlEncode($Title)
+    $safeGenerated = [System.Net.WebUtility]::HtmlEncode($generatedAt)
+    $safeCorrId    = [System.Net.WebUtility]::HtmlEncode($CorrelationID)
+
+    $footerHtml = @"
+<div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
+    SailPoint ISC Governance Toolkit &nbsp;|&nbsp; $safeTitle &nbsp;|&nbsp; Generated: $safeGenerated &nbsp;|&nbsp; Correlation ID: $safeCorrId
+</div>
+"@
+
+    # --- Assemble full HTML document ---
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$safeTitle</title>
+</head>
+<body style="font-family:$fontFamily; margin:0; padding:24px; background:#f0f2f5; color:#333;">
+<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
+
+<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">$safeTitle</h1>
+<p style="font-family:$fontFamily; color:#555; font-size:14px; margin:0 0 16px 0;">Generated: $safeGenerated</p>
+
+$summaryCardsHtml
+
+$legendHtml
+
+<h2 style="font-family:$fontFamily; color:#2c3e50; font-size:18px; border-bottom:2px solid #336699; padding-bottom:6px; margin-bottom:16px;">Organizational Hierarchy</h2>
+
+$($treeHtml.ToString())
+
+$footerHtml
+
+</div>
+</body>
+</html>
+"@
+
+    # --- Write to file ---
+    try {
+        $html | Set-Content -Path $OutputPath -Encoding UTF8
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Org chart HTML exported: $OutputPath ($totalNodes nodes)" `
+                -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Export-SPOrgChartHtml' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success = $true
+            Data    = @{
+                FilePath  = $OutputPath
+                NodeCount = $totalNodes
+                Depth     = $maxDepth
+                RootCount = $sortedRoots.Count
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Failed to write org chart HTML: $_"
+        }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -2287,5 +2683,6 @@ Export-ModuleMember -Function @(
     'Merge-SPOrgTreeWithSupplement',
     'Show-SPOrgTree',
     'Show-SPCampaignOrgPreview',
-    'Show-SPReportDistributionPreview'
+    'Show-SPReportDistributionPreview',
+    'Export-SPOrgChartHtml'
 )

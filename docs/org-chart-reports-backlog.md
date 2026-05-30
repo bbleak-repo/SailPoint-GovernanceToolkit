@@ -30,7 +30,7 @@ campaigns or sending emails.
 | OC-02 | ASCII Org Tree Renderer (terminal visualization) | none | DONE |
 | OC-03 | Campaign Org Chart Preview | OC-02 | DONE |
 | OC-04 | Report Distribution Preview | OC-03 | DONE |
-| OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | PENDING |
+| OC-05 | Org Chart HTML Export (visual tree report) | OC-02 | DONE |
 | OC-06 | Band/Level Classification Engine | OC-01 | PENDING |
 | OC-07 | Per-Band Leadership Reports | OC-06 | PENDING |
 | OC-08 | Report Distribution CLI (Invoke-SPReportDistribution.ps1) | OC-04 | PENDING |
@@ -270,8 +270,8 @@ SMTP Status: NOT CONFIGURED (reports will be generated but not emailed)
 
 ## OC-05: Org Chart HTML Export
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (see git log)
 - **Depends On:** OC-02
 
 **Description:**
