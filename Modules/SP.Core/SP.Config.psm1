@@ -51,7 +51,6 @@ function Get-SPConfigDefaults {
             Path             = '.\Logs'
             FilePrefix       = 'GovernanceToolkit'
             MinimumSeverity  = 'INFO'
-            RetentionDays    = 30
         }
         Api = @{
             BaseUrl                  = ''
@@ -322,7 +321,6 @@ function Get-SPConfigTemplate {
             Path            = '.\Logs'
             FilePrefix      = 'GovernanceToolkit'
             MinimumSeverity = 'INFO'
-            RetentionDays   = 30
         }
         Api = [ordered]@{
             BaseUrl                    = 'https://CHANGE_ME.api.identitynow.com/v3'
@@ -610,7 +608,6 @@ function Test-SPConfiguration {
         @('Api.RateLimitRequestsPerWindow',  { $config.Api.RateLimitRequestsPerWindow }),
         @('Api.RateLimitWindowSeconds',      { $config.Api.RateLimitWindowSeconds }),
         @('Api.MaxPaginationPages',          { $config.Api.MaxPaginationPages }),
-        @('Logging.RetentionDays',           { $config.Logging.RetentionDays }),
         @('Audit.DefaultDaysBack',           { $config.Audit.DefaultDaysBack }),
         @('Audit.DefaultIdentityEventDays',  { $config.Audit.DefaultIdentityEventDays }),
         @('Audit.LeadershipDepth',           { $config.Audit.LeadershipDepth }),

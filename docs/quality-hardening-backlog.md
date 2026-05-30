@@ -30,7 +30,7 @@ Critical items first, then high, medium, low.
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | DONE |
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | DONE |
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | DONE |
-| QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | PENDING |
+| QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | DONE |
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | PENDING |
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | PENDING |
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | PENDING |
@@ -269,7 +269,7 @@ changes required -- v1 files continue to work.
 
 ## QH-14: Remove Dead Logging.RetentionDays Config Key
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Logging.RetentionDays` is defined in defaults and config but never used
@@ -279,7 +279,16 @@ by `Invoke-SPLogRetention`. Dead config key creates confusion.
 **Fix:** Either wire `Logging.RetentionDays` into the logging module OR remove it
 from defaults and document that `Retention.*` is the authoritative config.
 
-**Files:** `Modules/SP.Core/SP.Config.psm1`, `Config/settings.json`
+**Resolution:** Removed `Logging.RetentionDays` from all locations: `Get-SPConfigDefaults`
+(two instances), `Test-SPConfiguration` positive-integer validation, `SP.Logging.psm1`
+fallback config, `Config/settings.json`, `Tests/TestData/valid-settings.json`, and
+`Tests/SP.Auth.Tests.ps1` fixture. Updated `docs/toolkit-status.md` to reference
+`Retention.ArchiveDays` / `Retention.DeleteDays` as the authoritative retention config.
+GUI file (`SP.MainWindow.psm1`) not modified per project conventions.
+
+**Files:** `Modules/SP.Core/SP.Config.psm1`, `Modules/SP.Core/SP.Logging.psm1`,
+`Config/settings.json`, `Tests/TestData/valid-settings.json`, `Tests/SP.Auth.Tests.ps1`,
+`docs/toolkit-status.md`
 
 ---
 

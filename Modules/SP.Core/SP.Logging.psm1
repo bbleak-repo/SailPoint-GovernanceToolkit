@@ -46,7 +46,6 @@ function Get-SPLoggingConfig {
                 Path            = '.\Logs'
                 FilePrefix      = 'GovernanceToolkit'
                 MinimumSeverity = 'INFO'
-                RetentionDays   = 30
             }
         }
     }

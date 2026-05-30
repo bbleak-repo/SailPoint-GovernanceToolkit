@@ -21,8 +21,7 @@
     "Logging": {
         "Path": ".\\Logs",
         "FilePrefix": "GovernanceToolkit",
-        "MinimumSeverity": "DEBUG",
-        "RetentionDays": 30
+        "MinimumSeverity": "DEBUG"
     },
     "Api": {
         "BaseUrl": "https://testlab.api.identitynow.com/v3",

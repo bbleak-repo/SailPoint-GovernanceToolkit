@@ -41,7 +41,6 @@ BeforeAll {
             Path            = 'TestDrive:\Logs'
             FilePrefix      = 'GovernanceToolkit'
             MinimumSeverity = 'DEBUG'
-            RetentionDays   = 30
         }
         Api = [PSCustomObject]@{
             BaseUrl        = 'https://testlab.api.identitynow.com/v3'

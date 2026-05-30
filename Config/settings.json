@@ -21,8 +21,7 @@
     "Logging": {
         "Path": ".\\Logs",
         "FilePrefix": "GovernanceToolkit",
-        "MinimumSeverity": "INFO",
-        "RetentionDays": 30
+        "MinimumSeverity": "INFO"
     },
     "Api": {
         "BaseUrl": "https://CHANGE_ME.api.identitynow.com/v3",
