@@ -28,7 +28,7 @@ Critical items first, then high, medium, low.
 | QH-09 | HIGH | Document Audit-Mock directory | S | DONE |
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | DONE |
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | DONE |
-| QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | PENDING |
+| QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | DONE |
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | PENDING |
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | PENDING |
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | PENDING |
@@ -228,14 +228,20 @@ FIPS-enforced environments will no longer throw on log file writes.
 
 ## QH-12: Add Pester Tests for CLI Script Entry Points
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
-**Problem:** No Pester tests for the 14 entry-point scripts. Parameter validation,
+**Problem:** No Pester tests for the 16 entry-point scripts. Parameter validation,
 module loading, exit codes, and WhatIf behavior are untested.
 
-**Fix:** New test file with at least: syntax validation (AST parse) for all 14 scripts,
+**Fix:** New test file with at least: syntax validation (AST parse) for all 16 scripts,
 parameter validation tests for key scripts, WhatIf behavior test for mutating scripts.
+
+**Resolution:** Created `Tests/SP.CliScripts.Tests.ps1` with 5 test contexts (CLI-001
+through CLI-005): AST syntax validation for all 16 scripts, #Requires version check,
+-Help switch presence, SupportsShouldProcess on 12 mutating scripts, expected parameters
+on key scripts (CampaignAudit, Retention, DeltaCert, Vault, Orchestrator), ValidateSet
+for OutputMode, and read-only script negative check. Uses ForEach data-driven tests.
 
 **Files:** `Tests/SP.CliScripts.Tests.ps1` (new)
 
