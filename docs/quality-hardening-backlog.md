@@ -27,7 +27,7 @@ Critical items first, then high, medium, low.
 | QH-08 | HIGH | Document settings.local.json override in README | S | DONE |
 | QH-09 | HIGH | Document Audit-Mock directory | S | DONE |
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | DONE |
-| QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | PENDING |
+| QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | DONE |
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | PENDING |
 | QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | PENDING |
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | PENDING |
@@ -210,13 +210,17 @@ documentation updated to reflect the fallback behavior.
 
 ## QH-11: Fix SHA1 to SHA256 in Logging Mutex
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `SP.Logging.psm1` uses SHA1 for mutex name generation. SHA1 is deprecated
 and throws in FIPS mode. Not a security risk but causes scanner findings and FIPS failures.
 
 **Fix:** Replace `SHA1.Create()` with `SHA256.Create()` and truncate hash to same length.
+
+**Resolution:** Replaced `SHA1.Create()` with `SHA256.Create()` at line 283. SHA256 output
+(64 hex chars) is truncated to 40 chars to maintain identical mutex name length as before.
+FIPS-enforced environments will no longer throw on log file writes.
 
 **Files:** `Modules/SP.Core/SP.Logging.psm1`
 
