@@ -75,7 +75,7 @@ Agent loop: `UG-01 -> UG-02 -> UG-03 -> UG-04 -> UG-05 -> UG-06 -> UG-07 -> UG-0
 |----|---------|------------|--------|
 | UG-01 | Framework Shell Template (HTML+CSS+JS) | none | DONE |
 | UG-02 | Framework Python Generator | UG-01 | DONE |
-| UG-03 | Framework Themes (light + dark) | UG-01 | PENDING |
+| UG-03 | Framework Themes (light + dark) | UG-01 | DONE |
 | UG-04 | Getting Started Section Content | none | PENDING |
 | UG-05 | Campaign Audit Section Content | none | PENDING |
 | UG-06 | Delta Certification Section Content | none | PENDING |
@@ -251,8 +251,8 @@ If markdown lib not installed, only .html section files are supported.
 
 ## UG-03: Framework Themes
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-01
 
 **Description:**
