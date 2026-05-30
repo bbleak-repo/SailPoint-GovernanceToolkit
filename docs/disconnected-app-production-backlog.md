@@ -25,23 +25,23 @@ upload data to ISC, or alert on failures. These 10 features close the loop from
 
 | Rank | ID | Feature | Depends On | Status |
 |------|-----|---------|------------|--------|
-| 1 | DA-21 | Post-Campaign Decision Collection | none | PENDING |
-| 2 | DA-22 | Disconnected App Remediation Tracker | DA-21 | PENDING |
-| 3 | DA-23 | Unified Daily Orchestrator Integration | none | PENDING |
-| 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | PENDING |
-| 5 | DA-25 | Operational Alerting (Wire Notifications) | none | PENDING |
-| 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | PENDING |
-| 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | PENDING |
-| 8 | DA-28 | Disconnected App Escalation | none | PENDING |
-| 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | PENDING |
-| 10 | DA-30 | Pester Tests | DA-29 | PENDING |
+| 1 | DA-21 | Post-Campaign Decision Collection | none | DONE |
+| 2 | DA-22 | Disconnected App Remediation Tracker | DA-21 | DONE |
+| 3 | DA-23 | Unified Daily Orchestrator Integration | none | DONE |
+| 4 | DA-24 | ISC Source Aggregation (CSV Upload) | none | DONE |
+| 5 | DA-25 | Operational Alerting (Wire Notifications) | none | DONE |
+| 6 | DA-26 | Campaign Lifecycle Management (Cleanup) | none | DONE |
+| 7 | DA-27 | Historical Trending + Compliance Packaging | DA-21 | DONE |
+| 8 | DA-28 | Disconnected App Escalation | none | DONE |
+| 9 | DA-29 | Self-Service App Team Dashboard | DA-21, DA-22 | DONE |
+| 10 | DA-30 | Pester Tests | DA-29 | DONE |
 
 ---
 
 ## DA-21: Post-Campaign Decision Collection
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-21
 - **Depends On:** none
 
 **Description:**
@@ -97,8 +97,8 @@ campaigns were completed, what was approved/revoked, or what needs remediation.
 
 ## DA-22: Disconnected App Remediation Tracker
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-22
 - **Depends On:** DA-21
 
 **Description:**
@@ -139,8 +139,8 @@ decided but actually executed. This closes that gap.
 
 ## DA-23: Unified Daily Orchestrator Integration
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-23
 - **Depends On:** none
 
 **Description:**
@@ -180,8 +180,8 @@ Also add:
 
 ## DA-24: ISC Source Aggregation (CSV Upload)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-24
 - **Depends On:** none
 
 **Description:**
@@ -236,8 +236,8 @@ function Push-SPDisconnectedAppToISC {
 
 ## DA-25: Operational Alerting (Wire Notifications)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-25
 - **Depends On:** none
 
 **Description:**
@@ -275,8 +275,8 @@ overdue remediations.
 
 ## DA-26: Campaign Lifecycle Management (Cleanup for Disconnected Apps)
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-26
 - **Depends On:** none
 
 **Description:**
@@ -307,8 +307,8 @@ ISC's campaign list becomes unmanageable.
 
 ## DA-27: Historical Trending + Compliance Packaging
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-27
 - **Depends On:** DA-21
 
 **Description:**
@@ -342,8 +342,8 @@ reporting. Package all evidence for a specific audit period.
 
 ## DA-28: Disconnected App Escalation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-28
 - **Depends On:** none
 
 **Description:**
@@ -374,8 +374,8 @@ campaigns by each app's CampaignNamePrefix.
 
 ## DA-29: Self-Service App Team Dashboard
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-29
 - **Depends On:** DA-21, DA-22
 
 **Description:**
@@ -410,8 +410,8 @@ Refreshed after each batch run, dropped to a web-accessible share.
 
 ## DA-30: Pester Tests
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** DA-30
 - **Depends On:** DA-29
 
 **Description:**

@@ -5,7 +5,7 @@
 .SYNOPSIS
     Pester 5.x tests for SP.DisconnectedApps modules
 .DESCRIPTION
-    Tests: DA-001 through DA-011, DA-12-T through DA-20-T
+    Tests: DA-001 through DA-011, DA-12-T through DA-20-T, DA-21-T through DA-29-T
     Covers:
         DA-001 to DA-002: Test-SPDisconnectedAppAccountFile  -- missing columns, duplicate IDs
         DA-003:           Test-SPDisconnectedAppCrossReference -- unmatched groups
@@ -25,6 +25,16 @@
         DA-18-T:          Get-SPDisconnectedAppEntitlementCatalog -- multi-app aggregation
         DA-19-T:          Export-SPDisconnectedAppBatchHtml      -- valid HTML with mixed statuses
         DA-20-T:          Get-SPDisconnectedAppSlaStatus         -- delivery rate from snapshots
+        DA-21-T:          Get-SPDisconnectedAppCampaignDecisions -- decision harvest from ISC (mocked)
+        DA-22-T:          New-SPRemediationRecord                -- PENDING record creation
+        DA-22-T2:         Update-SPRemediationStatus             -- CONFIRMED on entitlement absence
+        DA-22-T3:         Update-SPRemediationStatus             -- OVERDUE after threshold days
+        DA-23-T:          Invoke-SPDailyOrchestrator.ps1         -- disconnected app steps (7,8,9)
+        DA-24-T:          Push-SPDisconnectedAppToISC            -- API upload + FileDrop (mocked)
+        DA-25-T:          Send-SPDisconnectedAppAlert            -- threshold block alert
+        DA-26-T:          Invoke-SPDisconnectedAppCleanup        -- past-due campaign completion
+        DA-28-T:          Invoke-SPDisconnectedAppEscalation     -- prefix-filtered escalation
+        DA-29-T:          Export-SPDisconnectedAppTeamDashboard   -- HTML dashboard with delivery status
 
     Note on mock-scoping:
         DA-009 mocks cross-module calls (Invoke-SPApiRequest, Get-SPDeltaIdentityDetail) within
@@ -1344,6 +1354,839 @@ Describe "DA-20-T: SLA tracking calculates delivery rate from snapshot filenames
             $result.Data.Summary.TotalApps    | Should -Be 2
             $result.Data.Summary.Compliant    | Should -Be 1
             $result.Data.Summary.NonCompliant | Should -Be 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-21-T: Decision collection retrieves campaign decisions from ISC
+# ---------------------------------------------------------------------------
+
+Describe "DA-21-T: Decision collection retrieves campaign decisions from ISC (mocked)" {
+
+    Context "When audit trail has campaign IDs and ISC returns completed campaigns" {
+        BeforeAll {
+            # Set up per-app output directory with JSONL audit trail
+            $script:DA21OutputPath = Join-Path $TestDrive 'DA21-Reports'
+            $script:DA21AppDir    = Join-Path $script:DA21OutputPath 'TestApp21'
+            New-Item -Path $script:DA21AppDir -ItemType Directory -Force | Out-Null
+
+            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            $auditEvent = @{
+                Timestamp   = $timestamp
+                Action      = 'DisconnectedAppCertRun'
+                CampaignIds = @('camp-aaa', 'camp-bbb')
+            } | ConvertTo-Json -Compress
+
+            $auditPath = Join-Path $script:DA21AppDir 'disconnected-app-audit.jsonl'
+            $auditEvent | Set-Content -Path $auditPath -Encoding UTF8
+        }
+
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            # Mock Get-SPCampaign: camp-aaa completed, camp-bbb active
+            Mock Get-SPCampaign -ModuleName SP.DisconnectedAppRunner {
+                if ($CampaignId -eq 'camp-aaa') {
+                    return @{
+                        Success = $true
+                        Data    = [PSCustomObject]@{ id = 'camp-aaa'; status = 'COMPLETED'; name = 'TestApp21 Delta Cert 2026-05-28' }
+                        Error   = $null
+                    }
+                }
+                elseif ($CampaignId -eq 'camp-bbb') {
+                    return @{
+                        Success = $true
+                        Data    = [PSCustomObject]@{ id = 'camp-bbb'; status = 'ACTIVE'; name = 'TestApp21 Delta Cert 2026-05-29' }
+                        Error   = $null
+                    }
+                }
+                return @{ Success = $false; Data = $null; Error = '404 Not Found' }
+            }
+
+            # Mock Get-SPAuditCertifications: one certification per completed campaign
+            Mock Get-SPAuditCertifications -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id                = 'cert-001'
+                            EffectiveReviewer = [PSCustomObject]@{ displayName = 'Manager Smith' }
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            # Mock Get-SPAuditCertificationItems: 2 approved, 1 revoked
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            decision        = 'APPROVE'
+                            identitySummary = [PSCustomObject]@{ name = 'Alice' }
+                            accountId       = 'EMP001'
+                            accessSummary   = [PSCustomObject]@{
+                                entitlement = [PSCustomObject]@{ name = 'APP-ADMIN' }
+                            }
+                            completed       = '2026-05-28T12:00:00Z'
+                        },
+                        [PSCustomObject]@{
+                            decision        = 'APPROVE'
+                            identitySummary = [PSCustomObject]@{ name = 'Bob' }
+                            accountId       = 'EMP002'
+                            accessSummary   = [PSCustomObject]@{
+                                entitlement = [PSCustomObject]@{ name = 'APP-VIEWER' }
+                            }
+                            completed       = '2026-05-28T12:01:00Z'
+                        },
+                        [PSCustomObject]@{
+                            decision        = 'REVOKE'
+                            identitySummary = [PSCustomObject]@{ name = 'Carol' }
+                            accountId       = 'EMP003'
+                            accessSummary   = [PSCustomObject]@{
+                                entitlement = [PSCustomObject]@{ name = 'APP-POWERUSER' }
+                            }
+                            completed       = '2026-05-28T12:02:00Z'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Should return correct decision counts" {
+            $result = Get-SPDisconnectedAppCampaignDecisions `
+                -AppName 'TestApp21' `
+                -OutputPath $script:DA21OutputPath `
+                -DaysBack 7
+
+            $result.Success                | Should -Be $true
+            $result.Data.CampaignsChecked  | Should -Be 2
+            $result.Data.Completed         | Should -Be 1
+            $result.Data.Active            | Should -Be 1
+            $result.Data.Decisions.Approved | Should -Be 2
+            $result.Data.Decisions.Revoked  | Should -Be 1
+        }
+
+        It "Should capture revocation details for remediation follow-up" {
+            $result = Get-SPDisconnectedAppCampaignDecisions `
+                -AppName 'TestApp21' `
+                -OutputPath $script:DA21OutputPath `
+                -DaysBack 7
+
+            $result.Data.RevocationDetails.Count | Should -Be 1
+            $result.Data.RevocationDetails[0].IdentityName | Should -Be 'Carol'
+            $result.Data.RevocationDetails[0].AccountId    | Should -Be 'EMP003'
+            $result.Data.RevocationDetails[0].Entitlement  | Should -Be 'APP-POWERUSER'
+            $result.Data.RevocationDetails[0].ReviewerName | Should -Be 'Manager Smith'
+        }
+
+        It "Should return empty data when no audit trail exists" {
+            $result = Get-SPDisconnectedAppCampaignDecisions `
+                -AppName 'NonexistentApp' `
+                -OutputPath $script:DA21OutputPath `
+                -DaysBack 7
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'No audit trail found'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-22-T: Remediation tracker creates PENDING record for REVOKE decisions
+# ---------------------------------------------------------------------------
+
+Describe "DA-22-T: Remediation tracker creates PENDING record for REVOKE decisions" {
+
+    Context "When revocation details are provided" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+        }
+
+        It "Should create a PENDING remediation record in tracker JSON" {
+            $outputPath = Join-Path $TestDrive 'DA22-Reports'
+
+            $revocations = @(
+                @{
+                    AppName         = 'TestApp22'
+                    CampaignId      = 'camp-111'
+                    CertificationId = 'cert-111'
+                    IdentityName    = 'Carol'
+                    AccountId       = 'EMP003'
+                    Entitlement     = 'APP-POWERUSER'
+                    ReviewerName    = 'Manager Smith'
+                    DecisionDate    = '2026-05-28T12:02:00Z'
+                }
+            )
+
+            $result = New-SPRemediationRecord `
+                -RevocationDetails $revocations `
+                -AppName 'TestApp22' `
+                -OutputPath $outputPath
+
+            $result.Success      | Should -Be $true
+            $result.Data.Created | Should -Be 1
+            $result.Data.Skipped | Should -Be 0
+            $result.Data.Total   | Should -Be 1
+
+            # Verify file on disk
+            $trackerPath = Join-Path $outputPath 'TestApp22\remediation-tracker.json'
+            Test-Path -Path $trackerPath | Should -Be $true
+
+            $tracker = Get-Content -Path $trackerPath -Raw | ConvertFrom-Json
+            $tracker = @($tracker)
+            $tracker.Count          | Should -Be 1
+            $tracker[0].Status      | Should -Be 'PENDING'
+            $tracker[0].AccountId   | Should -Be 'EMP003'
+            $tracker[0].Entitlement | Should -Be 'APP-POWERUSER'
+        }
+
+        It "Should skip duplicate records on re-run" {
+            $outputPath = Join-Path $TestDrive 'DA22-Dupes'
+
+            $revocations = @(
+                @{
+                    AppName    = 'TestApp22'
+                    CampaignId = 'camp-222'
+                    AccountId  = 'EMP004'
+                    Entitlement = 'APP-ADMIN'
+                    IdentityName = 'Dave'
+                    ReviewerName = 'Manager Jones'
+                    DecisionDate = '2026-05-28T14:00:00Z'
+                }
+            )
+
+            # First call creates the record
+            New-SPRemediationRecord -RevocationDetails $revocations -AppName 'TestApp22' -OutputPath $outputPath
+
+            # Second call should skip (duplicate)
+            $result = New-SPRemediationRecord -RevocationDetails $revocations -AppName 'TestApp22' -OutputPath $outputPath
+
+            $result.Data.Created | Should -Be 0
+            $result.Data.Skipped | Should -Be 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-22-T2: Remediation confirmed when entitlement absent from next-day CSV
+# ---------------------------------------------------------------------------
+
+Describe "DA-22-T2: Remediation confirmed when entitlement absent from next-day CSV" {
+
+    Context "When the revoked entitlement is no longer in today's CSV" {
+        BeforeAll {
+            $script:DA22T2OutputPath = Join-Path $TestDrive 'DA22T2-Reports'
+            $script:DA22T2AppDir     = Join-Path $script:DA22T2OutputPath 'TestApp22T2'
+            New-Item -Path $script:DA22T2AppDir -ItemType Directory -Force | Out-Null
+
+            # Pre-create a tracker with one PENDING record
+            $tracker = @(
+                [ordered]@{
+                    RecordId       = 'rec-001'
+                    AppName        = 'TestApp22T2'
+                    AccountId      = 'EMP003'
+                    Entitlement    = 'APP-POWERUSER'
+                    IdentityName   = 'Carol'
+                    ReviewerName   = 'Manager Smith'
+                    CampaignId     = 'camp-111'
+                    CertificationId = 'cert-111'
+                    DecisionDate   = '2026-05-28T12:02:00Z'
+                    Status         = 'PENDING'
+                    CreatedAt      = '2026-05-28T12:05:00Z'
+                    ConfirmedAt    = $null
+                    DaysOverdue    = 0
+                    EscalatedAt    = $null
+                    CorrelationID  = 'corr-001'
+                }
+            )
+            $trackerJson = $tracker | ConvertTo-Json -Depth 5
+            $trackerJson = "[$trackerJson]"
+            $trackerPath = Join-Path $script:DA22T2AppDir 'remediation-tracker.json'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($trackerPath, $trackerJson, $utf8NoBom)
+
+            # Create an account CSV WITHOUT EMP003's APP-POWERUSER entitlement
+            $script:DA22T2AccountFile = Join-Path $TestDrive 'da22t2-accounts.csv'
+            @(
+                'id,name,givenName,familyName,e-mail,groups,IIQDisabled'
+                'EMP001,alice,Alice,Alpha,alice@corp.com,APP-ADMIN,false'
+                'EMP003,carol,Carol,Gamma,carol@corp.com,APP-VIEWER,false'
+            ) | Set-Content -Path $script:DA22T2AccountFile -Encoding UTF8
+        }
+
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+        }
+
+        It "Should mark remediation as CONFIRMED when entitlement is absent" {
+            $result = Update-SPRemediationStatus `
+                -AppName 'TestApp22T2' `
+                -AccountFilePath $script:DA22T2AccountFile `
+                -OutputPath $script:DA22T2OutputPath `
+                -OverdueDays 3
+
+            $result.Success        | Should -Be $true
+            $result.Data.Confirmed | Should -Be 1
+            $result.Data.Overdue   | Should -Be 0
+            $result.Data.Pending   | Should -Be 0
+
+            # Verify tracker file updated
+            $trackerPath = Join-Path $script:DA22T2AppDir 'remediation-tracker.json'
+            $updated = @(Get-Content -Path $trackerPath -Raw | ConvertFrom-Json)
+            $updated[0].Status      | Should -Be 'CONFIRMED'
+            $updated[0].ConfirmedAt | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-22-T3: Remediation marked OVERDUE after threshold days
+# ---------------------------------------------------------------------------
+
+Describe "DA-22-T3: Remediation marked OVERDUE after threshold days" {
+
+    Context "When the entitlement is still present and decision is older than threshold" {
+        BeforeAll {
+            $script:DA22T3OutputPath = Join-Path $TestDrive 'DA22T3-Reports'
+            $script:DA22T3AppDir     = Join-Path $script:DA22T3OutputPath 'TestApp22T3'
+            New-Item -Path $script:DA22T3AppDir -ItemType Directory -Force | Out-Null
+
+            # Create a tracker with PENDING record from 5 days ago
+            $oldDate = (Get-Date).ToUniversalTime().AddDays(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $tracker = @(
+                [ordered]@{
+                    RecordId       = 'rec-002'
+                    AppName        = 'TestApp22T3'
+                    AccountId      = 'EMP005'
+                    Entitlement    = 'APP-ADMIN'
+                    IdentityName   = 'Eve'
+                    ReviewerName   = 'Manager Clark'
+                    CampaignId     = 'camp-333'
+                    CertificationId = 'cert-333'
+                    DecisionDate   = $oldDate
+                    Status         = 'PENDING'
+                    CreatedAt      = $oldDate
+                    ConfirmedAt    = $null
+                    DaysOverdue    = 0
+                    EscalatedAt    = $null
+                    CorrelationID  = 'corr-003'
+                }
+            )
+            $trackerJson = $tracker | ConvertTo-Json -Depth 5
+            $trackerJson = "[$trackerJson]"
+            $trackerPath = Join-Path $script:DA22T3AppDir 'remediation-tracker.json'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($trackerPath, $trackerJson, $utf8NoBom)
+
+            # Account CSV still contains EMP005 with APP-ADMIN
+            $script:DA22T3AccountFile = Join-Path $TestDrive 'da22t3-accounts.csv'
+            @(
+                'id,name,givenName,familyName,e-mail,groups,IIQDisabled'
+                'EMP005,eve,Eve,Echo,eve@corp.com,APP-ADMIN,false'
+            ) | Set-Content -Path $script:DA22T3AccountFile -Encoding UTF8
+        }
+
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+        }
+
+        It "Should mark remediation as OVERDUE with correct DaysOverdue" {
+            $result = Update-SPRemediationStatus `
+                -AppName 'TestApp22T3' `
+                -AccountFilePath $script:DA22T3AccountFile `
+                -OutputPath $script:DA22T3OutputPath `
+                -OverdueDays 3
+
+            $result.Success       | Should -Be $true
+            $result.Data.Overdue  | Should -Be 1
+            $result.Data.Confirmed | Should -Be 0
+
+            # Verify tracker file
+            $trackerPath = Join-Path $script:DA22T3AppDir 'remediation-tracker.json'
+            $updated = @(Get-Content -Path $trackerPath -Raw | ConvertFrom-Json)
+            $updated[0].Status      | Should -Be 'OVERDUE'
+            $updated[0].DaysOverdue | Should -BeGreaterOrEqual 5
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-23-T: Unified orchestrator has disconnected app pipeline steps
+# ---------------------------------------------------------------------------
+
+Describe "DA-23-T: Unified orchestrator supports disconnected app pipeline" {
+
+    Context "Invoke-SPDailyOrchestrator.ps1 integration" {
+        BeforeAll {
+            $script:OrchestratorPath = Join-Path $PSScriptRoot '..\Scripts\Invoke-SPDailyOrchestrator.ps1'
+        }
+
+        It "Should parse without syntax errors" {
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path $script:OrchestratorPath).Path,
+                [ref]$null,
+                [ref]$parseErrors
+            )
+            $parseErrors.Count | Should -Be 0
+        }
+
+        It "Should have the SkipDisconnectedApps parameter" {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path $script:OrchestratorPath).Path,
+                [ref]$tokens,
+                [ref]$parseErrors
+            )
+
+            $paramBlock = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.ParamBlockAst] }, $true) |
+                Select-Object -First 1
+
+            $paramNames = @($paramBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+            $paramNames | Should -Contain 'SkipDisconnectedApps'
+        }
+
+        It "Should contain disconnected app step references (Step 7, 8, 9)" {
+            $content = Get-Content -Path (Resolve-Path $script:OrchestratorPath).Path -Raw
+            $content | Should -Match 'Step 7.*Disconnected App'
+            $content | Should -Match 'Step 8.*Decision Collection'
+            $content | Should -Match 'Step 9.*Remediation'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-24-T: Push-SPDisconnectedAppToISC calls API upload endpoint (mocked)
+# ---------------------------------------------------------------------------
+
+Describe "DA-24-T: Push-SPDisconnectedAppToISC calls API upload endpoint (mocked)" {
+
+    Context "When ISCSourceId is empty (not configured)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+        }
+
+        It "Should skip gracefully with Reason=NoISCSourceId" {
+            $result = Push-SPDisconnectedAppToISC `
+                -AppName 'TestApp24' `
+                -AccountFilePath $script:Day1Accounts `
+                -ISCSourceId ''
+
+            $result.Success            | Should -Be $true
+            $result.Data.Method        | Should -Be 'Skipped'
+            $result.Data.Reason        | Should -Be 'NoISCSourceId'
+        }
+    }
+
+    Context "When using FileDrop upload method" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+        }
+
+        It "Should copy CSV to the file drop path" {
+            $dropDir = Join-Path $TestDrive 'VA-Drop'
+
+            $result = Push-SPDisconnectedAppToISC `
+                -AppName 'TestApp24' `
+                -AccountFilePath $script:Day1Accounts `
+                -ISCSourceId 'src-abc-123' `
+                -UploadMethod 'FileDrop' `
+                -FileDropPath $dropDir
+
+            $result.Success     | Should -Be $true
+            $result.Data.Method | Should -Be 'FileDrop'
+            $result.Data.AggregationStatus | Should -Be 'FileDropped'
+
+            # Verify the file was actually copied
+            $copiedFile = Join-Path $dropDir 'TestApp24\accounts.csv'
+            Test-Path -Path $copiedFile | Should -Be $true
+        }
+    }
+
+    Context "When using API upload method (mocked)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            Mock Get-SPAuthToken -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @{
+                        Headers = @{ 'Authorization' = 'Bearer mock-token' }
+                    }
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPConfig -ModuleName SP.DisconnectedAppRunner {
+                return [PSCustomObject]@{
+                    Api = [PSCustomObject]@{
+                        BaseUrl        = 'https://test.api.identitynow.com'
+                        TimeoutSeconds = 30
+                    }
+                }
+            }
+
+            Mock Invoke-RestMethod -ModuleName SP.DisconnectedAppRunner {
+                return [PSCustomObject]@{
+                    task = [PSCustomObject]@{ id = 'task-xyz-999' }
+                }
+            }
+        }
+
+        It "Should call the API and return the task ID" {
+            $result = Push-SPDisconnectedAppToISC `
+                -AppName 'TestApp24' `
+                -AccountFilePath $script:Day1Accounts `
+                -ISCSourceId 'src-abc-123' `
+                -UploadMethod 'API'
+
+            $result.Success     | Should -Be $true
+            $result.Data.Method | Should -Be 'API'
+            $result.Data.TaskId | Should -Be 'task-xyz-999'
+
+            # Verify Invoke-RestMethod was called
+            Should -Invoke Invoke-RestMethod -ModuleName SP.DisconnectedAppRunner -Times 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-25-T: Alert triggered on threshold block
+# ---------------------------------------------------------------------------
+
+Describe "DA-25-T: Alert triggered on threshold block" {
+
+    Context "When a ThresholdBlocked alert is sent" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            # Mock Send-SPNotification as unavailable to test log-only fallback
+            Mock Get-Command -ModuleName SP.DisconnectedAppRunner {
+                if ($Name -eq 'Send-SPNotification') { return $null }
+                # Default: delegate to real Get-Command
+                Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
+            }
+        }
+
+        It "Should return Success with correct alert metadata" {
+            $result = Send-SPDisconnectedAppAlert `
+                -AlertType 'ThresholdBlocked' `
+                -Severity 'CRITICAL' `
+                -AppName 'TestApp25' `
+                -Message '42% accounts removed (threshold: 20%)' `
+                -Details @{ RemovedPct = 42; ThresholdPct = 20 }
+
+            $result.Success           | Should -Be $true
+            $result.Data.AlertType    | Should -Be 'ThresholdBlocked'
+            $result.Data.Severity     | Should -Be 'CRITICAL'
+            $result.Data.Subject      | Should -Match 'ThresholdBlocked'
+            $result.Data.Subject      | Should -Match 'CRITICAL'
+            $result.Data.Subject      | Should -Match 'TestApp25'
+        }
+
+        It "Should fall back to LogOnly when Send-SPNotification is unavailable" {
+            $result = Send-SPDisconnectedAppAlert `
+                -AlertType 'BatchAllFailed' `
+                -Severity 'CRITICAL' `
+                -Message 'All apps failed'
+
+            $result.Data.Backend | Should -Be 'LogOnly'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-26-T: Cleanup completes past-due disconnected app campaigns
+# ---------------------------------------------------------------------------
+
+Describe "DA-26-T: Cleanup completes past-due disconnected app campaigns" {
+
+    Context "When AllowCompleteCampaign is false" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Get-SPConfig -ModuleName SP.DisconnectedAppRunner {
+                return [PSCustomObject]@{
+                    Safety = [PSCustomObject]@{ AllowCompleteCampaign = $false }
+                }
+            }
+        }
+
+        It "Should block cleanup with a clear error message" {
+            $result = Invoke-SPDisconnectedAppCleanup
+
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'AllowCompleteCampaign'
+        }
+    }
+
+    Context "When AllowCompleteCampaign is true and stale campaigns exist" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            Mock Get-SPConfig -ModuleName SP.DisconnectedAppRunner {
+                return [PSCustomObject]@{
+                    Safety = [PSCustomObject]@{ AllowCompleteCampaign = $true }
+                }
+            }
+
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            Name               = 'CleanupApp'
+                            CampaignNamePrefix = 'CleanupApp Delta Cert'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            # Return one stale campaign (created 5 days ago, past deadline)
+            $staleDeadline = (Get-Date).ToUniversalTime().AddDays(-2).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $staleCreated  = (Get-Date).ToUniversalTime().AddDays(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+            Mock Search-SPCampaigns -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id       = 'camp-stale-001'
+                            name     = 'CleanupApp Delta Cert 2026-05-24'
+                            status   = 'ACTIVE'
+                            deadline = $staleDeadline
+                            created  = $staleCreated
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Complete-SPCampaign -ModuleName SP.DisconnectedAppRunner {
+                return @{ Success = $true; Data = @{ id = $CampaignId }; Error = $null }
+            }
+        }
+
+        It "Should complete the past-due campaign" {
+            $result = Invoke-SPDisconnectedAppCleanup -DaysStale 3
+
+            $result.Success              | Should -Be $true
+            $result.Data.TotalCompleted  | Should -Be 1
+            $result.Data.AppsChecked     | Should -Be 1
+
+            # Verify Complete-SPCampaign was called
+            Should -Invoke Complete-SPCampaign -ModuleName SP.DisconnectedAppRunner -Times 1
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-28-T: Escalation filters to disconnected app campaigns only
+# ---------------------------------------------------------------------------
+
+Describe "DA-28-T: Escalation filters to disconnected app campaigns only" {
+
+    Context "When stale certifications exist for a disconnected app" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            Name                  = 'EscApp'
+                            CampaignNamePrefix    = 'EscApp Delta Cert'
+                            EscalationStaleHours  = 12
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            # Return one stale certification
+            Mock Get-SPDeltaCertStaleCertifications -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        @{
+                            CertificationId = 'cert-stale-001'
+                            CampaignId      = 'camp-esc-001'
+                            ReviewerId      = 'rev-001'
+                            ReviewerName    = 'Slow Reviewer'
+                            HoursStale      = 36
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Invoke-SPDeltaCertEscalate -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @{
+                        Escalated = @(@{ CertificationId = 'cert-stale-001'; NewReviewerId = 'mgr-001' })
+                        Skipped   = @()
+                        Errors    = @()
+                    }
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Should detect stale certs using the app's CampaignNamePrefix and StaleHours" {
+            $reportPath = Join-Path $TestDrive 'DA28-Reports'
+
+            $result = Invoke-SPDisconnectedAppEscalation -ReportPath $reportPath
+
+            $result.Success             | Should -Be $true
+            $result.Data.AppsChecked    | Should -Be 1
+            $result.Data.TotalStaleCerts | Should -Be 1
+            $result.Data.TotalEscalated | Should -Be 1
+
+            # Verify Get-SPDeltaCertStaleCertifications was called with correct prefix
+            Should -Invoke Get-SPDeltaCertStaleCertifications -ModuleName SP.DisconnectedAppRunner `
+                -ParameterFilter { $CampaignNamePrefix -eq 'EscApp Delta Cert' -and $StaleHours -eq 12 } `
+                -Times 1
+        }
+
+        It "Should write escalation audit event to per-app JSONL" {
+            $reportPath = Join-Path $TestDrive 'DA28-Audit'
+
+            Invoke-SPDisconnectedAppEscalation -ReportPath $reportPath
+
+            $auditFile = Join-Path $reportPath 'EscApp\disconnected-app-escalation.jsonl'
+            Test-Path -Path $auditFile | Should -Be $true
+
+            $auditContent = Get-Content -Path $auditFile -Raw
+            $auditContent | Should -Match 'DisconnectedAppEscalation'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region DA-29-T: Team dashboard HTML generated with delivery status section
+# ---------------------------------------------------------------------------
+
+Describe "DA-29-T: Team dashboard HTML generated with delivery status section" {
+
+    Context "When app data exists for dashboard generation" {
+        BeforeAll {
+            $script:DA29OutputPath  = Join-Path $TestDrive 'DA29-Reports'
+            $script:DA29SnapshotDir = Join-Path $TestDrive 'DA29-Snapshots'
+            $script:DA29AppDir      = Join-Path $script:DA29OutputPath 'DashApp'
+            New-Item -Path $script:DA29AppDir -ItemType Directory -Force | Out-Null
+
+            # Create snapshot directory for SLA calendar
+            $appSnapDir = Join-Path $script:DA29SnapshotDir 'DashApp'
+            New-Item -Path $appSnapDir -ItemType Directory -Force | Out-Null
+            $today = (Get-Date).ToString('yyyy-MM-dd')
+            'data' | Set-Content (Join-Path $appSnapDir "${today}-accounts.csv") -Encoding UTF8
+
+            # Create a minimal audit trail
+            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+            $auditEvent = @{
+                Timestamp       = $timestamp
+                Action          = 'DisconnectedAppCertRun'
+                CampaignsCreated = 1
+                CampaignIds     = @('camp-dash-001')
+                DeltaSummary    = @{
+                    Added               = 2
+                    Removed             = 1
+                    Enabled             = 0
+                    EntitlementsGranted = 1
+                    EntitlementsRevoked = 0
+                }
+            } | ConvertTo-Json -Compress
+
+            $auditPath = Join-Path $script:DA29AppDir 'disconnected-app-audit.jsonl'
+            $auditEvent | Set-Content -Path $auditPath -Encoding UTF8
+
+            # Create a test account file for delivery status
+            $script:DA29AccountFile = Join-Path $TestDrive 'dashapp-accounts.csv'
+            @(
+                'id,name,givenName,familyName,e-mail,groups,IIQDisabled'
+                'D1,dashuser1,Dash,User1,d1@corp.com,GRP-A,false'
+                'D2,dashuser2,Dash,User2,d2@corp.com,GRP-B,false'
+            ) | Set-Content -Path $script:DA29AccountFile -Encoding UTF8
+            (Get-Item $script:DA29AccountFile).LastWriteTimeUtc = (Get-Date).ToUniversalTime()
+        }
+
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            Name            = 'DashApp'
+                            AccountFilePath = $script:DA29AccountFile
+                            Enabled         = $true
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Should generate a self-contained HTML dashboard file" {
+            $result = Export-SPDisconnectedAppTeamDashboard `
+                -AppName 'DashApp' `
+                -OutputPath $script:DA29OutputPath `
+                -SnapshotDir $script:DA29SnapshotDir
+
+            $result.Success         | Should -Be $true
+            $result.Data.FilePath   | Should -Not -BeNullOrEmpty
+            Test-Path -Path $result.Data.FilePath | Should -Be $true
+        }
+
+        It "Should contain delivery status and delta summary sections" {
+            $result = Export-SPDisconnectedAppTeamDashboard `
+                -AppName 'DashApp' `
+                -OutputPath $script:DA29OutputPath `
+                -SnapshotDir $script:DA29SnapshotDir
+
+            $htmlContent = Get-Content -Path $result.Data.FilePath -Raw
+
+            # Valid HTML structure
+            $htmlContent | Should -Match '<!DOCTYPE html>'
+            $htmlContent | Should -Match '</html>'
+
+            # Delivery status section
+            $htmlContent | Should -Match 'Delivery Status'
+            $htmlContent | Should -Match 'Delivered|Missing|Stale'
+
+            # App name present
+            $htmlContent | Should -Match 'DashApp'
+
+            # Footer with toolkit branding
+            $htmlContent | Should -Match 'SailPoint Governance Toolkit'
         }
     }
 }

@@ -116,6 +116,7 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 $moduleChain = @(
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';                       Name = 'SP.Core';             Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1';                         Name = 'SP.Api';               Required = $true  }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1';                     Name = 'SP.Audit';             Required = $false }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1';             Name = 'SP.DeltaCert';         Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'; Name = 'SP.DisconnectedApps'; Required = $true  }
 )
@@ -226,6 +227,23 @@ if ([string]::IsNullOrWhiteSpace($effectiveFallback)) {
     }
 }
 
+# ISC upload config (DA-24)
+$iscUploadMethod = 'API'
+$iscFileDropPath = ''
+$iscWaitSeconds  = 120
+if ($null -ne $daConfig.PSObject.Properties['ISC'] -and $null -ne $daConfig.ISC) {
+    if ($null -ne $daConfig.ISC.PSObject.Properties['UploadMethod']) {
+        $iscUploadMethod = [string]$daConfig.ISC.UploadMethod
+    }
+    if ($null -ne $daConfig.ISC.PSObject.Properties['FileDropBasePath']) {
+        $iscFileDropPath = [string]$daConfig.ISC.FileDropBasePath
+    }
+    if ($null -ne $daConfig.ISC.PSObject.Properties['WaitForAggregationSeconds'] -and
+        [int]$daConfig.ISC.WaitForAggregationSeconds -gt 0) {
+        $iscWaitSeconds = [int]$daConfig.ISC.WaitForAggregationSeconds
+    }
+}
+
 Write-SPLog -Message "Invoke-SPDisconnectedAppBatch started: CorrelationID=$batchCorrelationID" `
     -Severity INFO -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Start' -CorrelationID $batchCorrelationID
 
@@ -282,6 +300,47 @@ if (($WhatIfPreference -eq $true)) {
 
 #endregion
 
+#region DA-26: Campaign Cleanup (pre-step)
+
+Write-Host '  Step 0: Campaign cleanup (completing stale campaigns)...' -ForegroundColor Cyan
+
+$cleanupResult = $null
+try {
+    $cleanupParams = @{
+        DaysStale     = 3
+        CorrelationID = $batchCorrelationID
+    }
+    if ($ConfigPath) { $cleanupParams['ConfigPath'] = $ConfigPath }
+    if ($AppNames -and $AppNames.Count -gt 0) { $cleanupParams['AppNames'] = $AppNames }
+    if ($WhatIfPreference -eq $true) { $cleanupParams['WhatIf'] = $true }
+
+    $cleanupResult = Invoke-SPDisconnectedAppCleanup @cleanupParams
+
+    if ($cleanupResult.Success) {
+        $completedCount = $cleanupResult.Data.TotalCompleted
+        $activeCount    = $cleanupResult.Data.TotalStillActive
+        if ($completedCount -gt 0) {
+            Write-Host "    Completed $completedCount stale campaign(s), $activeCount still active." -ForegroundColor Green
+        }
+        else {
+            Write-Host "    No stale campaigns to clean up ($activeCount active)." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "    Cleanup skipped: $($cleanupResult.Error)" -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "    Cleanup failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-SPLog -Message "Campaign cleanup failed (non-blocking): $($_.Exception.Message)" `
+        -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'CampaignCleanup' `
+        -CorrelationID $batchCorrelationID
+}
+
+Write-Host ''
+
+#endregion
+
 #region Batch Processing
 
 $batchResults = [System.Collections.Generic.List[hashtable]]::new()
@@ -308,6 +367,7 @@ foreach ($app in $apps) {
         IdentityCount   = 0
         DeltaSummary    = @{}
         ReportPath      = $null
+        ISCUpload       = $null
         Error           = $null
         Reason          = $null
     }
@@ -363,6 +423,40 @@ foreach ($app in $apps) {
                 -AppName $appName -FileType 'entitlements' -SnapshotDir $effectiveSnapshotDir | Out-Null
         }
 
+        # --- Step B2: ISC source upload (DA-24) ---
+        $appISCSourceId = if ($null -ne $app.PSObject.Properties['ISCSourceId']) { $app.ISCSourceId } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($appISCSourceId)) {
+            Write-Host '    b2. Uploading to ISC source...' -ForegroundColor DarkCyan
+
+            $iscUploadParams = @{
+                AppName            = $appName
+                AccountFilePath    = $appAccountPath
+                ISCSourceId        = $appISCSourceId
+                UploadMethod       = $iscUploadMethod
+                WaitTimeoutSeconds = $iscWaitSeconds
+                CorrelationID      = $appCorrelationID
+            }
+            if (-not [string]::IsNullOrWhiteSpace($appEntitlementPath)) {
+                $iscUploadParams['EntitlementFilePath'] = $appEntitlementPath
+            }
+            if ($iscUploadMethod -eq 'FileDrop' -and -not [string]::IsNullOrWhiteSpace($iscFileDropPath)) {
+                $iscUploadParams['FileDropPath'] = $iscFileDropPath
+            }
+
+            $iscResult = Push-SPDisconnectedAppToISC @iscUploadParams
+            $appResult.ISCUpload = $iscResult.Data
+
+            if (-not $iscResult.Success) {
+                Write-Host "       ISC upload failed (non-blocking): $($iscResult.Error)" -ForegroundColor Yellow
+                Write-SPLog -Message "ISC upload failed for '$appName' (non-blocking): $($iscResult.Error)" `
+                    -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ISCUpload' `
+                    -CorrelationID $appCorrelationID
+            }
+            else {
+                Write-Host "       Uploaded ($($iscResult.Data.Method), Task=$($iscResult.Data.TaskId))" -ForegroundColor DarkGray
+            }
+        }
+
         # --- Step C: Find previous snapshot ---
         $prevResult = Get-SPDisconnectedAppPreviousSnapshot -AppName $appName `
             -FileType 'accounts' -SnapshotDir $effectiveSnapshotDir
@@ -412,6 +506,18 @@ foreach ($app in $apps) {
 
             Write-SPLog -Message "App '$appName' blocked by deletion threshold: $($thresholdResult.RemovedPct)% removed (threshold=$appThresholdPct%)" `
                 -Severity ERROR -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ThresholdCheck' `
+                -CorrelationID $appCorrelationID
+
+            # DA-25: Alert on threshold block
+            Send-SPDisconnectedAppAlert -AlertType ThresholdBlocked -Severity CRITICAL `
+                -AppName $appName `
+                -Message "$($thresholdResult.RemovedPct)% accounts removed (threshold: $($thresholdResult.ThresholdPct)%). Batch blocked for $appName." `
+                -Details @{
+                    RemovedPct   = $thresholdResult.RemovedPct
+                    ThresholdPct = $thresholdResult.ThresholdPct
+                    RemovedCount = $removedCount
+                    Action       = 'Review CSV file for unexpected mass deletions. Use -Force to override.'
+                } `
                 -CorrelationID $appCorrelationID
 
             # Still generate report for blocked apps
@@ -567,6 +673,16 @@ foreach ($app in $apps) {
         Write-SPLog -Message "App '$appName' failed: $($_.Exception.Message)" `
             -Severity ERROR -Component 'Invoke-SPDisconnectedAppBatch' -Action 'ProcessApp' `
             -CorrelationID $appCorrelationID
+
+        # DA-25: Alert on per-app failure
+        Send-SPDisconnectedAppAlert -AlertType ValidationFailed -Severity WARN `
+            -AppName $appName `
+            -Message "App '$appName' failed processing: $($_.Exception.Message)" `
+            -Details @{
+                ErrorMessage = $_.Exception.Message
+                Action       = 'Investigate the error and re-run the batch for this app.'
+            } `
+            -CorrelationID $appCorrelationID
     }
 
     $appEndTime = Get-Date
@@ -589,6 +705,22 @@ $blockedCount    = @($batchResults | Where-Object { $_.Status -eq 'ThresholdBloc
 $errorCount      = @($batchResults | Where-Object { $_.Status -eq 'Error' }).Count
 $totalCampaigns  = ($batchResults | ForEach-Object { $_.CampaignsCreated } | Measure-Object -Sum).Sum
 $totalIdentities = ($batchResults | ForEach-Object { $_.IdentityCount } | Measure-Object -Sum).Sum
+
+# DA-25: Detect missing file delivery (errors containing "not found")
+$missingFileApps = @($batchResults | Where-Object {
+    $_.Status -eq 'Error' -and $_.Error -match 'not found|file .* missing'
+} | ForEach-Object { $_.App })
+
+if ($missingFileApps.Count -ge 3) {
+    Send-SPDisconnectedAppAlert -AlertType DeliveryMissing -Severity WARN `
+        -Message "$($missingFileApps.Count) apps have missing account files." `
+        -Details @{
+            MissingApps = $missingFileApps
+            AppCount    = $missingFileApps.Count
+            Action      = 'Verify file delivery pipeline. Multiple apps are not receiving CSV files.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
 
 # --- JSONL Batch Audit Trail ---
 try {
@@ -766,6 +898,129 @@ switch ($OutputMode) {
 
 Write-SPLog -Message "Invoke-SPDisconnectedAppBatch completed: $($batchResults.Count) app(s), $successCount success, $errorCount error(s), $totalCampaigns campaign(s)" `
     -Severity INFO -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Complete' -CorrelationID $batchCorrelationID
+
+# DA-25: Batch-level alerts
+$failedAppNames = @($batchResults | Where-Object { $_.Status -eq 'Error' } | ForEach-Object { $_.App })
+$blockedAppNames = @($batchResults | Where-Object { $_.Status -eq 'ThresholdBlocked' } | ForEach-Object { $_.App })
+
+if ($errorCount -gt 0 -and ($successCount + $noChangesCount) -eq 0) {
+    # All apps failed
+    Send-SPDisconnectedAppAlert -AlertType BatchAllFailed -Severity CRITICAL `
+        -Message "All $($batchResults.Count) app(s) failed processing." `
+        -Details @{
+            ErrorCount     = $errorCount
+            BlockedCount   = $blockedCount
+            FailedApps     = $failedAppNames
+            BlockedApps    = $blockedAppNames
+            DurationSeconds = $batchDuration
+            Action         = 'Investigate batch failures immediately. No campaigns were created.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
+elseif ($errorCount -gt 0 -or $blockedCount -gt 0) {
+    # Partial failure
+    Send-SPDisconnectedAppAlert -AlertType BatchPartialFailure -Severity WARN `
+        -Message "$errorCount error(s) and $blockedCount threshold block(s) out of $($batchResults.Count) app(s)." `
+        -Details @{
+            SuccessCount    = $successCount
+            NoChangesCount  = $noChangesCount
+            ErrorCount      = $errorCount
+            BlockedCount    = $blockedCount
+            FailedApps      = $failedAppNames
+            BlockedApps     = $blockedAppNames
+            TotalCampaigns  = $totalCampaigns
+            DurationSeconds = $batchDuration
+            Action          = 'Review failed/blocked apps. Successful apps processed normally.'
+        } `
+        -CorrelationID $batchCorrelationID
+}
+
+#endregion
+
+#region DA-28: Escalation (post-step)
+
+Write-Host '  Post-step: Escalation (reassigning stale certifications)...' -ForegroundColor Cyan
+
+$escalationResult = $null
+try {
+    $escalationParams = @{
+        DefaultStaleHours   = 24
+        MaxEscalationLevels = 2
+        CorrelationID       = $batchCorrelationID
+    }
+    if ($ConfigPath) { $escalationParams['ConfigPath'] = $ConfigPath }
+    if ($AppNames -and $AppNames.Count -gt 0) { $escalationParams['AppNames'] = $AppNames }
+    if ($WhatIfPreference -eq $true) { $escalationParams['WhatIf'] = $true }
+
+    $escalationResult = Invoke-SPDisconnectedAppEscalation @escalationParams
+
+    if ($escalationResult.Success) {
+        $escEscalated = $escalationResult.Data.TotalEscalated
+        $escStale     = $escalationResult.Data.TotalStaleCerts
+        $escSkipped   = $escalationResult.Data.TotalSkipped
+        if ($escStale -gt 0) {
+            Write-Host "    Found $escStale stale cert(s): escalated $escEscalated, skipped $escSkipped." -ForegroundColor Green
+        }
+        else {
+            Write-Host "    No stale certifications to escalate." -ForegroundColor DarkGray
+        }
+    }
+    else {
+        Write-Host "    Escalation skipped: $($escalationResult.Error)" -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "    Escalation failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-SPLog -Message "Escalation failed (non-blocking): $($_.Exception.Message)" `
+        -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'Escalation' `
+        -CorrelationID $batchCorrelationID
+}
+
+Write-Host ''
+
+#endregion
+
+#region DA-29: Team Dashboards (per-app HTML status pages)
+
+Write-Host '  Post-step: Generating team dashboards...' -ForegroundColor Cyan
+
+$dashboardCount = 0
+foreach ($app in $apps) {
+    try {
+        $dashParams = @{
+            AppName       = $app.Name
+            OutputPath    = $effectiveOutputPath
+            SnapshotDir   = $effectiveSnapshotDir
+            CorrelationID = $batchCorrelationID
+        }
+        if ($ConfigPath) { $dashParams['ConfigPath'] = $ConfigPath }
+
+        $dashResult = Export-SPDisconnectedAppTeamDashboard @dashParams
+
+        if ($dashResult.Success) {
+            $dashboardCount++
+            Write-Host "    $($app.Name): $($dashResult.Data.FilePath)" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "    $($app.Name): Dashboard failed: $($dashResult.Error)" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "    $($app.Name): Dashboard failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Team dashboard failed for '$($app.Name)' (non-blocking): $($_.Exception.Message)" `
+            -Severity WARN -Component 'Invoke-SPDisconnectedAppBatch' -Action 'TeamDashboard' `
+            -CorrelationID $batchCorrelationID
+    }
+}
+
+if ($dashboardCount -gt 0) {
+    Write-Host "    Generated $dashboardCount team dashboard(s)." -ForegroundColor Green
+}
+else {
+    Write-Host "    No team dashboards generated." -ForegroundColor DarkGray
+}
+
+Write-Host ''
 
 #endregion
 

@@ -123,6 +123,11 @@
         "DefaultDeadlineDays": 2,
         "CorrelationAttribute": "e-mail",
         "AccountDeletionThresholdPct": 20,
+        "ISC": {
+            "UploadMethod": "API",
+            "FileDropBasePath": "",
+            "WaitForAggregationSeconds": 120
+        },
         "RequiredAccountColumns": [
             "id",
             "name",

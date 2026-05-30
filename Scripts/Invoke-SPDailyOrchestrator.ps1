@@ -14,7 +14,10 @@
       4. Delta Report              (Get-SPDeltaReportData + Export-SPDeltaReportHtml)
       5. Escalation                (Invoke-SPDeltaCertEscalate)
       6. Health Check              (Get-SPCampaignHealth)
-      7. Daily Summary             (consolidated output + JSONL audit trail)
+      7. Disconnected App Batch    (Invoke-SPDisconnectedAppBatch)
+      8. Decision Collection       (Get-SPDisconnectedAppCampaignDecisions)
+      9. Remediation Check         (Update-SPRemediationStatus)
+     10. Daily Summary             (consolidated output + JSONL audit trail)
 
     Each step is isolated -- a failure in one step does not prevent subsequent
     steps from executing. The exit code reflects the worst outcome.
@@ -46,6 +49,8 @@
     Skip Step 5: Escalation of stale certifications.
 .PARAMETER SkipHealthCheck
     Skip Step 6: Campaign health check.
+.PARAMETER SkipDisconnectedApps
+    Skip Steps 7-9: Disconnected app batch, decision collection, and remediation check.
 .PARAMETER HoursBack
     Override the look-back window in hours for delta cert run and report.
 .PARAMETER DeadlineDays
@@ -120,6 +125,9 @@ param(
     [Parameter()]
     [switch]$SkipHealthCheck,
 
+    [Parameter()]
+    [switch]$SkipDisconnectedApps,
+
     # Overrides
     [Parameter()]
     [int]$HoursBack,
@@ -176,6 +184,7 @@ $moduleChain = @(
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1';             Name = 'SP.Api';         Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1';         Name = 'SP.Audit';       Required = $false }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'; Name = 'SP.DeltaCert';   Required = $true  }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'; Name = 'SP.DisconnectedApps'; Required = $false }
 )
 
 foreach ($mod in $moduleChain) {
@@ -402,8 +411,11 @@ $stepResults = [ordered]@{
     Cleanup     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DeltaCert   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DeltaReport = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
-    Escalation  = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
-    HealthCheck = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    Escalation    = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    HealthCheck   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    DABatch       = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    DADecisions   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    DARemediation = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
 # Track worst exit code
@@ -894,7 +906,289 @@ else {
 
 #endregion
 
-#region Step 7: Daily Summary
+#region Disconnected App Shared State (Steps 7-9)
+
+$daRegisteredApps = @()
+$daReportPath = ''
+if (-not $SkipDisconnectedApps) {
+    if ($null -ne $config.PSObject.Properties['DisconnectedApps'] -and $null -ne $config.DisconnectedApps) {
+        if ($null -ne $config.DisconnectedApps.PSObject.Properties['ReportPath'] -and
+            -not [string]::IsNullOrWhiteSpace($config.DisconnectedApps.ReportPath)) {
+            $daReportPath = [string]$config.DisconnectedApps.ReportPath
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($daReportPath)) {
+        $daReportPath = Join-Path $toolkitRoot 'DisconnectedApps\Reports'
+    }
+    if (-not [System.IO.Path]::IsPathRooted($daReportPath)) {
+        $daReportPath = Join-Path $toolkitRoot $daReportPath
+    }
+}
+
+#endregion
+
+#region Step 7: Disconnected App Batch
+
+if (-not $SkipDisconnectedApps) {
+    Write-Host '  Step 7: Disconnected App Batch' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    $daModuleLoaded = $null -ne (Get-Module -Name 'SP.DisconnectedApps' -ErrorAction SilentlyContinue)
+
+    if (-not $daModuleLoaded) {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'DABatch' -Status 'Skipped' -Detail 'SP.DisconnectedApps module not available' -Duration $stepDuration
+        Write-Host '  Step 7: SP.DisconnectedApps module not available [SKIPPED]' -ForegroundColor DarkGray
+    }
+    else {
+        try {
+            $regParams = @{}
+            if ($ConfigPath) { $regParams['ConfigPath'] = $ConfigPath }
+            $regResult = Get-SPRegisteredApps @regParams
+
+            if (-not $regResult.Success -or @($regResult.Data).Count -eq 0) {
+                $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+                Set-StepResult -Step 'DABatch' -Status 'Success' -Detail 'No registered disconnected apps' -Duration $stepDuration
+                Write-Host '  Step 7: No registered disconnected apps' -ForegroundColor Green
+            }
+            else {
+                $daRegisteredApps = @($regResult.Data)
+                Write-Host "    $($daRegisteredApps.Count) app(s) registered." -ForegroundColor DarkGray
+
+                $batchScriptPath = Join-Path $scriptRoot 'Invoke-SPDisconnectedAppBatch.ps1'
+                $batchParams = @{
+                    ConfigPath = $ConfigPath
+                    OutputMode = 'JSON'
+                }
+                if ($Token) {
+                    $batchParams['Token'] = $Token
+                    $batchParams['TokenExpiryMinutes'] = $TokenExpiryMinutes
+                }
+                if ($isWhatIf) {
+                    $batchParams['WhatIf'] = $true
+                }
+
+                $batchJsonOutput = & $batchScriptPath @batchParams
+                $batchExitCode = $LASTEXITCODE
+                $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+
+                # Parse batch JSON output
+                $batchData = $null
+                if ($batchJsonOutput) {
+                    try {
+                        $jsonStr = ($batchJsonOutput | Out-String).Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($jsonStr)) {
+                            $batchData = $jsonStr | ConvertFrom-Json
+                        }
+                    }
+                    catch {
+                        Write-SPLog -Message "Failed to parse batch JSON output: $($_.Exception.Message)" `
+                            -Severity WARN -Component 'DailyOrchestrator' -Action 'DABatchParse' -CorrelationID $correlationID
+                    }
+                }
+
+                if ($batchExitCode -eq 0) {
+                    $daBatchApps = if ($batchData) { $batchData.AppsProcessed } else { $daRegisteredApps.Count }
+                    $daBatchCampaigns = if ($batchData) { $batchData.TotalCampaigns } else { 0 }
+                    $detail = "$daBatchApps app(s) processed, $daBatchCampaigns campaign(s) created"
+                    Set-StepResult -Step 'DABatch' -Status 'Success' -Detail $detail -Duration $stepDuration
+                    Write-Host "  Step 7: $detail" -ForegroundColor Green
+                }
+                elseif ($batchExitCode -eq 1) {
+                    $daBatchErrs = if ($batchData) { $batchData.Errors } else { 0 }
+                    $daBatchBlocked = if ($batchData) { $batchData.ThresholdBlocked } else { 0 }
+                    $detail = "Partial: $daBatchErrs error(s), $daBatchBlocked blocked"
+                    Set-StepResult -Step 'DABatch' -Status 'Warning' -Detail $detail -Duration $stepDuration
+                    Write-Host "  Step 7: WARN - $detail" -ForegroundColor Yellow
+                    Write-SPLog -Message "DA batch partial: $detail" `
+                        -Severity WARN -Component 'DailyOrchestrator' -Action 'DABatchWarn' -CorrelationID $correlationID
+                    if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+                }
+                else {
+                    $detail = "Batch failed (exit code $batchExitCode)"
+                    Set-StepResult -Step 'DABatch' -Status 'Failed' -Detail $detail -Duration $stepDuration
+                    Write-Host "  Step 7: ERROR - $detail" -ForegroundColor Red
+                    Write-SPLog -Message "DA batch failed: exit code $batchExitCode" `
+                        -Severity ERROR -Component 'DailyOrchestrator' -Action 'DABatchFailed' -CorrelationID $correlationID
+                    if ($worstExitCode -lt 5) { $worstExitCode = 5 }
+                }
+            }
+        }
+        catch {
+            $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+            Set-StepResult -Step 'DABatch' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+            Write-Host "  Step 7: WARN - $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-SPLog -Message "DA batch exception: $($_.Exception.Message)" `
+                -Severity WARN -Component 'DailyOrchestrator' -Action 'DABatchError' -CorrelationID $correlationID
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+        }
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 7: Disconnected App Batch [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 8: Decision Collection
+
+if (-not $SkipDisconnectedApps -and $daRegisteredApps.Count -gt 0) {
+    Write-Host '  Step 8: Decision Collection' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        $totalChecked    = 0
+        $totalCompleted  = 0
+        $totalRevoked    = 0
+        $decisionErrors  = 0
+
+        foreach ($daApp in $daRegisteredApps) {
+            try {
+                $decResult = Get-SPDisconnectedAppCampaignDecisions `
+                    -AppName $daApp.Name `
+                    -OutputPath $daReportPath `
+                    -CorrelationID $correlationID
+
+                if ($decResult.Success -and $null -ne $decResult.Data) {
+                    $totalChecked   += $decResult.Data.CampaignsChecked
+                    $totalCompleted += $decResult.Data.Completed
+                    if ($null -ne $decResult.Data.Decisions) {
+                        $totalRevoked += $decResult.Data.Decisions.Revoked
+                    }
+                }
+            }
+            catch {
+                $decisionErrors++
+                Write-SPLog -Message "Decision collection failed for '$($daApp.Name)': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'DailyOrchestrator' -Action 'DecisionCollection' -CorrelationID $correlationID
+            }
+        }
+
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        $detail = "$totalChecked campaign(s) checked, $totalCompleted completed, $totalRevoked revocation(s)"
+        if ($decisionErrors -gt 0) {
+            $detail += " ($decisionErrors error(s))"
+            Set-StepResult -Step 'DADecisions' -Status 'Warning' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 8: WARN - $detail" -ForegroundColor Yellow
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+        }
+        else {
+            Set-StepResult -Step 'DADecisions' -Status 'Success' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 8: $detail" -ForegroundColor Green
+        }
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'DADecisions' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Step 8: WARN - $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Decision collection exception: $($_.Exception.Message)" `
+            -Severity WARN -Component 'DailyOrchestrator' -Action 'DecisionCollectionError' -CorrelationID $correlationID
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+    }
+    Write-Host ''
+}
+elseif (-not $SkipDisconnectedApps) {
+    Write-Host '  Step 8: Decision Collection [SKIPPED - no registered apps]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 8: Decision Collection [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 9: Remediation Check
+
+if (-not $SkipDisconnectedApps -and $daRegisteredApps.Count -gt 0) {
+    Write-Host '  Step 9: Remediation Check' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        $totalConfirmed = 0
+        $totalOverdue   = 0
+        $totalPending   = 0
+        $remErrors      = 0
+
+        foreach ($daApp in $daRegisteredApps) {
+            try {
+                # Skip if no account file path or file missing
+                if ([string]::IsNullOrWhiteSpace($daApp.AccountFilePath) -or
+                    -not (Test-Path -Path $daApp.AccountFilePath -PathType Leaf)) {
+                    continue
+                }
+
+                $remResult = Update-SPRemediationStatus `
+                    -AppName $daApp.Name `
+                    -AccountFilePath $daApp.AccountFilePath `
+                    -OutputPath $daReportPath `
+                    -CorrelationID $correlationID
+
+                if ($remResult.Success -and $null -ne $remResult.Data) {
+                    $totalConfirmed += $remResult.Data.Confirmed
+                    $totalOverdue   += $remResult.Data.Overdue
+                    $totalPending   += $remResult.Data.Pending
+                }
+            }
+            catch {
+                $remErrors++
+                Write-SPLog -Message "Remediation check failed for '$($daApp.Name)': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'DailyOrchestrator' -Action 'RemediationCheck' -CorrelationID $correlationID
+            }
+        }
+
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        $detail = "$totalConfirmed confirmed, $totalOverdue overdue, $totalPending pending"
+
+        if ($totalOverdue -gt 0 -or $remErrors -gt 0) {
+            if ($remErrors -gt 0) { $detail += " ($remErrors error(s))" }
+            Set-StepResult -Step 'DARemediation' -Status 'Warning' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 9: WARN - $detail" -ForegroundColor Yellow
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+
+            # DA-25: Alert on overdue remediations
+            if ($totalOverdue -gt 0) {
+                $remSeverity = if ($totalOverdue -gt 5) { 'CRITICAL' } else { 'WARN' }
+                Send-SPDisconnectedAppAlert -AlertType RemediationOverdue -Severity $remSeverity `
+                    -Message "$totalOverdue remediation(s) overdue across all disconnected apps." `
+                    -Details @{
+                        OverdueCount   = $totalOverdue
+                        PendingCount   = $totalPending
+                        ConfirmedCount = $totalConfirmed
+                        Action         = 'App teams must remove revoked access. Check per-app remediation-tracker.json.'
+                    } `
+                    -CorrelationID $correlationID
+            }
+        }
+        else {
+            Set-StepResult -Step 'DARemediation' -Status 'Success' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 9: $detail" -ForegroundColor Green
+        }
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'DARemediation' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Step 9: WARN - $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Remediation check exception: $($_.Exception.Message)" `
+            -Severity WARN -Component 'DailyOrchestrator' -Action 'RemediationCheckError' -CorrelationID $correlationID
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+    }
+    Write-Host ''
+}
+elseif (-not $SkipDisconnectedApps) {
+    Write-Host '  Step 9: Remediation Check [SKIPPED - no registered apps]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 9: Remediation Check [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 10: Daily Summary
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime)
@@ -922,7 +1216,7 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
             'Skipped'  { 'DarkGray' }
             default    { 'White' }
         }
-        $label = ('{0,-12}' -f "${stepName}:")
+        $label = ('{0,-15}' -f "${stepName}:")
         Write-Host "  $label $($step.Detail)" -ForegroundColor $statusColor
     }
 
