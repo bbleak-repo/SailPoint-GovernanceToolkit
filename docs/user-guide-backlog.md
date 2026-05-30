@@ -81,8 +81,8 @@ Agent loop: `UG-01 -> UG-02 -> UG-03 -> UG-04 -> UG-05 -> UG-06 -> UG-07 -> UG-0
 | UG-06 | Delta Certification Section Content | none | DONE |
 | UG-07 | Disconnected Apps Section Content | none | DONE |
 | UG-08 | Generate SailPoint USER-GUIDE.html | UG-02 to UG-07 | DONE |
-| UG-09 | Update README/QUICKSTART References | UG-08 | PENDING |
-| UG-10 | Add to Handoff Zip + Validation | UG-09 | PENDING |
+| UG-09 | Update README/QUICKSTART References | UG-08 | DONE |
+| UG-10 | Add to Handoff Zip + Validation | UG-09 | DONE |
 
 ---
 
@@ -426,8 +426,8 @@ python generate-report.py \
 
 ## UG-09: Update README/QUICKSTART References
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** 5dfd367 (feature/user-guide)
 - **Depends On:** UG-08
 
 **Description:**
@@ -444,8 +444,8 @@ Add references to USER-GUIDE.html in README.md and QUICKSTART.md.
 
 ## UG-10: Add to Handoff Zip + Validation
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** UG-09
 
 **Description:**
