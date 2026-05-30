@@ -24,7 +24,7 @@ Critical items first, then high, medium, low.
 | QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | DONE |
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | DONE |
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | DONE |
-| QH-08 | HIGH | Document settings.local.json override in README | S | PENDING |
+| QH-08 | HIGH | Document settings.local.json override in README | S | DONE |
 | QH-09 | HIGH | Document Audit-Mock directory | S | PENDING |
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | PENDING |
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | PENDING |
@@ -158,7 +158,7 @@ Users can't run retention cleanup without writing their own wrapper.
 
 ## QH-08: Document settings.local.json Override
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Resolve-SPConfigPath` supports `.local.json` override (gitignored) but

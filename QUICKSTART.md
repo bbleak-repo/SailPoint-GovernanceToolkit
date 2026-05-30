@@ -53,6 +53,8 @@ Open `Config\settings.json` and replace all `CHANGE_ME` values:
 
 Replace `acme` with your ISC tenant name. Leave all other fields at their defaults.
 
+> **Tip: Local override file.** Instead of editing the tracked `settings.json`, copy it to `Config\settings.local.json` and edit that copy. The toolkit automatically uses `settings.local.json` when it exists, and the file is already gitignored. This keeps the tracked template clean and prevents accidentally committing credentials. See [README.md](README.md#local-configuration-override-settingslocaljson) for details.
+
 **Required PAT scopes (read-only audit):**
 
 ```

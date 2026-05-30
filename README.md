@@ -126,6 +126,36 @@ For production environments, set `Authentication.Mode` to `Vault` and store cred
 
 For the complete list of all configuration keys including Logging, Notification, Retention, and advanced API settings, see `Config/settings.json`.
 
+### Local Configuration Override (settings.local.json)
+
+The toolkit supports a `settings.local.json` override file for per-developer or per-machine configuration. When `Config\settings.local.json` exists alongside `Config\settings.json`, the toolkit automatically uses the local file instead of the tracked template.
+
+**How it works:**
+
+1. Every CLI script and the GUI call `Resolve-SPConfigPath` to locate the config file.
+2. `Resolve-SPConfigPath` checks for `Config\settings.local.json` first.
+3. If it exists, that file is used. Otherwise, `Config\settings.json` is used.
+
+**Why use it:**
+
+- Keep the tracked `settings.json` as a clean `CHANGE_ME` template that documents the expected structure.
+- Store your real tenant credentials, paths, and environment-specific overrides in `settings.local.json` without risk of committing them.
+- Each team member can maintain their own local file targeting different tenants or modes.
+
+**Setup:**
+
+```powershell
+# Copy the template to create your local override
+Copy-Item Config\settings.json Config\settings.local.json
+
+# Edit the local copy with your real values
+notepad Config\settings.local.json
+```
+
+The file is already gitignored (`Config/*.local.json` is in `.gitignore`). No additional configuration is needed -- the toolkit detects and uses it automatically.
+
+**Precedence:** If a `-ConfigPath` parameter is passed to any script, that explicit path takes priority over both `settings.local.json` and `settings.json`.
+
 ---
 
 ## Authentication Modes
