@@ -25,7 +25,7 @@ Critical items first, then high, medium, low.
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | DONE |
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | DONE |
 | QH-08 | HIGH | Document settings.local.json override in README | S | DONE |
-| QH-09 | HIGH | Document Audit-Mock directory | S | PENDING |
+| QH-09 | HIGH | Document Audit-Mock directory | S | DONE |
 | QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | PENDING |
 | QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | PENDING |
 | QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | PENDING |
@@ -173,7 +173,7 @@ file separate from the tracked template.
 
 ## QH-09: Document Audit-Mock Directory
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Audit-Mock/` contains pre-generated reports but is not documented.

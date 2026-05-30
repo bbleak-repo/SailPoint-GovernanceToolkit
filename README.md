@@ -320,6 +320,18 @@ summary. The detailed sections follow:
 | 3 | Authentication or API error |
 | 4 | Configuration error (settings.json missing or invalid) |
 
+#### Sample Output (Audit-Mock Directory)
+
+The `Audit-Mock/` directory contains pre-generated audit reports from three representative campaign types: an annual access review, a source owner review, and an AD delta cert. These files serve as an offline reference so you can see the exact HTML, TXT, and JSONL output the toolkit produces without connecting to an ISC tenant.
+
+Use the samples to:
+
+- **Train reviewers** on the report format before running a live audit.
+- **Validate report rendering** in your environment (browser, PDF printer, mail client).
+- **Feed the GUI dashboard** -- point the Audit tab at `Audit-Mock\` to explore the dashboard without live data.
+
+The directory structure mirrors the live `Audit\` output documented above.
+
 ### Delta Cert: Invoke-SPADDeltaCert.ps1
 
 Daily AD access change detection. Queries SailPoint ISC for `GRANT_ACCESS` events on specified AD sources within a configurable time window, groups affected identities by manager, and creates one SEARCH-type certification campaign per manager group. On quiet days with no new access grants, the script exits with code 1 (expected no-op).

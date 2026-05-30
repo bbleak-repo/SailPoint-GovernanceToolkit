@@ -168,6 +168,8 @@ Reports\
 
 Open the HTML reports in a browser to review results.
 
+> **Tip -- Offline demo:** The `Audit-Mock\` directory at the toolkit root contains pre-generated audit reports (HTML, TXT, JSONL) for three sample campaigns. Open these to preview report formatting before running a live audit, or point the GUI dashboard's Audit tab at `Audit-Mock\` to explore the interface without an ISC connection.
+
 ---
 
 ## Step 8: Launch the GUI Dashboard (Windows Only)
