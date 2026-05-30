@@ -17,7 +17,7 @@ Critical items first, then high, medium, low.
 
 | # | Priority | Feature | Size | Status |
 |---|----------|---------|------|--------|
-| QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | PENDING |
+| QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | DONE |
 | QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | PENDING |
 | QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | PENDING |
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | PENDING |
@@ -42,7 +42,7 @@ Critical items first, then high, medium, low.
 
 ## QH-01: Create SP.DisconnectedApps.psd1 Manifest
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** Three CLI scripts reference `SP.DisconnectedApps.psd1` with `Required = $true`
