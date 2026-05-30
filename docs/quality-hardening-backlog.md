@@ -21,7 +21,7 @@ Critical items first, then high, medium, low.
 | QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | DONE |
 | QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | DONE |
 | QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | DONE |
-| QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | PENDING |
+| QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | DONE |
 | QH-06 | HIGH | Update valid-settings.json test fixture | S | PENDING |
 | QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | PENDING |
 | QH-08 | HIGH | Document settings.local.json override in README | S | PENDING |
@@ -113,7 +113,7 @@ ISC = @{
 
 ## QH-05: Expand Test-SPConfiguration for Missing Sections
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-04
 
 **Problem:** `Test-SPConfiguration` validates only 7 of 11 config sections. Missing:

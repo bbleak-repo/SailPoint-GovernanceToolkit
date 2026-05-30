@@ -169,6 +169,12 @@ function Get-SPConfigDefaults {
                 CampaignNamePrefix     = 'AD Delta Cert'
             }
         }
+        Leadership = @{
+            OrgChartSupplementPath  = ''
+            UseSupplementForReports = $false
+            DefaultBandMapping      = @{}
+            ISCBandAttribute        = 'jobLevel'
+        }
     }
 }
 
@@ -427,6 +433,12 @@ function Get-SPConfigTemplate {
                 MaxEscalationLevels = 2
                 CampaignNamePrefix  = 'AD Delta Cert'
             }
+        }
+        Leadership = [ordered]@{
+            OrgChartSupplementPath  = ''
+            UseSupplementForReports = $false
+            DefaultBandMapping      = @{}
+            ISCBandAttribute        = 'jobLevel'
         }
     }
 
@@ -778,6 +790,227 @@ function Test-SPConfiguration {
                         $errors.Add("Audit.RiskIndicators.ServiceAccountPatterns contains invalid regex '$pattern': $($_.Exception.Message)")
                     }
                 }
+            }
+        }
+    } catch { }
+
+    # --- DisconnectedApps validation ---
+    try {
+        $da = $config.DisconnectedApps
+        if ($null -ne $da) {
+            # Path fields
+            foreach ($pathKey in @('ImportBasePath', 'SnapshotPath', 'ReportPath')) {
+                try {
+                    $pVal = $da.$pathKey
+                    if ([string]::IsNullOrWhiteSpace($pVal)) {
+                        $warnings.Add("DisconnectedApps.$pathKey is empty")
+                    }
+                } catch { }
+            }
+
+            # Positive integer fields
+            foreach ($intKey in @('SnapshotRetentionDays', 'DefaultDeadlineDays', 'AccountDeletionThresholdPct')) {
+                try {
+                    $iVal = $da.$intKey -as [int]
+                    if ($null -ne $da.$intKey -and ($null -eq $iVal -or $iVal -le 0)) {
+                        $errors.Add("DisconnectedApps.$intKey must be a positive integer (got '$($da.$intKey)')")
+                    }
+                } catch { }
+            }
+
+            # AccountDeletionThresholdPct range 1-100
+            try {
+                $pct = $da.AccountDeletionThresholdPct -as [int]
+                if ($null -ne $pct -and ($pct -lt 1 -or $pct -gt 100)) {
+                    $errors.Add("DisconnectedApps.AccountDeletionThresholdPct must be between 1 and 100 (got $pct)")
+                }
+            } catch { }
+
+            # Applications must be an array
+            try {
+                $apps = $da.Applications
+                if ($null -ne $apps -and $apps -isnot [array] -and $apps -isnot [System.Collections.IEnumerable]) {
+                    $errors.Add("DisconnectedApps.Applications must be an array (got type $($apps.GetType().Name))")
+                }
+            } catch { }
+
+            # Required column arrays
+            foreach ($colKey in @('RequiredAccountColumns', 'RequiredEntitlementColumns')) {
+                try {
+                    $cols = $da.$colKey
+                    if ($null -ne $cols -and $cols -isnot [array] -and $cols -isnot [System.Collections.IEnumerable]) {
+                        if ($cols -isnot [string]) {
+                            $errors.Add("DisconnectedApps.$colKey must be an array (got type $($cols.GetType().Name))")
+                        }
+                    }
+                } catch { }
+            }
+
+            # ISC sub-section
+            try {
+                $isc = $da.ISC
+                if ($null -ne $isc) {
+                    $validMethods = @('API', 'FileDrop')
+                    $method = $isc.UploadMethod
+                    if (-not [string]::IsNullOrWhiteSpace($method) -and $method -notin $validMethods) {
+                        $errors.Add("DisconnectedApps.ISC.UploadMethod must be 'API' or 'FileDrop' (got '$method')")
+                    }
+                    if ($method -eq 'FileDrop' -and [string]::IsNullOrWhiteSpace($isc.FileDropBasePath)) {
+                        $errors.Add("DisconnectedApps.ISC.FileDropBasePath is required when UploadMethod is 'FileDrop'")
+                    }
+                    $waitSec = $isc.WaitForAggregationSeconds -as [int]
+                    if ($null -ne $isc.WaitForAggregationSeconds -and ($null -eq $waitSec -or $waitSec -le 0)) {
+                        $errors.Add("DisconnectedApps.ISC.WaitForAggregationSeconds must be a positive integer (got '$($isc.WaitForAggregationSeconds)')")
+                    }
+                }
+            } catch { }
+        }
+    } catch { }
+
+    # --- Notification validation ---
+    try {
+        $notif = $config.Notification
+        if ($null -ne $notif) {
+            # Backends must be an array with valid values
+            try {
+                $backends = $notif.Backends
+                if ($null -ne $backends) {
+                    if ($backends -isnot [array] -and $backends -isnot [System.Collections.IEnumerable]) {
+                        if ($backends -isnot [string]) {
+                            $errors.Add("Notification.Backends must be an array (got type $($backends.GetType().Name))")
+                        }
+                    }
+                    $validBackends = @('Log', 'Smtp', 'Webhook')
+                    foreach ($b in @($backends)) {
+                        if ($b -notin $validBackends) {
+                            $warnings.Add("Notification.Backends contains unknown backend '$b' (valid: $($validBackends -join ', '))")
+                        }
+                    }
+                }
+            } catch { }
+
+            # SMTP sub-section
+            try {
+                $smtp = $notif.Smtp
+                if ($null -ne $smtp) {
+                    # If SMTP is listed as a backend, Server and From are required
+                    $smtpActive = ($null -ne $notif.Backends) -and (@($notif.Backends) -contains 'Smtp')
+                    if ($smtpActive) {
+                        if ([string]::IsNullOrWhiteSpace($smtp.Server)) {
+                            $errors.Add("Notification.Smtp.Server is required when 'Smtp' is in Notification.Backends")
+                        }
+                        if ([string]::IsNullOrWhiteSpace($smtp.From)) {
+                            $errors.Add("Notification.Smtp.From is required when 'Smtp' is in Notification.Backends")
+                        }
+                    }
+                    $smtpPort = $smtp.Port -as [int]
+                    if ($null -ne $smtp.Port -and ($null -eq $smtpPort -or $smtpPort -le 0 -or $smtpPort -gt 65535)) {
+                        $errors.Add("Notification.Smtp.Port must be between 1 and 65535 (got '$($smtp.Port)')")
+                    }
+                    if ($null -ne $smtp.UseSsl -and $smtp.UseSsl -isnot [bool]) {
+                        $errors.Add("Notification.Smtp.UseSsl must be a boolean (got '$($smtp.UseSsl)')")
+                    }
+                }
+            } catch { }
+
+            # Webhook sub-section
+            try {
+                $wh = $notif.Webhook
+                if ($null -ne $wh) {
+                    $whActive = ($null -ne $notif.Backends) -and (@($notif.Backends) -contains 'Webhook')
+                    if ($whActive -and [string]::IsNullOrWhiteSpace($wh.Url)) {
+                        $errors.Add("Notification.Webhook.Url is required when 'Webhook' is in Notification.Backends")
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($wh.Method) -and $wh.Method -notin @('POST', 'PUT')) {
+                        $warnings.Add("Notification.Webhook.Method is '$($wh.Method)' (typically POST or PUT)")
+                    }
+                    if ($null -ne $wh.IncludePayload -and $wh.IncludePayload -isnot [bool]) {
+                        $errors.Add("Notification.Webhook.IncludePayload must be a boolean (got '$($wh.IncludePayload)')")
+                    }
+                }
+            } catch { }
+        }
+    } catch { }
+
+    # --- Retention validation ---
+    try {
+        $ret = $config.Retention
+        if ($null -ne $ret) {
+            if ($null -ne $ret.Enabled -and $ret.Enabled -isnot [bool]) {
+                $errors.Add("Retention.Enabled must be a boolean (got '$($ret.Enabled)')")
+            }
+
+            $archDays = $ret.ArchiveDays -as [int]
+            $delDays  = $ret.DeleteDays  -as [int]
+
+            if ($null -ne $ret.ArchiveDays -and ($null -eq $archDays -or $archDays -le 0)) {
+                $errors.Add("Retention.ArchiveDays must be a positive integer (got '$($ret.ArchiveDays)')")
+            }
+            if ($null -ne $ret.DeleteDays -and ($null -eq $delDays -or $delDays -le 0)) {
+                $errors.Add("Retention.DeleteDays must be a positive integer (got '$($ret.DeleteDays)')")
+            }
+
+            # ArchiveDays must be less than DeleteDays
+            if ($null -ne $archDays -and $null -ne $delDays -and $archDays -gt 0 -and $delDays -gt 0) {
+                if ($archDays -ge $delDays) {
+                    $errors.Add("Retention.ArchiveDays ($archDays) must be less than Retention.DeleteDays ($delDays)")
+                }
+            }
+
+            # Paths array
+            try {
+                $retPaths = $ret.Paths
+                if ($null -ne $retPaths -and $retPaths -isnot [array] -and $retPaths -isnot [System.Collections.IEnumerable]) {
+                    if ($retPaths -isnot [string]) {
+                        $errors.Add("Retention.Paths must be an array (got type $($retPaths.GetType().Name))")
+                    }
+                }
+            } catch { }
+
+            # ArchivePath existence check when enabled
+            if ($ret.Enabled -eq $true -and -not [string]::IsNullOrWhiteSpace($ret.ArchivePath)) {
+                $archPath = $ret.ArchivePath
+                if (-not [System.IO.Path]::IsPathRooted($archPath)) {
+                    $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+                    $archPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $archPath))
+                }
+                $archParent = Split-Path -Path $archPath -Parent
+                if (-not [string]::IsNullOrEmpty($archParent) -and -not (Test-Path -Path $archParent -PathType Container)) {
+                    $warnings.Add("Retention.ArchivePath parent directory does not exist: $archParent")
+                }
+            }
+        }
+    } catch { }
+
+    # --- Leadership validation ---
+    try {
+        $lead = $config.Leadership
+        if ($null -ne $lead) {
+            if ($null -ne $lead.UseSupplementForReports -and $lead.UseSupplementForReports -isnot [bool]) {
+                $errors.Add("Leadership.UseSupplementForReports must be a boolean (got '$($lead.UseSupplementForReports)')")
+            }
+
+            # If UseSupplementForReports is true, OrgChartSupplementPath must be set
+            if ($lead.UseSupplementForReports -eq $true) {
+                if ([string]::IsNullOrWhiteSpace($lead.OrgChartSupplementPath)) {
+                    $errors.Add("Leadership.OrgChartSupplementPath is required when UseSupplementForReports is true")
+                }
+                else {
+                    # Check the supplement file exists
+                    $suppPath = $lead.OrgChartSupplementPath
+                    if (-not [System.IO.Path]::IsPathRooted($suppPath)) {
+                        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+                        $suppPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $suppPath))
+                    }
+                    if (-not (Test-Path -Path $suppPath -PathType Leaf)) {
+                        $warnings.Add("Leadership.OrgChartSupplementPath file not found: $suppPath")
+                    }
+                }
+            }
+
+            # ISCBandAttribute should be a non-empty string if set
+            if ($null -ne $lead.ISCBandAttribute -and [string]::IsNullOrWhiteSpace($lead.ISCBandAttribute)) {
+                $warnings.Add("Leadership.ISCBandAttribute is empty (defaults to 'jobLevel')")
             }
         }
     } catch { }
