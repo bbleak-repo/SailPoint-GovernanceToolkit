@@ -1,0 +1,1815 @@
+<!-- section: disconnected-apps -->
+<!-- title: Disconnected Apps -->
+<!-- icon: 4 -->
+
+<h2>Disconnected Apps</h2>
+
+<p>Disconnected App Onboarding provides certification governance for applications that lack native
+ISC connectors. App teams export daily account and entitlement CSV files to a shared location; the
+toolkit validates the files, detects day-over-day access changes, resolves identities to ISC records,
+and creates targeted manager-routed certification campaigns -- the same pattern used by Delta
+Certification, adapted for flat-file sources. A registry tracks all onboarded apps, and a batch
+orchestrator processes them in sequence with SLA monitoring, team dashboards, and cross-app analytics.</p>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <div class="stat-number">17</div>
+        <div class="stat-label">Public Functions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">3</div>
+        <div class="stat-label">CLI Scripts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">7</div>
+        <div class="stat-label">Change Types Detected</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">4</div>
+        <div class="stat-label">Sub-Modules</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h3>Disconnected App Overview</h3>
+
+<p>Many enterprise applications -- legacy mainframe systems, vendor-hosted SaaS platforms, niche
+financial tools -- have no SailPoint ISC connector and no public API. The only viable integration
+path is flat-file import: the app team extracts a CSV of current accounts and entitlements,
+places it on a shared drive or SFTP location, and the toolkit picks it up for governance.</p>
+
+<h4>Why Flat Files?</h4>
+
+<ul>
+    <li><strong>No connector available</strong> -- ISC has ~200 connectors, but thousands of
+    enterprise apps fall outside that catalog (e.g., PEP+ by Fiserv, DebtNext dPlat, IPAY by
+    Jack Henry).</li>
+    <li><strong>No admin API</strong> -- even SaaS apps may not expose a REST API for reading
+    account/entitlement data.</li>
+    <li><strong>Compliance deadline</strong> -- building a custom connector takes weeks to months;
+    flat-file onboarding can begin the same day.</li>
+    <li><strong>Phase 1 / Phase 2 pattern</strong> -- start with flat-file CSV governance (Phase 1),
+    then invest in a custom connector only if the app's user volume and churn rate justify it
+    (Phase 2).</li>
+</ul>
+
+<h4>Architecture</h4>
+
+<pre><code>App Team (daily export)          Toolkit (daily run)                ISC
+-----------------------------    --------------------------------   ----------------
+accounts.csv    ---+
+entitlements.csv --+--> shared drive --> Validate --> Snapshot --> Delta Detection
+                                                                      |
+                                  Resolve identities (ISC search) <---+
+                                      |
+                                  Group by manager
+                                      |
+                                  Create SEARCH campaigns ----------> ISC Campaigns
+                                      |
+                                  HTML delta report + JSONL audit</code></pre>
+
+<h4>Module Structure</h4>
+
+<pre><code>Modules/SP.DisconnectedApps/
+    SP.DisconnectedAppRunner.psm1       # Core orchestration (17 public functions)
+    SP.DisconnectedAppSnapshot.psm1     # Snapshot save/retrieve/cleanup
+    SP.DisconnectedAppDelta.psm1        # File comparison engine
+    SP.DisconnectedAppValidator.psm1    # CSV schema + cross-reference validation
+
+Scripts/
+    Invoke-SPDisconnectedAppCert.ps1    # Single-app daily certification
+    Invoke-SPDisconnectedAppBatch.ps1   # Multi-app batch orchestrator
+    Invoke-SPDisconnectedAppRegistry.ps1 # App registration management
+
+Config/Templates/
+    v2/disconnected-app-accounts.csv    # Account CSV template (extended)
+    v2/disconnected-app-entitlements.csv # Entitlement CSV template (extended)</code></pre>
+
+<h4>Output Structure</h4>
+
+<pre><code>DisconnectedApps\
+    Imports\
+        {AppName}\accounts.csv              # Current import file (app team places here)
+        {AppName}\entitlements.csv
+    Snapshots\
+        {AppName}\2026-05-30-accounts.csv   # Date-stamped daily snapshots
+        {AppName}\2026-05-29-accounts.csv
+    Reports\
+        {AppName}\delta-2026-05-30.html     # Daily delta report
+        {AppName}\team-dashboard.html       # Self-service status page
+        batch-summary-2026-05-30.html       # Batch run summary
+        identity-risk-2026-05-30.html       # Cross-app identity risk</code></pre>
+
+<!-- ============================================================ -->
+<h3>CSV Templates</h3>
+
+<p>Two CSV files define each disconnected app's identity data: an accounts file (who has access)
+and an optional entitlements file (what access exists). The toolkit validates both files against
+a strict schema before processing.</p>
+
+<h4>Account CSV Columns</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Column</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>id</code></td>
+            <td>Yes</td>
+            <td>Unique account identifier. Max 128 characters. No duplicates allowed.</td>
+        </tr>
+        <tr>
+            <td><code>name</code></td>
+            <td>Yes</td>
+            <td>Account display name or username.</td>
+        </tr>
+        <tr>
+            <td><code>givenName</code></td>
+            <td>Yes</td>
+            <td>First name of the account holder.</td>
+        </tr>
+        <tr>
+            <td><code>familyName</code></td>
+            <td>Yes</td>
+            <td>Last name of the account holder.</td>
+        </tr>
+        <tr>
+            <td><code>e-mail</code></td>
+            <td>Yes</td>
+            <td>Email address. Must contain <code>@</code>. Primary correlation attribute for ISC identity resolution.</td>
+        </tr>
+        <tr>
+            <td><code>department</code></td>
+            <td>No</td>
+            <td>Organizational department. Included in reports but not used for correlation.</td>
+        </tr>
+        <tr>
+            <td><code>groups</code></td>
+            <td>Yes</td>
+            <td>Comma-separated entitlement IDs. Must match <code>id</code> values in the entitlement file. Drives delta detection for entitlement grants and revocations.</td>
+        </tr>
+        <tr>
+            <td><code>IIQDisabled</code></td>
+            <td>Yes</td>
+            <td>Account status: <code>true</code> (disabled) or <code>false</code> (active). Drives enable/disable delta detection.</td>
+        </tr>
+        <tr>
+            <td><code>accountType</code></td>
+            <td>No (v2)</td>
+            <td>Account classification (e.g., Standard, Admin, Service). v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>created</code></td>
+            <td>No (v2)</td>
+            <td>Account creation date. v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>lastLogin</code></td>
+            <td>No (v2)</td>
+            <td>Last authentication timestamp. v2 extension.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Entitlement CSV Columns</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Column</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>id</code></td>
+            <td>Yes</td>
+            <td>Unique entitlement identifier. Referenced by the <code>groups</code> column in the account file.</td>
+        </tr>
+        <tr>
+            <td><code>name</code></td>
+            <td>Yes</td>
+            <td>Entitlement name. No <code>+</code> characters or emoji allowed.</td>
+        </tr>
+        <tr>
+            <td><code>displayName</code></td>
+            <td>Yes</td>
+            <td>Human-readable label shown in ISC and reports.</td>
+        </tr>
+        <tr>
+            <td><code>description</code></td>
+            <td>Yes</td>
+            <td>What this entitlement grants. Max 2,000 characters.</td>
+        </tr>
+        <tr>
+            <td><code>owner</code></td>
+            <td>No (v2)</td>
+            <td>Entitlement owner email or name. v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>type</code></td>
+            <td>No (v2)</td>
+            <td>Entitlement type classification (e.g., Role, Permission, Group). v2 extension.</td>
+        </tr>
+        <tr>
+            <td><code>riskLevel</code></td>
+            <td>No (v2)</td>
+            <td>Risk level (e.g., Low, Medium, High, Critical). v2 extension.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Cross-Reference Validation</h4>
+
+<p><code>Test-SPDisconnectedAppCrossReference</code> verifies referential integrity between the two
+files. Every entitlement ID in an account's <code>groups</code> column must exist in the entitlement
+file's <code>id</code> column. Orphaned entitlements (defined but never referenced) are reported as
+warnings.</p>
+
+<h4>Example Account CSV</h4>
+
+<pre><code>id,name,givenName,familyName,e-mail,department,groups,IIQDisabled
+ACC-001,jsmith,John,Smith,john.smith@contoso.com,Finance,"ENT-VIEWER,ENT-APPROVER",false
+ACC-002,jdoe,Jane,Doe,jane.doe@contoso.com,IT,"ENT-ADMIN",false
+ACC-003,svc-batch,Service,Account,svc-batch@contoso.com,IT,"ENT-ADMIN,ENT-VIEWER",true</code></pre>
+
+<h4>Example Entitlement CSV</h4>
+
+<pre><code>id,name,displayName,description
+ENT-VIEWER,Viewer,Read-Only Viewer,View reports and dashboards without modification access
+ENT-APPROVER,Approver,Transaction Approver,Approve financial transactions up to $10000
+ENT-ADMIN,Administrator,Full Administrator,Full administrative access including user management</code></pre>
+
+<!-- ============================================================ -->
+<h3>Onboarding a New App</h3>
+
+<p><code>Invoke-SPDisconnectedAppRegistry.ps1</code> manages the app registry in
+<code>Config/settings.json</code>. Four actions are available: <code>Register</code>,
+<code>Unregister</code>, <code>List</code>, and <code>Test</code>.</p>
+
+<h4>Step 1: Prepare CSV Files</h4>
+
+<p>Copy the templates from <code>Config/Templates/v2/</code> and populate them with real data from
+the target application. Place the files on a shared drive or local path accessible to the toolkit.</p>
+
+<pre><code># Copy templates
+Copy-Item Config\Templates\v2\disconnected-app-accounts.csv \\fileserver\imports\MyApp\accounts.csv
+Copy-Item Config\Templates\v2\disconnected-app-entitlements.csv \\fileserver\imports\MyApp\entitlements.csv
+
+# Populate with real data (use your app team's export process)</code></pre>
+
+<h4>Step 2: Register the App</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register `
+    -AppName "MyApp" `
+    -AccountFilePath "\\fileserver\imports\MyApp\accounts.csv" `
+    -EntitlementFilePath "\\fileserver\imports\MyApp\entitlements.csv" `
+    -CorrelationAttribute "e-mail" `
+    -CampaignNamePrefix "MyApp Cert" `
+    -DeadlineDays 2 `
+    -SlaDays 1</code></pre>
+
+<p>This adds an entry to <code>DisconnectedApps.Applications</code> in settings.json and creates
+the directory structure (<code>Imports</code>, <code>Snapshots</code>, <code>Reports</code> under
+the app name).</p>
+
+<h4>Step 3: Validate the Files</h4>
+
+<pre><code># Run 5-step validation: file paths, CSV structure, entitlements, cross-references
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName "MyApp"</code></pre>
+
+<p>The <code>Test</code> action runs five validation checks:</p>
+
+<ol>
+    <li>Account file path exists and is readable</li>
+    <li>Account CSV structure: required columns present, no empty IDs, no duplicate IDs,
+    <code>id</code> length &lt;= 128, <code>IIQDisabled</code> is <code>true</code> or
+    <code>false</code>, <code>e-mail</code> contains <code>@</code></li>
+    <li>Entitlement file path exists (if configured)</li>
+    <li>Entitlement CSV structure: required columns, no duplicate IDs,
+    <code>description</code> &lt;= 2,000 chars, no <code>+</code> in <code>name</code></li>
+    <li>Cross-reference: all <code>groups</code> values in accounts resolve to entitlement IDs</li>
+</ol>
+
+<h4>Step 4: List Registered Apps</h4>
+
+<pre><code># View all registered apps with delivery status
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action List</code></pre>
+
+<p>Output shows <code>Name</code>, <code>Enabled</code>, <code>FileStatus</code> (Current / Stale /
+Missing / Empty / Error), <code>LastProcessed</code> (from snapshot filename), and
+<code>AccountPath</code>.</p>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppRegistry.ps1</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Action</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>ValidateSet: <code>Register</code>, <code>Unregister</code>, <code>List</code>, <code>Test</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Required for Register, Unregister, Test. Case-sensitive name for the application.</td>
+        </tr>
+        <tr>
+            <td><code>-AccountFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Required for Register. Path to the account CSV file.</td>
+        </tr>
+        <tr>
+            <td><code>-EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Optional. Path to the entitlement CSV file. Enables cross-reference validation.</td>
+        </tr>
+        <tr>
+            <td><code>-ISCSourceId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>ISC source ID for API-based CSV upload. Leave empty to skip ISC aggregation.</td>
+        </tr>
+        <tr>
+            <td><code>-CorrelationAttribute</code></td>
+            <td>string</td>
+            <td>e-mail</td>
+            <td>Identity attribute used to resolve CSV accounts to ISC identities.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>{AppName} Cert</td>
+            <td>Prefix for certification campaign names.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days until the campaign deadline.</td>
+        </tr>
+        <tr>
+            <td><code>-SlaDays</code></td>
+            <td>int</td>
+            <td>1</td>
+            <td>Expected delivery frequency in days. Used for SLA compliance scoring.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success (action completed)</td></tr>
+        <tr><td>1</td><td>No apps found (List) or validation warnings (Test)</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Validation failure</td></tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Single App Processing</h3>
+
+<p><code>Invoke-SPDisconnectedAppCert.ps1</code> runs the full daily certification pipeline for a
+single app: validate, snapshot, detect deltas, resolve identities, create campaigns, and generate
+reports.</p>
+
+<h4>Pipeline Steps</h4>
+
+<ol>
+    <li><strong>Validate</strong> -- <code>Test-SPDisconnectedAppAccountFile</code> checks CSV
+    structure and data integrity. If an entitlement file is provided,
+    <code>Test-SPDisconnectedAppEntitlementFile</code> and
+    <code>Test-SPDisconnectedAppCrossReference</code> also run.</li>
+
+    <li><strong>Snapshot</strong> -- <code>Save-SPDisconnectedAppSnapshot</code> copies the current
+    CSV to <code>{SnapshotDir}/{AppName}/{YYYY-MM-DD}-accounts.csv</code>. Idempotent: re-running
+    on the same day does not create duplicate snapshots.</li>
+
+    <li><strong>Previous Snapshot</strong> -- <code>Get-SPDisconnectedAppPreviousSnapshot</code>
+    finds the most recent snapshot before today. Returns <code>$null</code> on first run.</li>
+
+    <li><strong>Delta Detection</strong> -- <code>Compare-SPDisconnectedAppFiles</code> compares
+    today's file against yesterday's snapshot. Seven change types detected (see
+    <a href="#" onclick="event.preventDefault()">Delta Detection</a> below).</li>
+
+    <li><strong>Threshold Check</strong> -- <code>Test-SPDisconnectedAppDeletionThreshold</code>
+    blocks processing if account removals exceed <code>AccountDeletionThresholdPct</code>
+    (default: 20%). Prevents mass-revocation from corrupt or truncated CSV files.</li>
+
+    <li><strong>Identity Resolution</strong> -- <code>Resolve-SPDisconnectedAppIdentities</code>
+    resolves changed accounts to ISC identities via <code>POST /v3/search</code> (email primary,
+    username fallback). Session-level cache avoids duplicate API calls.</li>
+
+    <li><strong>Campaign Creation</strong> -- <code>Invoke-SPDisconnectedAppCertRun</code> groups
+    resolved identities by manager and creates one SEARCH campaign per manager. Includes duplicate
+    campaign detection and <code>MaxCampaignsPerRun</code> safety guard (default: 20).</li>
+
+    <li><strong>HTML Report</strong> -- <code>Export-SPDisconnectedAppDeltaHtml</code> generates
+    a self-contained delta report with six sections.</li>
+
+    <li><strong>Audit Event</strong> -- JSONL audit trail entry appended for compliance evidence.</li>
+</ol>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppCert.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName &lt;string&gt; -AccountFilePath &lt;string&gt;
+    [-EntitlementFilePath &lt;string&gt;] [-CampaignNamePrefix &lt;string&gt;]
+    [-DeadlineDays &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-MaxCampaignsPerRun &lt;int&gt;] [-SnapshotDir &lt;string&gt;] [-OutputPath &lt;string&gt;]
+    [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;] [-TokenExpiryMinutes &lt;int&gt;]
+    [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<h4>Required Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>Application name. Drives directory paths, campaign naming, and report organization.</td>
+        </tr>
+        <tr>
+            <td><code>-AccountFilePath</code></td>
+            <td>string</td>
+            <td>Path to today's account CSV file. The file is validated before processing.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Campaign Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Path to entitlement CSV. Enables cross-reference validation and richer delta reports.</td>
+        </tr>
+        <tr>
+            <td><code>-CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>config or Disconnected App Cert</td>
+            <td>Prefix for campaign names. Full name: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-DeadlineDays</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Days from today until the campaign deadline.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Reviewer for accounts whose resolved ISC identity has no manager.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxCampaignsPerRun</code></td>
+            <td>int</td>
+            <td>20 (from config)</td>
+            <td>Safety guard. Abort if the number of manager groups exceeds this threshold.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Path Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>config or .\DisconnectedApps\Snapshots</td>
+            <td>Directory for date-stamped CSV snapshots.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>config or .\DisconnectedApps\Reports</td>
+            <td>Directory for HTML reports and audit trail.</td>
+        </tr>
+        <tr>
+            <td><code>-ConfigPath</code></td>
+            <td>string</td>
+            <td>..\Config\settings.json</td>
+            <td>Path to settings.json. Auto-resolved from script location.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Authentication Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token from ISC admin console. The <code>Bearer </code> prefix is stripped automatically. Bypasses OAuth client_credentials flow.</td>
+        </tr>
+        <tr>
+            <td><code>-TokenExpiryMinutes</code></td>
+            <td>int</td>
+            <td>10</td>
+            <td>Minutes until the browser token is considered expired. ISC browser tokens are typically valid for ~12 minutes.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Output Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-OutputMode</code></td>
+            <td>string</td>
+            <td>Console</td>
+            <td>Output format: <code>Console</code>, <code>JSON</code>, <code>Both</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. Runs validation, snapshot, and delta detection but skips campaign creation.</td>
+        </tr>
+        <tr>
+            <td><code>-Help</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Display comment-based help and exit.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>Success -- campaigns created (or WhatIf completed)</td></tr>
+        <tr><td>1</td><td>No changes -- CSV is identical to yesterday's snapshot</td></tr>
+        <tr><td>2</td><td>Parameter error</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+        <tr><td>5</td><td>Validation failure (CSV structure or threshold exceeded)</td></tr>
+        <tr><td>6</td><td>Campaign creation error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># First run for a new app (all accounts treated as Added)
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "PEP-Plus" `
+    -AccountFilePath "\\fileserver\imports\PEP-Plus\accounts.csv"
+
+# With entitlement cross-reference and dry-run
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "PEP-Plus" `
+    -AccountFilePath "\\fileserver\imports\PEP-Plus\accounts.csv" `
+    -EntitlementFilePath "\\fileserver\imports\PEP-Plus\entitlements.csv" `
+    -WhatIf
+
+# Browser token authentication
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "DebtNext" `
+    -AccountFilePath "\\fileserver\imports\DebtNext\accounts.csv" `
+    -Token 'eyJhbGciOiJSUzI1...'
+
+# Custom campaign prefix and fallback reviewer
+.\Scripts\Invoke-SPDisconnectedAppCert.ps1 `
+    -AppName "IPAY" `
+    -AccountFilePath "C:\Imports\IPAY\accounts.csv" `
+    -CampaignNamePrefix "IPAY Access Review" `
+    -FallbackReviewerIdentityId 'abc-fallback-123' `
+    -DeadlineDays 3</code></pre>
+
+<!-- ============================================================ -->
+<h3>Batch Processing</h3>
+
+<p><code>Invoke-SPDisconnectedAppBatch.ps1</code> processes all registered apps (or a specified
+subset) in a single coordinated run. Designed for enterprises with 20+ disconnected apps that need
+daily governance.</p>
+
+<h4>Batch Pipeline</h4>
+
+<p>The batch orchestrator runs three phases:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Phase</th>
+            <th>Step</th>
+            <th>Operation</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td rowspan="2"><strong>Pre</strong></td>
+            <td>1</td>
+            <td>Campaign cleanup -- complete past-due campaigns (requires <code>Safety.AllowCompleteCampaign = true</code>)</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Load registered apps from settings.json (filter to enabled, or <code>-AppNames</code> subset)</td>
+        </tr>
+        <tr>
+            <td rowspan="7"><strong>Per-App</strong></td>
+            <td>3</td>
+            <td>CSV validation (structure + cross-reference)</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Snapshot today's file</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>ISC source upload (if <code>ISCSourceId</code> configured)</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Find previous snapshot + delta detection</td>
+        </tr>
+        <tr>
+            <td>7</td>
+            <td>Deletion threshold check</td>
+        </tr>
+        <tr>
+            <td>8</td>
+            <td>Identity resolution + manager grouping + campaign creation</td>
+        </tr>
+        <tr>
+            <td>9</td>
+            <td>Per-app HTML delta report</td>
+        </tr>
+        <tr>
+            <td rowspan="3"><strong>Post</strong></td>
+            <td>10</td>
+            <td>Batch summary HTML report</td>
+        </tr>
+        <tr>
+            <td>11</td>
+            <td>Escalation -- reassign stale certifications across all apps</td>
+        </tr>
+        <tr>
+            <td>12</td>
+            <td>Team dashboards -- regenerate per-app status pages</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Each app is processed independently -- a failure in one app does not prevent subsequent apps from
+running. The batch summary report aggregates all results with color-coded per-app status.</p>
+
+<h4>CLI Reference: Invoke-SPDisconnectedAppBatch.ps1</h4>
+
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppBatch.ps1
+    [-AppNames &lt;string[]&gt;] [-ConfigPath &lt;string&gt;] [-Token &lt;string&gt;]
+    [-TokenExpiryMinutes &lt;int&gt;] [-FallbackReviewerIdentityId &lt;string&gt;]
+    [-Force] [-OutputMode &lt;string&gt;] [-WhatIf] [-Help]</code></pre>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all enabled apps</td>
+            <td>Process only the specified apps. Omit to process all enabled registered apps.</td>
+        </tr>
+        <tr>
+            <td><code>-Token</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Browser JWT token.</td>
+        </tr>
+        <tr>
+            <td><code>-FallbackReviewerIdentityId</code></td>
+            <td>string</td>
+            <td>--</td>
+            <td>Fallback reviewer for manager-less identities across all apps.</td>
+        </tr>
+        <tr>
+            <td><code>-Force</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Bypass duplicate campaign detection. Creates campaigns even if same-day campaigns already exist for an app.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Dry-run mode. All per-app steps receive WhatIf.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Exit Codes</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>0</td><td>All apps succeeded or had no changes</td></tr>
+        <tr><td>1</td><td>Partial failure -- some apps failed, others succeeded</td></tr>
+        <tr><td>2</td><td>All apps failed</td></tr>
+        <tr><td>3</td><td>Authentication error</td></tr>
+        <tr><td>4</td><td>Configuration error</td></tr>
+    </tbody>
+</table>
+
+<h4>Examples</h4>
+
+<pre><code># Process all enabled registered apps
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token $token
+
+# Process specific apps only
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -AppNames @('PEP-Plus','DebtNext') -Token $token
+
+# Dry-run all apps
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -WhatIf
+
+# Force re-run (bypass duplicate campaign guard)
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token $token -Force</code></pre>
+
+<div class="callout callout-info">
+    <strong>Daily Orchestrator:</strong> For fully automated daily runs, use
+    <code>Invoke-SPDailyOrchestrator.ps1</code> (see the Delta Certification section) which
+    runs disconnected app batch processing as Steps 7-9 alongside AD delta cert, escalation,
+    and health checks in a single coordinated invocation.
+</div>
+
+<!-- ============================================================ -->
+<h3>Delta Detection</h3>
+
+<p><code>Compare-SPDisconnectedAppFiles</code> compares today's account CSV against yesterday's
+snapshot and classifies every account into one of seven change types. The comparison uses O(1)
+hashtable lookups keyed by the <code>id</code> column for performance.</p>
+
+<h4>Change Types</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Change Type</th>
+            <th>Detection Logic</th>
+            <th>Triggers Campaign?</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>AccountAdded</strong></td>
+            <td>Account ID exists in today's file but not in yesterday's snapshot.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>AccountRemoved</strong></td>
+            <td>Account ID exists in yesterday's snapshot but not in today's file.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AccountDisabled</strong></td>
+            <td><code>IIQDisabled</code> changed from <code>false</code> to <code>true</code>.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AccountEnabled</strong></td>
+            <td><code>IIQDisabled</code> changed from <code>true</code> to <code>false</code>.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>EntitlementGranted</strong></td>
+            <td>New entitlement ID(s) appear in the <code>groups</code> column compared to yesterday.</td>
+            <td>Yes</td>
+        </tr>
+        <tr>
+            <td><strong>EntitlementRevoked</strong></td>
+            <td>Entitlement ID(s) removed from the <code>groups</code> column compared to yesterday.</td>
+            <td>No (informational)</td>
+        </tr>
+        <tr>
+            <td><strong>AttributeChanged</strong></td>
+            <td>Any other column value differs between today and yesterday (e.g., name, email, department).</td>
+            <td>No (informational)</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Only three change types trigger certification campaigns: <strong>AccountAdded</strong>,
+<strong>AccountEnabled</strong>, and <strong>EntitlementGranted</strong>. These represent new
+or expanded access that requires manager review. Removals, disables, and attribute changes are
+captured in the delta report for audit visibility but do not create campaigns.</p>
+
+<h4>First Run Behavior</h4>
+
+<p>On the first run for an app (no previous snapshot exists), all accounts in the CSV are treated
+as <code>AccountAdded</code>. This creates campaigns for every identity in the file, establishing
+the baseline. Subsequent runs detect only day-over-day changes.</p>
+
+<h4>Deletion Threshold Protection</h4>
+
+<p><code>Test-SPDisconnectedAppDeletionThreshold</code> prevents mass-revocation from corrupt or
+truncated CSV files. If the percentage of removed accounts exceeds
+<code>AccountDeletionThresholdPct</code> (default: 20%), processing is blocked.</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Scenario</th>
+            <th>Behavior</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>First run (no previous snapshot)</td>
+            <td>Threshold check bypassed -- all accounts are Added.</td>
+        </tr>
+        <tr>
+            <td>Previous snapshot has &lt; 5 accounts</td>
+            <td>Threshold check bypassed -- too few accounts for meaningful percentage.</td>
+        </tr>
+        <tr>
+            <td>Removals &lt;= 20% of previous count</td>
+            <td>Processing continues normally.</td>
+        </tr>
+        <tr>
+            <td>Removals &gt; 20% of previous count</td>
+            <td>Processing blocked. Exit code 5. Investigate the CSV before re-running.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <strong>Threshold exceeded?</strong> Verify that the CSV file is complete and not truncated.
+    If the removals are legitimate (e.g., a department was offboarded), increase
+    <code>DisconnectedApps.AccountDeletionThresholdPct</code> temporarily, re-run, then restore
+    the default.
+</div>
+
+<h4>Delta Summary Output</h4>
+
+<p>The <code>Summary</code> hashtable from <code>Compare-SPDisconnectedAppFiles</code> provides
+counts for all seven change types plus totals:</p>
+
+<pre><code>@{
+    TotalCurrent          = 142
+    TotalPrevious         = 140
+    Added                 = 5
+    Removed               = 3
+    Disabled              = 1
+    Enabled               = 2
+    EntitlementsGranted   = 8
+    EntitlementsRevoked   = 4
+    AttributeChanges      = 6
+    Unchanged             = 126
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Remediation Tracking</h3>
+
+<p>When a reviewer revokes an entitlement in an ISC certification campaign, that decision must be
+verified against the next day's CSV to confirm the app team actually removed the access. The
+remediation tracking workflow bridges this gap between ISC governance decisions and real-world
+access removal.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li><strong>Decision harvest</strong> -- <code>Get-SPDisconnectedAppCampaignDecisions</code>
+    queries completed campaigns and collects revocation decisions (see
+    <a href="#" onclick="event.preventDefault()">Decision Collection</a> below).</li>
+
+    <li><strong>Record creation</strong> -- <code>New-SPRemediationRecord</code> writes revocation
+    details to <code>remediation-tracker.json</code> in the app's report directory. Each record
+    includes: identity, entitlement, campaign ID, decision timestamp, and status
+    (<code>Pending</code>).</li>
+
+    <li><strong>Verification</strong> -- On the next daily run, delta detection identifies
+    <code>EntitlementRevoked</code> changes. The toolkit cross-references these against pending
+    remediation records to confirm removal.</li>
+
+    <li><strong>Status update</strong> -- Confirmed removals are marked <code>Remediated</code>
+    with the verification date. Unconfirmed removals remain <code>Pending</code> and are flagged
+    in the team dashboard and batch summary.</li>
+</ol>
+
+<h4>Remediation States</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>State</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Pending</strong></td>
+            <td>Revocation decision made in ISC but not yet confirmed in next-day CSV.</td>
+        </tr>
+        <tr>
+            <td><strong>Remediated</strong></td>
+            <td>Entitlement removal confirmed: the group no longer appears in the account's <code>groups</code> column.</td>
+        </tr>
+        <tr>
+            <td><strong>Overdue</strong></td>
+            <td>More than <code>DeadlineDays</code> elapsed since the revocation decision with no confirmation.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <strong>No provisioning API:</strong> Disconnected apps by definition lack an API for
+    automated access removal. The revocation decision in ISC is a directive to the app team,
+    not an automated action. Remediation tracking provides accountability evidence that the
+    directive was fulfilled.
+</div>
+
+<!-- ============================================================ -->
+<h3>Decision Collection</h3>
+
+<p><code>Get-SPDisconnectedAppCampaignDecisions</code> harvests certification outcomes from
+completed ISC campaigns, providing the raw data for remediation tracking and compliance reporting.</p>
+
+<h4>How It Works</h4>
+
+<ol>
+    <li>Reads the JSONL audit trail for campaign IDs created within the last <code>DaysBack</code>
+    days (default: 7).</li>
+    <li>Queries ISC for each campaign's current status via <code>Get-SPCampaign</code>.</li>
+    <li>For completed campaigns, retrieves item-level decisions via
+    <code>Get-SPAuditCertifications</code> and <code>Get-SPAuditCertificationItems</code>.</li>
+    <li>Classifies decisions: <strong>Approved</strong>, <strong>Revoked</strong>, or
+    <strong>Pending</strong>.</li>
+</ol>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>Application name. Used to locate audit trail and filter campaigns by prefix.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>7</td>
+            <td>Look-back window for campaign IDs in the audit trail. Range: 1-365.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Reports</td>
+            <td>Directory containing the JSONL audit trail.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Return Structure</h4>
+
+<pre><code>@{
+    CampaignsChecked  = 5
+    Completed         = 3
+    Active            = 1
+    Expired           = 1
+    Purged            = 0
+    Decisions         = @{
+        Approved = 12
+        Revoked  = 4
+        Pending  = 2
+    }
+    RevocationDetails = @(
+        @{ Identity = "John Smith"; Entitlement = "ENT-ADMIN"; CampaignId = "abc123"; ... }
+        # ...
+    )
+}</code></pre>
+
+<h4>Decision Harvest Report</h4>
+
+<p><code>Export-SPDisconnectedAppDecisionHarvestHtml</code> generates a self-contained HTML report
+from the decision data, saved to <code>{OutputPath}/{AppName}/</code>. This report serves as
+evidence for compliance audits showing what was reviewed, by whom, and what actions were taken.</p>
+
+<!-- ============================================================ -->
+<h3>SLA Tracking and Delivery Monitoring</h3>
+
+<p>Two complementary functions monitor whether app teams are delivering their CSV files on schedule.</p>
+
+<h4>Delivery Status (Real-Time)</h4>
+
+<p><code>Get-SPDisconnectedAppDeliveryStatus</code> examines the <code>AccountFilePath</code>
+for each registered app and reports its current state:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Condition</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Delivered</strong></td>
+            <td>File modified within the last <code>StaleHours</code> (default: 24).</td>
+        </tr>
+        <tr>
+            <td><strong>Stale</strong></td>
+            <td>File exists but was last modified more than <code>StaleHours</code> ago.</td>
+        </tr>
+        <tr>
+            <td><strong>Missing</strong></td>
+            <td>File does not exist at the configured path.</td>
+        </tr>
+        <tr>
+            <td><strong>Disabled</strong></td>
+            <td>App is registered but <code>Enabled = false</code>.</td>
+        </tr>
+        <tr>
+            <td><strong>Error</strong></td>
+            <td>File exists but is empty or cannot be parsed as CSV.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>SLA Compliance (Historical)</h4>
+
+<p><code>Get-SPDisconnectedAppSlaStatus</code> scans the snapshot directory for date-stamped
+filenames and builds a 30-day delivery calendar for each app. It calculates:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Metric</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DeliveryRate</code></td>
+            <td>Percentage of days with a snapshot file present in the tracking window.</td>
+        </tr>
+        <tr>
+            <td><code>LongestGapDays</code></td>
+            <td>Maximum consecutive days without a snapshot.</td>
+        </tr>
+        <tr>
+            <td><code>ConsecutiveMisses</code></td>
+            <td>Current streak of missed days (0 if today was delivered).</td>
+        </tr>
+        <tr>
+            <td><code>SlaCompliant</code></td>
+            <td>Boolean. <code>$true</code> if the longest gap does not exceed the app's <code>SlaDays</code> setting.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-DaysBack</code></td>
+            <td>int</td>
+            <td>30</td>
+            <td>Number of days to include in the compliance window. Range: 1-365.</td>
+        </tr>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Snapshots</td>
+            <td>Root directory containing per-app snapshot subdirectories.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>SLA HTML Report</h4>
+
+<p><code>Export-SPDisconnectedAppSlaHtml</code> generates a compliance report with a 30-day
+delivery grid for each app. Days with snapshots are shown as filled cells; gaps are highlighted.
+This report is useful for holding app teams accountable for timely data delivery.</p>
+
+<!-- ============================================================ -->
+<h3>App Team Dashboard</h3>
+
+<p><code>Export-SPDisconnectedAppTeamDashboard</code> generates a self-service HTML status page
+for each registered app. App teams can open this file in a browser to see their governance
+status without needing ISC admin access.</p>
+
+<h4>Dashboard Sections</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Section</th>
+            <th>Content</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>1</td>
+            <td>Delivery Status</td>
+            <td>Current file delivery state (Delivered / Stale / Missing), last modified timestamp, file size, row count.</td>
+        </tr>
+        <tr>
+            <td>2</td>
+            <td>Delta Summary</td>
+            <td>Today's change counts: accounts added, removed, enabled, disabled; entitlements granted, revoked.</td>
+        </tr>
+        <tr>
+            <td>3</td>
+            <td>Campaign Status</td>
+            <td>Active and completed campaigns for this app, with reviewer names and decision counts.</td>
+        </tr>
+        <tr>
+            <td>4</td>
+            <td>Remediation Queue</td>
+            <td>Pending revocations awaiting confirmation in the next CSV delivery.</td>
+        </tr>
+        <tr>
+            <td>5</td>
+            <td>SLA Compliance</td>
+            <td>30-day delivery calendar with filled/empty day cells.</td>
+        </tr>
+        <tr>
+            <td>6</td>
+            <td>Trend Sparkline</td>
+            <td>90-day CSS bar chart showing daily account counts and change volumes.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Parameters</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppName</code></td>
+            <td>string</td>
+            <td>(required)</td>
+            <td>Application name. Dashboard is saved to <code>{OutputPath}/{AppName}/team-dashboard.html</code>.</td>
+        </tr>
+        <tr>
+            <td><code>-OutputPath</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Reports</td>
+            <td>Base directory for report output.</td>
+        </tr>
+        <tr>
+            <td><code>-SnapshotDir</code></td>
+            <td>string</td>
+            <td>.\DisconnectedApps\Snapshots</td>
+            <td>Snapshot directory for SLA and trend data.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-info">
+    <strong>No JavaScript dependencies:</strong> The team dashboard is fully self-contained with
+    inline CSS. The sparkline chart uses CSS-only bar rendering (no JavaScript charting libraries).
+    This means it can be emailed, saved to SharePoint, or opened from a file share without any
+    browser security restrictions.
+</div>
+
+<h4>Example</h4>
+
+<pre><code># Generate a single app's dashboard
+$result = Export-SPDisconnectedAppTeamDashboard -AppName "PEP-Plus"
+Write-Host "Dashboard saved to: $($result.Data.FilePath)"
+
+# Batch orchestrator auto-generates dashboards for all apps in its post-step</code></pre>
+
+<!-- ============================================================ -->
+<h3>Cross-App Analytics</h3>
+
+<p>Two functions provide enterprise-wide visibility across all registered disconnected apps.</p>
+
+<h4>Identity Risk Analysis</h4>
+
+<p><code>Get-SPDisconnectedAppIdentityRisk</code> reads the latest account snapshot from each
+registered app and builds a cross-app identity map keyed by email address. No ISC API calls
+are made -- this is a purely local analysis.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Risk Level</th>
+            <th>Condition</th>
+            <th>Example</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Normal</strong></td>
+            <td>Identity appears in 1 app</td>
+            <td>John Smith has a PEP+ account only</td>
+        </tr>
+        <tr>
+            <td><strong>Elevated</strong></td>
+            <td>Identity appears in 2 apps</td>
+            <td>Jane Doe has both PEP+ and DebtNext accounts</td>
+        </tr>
+        <tr>
+            <td><strong>High</strong></td>
+            <td>Identity appears in 3+ apps</td>
+            <td>Service account svc-batch has accounts in PEP+, DebtNext, and IPAY</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><code>Export-SPDisconnectedAppIdentityRiskHtml</code> generates a risk report with an executive
+summary (total identities, single-app, multi-app, high-risk counts) and a color-coded identity
+table. For large environments (over 500 identities), the all-identity table is suppressed and
+only multi-app identities are shown.</p>
+
+<h4>Entitlement Catalog</h4>
+
+<p><code>Get-SPDisconnectedAppEntitlementCatalog</code> reads the latest entitlement snapshot from
+all registered apps and produces a unified catalog. This provides a single view of all entitlements
+across all disconnected apps.</p>
+
+<p><code>Export-SPDisconnectedAppEntitlementCatalogHtml</code> generates the catalog as a
+searchable HTML report, organized by app with entitlement details including name, display name,
+description, and v2 extensions (owner, type, risk level) when available.</p>
+
+<h4>Examples</h4>
+
+<pre><code># Identity risk analysis
+$risk = Get-SPDisconnectedAppIdentityRisk
+Export-SPDisconnectedAppIdentityRiskHtml -RiskResult $risk.Data
+Write-Host "High-risk identities: $($risk.Data.Summary.HighRisk)"
+
+# Entitlement catalog
+$catalog = Get-SPDisconnectedAppEntitlementCatalog
+Export-SPDisconnectedAppEntitlementCatalogHtml -CatalogResult $catalog.Data</code></pre>
+
+<!-- ============================================================ -->
+<h3>Campaign Cleanup and Escalation</h3>
+
+<p>The disconnected apps module reuses the same cleanup and escalation patterns as
+Delta Certification, adapted for per-app campaign prefixes.</p>
+
+<h4>Campaign Cleanup</h4>
+
+<p><code>Invoke-SPDisconnectedAppCleanup</code> finds active campaigns matching each app's
+<code>CampaignNamePrefix</code> and completes past-due campaigns older than
+<code>DaysStale</code> (default: 3 days).</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all registered apps</td>
+            <td>Limit cleanup to specific apps.</td>
+        </tr>
+        <tr>
+            <td><code>-DaysStale</code></td>
+            <td>int</td>
+            <td>3</td>
+            <td>Days before a campaign is eligible for auto-completion.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Preview which campaigns would be completed.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-warning">
+    <strong>Safety Guard:</strong> Cleanup is guarded by <code>Safety.AllowCompleteCampaign</code>
+    (default: <code>false</code>). Set to <code>true</code> in settings.json for cleanup to make
+    API calls. This is the same guard used by Delta Certification cleanup.
+</div>
+
+<h4>Escalation</h4>
+
+<p><code>Invoke-SPDisconnectedAppEscalation</code> detects stale certifications across all
+registered apps and escalates them via org-tree reassignment. Each app can override the default
+stale-hours threshold via its <code>EscalationStaleHours</code> setting.</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Type</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>-AppNames</code></td>
+            <td>string[]</td>
+            <td>all registered apps</td>
+            <td>Limit escalation to specific apps.</td>
+        </tr>
+        <tr>
+            <td><code>-DefaultStaleHours</code></td>
+            <td>int</td>
+            <td>24</td>
+            <td>Hours without reviewer action before escalation. Per-app <code>EscalationStaleHours</code> overrides this.</td>
+        </tr>
+        <tr>
+            <td><code>-MaxEscalationLevels</code></td>
+            <td>int</td>
+            <td>2</td>
+            <td>Maximum org-tree hops from the original reviewer.</td>
+        </tr>
+        <tr>
+            <td><code>-WhatIf</code></td>
+            <td>switch</td>
+            <td>off</td>
+            <td>Preview which certifications would be escalated.</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>ISC Source Upload</h3>
+
+<p><code>Push-SPDisconnectedAppToISC</code> optionally uploads the account and entitlement CSV
+files to an ISC delimited file source for aggregation. This enables ISC to display the disconnected
+app's accounts alongside native connector sources in the identity cube.</p>
+
+<h4>Upload Methods</h4>
+
+<table>
+    <thead>
+        <tr>
+            <th>Method</th>
+            <th>How It Works</th>
+            <th>When to Use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>API</strong></td>
+            <td>Multipart/form-data POST to the ISC source import endpoint.</td>
+            <td>Direct API access available (no firewall restrictions).</td>
+        </tr>
+        <tr>
+            <td><strong>FileDrop</strong></td>
+            <td>Copies CSV files to a configured file drop path monitored by the Virtual Appliance.</td>
+            <td>Network restrictions prevent direct API access; VA handles the upload.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Configuration</h4>
+
+<p>ISC upload is optional and controlled per-app. Set <code>ISCSourceId</code> in the app
+registration to enable upload. Leave it empty to skip.</p>
+
+<pre><code>"ISC": {
+    "UploadMethod": "API",              // "API" or "FileDrop"
+    "FileDropBasePath": "",             // UNC path for FileDrop method
+    "WaitForAggregationSeconds": 120    // Seconds to wait for ISC aggregation after upload
+}</code></pre>
+
+<!-- ============================================================ -->
+<h3>Configuration Reference</h3>
+
+<p>All disconnected app settings in <code>Config/settings.json</code>:</p>
+
+<pre><code>{
+    "DisconnectedApps": {
+        "ImportBasePath": ".\\DisconnectedApps\\Imports",
+        "SnapshotPath": ".\\DisconnectedApps\\Snapshots",
+        "ReportPath": ".\\DisconnectedApps\\Reports",
+        "SnapshotRetentionDays": 30,
+        "DefaultCampaignNamePrefix": "Disconnected App Cert",
+        "DefaultDeadlineDays": 2,
+        "CorrelationAttribute": "e-mail",
+        "AccountDeletionThresholdPct": 20,
+        "ISC": {
+            "UploadMethod": "API",
+            "FileDropBasePath": "",
+            "WaitForAggregationSeconds": 120
+        },
+        "RequiredAccountColumns": [
+            "id", "name", "givenName", "familyName",
+            "e-mail", "groups", "IIQDisabled"
+        ],
+        "RequiredEntitlementColumns": [
+            "id", "name", "displayName", "description"
+        ],
+        "Applications": [
+            {
+                "Name": "PEP-Plus",
+                "AccountFilePath": "\\\\fileserver\\imports\\PEP-Plus\\accounts.csv",
+                "EntitlementFilePath": "\\\\fileserver\\imports\\PEP-Plus\\entitlements.csv",
+                "ISCSourceId": "",
+                "CorrelationAttribute": "e-mail",
+                "CampaignNamePrefix": "PEP+ Cert",
+                "DeadlineDays": 2,
+                "SlaDays": 1,
+                "Enabled": true
+            }
+        ]
+    }
+}</code></pre>
+
+<h4>Per-App Settings</h4>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Setting</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>Name</code></td>
+            <td>string</td>
+            <td>Unique application name. Used for directory paths, campaign naming, and report organization.</td>
+        </tr>
+        <tr>
+            <td><code>AccountFilePath</code></td>
+            <td>string</td>
+            <td>Path to the daily account CSV. UNC paths supported for shared drives.</td>
+        </tr>
+        <tr>
+            <td><code>EntitlementFilePath</code></td>
+            <td>string</td>
+            <td>Path to the entitlement CSV. Empty string to skip entitlement validation.</td>
+        </tr>
+        <tr>
+            <td><code>ISCSourceId</code></td>
+            <td>string</td>
+            <td>ISC source ID for CSV upload. Empty string to skip upload.</td>
+        </tr>
+        <tr>
+            <td><code>CorrelationAttribute</code></td>
+            <td>string</td>
+            <td>Identity attribute for ISC search resolution. Default: <code>e-mail</code>.</td>
+        </tr>
+        <tr>
+            <td><code>CampaignNamePrefix</code></td>
+            <td>string</td>
+            <td>Prefix for campaign names. Full name: <code>{Prefix} {YYYY-MM-DD} - {ManagerName}</code>.</td>
+        </tr>
+        <tr>
+            <td><code>DeadlineDays</code></td>
+            <td>int</td>
+            <td>Campaign deadline in days from creation.</td>
+        </tr>
+        <tr>
+            <td><code>SlaDays</code></td>
+            <td>int</td>
+            <td>Expected delivery frequency. SLA compliance checks use this value.</td>
+        </tr>
+        <tr>
+            <td><code>Enabled</code></td>
+            <td>bool</td>
+            <td>Whether the batch orchestrator includes this app. Disabled apps are skipped.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h4>Global Defaults</h4>
+
+<p>Per-app settings inherit from global defaults when not specified:</p>
+
+<table class="param-table">
+    <thead>
+        <tr>
+            <th>Global Setting</th>
+            <th>Default</th>
+            <th>Per-App Override</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>DisconnectedApps.CorrelationAttribute</code></td>
+            <td>e-mail</td>
+            <td><code>Applications[].CorrelationAttribute</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.DefaultCampaignNamePrefix</code></td>
+            <td>Disconnected App Cert</td>
+            <td><code>Applications[].CampaignNamePrefix</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.DefaultDeadlineDays</code></td>
+            <td>2</td>
+            <td><code>Applications[].DeadlineDays</code></td>
+        </tr>
+        <tr>
+            <td><code>DisconnectedApps.AccountDeletionThresholdPct</code></td>
+            <td>20</td>
+            <td><code>Applications[].AccountDeletionThresholdPct</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h3>Module Function Reference</h3>
+
+<p>The SP.DisconnectedApps module exports 17 public functions across four sub-modules:</p>
+
+<details>
+    <summary><strong>SP.DisconnectedAppRunner (17 functions)</strong> -- Core orchestration</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Get-SPRegisteredApps</code></td>
+                <td>Reads app registry from settings.json, merges per-app settings with global defaults.</td>
+            </tr>
+            <tr>
+                <td><code>Initialize-SPDisconnectedAppDirectories</code></td>
+                <td>Creates Import, Snapshot, and Report directories for registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Resolve-SPDisconnectedAppIdentities</code></td>
+                <td>Resolves delta-changed accounts to ISC identities via POST /v3/search.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppCertRun</code></td>
+                <td>Groups identities by manager, creates SEARCH campaigns. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppDeltaHtml</code></td>
+                <td>Generates per-app HTML delta report with six sections.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppBatchHtml</code></td>
+                <td>Generates batch summary HTML with per-app status and error details.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppDeliveryStatus</code></td>
+                <td>Real-time delivery status check for all registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppSlaStatus</code></td>
+                <td>30-day SLA compliance analysis from snapshot history.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppSlaHtml</code></td>
+                <td>SLA compliance HTML report with 30-day delivery grid.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppIdentityRisk</code></td>
+                <td>Cross-app identity risk classification (Normal / Elevated / High).</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppIdentityRiskHtml</code></td>
+                <td>Identity risk HTML report with color-coded identity table.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppEntitlementCatalog</code></td>
+                <td>Unified entitlement catalog across all registered apps.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppEntitlementCatalogHtml</code></td>
+                <td>Entitlement catalog HTML report organized by app.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppCampaignDecisions</code></td>
+                <td>Harvests certification decisions from completed ISC campaigns.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppDecisionHarvestHtml</code></td>
+                <td>Decision harvest HTML report for compliance evidence.</td>
+            </tr>
+            <tr>
+                <td><code>Push-SPDisconnectedAppToISC</code></td>
+                <td>Uploads CSV files to ISC source via API or FileDrop.</td>
+            </tr>
+            <tr>
+                <td><code>Send-SPDisconnectedAppAlert</code></td>
+                <td>Dispatches alerts for validation failures, threshold blocks, delivery gaps.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppCleanup</code></td>
+                <td>Completes past-due disconnected app campaigns. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Invoke-SPDisconnectedAppEscalation</code></td>
+                <td>Escalates stale certifications via org-tree reassignment. Supports -WhatIf.</td>
+            </tr>
+            <tr>
+                <td><code>Export-SPDisconnectedAppTeamDashboard</code></td>
+                <td>Generates self-service HTML status page for an app team.</td>
+            </tr>
+            <tr>
+                <td><code>New-SPRemediationRecord</code></td>
+                <td>Creates remediation tracking records from revocation decisions.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppSnapshot (3 functions)</strong> -- Snapshot management</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Save-SPDisconnectedAppSnapshot</code></td>
+                <td>Saves a date-stamped copy of the current CSV. Idempotent on same-day re-runs.</td>
+            </tr>
+            <tr>
+                <td><code>Get-SPDisconnectedAppPreviousSnapshot</code></td>
+                <td>Finds the most recent snapshot before today for delta comparison.</td>
+            </tr>
+            <tr>
+                <td><code>Remove-SPDisconnectedAppOldSnapshots</code></td>
+                <td>Deletes snapshots older than RetentionDays (default: 30). Called during batch cleanup.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppDelta (2 functions)</strong> -- File comparison engine</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Compare-SPDisconnectedAppFiles</code></td>
+                <td>Detects 7 change types between today's CSV and yesterday's snapshot using O(1) hashtable lookups.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppDeletionThreshold</code></td>
+                <td>Blocks processing if account removals exceed the configured percentage threshold.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
+
+<details>
+    <summary><strong>SP.DisconnectedAppValidator (3 functions)</strong> -- CSV validation</summary>
+    <table class="param-table">
+        <thead>
+            <tr>
+                <th>Function</th>
+                <th>Purpose</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>Test-SPDisconnectedAppAccountFile</code></td>
+                <td>Validates account CSV: required columns, encoding, data integrity, duplicate IDs.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppEntitlementFile</code></td>
+                <td>Validates entitlement CSV: required columns, description length, name constraints.</td>
+            </tr>
+            <tr>
+                <td><code>Test-SPDisconnectedAppCrossReference</code></td>
+                <td>Verifies all groups references in accounts resolve to entitlement IDs.</td>
+            </tr>
+        </tbody>
+    </table>
+</details>
