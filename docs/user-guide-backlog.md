@@ -78,7 +78,7 @@ Agent loop: `UG-01 -> UG-02 -> UG-03 -> UG-04 -> UG-05 -> UG-06 -> UG-07 -> UG-0
 | UG-03 | Framework Themes (light + dark) | UG-01 | DONE |
 | UG-04 | Getting Started Section Content | none | DONE |
 | UG-05 | Campaign Audit Section Content | none | DONE |
-| UG-06 | Delta Certification Section Content | none | PENDING |
+| UG-06 | Delta Certification Section Content | none | DONE |
 | UG-07 | Disconnected Apps Section Content | none | PENDING |
 | UG-08 | Generate SailPoint USER-GUIDE.html | UG-02 to UG-07 | PENDING |
 | UG-09 | Update README/QUICKSTART References | UG-08 | PENDING |
@@ -341,8 +341,8 @@ Write the "Campaign Audit" section covering the full audit workflow.
 
 ## UG-06: Delta Certification Section Content
 
-- **Status:** `PENDING`
-- **Commit:** --
+- **Status:** `DONE`
+- **Commit:** (committed on feature/user-guide)
 - **Depends On:** none
 
 **Description:**
