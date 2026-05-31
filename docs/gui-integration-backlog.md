@@ -17,7 +17,7 @@
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
 | GU-01 | Governance tab XAML layout | none | DONE |
-| GU-02 | Governance bridge functions | GU-01 | PENDING |
+| GU-02 | Governance bridge functions | GU-01 | DONE |
 | GU-03 | Governance tab MainWindow wiring | GU-02 | PENDING |
 | GU-04 | GovernanceRunDialog.xaml | GU-01 | PENDING |
 | GU-05 | Enhanced AuditQueryDialog (type + dates) | none | PENDING |
@@ -88,7 +88,7 @@ Row 4: Recent Governance Reports (ListBox, same pattern as Audit report list)
 
 ## GU-02: Governance Bridge Functions
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** GU-01
 
 **Add 4 bridge functions to SP.GuiBridge.psm1:**
