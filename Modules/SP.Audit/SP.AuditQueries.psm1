@@ -5730,6 +5730,426 @@ function Measure-SPIdentityDataQuality {
 
 #endregion
 
+#region P16-07: Reviewer Delegation Audit Trail
+
+function Get-SPReviewerDelegations {
+    <#
+    .SYNOPSIS
+        Analyzes certification item reassignments to detect delegation patterns.
+    .DESCRIPTION
+        Examines campaign audit decision items for reassignment indicators --
+        items where the final reviewer differs from the original assigned reviewer.
+        Detects patterns such as high-frequency delegators, deadline-proximate
+        reassignments, circular delegation chains, and delegate-to-approver behavior.
+
+        Works with campaign audit data produced by the standard audit pipeline
+        (Get-SPAuditCampaigns / Get-SPAuditCampaignReport / Group-SPAuditDecisions).
+        Each decision item may contain OriginalReviewer, ReassignedFrom, or
+        ReviewerClassification fields indicating reassignment. When reassignment
+        data is not present in the audit data, returns a summary noting that
+        reassignment data is unavailable rather than erroring.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables. Each must contain CampaignId,
+        CampaignName, and Decisions (with Approved/Revoked/Pending arrays).
+    .PARAMETER DeadlineProximityHours
+        Hours before campaign deadline within which a reassignment is flagged
+        as a DeadlineDelegation. Default: 24.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Delegations; ReviewerMetrics; PatternSummary; Summary }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 90 | ForEach-Object {
+            Get-SPAuditCampaignReport -CampaignId $_.id
+        }
+        $delegations = Get-SPReviewerDelegations -CampaignAudits $audits
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$DeadlineProximityHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPReviewerDelegations: starting with $($CampaignAudits.Count) campaign(s), DeadlineProximityHours=$DeadlineProximityHours" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+        -CorrelationID $CorrelationID
+
+    # Empty input guard
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        Write-SPLog -Message "Get-SPReviewerDelegations: no campaign audits provided" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+            -CorrelationID $CorrelationID
+        return @{
+            Delegations    = @()
+            ReviewerMetrics = @()
+            PatternSummary = @{
+                HighDelegators      = 0
+                DeadlineDelegations = 0
+                CircularDelegations = 0
+                DelegateToApprover  = 0
+            }
+            Summary = @{
+                TotalItemsAnalyzed       = 0
+                TotalReassigned          = 0
+                OverallReassignmentRate  = 0.0
+                CampaignsWithDelegations = 0
+                ReviewersWhoDelegate     = 0
+            }
+        }
+    }
+
+    $delegations = [System.Collections.Generic.List[hashtable]]::new()
+    # Track per-reviewer stats: reviewer -> @{ Assigned; Reassigned; Timestamps }
+    $reviewerStats = @{}
+    # Track per-reviewer approval rates for delegate-to-approver detection
+    $reviewerApprovalCounts = @{}
+    $reviewerTotalDecisions = @{}
+
+    $totalItemsAnalyzed   = 0
+    $totalReassigned       = 0
+    $campaignsWithDelegations = [System.Collections.Generic.HashSet[string]]::new()
+    $reassignmentDataAvailable = $false
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $campaignId   = if ($audit.ContainsKey('CampaignId'))   { [string]$audit['CampaignId'] }   else { '' }
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { [string]$audit['CampaignName'] } else { '' }
+
+        # Parse campaign deadline
+        $deadlineDate = $null
+        $dlStr = ''
+        if ($audit.ContainsKey('Deadline')) { $dlStr = [string]$audit['Deadline'] }
+        if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+            try {
+                $deadlineDate = [datetime]::Parse($dlStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            } catch { $deadlineDate = $null }
+        }
+
+        # Parse campaign created date
+        $campaignCreated = $null
+        if ($audit.ContainsKey('Created')) {
+            $createdStr = [string]$audit['Created']
+            if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+                try {
+                    $campaignCreated = [datetime]::Parse($createdStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $campaignCreated = $null }
+            }
+        }
+
+        # Extract decisions
+        $decisions = $null
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+        }
+        if ($null -eq $decisions) { continue }
+
+        # Process all decision categories
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+                $totalItemsAnalyzed++
+
+                # Extract fields - support both hashtable and PSObject
+                $reviewerName     = ''
+                $originalReviewer = ''
+                $identityName     = ''
+                $entitlementName  = ''
+                $completedDateStr = ''
+                $decision         = $category
+                $reassignedFrom   = ''
+                $reassignmentChainRaw = $null
+                $reviewerClassification = ''
+
+                if ($item -is [hashtable]) {
+                    if ($item.ContainsKey('ReviewerName'))     { $reviewerName     = [string]$item['ReviewerName'] }
+                    if ($item.ContainsKey('OriginalReviewer')) { $originalReviewer = [string]$item['OriginalReviewer'] }
+                    if ($item.ContainsKey('ReassignedFrom'))   { $reassignedFrom   = [string]$item['ReassignedFrom'] }
+                    if ($item.ContainsKey('IdentityName'))     { $identityName     = [string]$item['IdentityName'] }
+                    if ($item.ContainsKey('AccessName'))       { $entitlementName  = [string]$item['AccessName'] }
+                    if ($item.ContainsKey('CompletedDate'))    { $completedDateStr = [string]$item['CompletedDate'] }
+                    elseif ($item.ContainsKey('DecisionDate')) { $completedDateStr = [string]$item['DecisionDate'] }
+                    elseif ($item.ContainsKey('Created'))      { $completedDateStr = [string]$item['Created'] }
+                    if ($item.ContainsKey('Decision'))         { $decision         = [string]$item['Decision'] }
+                    if ($item.ContainsKey('ReassignmentChain')) { $reassignmentChainRaw = $item['ReassignmentChain'] }
+                    if ($item.ContainsKey('ReviewerClassification')) { $reviewerClassification = [string]$item['ReviewerClassification'] }
+                } else {
+                    if ($null -ne $item.PSObject.Properties['ReviewerName']     -and $null -ne $item.ReviewerName)     { $reviewerName     = [string]$item.ReviewerName }
+                    if ($null -ne $item.PSObject.Properties['OriginalReviewer'] -and $null -ne $item.OriginalReviewer) { $originalReviewer = [string]$item.OriginalReviewer }
+                    if ($null -ne $item.PSObject.Properties['ReassignedFrom']   -and $null -ne $item.ReassignedFrom)   { $reassignedFrom   = [string]$item.ReassignedFrom }
+                    if ($null -ne $item.PSObject.Properties['IdentityName']     -and $null -ne $item.IdentityName)     { $identityName     = [string]$item.IdentityName }
+                    if ($null -ne $item.PSObject.Properties['AccessName']       -and $null -ne $item.AccessName)       { $entitlementName  = [string]$item.AccessName }
+                    if ($null -ne $item.PSObject.Properties['CompletedDate']    -and $null -ne $item.CompletedDate)    { $completedDateStr = [string]$item.CompletedDate }
+                    elseif ($null -ne $item.PSObject.Properties['DecisionDate'] -and $null -ne $item.DecisionDate)     { $completedDateStr = [string]$item.DecisionDate }
+                    elseif ($null -ne $item.PSObject.Properties['Created']      -and $null -ne $item.Created)          { $completedDateStr = [string]$item.Created }
+                    if ($null -ne $item.PSObject.Properties['Decision']         -and $null -ne $item.Decision)         { $decision         = [string]$item.Decision }
+                    if ($null -ne $item.PSObject.Properties['ReassignmentChain']) { $reassignmentChainRaw = $item.ReassignmentChain }
+                    if ($null -ne $item.PSObject.Properties['ReviewerClassification'] -and $null -ne $item.ReviewerClassification) { $reviewerClassification = [string]$item.ReviewerClassification }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($reviewerName)) { continue }
+
+                # Determine original reviewer for reassignment detection
+                $origReviewer = ''
+                if (-not [string]::IsNullOrWhiteSpace($originalReviewer)) {
+                    $origReviewer = $originalReviewer
+                    $reassignmentDataAvailable = $true
+                } elseif (-not [string]::IsNullOrWhiteSpace($reassignedFrom)) {
+                    $origReviewer = $reassignedFrom
+                    $reassignmentDataAvailable = $true
+                } elseif ($reviewerClassification -eq 'Reassigned') {
+                    # We know it was reassigned but don't know the original reviewer
+                    $origReviewer = '(Unknown original reviewer)'
+                    $reassignmentDataAvailable = $true
+                }
+
+                # Track reviewer assignment counts (original reviewer gets assignment credit)
+                $assignedReviewer = if (-not [string]::IsNullOrWhiteSpace($origReviewer) -and $origReviewer -ne '(Unknown original reviewer)') {
+                    $origReviewer
+                } else {
+                    $reviewerName
+                }
+
+                if (-not $reviewerStats.ContainsKey($assignedReviewer)) {
+                    $reviewerStats[$assignedReviewer] = @{
+                        Assigned    = 0
+                        Reassigned  = 0
+                        DelegationTimestamps = [System.Collections.Generic.List[datetime]]::new()
+                    }
+                }
+                $reviewerStats[$assignedReviewer]['Assigned']++
+
+                # Track final reviewer approval rates
+                if (-not $reviewerApprovalCounts.ContainsKey($reviewerName)) {
+                    $reviewerApprovalCounts[$reviewerName] = 0
+                    $reviewerTotalDecisions[$reviewerName] = 0
+                }
+                if ($category -ne 'Pending') {
+                    $reviewerTotalDecisions[$reviewerName]++
+                    if ($decision -eq 'Approved' -or $category -eq 'Approved') {
+                        $reviewerApprovalCounts[$reviewerName]++
+                    }
+                }
+
+                # Check if this item was reassigned
+                $isReassigned = (-not [string]::IsNullOrWhiteSpace($origReviewer)) -and ($origReviewer -ne $reviewerName)
+                if (-not $isReassigned) { continue }
+
+                $totalReassigned++
+                $campaignsWithDelegations.Add($campaignId) | Out-Null
+
+                # Credit reassignment to original reviewer
+                $reviewerStats[$assignedReviewer]['Reassigned']++
+
+                # Parse completed date for timing analysis
+                $completedDate = $null
+                if (-not [string]::IsNullOrWhiteSpace($completedDateStr)) {
+                    try {
+                        $completedDate = [datetime]::Parse($completedDateStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                    } catch { $completedDate = $null }
+                }
+
+                # Estimate delegation timestamp (use completedDate as proxy)
+                if ($null -ne $completedDate) {
+                    $reviewerStats[$assignedReviewer]['DelegationTimestamps'].Add($completedDate)
+                }
+
+                # Build reassignment chain
+                $reassignmentChain = @()
+                if ($null -ne $reassignmentChainRaw -and $reassignmentChainRaw.Count -gt 0) {
+                    $reassignmentChain = @($reassignmentChainRaw)
+                } else {
+                    $reassignmentChain = @($origReviewer, $reviewerName)
+                }
+
+                # Calculate time before deadline
+                $timeBeforeDeadline = $null
+                if ($null -ne $deadlineDate -and $null -ne $completedDate) {
+                    $timeBeforeDeadline = [math]::Round(($deadlineDate - $completedDate).TotalHours, 1)
+                }
+
+                # Detect patterns for this delegation
+                $patterns = [System.Collections.Generic.List[string]]::new()
+
+                # DeadlineDelegation: reassignment within DeadlineProximityHours of deadline
+                if ($null -ne $timeBeforeDeadline -and $timeBeforeDeadline -ge 0 -and $timeBeforeDeadline -le $DeadlineProximityHours) {
+                    $patterns.Add('DeadlineDelegation')
+                }
+
+                # CircularDelegation: item assigned back to a previous reviewer in the chain
+                if ($reassignmentChain.Count -gt 2) {
+                    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    $hasCircular = $false
+                    foreach ($r in $reassignmentChain) {
+                        if (-not $seen.Add($r)) {
+                            $hasCircular = $true
+                            break
+                        }
+                    }
+                    if ($hasCircular) { $patterns.Add('CircularDelegation') }
+                } elseif ($reassignmentChain.Count -eq 2) {
+                    # Check A->B->A pattern by looking at other delegations in same campaign
+                    # (handled in post-processing below)
+                }
+
+                # Extract item ID if available
+                $itemId = ''
+                if ($item -is [hashtable] -and $item.ContainsKey('ItemId')) {
+                    $itemId = [string]$item['ItemId']
+                } elseif ($item -is [hashtable] -and $item.ContainsKey('CertificationId')) {
+                    $itemId = [string]$item['CertificationId']
+                } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ItemId']) {
+                    $itemId = [string]$item.ItemId
+                }
+
+                $delegations.Add(@{
+                    CampaignId          = $campaignId
+                    CampaignName        = $campaignName
+                    ItemId              = $itemId
+                    IdentityName        = $identityName
+                    EntitlementName     = $entitlementName
+                    OriginalReviewer    = $origReviewer
+                    FinalReviewer       = $reviewerName
+                    ReassignmentChain   = $reassignmentChain
+                    ReassignmentCount   = [math]::Max(1, $reassignmentChain.Count - 1)
+                    TimeBeforeDeadline  = $timeBeforeDeadline
+                    FinalDecision       = $decision
+                    Patterns            = @($patterns)
+                })
+            }
+        }
+    }
+
+    # Post-processing: detect circular A->B->A across delegations within same campaign
+    $campaignDelegationPairs = @{}
+    foreach ($d in $delegations) {
+        $key = "$($d['CampaignId'])|$($d['OriginalReviewer'])|$($d['FinalReviewer'])"
+        $reverseKey = "$($d['CampaignId'])|$($d['FinalReviewer'])|$($d['OriginalReviewer'])"
+        if (-not $campaignDelegationPairs.ContainsKey($key)) {
+            $campaignDelegationPairs[$key] = $true
+        }
+        if ($campaignDelegationPairs.ContainsKey($reverseKey)) {
+            # A->B and B->A both exist -- mark as circular
+            if ($d['Patterns'] -notcontains 'CircularDelegation') {
+                $d['Patterns'] = @($d['Patterns']) + @('CircularDelegation')
+            }
+        }
+    }
+
+    # Build reviewer metrics
+    $reviewerMetrics = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($rName in ($reviewerStats.Keys | Sort-Object)) {
+        $rs = $reviewerStats[$rName]
+        $assigned   = $rs['Assigned']
+        $reassigned = $rs['Reassigned']
+        $rate = if ($assigned -gt 0) { [math]::Round(($reassigned / $assigned) * 100, 1) } else { 0.0 }
+
+        # Average hours before delegation
+        $avgHours = 0.0
+        $timestamps = $rs['DelegationTimestamps']
+        if ($timestamps.Count -gt 0 -and $null -ne $campaignCreated) {
+            # Rough estimate: average time from campaign start to delegation
+            $totalHours = 0.0
+            foreach ($ts in $timestamps) {
+                $totalHours += ($ts - $campaignCreated).TotalHours
+            }
+            $avgHours = [math]::Round($totalHours / $timestamps.Count, 1)
+            if ($avgHours -lt 0) { $avgHours = 0.0 }
+        }
+
+        $rPatterns = [System.Collections.Generic.List[string]]::new()
+
+        # HighDelegator: >30% reassignment rate
+        if ($rate -gt 30.0) {
+            $rPatterns.Add('HighDelegator')
+        }
+
+        # DelegateToApprover: reviewer consistently reassigns to someone who always approves
+        $delegateTargets = @($delegations | Where-Object { $_['OriginalReviewer'] -eq $rName } |
+            ForEach-Object { $_['FinalReviewer'] } | Sort-Object -Unique)
+        foreach ($target in $delegateTargets) {
+            if ($reviewerTotalDecisions.ContainsKey($target) -and $reviewerTotalDecisions[$target] -ge 5) {
+                $approvalRate = [math]::Round(($reviewerApprovalCounts[$target] / $reviewerTotalDecisions[$target]) * 100, 1)
+                if ($approvalRate -ge 95.0) {
+                    $rPatterns.Add('DelegateToApprover')
+                    break
+                }
+            }
+        }
+
+        $reviewerMetrics.Add(@{
+            ReviewerName             = $rName
+            ItemsAssigned            = $assigned
+            ItemsReassigned          = $reassigned
+            ReassignmentRate         = $rate
+            AvgHoursBeforeDelegation = $avgHours
+            Patterns                 = @($rPatterns)
+        })
+    }
+
+    # Pattern summary counts
+    $highDelegatorCount      = @($reviewerMetrics | Where-Object { $_['Patterns'] -contains 'HighDelegator' }).Count
+    $deadlineDelegationCount = @($delegations | Where-Object { $_['Patterns'] -contains 'DeadlineDelegation' }).Count
+    $circularDelegationCount = @($delegations | Where-Object { $_['Patterns'] -contains 'CircularDelegation' }).Count
+    $delegateToApproverCount = @($reviewerMetrics | Where-Object { $_['Patterns'] -contains 'DelegateToApprover' }).Count
+
+    $overallRate = if ($totalItemsAnalyzed -gt 0) { [math]::Round(($totalReassigned / $totalItemsAnalyzed) * 100, 1) } else { 0.0 }
+    $reviewersWhoDelegate = @($reviewerMetrics | Where-Object { $_['ItemsReassigned'] -gt 0 }).Count
+
+    $summaryResult = @{
+        TotalItemsAnalyzed       = $totalItemsAnalyzed
+        TotalReassigned          = $totalReassigned
+        OverallReassignmentRate  = $overallRate
+        CampaignsWithDelegations = $campaignsWithDelegations.Count
+        ReviewersWhoDelegate     = $reviewersWhoDelegate
+    }
+
+    if (-not $reassignmentDataAvailable -and $totalItemsAnalyzed -gt 0) {
+        $summaryResult['Note'] = 'Reassignment data unavailable in campaign audit data. Enrich audit items with OriginalReviewer or ReassignedFrom fields for delegation analysis.'
+    }
+
+    Write-SPLog -Message "Get-SPReviewerDelegations: $totalItemsAnalyzed items analyzed, $totalReassigned reassigned ($overallRate%), HighDelegators=$highDelegatorCount, DeadlineDelegations=$deadlineDelegationCount, CircularDelegations=$circularDelegationCount" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Delegations     = @($delegations)
+        ReviewerMetrics = @($reviewerMetrics)
+        PatternSummary  = @{
+            HighDelegators      = $highDelegatorCount
+            DeadlineDelegations = $deadlineDelegationCount
+            CircularDelegations = $circularDelegationCount
+            DelegateToApprover  = $delegateToApproverCount
+        }
+        Summary         = $summaryResult
+    }
+}
+
+#endregion
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -5751,5 +6171,6 @@ Export-ModuleMember -Function @(
     'Get-SPConfigurationSnapshot',
     'Get-SPOrphanAccounts',
     'Get-SPSourceAggregationHealth',
-    'Measure-SPIdentityDataQuality'
+    'Measure-SPIdentityDataQuality',
+    'Get-SPReviewerDelegations'
 )

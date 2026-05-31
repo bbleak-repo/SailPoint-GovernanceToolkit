@@ -9750,6 +9750,380 @@ ${campaignContent}
 
 #endregion
 
+#region P16-07: Reviewer Delegation Audit Trail Report
+
+function Export-SPReviewerDelegationHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPReviewerDelegations output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report showing reviewer delegation metrics,
+        pattern badges (HighDelegator, DeadlineDelegation, CircularDelegation,
+        DelegateToApprover), delegation chain visualizations, and recommendation
+        sections. Uses inline CSS only for Word paste compatibility.
+    .PARAMETER DelegationData
+        Hashtable output from Get-SPReviewerDelegations.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $delegations = Get-SPReviewerDelegations -CampaignAudits $audits
+        $path = Export-SPReviewerDelegationHtml -DelegationData $delegations -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DelegationData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "ReviewerDelegations-${timestamp}.html"
+
+    $summary         = $DelegationData['Summary']
+    $patternSummary  = $DelegationData['PatternSummary']
+    $reviewerMetrics = @($DelegationData['ReviewerMetrics'])
+    $delegationItems = @($DelegationData['Delegations'])
+
+    # --- Summary card ---
+    $totalAnalyzed = if ($null -ne $summary['TotalItemsAnalyzed'])       { $summary['TotalItemsAnalyzed'] }       else { 0 }
+    $totalReassigned = if ($null -ne $summary['TotalReassigned'])        { $summary['TotalReassigned'] }          else { 0 }
+    $overallRate = if ($null -ne $summary['OverallReassignmentRate'])    { $summary['OverallReassignmentRate'] }  else { 0 }
+    $campaignsWithDel = if ($null -ne $summary['CampaignsWithDelegations']) { $summary['CampaignsWithDelegations'] } else { 0 }
+    $reviewersWho = if ($null -ne $summary['ReviewersWhoDelegate'])     { $summary['ReviewersWhoDelegate'] }     else { 0 }
+
+    $highDel    = if ($null -ne $patternSummary['HighDelegators'])      { $patternSummary['HighDelegators'] }      else { 0 }
+    $deadlineDel = if ($null -ne $patternSummary['DeadlineDelegations']) { $patternSummary['DeadlineDelegations'] } else { 0 }
+    $circularDel = if ($null -ne $patternSummary['CircularDelegations']) { $patternSummary['CircularDelegations'] } else { 0 }
+    $delToAppr  = if ($null -ne $patternSummary['DelegateToApprover'])  { $patternSummary['DelegateToApprover'] }  else { 0 }
+
+    # Note if reassignment data was unavailable
+    $noteHtml = ''
+    if ($null -ne $summary['Note'] -and -not [string]::IsNullOrWhiteSpace([string]$summary['Note'])) {
+        $noteHtml = @"
+<div style="border:2px solid #f39c12; background:#fef9e7; padding:12px; margin-bottom:20px;">
+<p style="font-size:13px; color:#856404; margin:0;"><strong>Note:</strong> $(ConvertTo-SafeHtml $summary['Note'])</p>
+</div>
+"@
+    }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Items Analyzed<br/><span style="font-size:22px;">${totalAnalyzed}</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Reassigned<br/><span style="font-size:22px;">${totalReassigned}</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Reassignment Rate<br/><span style="font-size:22px;">${overallRate}%</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Campaigns<br/><span style="font-size:22px;">${campaignsWithDel}</span>
+</td>
+<td style="padding:12px 16px; background:#2c3e50; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Delegators<br/><span style="font-size:22px;">${reviewersWho}</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Pattern summary ---
+    $patternHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Pattern Detection Summary</h2>
+<table style="width:80%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#e67e22;">HighDelegator</span>
+<br/><span style="font-size:20px; font-weight:bold;">${highDel}</span>
+<br/><span style="font-size:11px; color:#888888;">Reassigned &gt;30% of items</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">DeadlineDelegation</span>
+<br/><span style="font-size:20px; font-weight:bold;">${deadlineDel}</span>
+<br/><span style="font-size:11px; color:#888888;">Reassigned near deadline</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">CircularDelegation</span>
+<br/><span style="font-size:20px; font-weight:bold;">${circularDel}</span>
+<br/><span style="font-size:11px; color:#888888;">A-&gt;B-&gt;A patterns</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">DelegateToApprover</span>
+<br/><span style="font-size:20px; font-weight:bold;">${delToAppr}</span>
+<br/><span style="font-size:11px; color:#888888;">Forwards to approve-all reviewer</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Reviewer metrics table ---
+    $reviewerTableHtml = ''
+    if ($reviewerMetrics.Count -gt 0) {
+        $rmHeader = Build-HtmlTableHeader -Headers @('Reviewer', 'Items Assigned', 'Items Reassigned', 'Reassignment Rate', 'Avg Hours Before Delegation', 'Patterns')
+        $rmRows = [System.Collections.Generic.List[string]]::new()
+        # Sort by reassignment rate descending
+        $sortedMetrics = @($reviewerMetrics | Sort-Object { $_['ReassignmentRate'] } -Descending)
+        $rmIdx = 0
+        foreach ($rm in $sortedMetrics) {
+            if ($null -eq $rm) { continue }
+            $rmIdx++
+
+            # Build rate bar
+            $rmRate = if ($null -ne $rm['ReassignmentRate']) { $rm['ReassignmentRate'] } else { 0 }
+            $barColor = if ($rmRate -gt 30) { '#c0392b' } elseif ($rmRate -gt 15) { '#f39c12' } else { '#27ae60' }
+            $barWidth = [math]::Min(100, $rmRate)
+            $rateCell = @"
+<div style="background:#e0e0e0; width:100%; height:14px; border-radius:2px; overflow:hidden; margin:2px 0;">
+<div style="background:${barColor}; width:${barWidth}%; height:14px; min-width:1px;"></div>
+</div>
+<span style="font-size:12px;">${rmRate}%</span>
+"@
+
+            # Build pattern badges
+            $patternBadges = ''
+            $rmPatterns = @($rm['Patterns'])
+            if ($rmPatterns.Count -gt 0) {
+                $badges = [System.Collections.Generic.List[string]]::new()
+                foreach ($p in $rmPatterns) {
+                    $pColor = switch ($p) {
+                        'HighDelegator'     { 'background:#e67e22; color:#fff;' }
+                        'DelegateToApprover' { 'background:#c0392b; color:#fff;' }
+                        default              { 'background:#777777; color:#fff;' }
+                    }
+                    $badges.Add("<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; ${pColor} margin-right:4px;"">$(ConvertTo-SafeHtml $p)</span>")
+                }
+                $patternBadges = $badges -join ''
+            }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $rm['ReviewerName']),
+                [string]$rm['ItemsAssigned'],
+                [string]$rm['ItemsReassigned'],
+                $rateCell,
+                [string]$rm['AvgHoursBeforeDelegation'],
+                $patternBadges
+            )
+            $rmRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rmIdx % 2) -eq 0)))
+        }
+
+        $reviewerTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Reviewer Delegation Metrics ($($reviewerMetrics.Count) reviewers)</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${rmHeader}
+<tbody>
+$($rmRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Delegation detail table ---
+    $delegationTableHtml = ''
+    if ($delegationItems.Count -gt 0) {
+        $dlHeader = Build-HtmlTableHeader -Headers @('Campaign', 'Identity', 'Entitlement', 'Original Reviewer', 'Final Reviewer', 'Chain', 'Time to Deadline', 'Decision', 'Patterns')
+        $dlRows = [System.Collections.Generic.List[string]]::new()
+        $dlIdx = 0
+        foreach ($dl in $delegationItems) {
+            if ($null -eq $dl) { continue }
+            $dlIdx++
+
+            # Build chain visualization: A -> B -> C
+            $chainStr = ''
+            $chain = @($dl['ReassignmentChain'])
+            if ($chain.Count -gt 0) {
+                $chainParts = @($chain | ForEach-Object { ConvertTo-SafeHtml $_ })
+                $chainStr = $chainParts -join ' -&gt; '
+            }
+
+            # Time to deadline display
+            $tbdDisplay = ''
+            $tbd = $dl['TimeBeforeDeadline']
+            if ($null -ne $tbd) {
+                $tbdColor = if ($tbd -le 24) { '#c0392b' } elseif ($tbd -le 72) { '#f39c12' } else { '#27ae60' }
+                $tbdDisplay = "<span style=""color:${tbdColor}; font-weight:bold;"">${tbd}h</span>"
+            } else {
+                $tbdDisplay = '<span style="color:#888888;">N/A</span>'
+            }
+
+            # Pattern badges
+            $dlPatternBadges = ''
+            $dlPatterns = @($dl['Patterns'])
+            if ($dlPatterns.Count -gt 0) {
+                $dlBadges = [System.Collections.Generic.List[string]]::new()
+                foreach ($p in $dlPatterns) {
+                    $pColor = switch ($p) {
+                        'DeadlineDelegation' { 'background:#c0392b; color:#fff;' }
+                        'CircularDelegation' { 'background:#c0392b; color:#fff;' }
+                        'DelegateToApprover' { 'background:#c0392b; color:#fff;' }
+                        'HighDelegator'      { 'background:#e67e22; color:#fff;' }
+                        default              { 'background:#777777; color:#fff;' }
+                    }
+                    $dlBadges.Add("<span style=""display:inline-block; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold; ${pColor};"">$(ConvertTo-SafeHtml $p)</span>")
+                }
+                $dlPatternBadges = $dlBadges -join ' '
+            }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $dl['CampaignName']),
+                (ConvertTo-SafeHtml $dl['IdentityName']),
+                (ConvertTo-SafeHtml $dl['EntitlementName']),
+                (ConvertTo-SafeHtml $dl['OriginalReviewer']),
+                (ConvertTo-SafeHtml $dl['FinalReviewer']),
+                $chainStr,
+                $tbdDisplay,
+                (ConvertTo-SafeHtml $dl['FinalDecision']),
+                $dlPatternBadges
+            )
+            $dlRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($dlIdx % 2) -eq 0)))
+        }
+
+        $delegationTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Delegation Details ($($delegationItems.Count) reassignments)</h2>
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:20px;">
+${dlHeader}
+<tbody>
+$($dlRows -join "`n")
+</tbody>
+</table>
+"@
+    } else {
+        $delegationTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Delegation Details</h2>
+<p style="font-size:13px; color:#888888;">No reassignment events detected.</p>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+"@
+
+    $recItems = [System.Collections.Generic.List[string]]::new()
+    if ($highDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#e67e22; color:#fff;">HighDelegator</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Review assignment policies for high-delegation reviewers. Consider reassigning their certification responsibilities to better-suited managers or reducing their campaign scope. Investigate whether delegation reflects a knowledge gap, workload issue, or governance avoidance.
+</td>
+</tr>
+"@)
+    }
+    if ($deadlineDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">DeadlineDelegation</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Deadline-proximate reassignments may indicate procrastination or an attempt to shift responsibility. Consider sending earlier reminders, shortening reassignment windows near deadlines, or requiring justification for late reassignments.
+</td>
+</tr>
+"@)
+    }
+    if ($circularDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">CircularDelegation</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Circular delegation (A reassigns to B, B reassigns back to A) prevents timely access decisions. Review items caught in delegation loops and escalate to a designated fallback reviewer or campaign administrator.
+</td>
+</tr>
+"@)
+    }
+    if ($delToAppr -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">DelegateToApprover</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Some reviewers consistently reassign items to a reviewer who approves nearly all items. This may indicate rubber-stamp forwarding. Cross-reference with reviewer reputation data and consider restricting reassignment targets or requiring manager approval for delegation.
+</td>
+</tr>
+"@)
+    }
+    if ($recItems.Count -eq 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; color:#27ae60;" colspan="2">
+No concerning delegation patterns detected. Reassignment behavior appears within normal operational bounds.
+</td>
+</tr>
+"@)
+    }
+
+    $recsHtml += ($recItems -join "`n")
+    $recsHtml += "`n</table>"
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Reviewer Delegation Audit Trail Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Reviewer Delegation Audit Trail Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${noteHtml}
+
+${summaryHtml}
+
+${patternHtml}
+
+${reviewerTableHtml}
+
+${delegationTableHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Reviewer delegation HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPReviewerDelegationHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -9773,12 +10147,12 @@ Export-ModuleMember -Function @(
     'Export-SPGovernanceBIData',
     'Export-SPRemediationPriorityHtml',
     'Export-SPGovernanceMaturityHtml',
-    'Export-SPIdentityAccessSpreadHtml'
-,
+    'Export-SPIdentityAccessSpreadHtml',
     'Export-SPAuditPeriodComparisonHtml',
     'Export-SPOrphanAccountHtml',
     'Export-SPSourceAggregationHealthHtml',
     'Export-SPIdentityDataQualityHtml',
     'Export-SPCampaignCoverageGapHtml',
-    'Export-SPCampaignCompletionForecastHtml'
+    'Export-SPCampaignCompletionForecastHtml',
+    'Export-SPReviewerDelegationHtml'
 )

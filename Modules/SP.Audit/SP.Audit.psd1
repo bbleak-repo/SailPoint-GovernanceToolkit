@@ -174,6 +174,12 @@
         'Save-SPGovernanceMetrics'
         'Get-SPGovernanceMetrics'
         'Get-SPGovernanceMetricsTrend'
+
+        # SP.AuditQueries - Reviewer Delegation Audit Trail (P16-07)
+        'Get-SPReviewerDelegations'
+
+        # SP.AuditReportHtml - Reviewer Delegation Report (P16-07)
+        'Export-SPReviewerDelegationHtml'
     )
 
     # Do not export variables or aliases from nested modules
