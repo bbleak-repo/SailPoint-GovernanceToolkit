@@ -33,7 +33,7 @@ Critical items first, then high, medium, low.
 | QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | DONE |
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | DONE |
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | DONE |
-| QH-17 | LOW | Add credential rotation / vault re-key command | M | PENDING |
+| QH-17 | LOW | Add credential rotation / vault re-key command | M | DONE |
 | QH-18 | LOW | Update SP.Testing module for newer workflows | M | PENDING |
 | QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | PENDING |
 | QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | PENDING |
@@ -346,7 +346,7 @@ Returns `@{Success; Data = @{File; RowCount; Columns}; Error}`. Added to
 
 ## QH-17: Credential Rotation / Vault Re-Key
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** PAT rotation requires manual remove + add. No rotate or re-key workflow.
@@ -355,7 +355,18 @@ Returns `@{Success; Data = @{File; RowCount; Columns}; Error}`. Added to
 without requiring the old value. Add `Update-SPVaultPassphrase` that re-encrypts the
 vault with a new passphrase.
 
-**Files:** `Modules/SP.Core/SP.Vault.psm1`
+**Resolution:** Added two new public functions to `SP.Vault.psm1`:
+- `Update-SPVaultCredential`: Updates ClientId and/or ClientSecret for an existing vault
+  key. Accepts optional -ClientId and -ClientSecret (at least one required). Preserves
+  unchanged fields. Returns `@{Success; Data=@{UpdatedFields}; Error}`.
+- `Update-SPVaultPassphrase`: Decrypts vault with current passphrase, re-encrypts with
+  new passphrase (fresh salt + IV via Invoke-SPVaultEncrypt). Enforces 12-char minimum
+  on new passphrase. Verifies read-back after re-key. Returns
+  `@{Success; Data=@{KeyCount}; Error}`.
+Both functions added to `Export-ModuleMember` in SP.Vault.psm1 and `FunctionsToExport`
+in SP.Core.psd1.
+
+**Files:** `Modules/SP.Core/SP.Vault.psm1`, `Modules/SP.Core/SP.Core.psd1`
 
 ---
 

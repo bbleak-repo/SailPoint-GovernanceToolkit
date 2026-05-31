@@ -71,6 +71,8 @@
         'Get-SPVaultCredential',
         'Test-SPVaultExists',
         'Remove-SPVaultCredential',
+        'Update-SPVaultCredential',
+        'Update-SPVaultPassphrase',
 
         # SP.Auth exports
         'Get-SPAuthToken',
