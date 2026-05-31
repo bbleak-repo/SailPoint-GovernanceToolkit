@@ -145,6 +145,12 @@
 
         # SP.AuditReportHtml - Orphan Account Report (P16-01)
         'Export-SPOrphanAccountHtml'
+
+        # SP.AuditQueries - Source Aggregation Health Monitor (P16-02)
+        'Get-SPSourceAggregationHealth'
+
+        # SP.AuditReportHtml - Source Aggregation Health Report (P16-02)
+        'Export-SPSourceAggregationHealthHtml'
     )
 
     # Do not export variables or aliases from nested modules

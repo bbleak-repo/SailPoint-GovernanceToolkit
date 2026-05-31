@@ -4932,6 +4932,425 @@ function Get-SPOrphanAccounts {
     return $result
 }
 
+#region P16-02: Source Aggregation Health Monitor
+
+function Get-SPSourceAggregationHealth {
+    <#
+    .SYNOPSIS
+        Evaluates source connection status and recent aggregation history.
+    .DESCRIPTION
+        Queries /v3/sources and /v3/account-aggregations to detect sources that
+        have stopped syncing or are experiencing data freshness issues.
+        Classifies each source as Healthy, Warning, Critical, or Unknown based
+        on aggregation success rate, staleness, and account count trends.
+    .PARAMETER SourceIds
+        Optional array of source IDs to check. If omitted, queries all enabled sources.
+    .PARAMETER MaxAcceptableStalenessHours
+        Hours after which a source with no successful aggregation is considered stale.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Sources = @(...); Summary = @{...} }
+    .EXAMPLE
+        $health = Get-SPSourceAggregationHealth -MaxAcceptableStalenessHours 48
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$MaxAcceptableStalenessHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sourceFilter = if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) { "$($SourceIds.Count) specified" } else { 'all enabled' }
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: checking $sourceFilter source(s), MaxStaleness=${MaxAcceptableStalenessHours}h" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    # Step 1: Get sources
+    $allSources = [System.Collections.Generic.List[hashtable]]::new()
+
+    if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) {
+        # Query each specified source by ID
+        foreach ($sid in $SourceIds) {
+            try {
+                $srcResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$sid" `
+                    -CorrelationID $CorrelationID
+                if ($srcResult.Success -and $null -ne $srcResult.Data) {
+                    $allSources.Add(@{
+                        Id            = $srcResult.Data.id
+                        Name          = $srcResult.Data.name
+                        Type          = if ($null -ne $srcResult.Data.type) { [string]$srcResult.Data.type } else { '' }
+                        ConnectorType = if ($null -ne $srcResult.Data.connectorAttributes -and
+                                           $null -ne $srcResult.Data.connectorAttributes.connectorName) {
+                                           [string]$srcResult.Data.connectorAttributes.connectorName
+                                       } else { '' }
+                        Enabled       = if ($null -ne $srcResult.Data.healthy) { [bool]$srcResult.Data.healthy } else { $true }
+                    })
+                }
+            }
+            catch {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: failed to query source '$sid': $_" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+    }
+    else {
+        # Paginate through all sources
+        $pageSize = 250
+        $offset = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: pagination ceiling reached at page $pageNum" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $queryParams = @{
+                'limit'  = $pageSize.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            $srcResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/sources' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $srcResult.Success) {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: API error querying sources at page ${pageNum}: $($srcResult.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $page = $srcResult.Data
+            if ($null -ne $srcResult.Data -and $srcResult.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $srcResult.Data.items
+            }
+            $page = @($page)
+
+            foreach ($src in $page) {
+                $isEnabled = $true
+                if ($null -ne $src.healthy) { $isEnabled = [bool]$src.healthy }
+
+                # Skip disabled sources unless explicitly requested via SourceIds
+                if (-not $isEnabled) { continue }
+
+                $allSources.Add(@{
+                    Id            = $src.id
+                    Name          = $src.name
+                    Type          = if ($null -ne $src.type) { [string]$src.type } else { '' }
+                    ConnectorType = if ($null -ne $src.connectorAttributes -and
+                                       $null -ne $src.connectorAttributes.connectorName) {
+                                       [string]$src.connectorAttributes.connectorName
+                                   } else { '' }
+                    Enabled       = $isEnabled
+                })
+            }
+
+            Write-SPLog -Message "Get-SPSourceAggregationHealth: sources page $pageNum, $($page.Count) items" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+    }
+
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: evaluating $($allSources.Count) source(s)" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    $now = [datetime]::UtcNow
+    $sourceResults = [System.Collections.Generic.List[hashtable]]::new()
+    $healthyCt = 0; $warningCt = 0; $criticalCt = 0; $unknownCt = 0
+    $staleCt = 0; $withFailuresCt = 0
+    $totalFreshness = 0.0; $freshnessCount = 0
+
+    foreach ($source in $allSources) {
+        $sourceId = $source['Id']
+        $sourceName = $source['Name']
+
+        # Step 2: Query recent aggregations for this source
+        $aggQueryParams = @{
+            'filters' = "sourceId eq `"$sourceId`""
+            'sorters' = '-started'
+            'limit'   = '5'
+        }
+
+        $aggResult = $null
+        try {
+            $aggResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/account-aggregations' `
+                -QueryParams $aggQueryParams -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Get-SPSourceAggregationHealth: failed to query aggregations for '$sourceName': $_" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                -CorrelationID $CorrelationID
+        }
+
+        $aggregations = @()
+        if ($null -ne $aggResult -and $aggResult.Success -and $null -ne $aggResult.Data) {
+            $aggData = $aggResult.Data
+            if ($null -ne $aggResult.Data.PSObject.Properties.Name -and
+                $aggResult.Data.PSObject.Properties.Name -contains 'items') {
+                $aggData = $aggResult.Data.items
+            }
+            $aggregations = @($aggData)
+        }
+
+        if ($aggregations.Count -eq 0) {
+            # No aggregation history
+            $unknownCt++
+            $sourceResults.Add(@{
+                SourceId              = $sourceId
+                SourceName            = $sourceName
+                SourceType            = $source['Type']
+                Enabled               = $source['Enabled']
+                HealthStatus          = 'Unknown'
+                LastAggregation       = $null
+                DataFreshnessHours    = $null
+                IsStale               = $false
+                ConsecutiveFailures   = 0
+                AvgDurationMinutes    = $null
+                AccountTrend          = 'Unknown'
+                AccountTrendDetail    = 'No aggregation history found'
+            })
+            continue
+        }
+
+        # Step 3: Extract last aggregation details
+        $lastAgg = $aggregations[0]
+
+        $lastStarted   = if ($null -ne $lastAgg.started) { [string]$lastAgg.started } else { '' }
+        $lastCompleted = if ($null -ne $lastAgg.completed) { [string]$lastAgg.completed } else { '' }
+        $lastStatus    = if ($null -ne $lastAgg.status) { [string]$lastAgg.status } else { 'UNKNOWN' }
+        $totalAccounts = if ($null -ne $lastAgg.totalAccounts) { [int]$lastAgg.totalAccounts } else { 0 }
+        $errorCount    = if ($null -ne $lastAgg.errors) { @($lastAgg.errors).Count } else { 0 }
+        if ($null -ne $lastAgg.errorCount) { $errorCount = [int]$lastAgg.errorCount }
+
+        $durationMinutes = 0
+        if (-not [string]::IsNullOrWhiteSpace($lastStarted) -and
+            -not [string]::IsNullOrWhiteSpace($lastCompleted)) {
+            try {
+                $startDt = [datetime]::Parse($lastStarted)
+                $endDt   = [datetime]::Parse($lastCompleted)
+                $durationMinutes = [math]::Round(($endDt - $startDt).TotalMinutes, 1)
+            } catch { }
+        }
+
+        # Step 4: Calculate health indicators
+        # DataFreshnessHours: hours since last SUCCESSFUL aggregation completed
+        $dataFreshnessHours = $null
+        $lastSuccessfulCompleted = $null
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -eq 'SUCCESS' -and -not [string]::IsNullOrWhiteSpace($agg.completed)) {
+                $lastSuccessfulCompleted = $agg.completed
+                break
+            }
+        }
+
+        if ($null -ne $lastSuccessfulCompleted) {
+            try {
+                $successDt = [datetime]::Parse($lastSuccessfulCompleted)
+                $dataFreshnessHours = [math]::Round(($now - $successDt).TotalHours, 1)
+            } catch { }
+        }
+
+        $isStale = $false
+        if ($null -ne $dataFreshnessHours) {
+            $isStale = $dataFreshnessHours -gt $MaxAcceptableStalenessHours
+        }
+        elseif ($lastStatus -ne 'SUCCESS') {
+            # No successful aggregation found in recent history
+            $isStale = $true
+        }
+
+        # ConsecutiveFailures: count of non-SUCCESS from most recent
+        $consecutiveFailures = 0
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -ne 'SUCCESS') {
+                $consecutiveFailures++
+            }
+            else {
+                break
+            }
+        }
+
+        # AvgDurationMinutes from successful aggregations
+        $avgDuration = $null
+        $durationSum = 0.0
+        $durationCount = 0
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -eq 'SUCCESS' -and
+                -not [string]::IsNullOrWhiteSpace($agg.started) -and
+                -not [string]::IsNullOrWhiteSpace($agg.completed)) {
+                try {
+                    $s = [datetime]::Parse($agg.started)
+                    $e = [datetime]::Parse($agg.completed)
+                    $durationSum += ($e - $s).TotalMinutes
+                    $durationCount++
+                } catch { }
+            }
+        }
+        if ($durationCount -gt 0) {
+            $avgDuration = [math]::Round($durationSum / $durationCount, 1)
+        }
+
+        # AccountTrend: compare two most recent successful aggregations
+        $accountTrend = 'Unknown'
+        $accountTrendDetail = 'Insufficient data for trend'
+        $successfulAggs = @($aggregations | Where-Object {
+            $null -ne $_.status -and [string]$_.status -eq 'SUCCESS'
+        })
+        if ($successfulAggs.Count -ge 2) {
+            $newestCount = if ($null -ne $successfulAggs[0].totalAccounts) { [int]$successfulAggs[0].totalAccounts } else { 0 }
+            $prevCount   = if ($null -ne $successfulAggs[1].totalAccounts) { [int]$successfulAggs[1].totalAccounts } else { 0 }
+            $diff = $newestCount - $prevCount
+
+            if ($prevCount -gt 0) {
+                $pctChange = [math]::Abs($diff / $prevCount * 100)
+            }
+            else {
+                $pctChange = 0
+            }
+
+            if ($diff -gt 0) {
+                $accountTrend = 'Increasing'
+                $accountTrendDetail = "+$diff accounts since previous aggregation"
+            }
+            elseif ($diff -lt 0) {
+                $accountTrend = 'Decreasing'
+                $accountTrendDetail = "$diff accounts since previous aggregation"
+            }
+            else {
+                $accountTrend = 'Stable'
+                $accountTrendDetail = "+0 accounts since previous aggregation"
+            }
+        }
+        elseif ($successfulAggs.Count -eq 1) {
+            $accountTrend = 'Stable'
+            $accountTrendDetail = 'Only one successful aggregation available'
+        }
+
+        # Step 5: Classify source health
+        $healthStatus = 'Healthy'
+        $significantDrop = $false
+        if ($accountTrend -eq 'Decreasing' -and $successfulAggs.Count -ge 2) {
+            $newestCount = if ($null -ne $successfulAggs[0].totalAccounts) { [int]$successfulAggs[0].totalAccounts } else { 0 }
+            $prevCount   = if ($null -ne $successfulAggs[1].totalAccounts) { [int]$successfulAggs[1].totalAccounts } else { 0 }
+            if ($prevCount -gt 0) {
+                $dropPct = ($prevCount - $newestCount) / $prevCount * 100
+                $significantDrop = $dropPct -gt 10
+            }
+        }
+
+        if ($consecutiveFailures -ge 2) {
+            $healthStatus = 'Critical'
+        }
+        elseif ($lastStatus -ne 'SUCCESS' -and $null -eq $dataFreshnessHours) {
+            # No successful aggregation within the 5 most recent, no staleness data
+            $healthStatus = 'Critical'
+        }
+        elseif ($null -ne $dataFreshnessHours -and $dataFreshnessHours -gt (2 * $MaxAcceptableStalenessHours) -and $lastStatus -ne 'SUCCESS') {
+            $healthStatus = 'Critical'
+        }
+        elseif ($consecutiveFailures -eq 1 -or $isStale -or $significantDrop) {
+            $healthStatus = 'Warning'
+        }
+        else {
+            $healthStatus = 'Healthy'
+        }
+
+        # Update counters
+        switch ($healthStatus) {
+            'Healthy'  { $healthyCt++ }
+            'Warning'  { $warningCt++ }
+            'Critical' { $criticalCt++ }
+            'Unknown'  { $unknownCt++ }
+        }
+        if ($isStale) { $staleCt++ }
+        if ($consecutiveFailures -gt 0) { $withFailuresCt++ }
+        if ($null -ne $dataFreshnessHours) {
+            $totalFreshness += $dataFreshnessHours
+            $freshnessCount++
+        }
+
+        $lastAggInfo = @{
+            Started         = $lastStarted
+            Completed       = $lastCompleted
+            DurationMinutes = $durationMinutes
+            Status          = $lastStatus
+            TotalAccounts   = $totalAccounts
+            ErrorCount      = $errorCount
+        }
+
+        $sourceResults.Add(@{
+            SourceId              = $sourceId
+            SourceName            = $sourceName
+            SourceType            = $source['Type']
+            Enabled               = $source['Enabled']
+            HealthStatus          = $healthStatus
+            LastAggregation       = $lastAggInfo
+            DataFreshnessHours    = $dataFreshnessHours
+            IsStale               = $isStale
+            ConsecutiveFailures   = $consecutiveFailures
+            AvgDurationMinutes    = $avgDuration
+            AccountTrend          = $accountTrend
+            AccountTrendDetail    = $accountTrendDetail
+        })
+    }
+
+    $avgFreshness = if ($freshnessCount -gt 0) { [math]::Round($totalFreshness / $freshnessCount, 1) } else { 0 }
+
+    $result = @{
+        Sources = @($sourceResults)
+        Summary = @{
+            TotalSources        = $allSources.Count
+            Healthy             = $healthyCt
+            Warning             = $warningCt
+            Critical            = $criticalCt
+            Unknown             = $unknownCt
+            StaleSources        = $staleCt
+            AvgFreshnessHours   = $avgFreshness
+            SourcesWithFailures = $withFailuresCt
+        }
+    }
+
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: $($allSources.Count) sources -- Healthy=$healthyCt, Warning=$warningCt, Critical=$criticalCt, Unknown=$unknownCt, Stale=$staleCt" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+#endregion
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -4951,5 +5370,6 @@ Export-ModuleMember -Function @(
     'Get-SPAccessProfileInventory',
     'Save-SPConfigurationSnapshot',
     'Get-SPConfigurationSnapshot',
-    'Get-SPOrphanAccounts'
+    'Get-SPOrphanAccounts',
+    'Get-SPSourceAggregationHealth'
 )

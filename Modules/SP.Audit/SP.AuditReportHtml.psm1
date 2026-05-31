@@ -8573,6 +8573,292 @@ ${recsHtml}
 
 #endregion
 
+#region P16-02: Source Aggregation Health Report
+
+function Export-SPSourceAggregationHealthHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPSourceAggregationHealth output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source health cards,
+        aggregation details, data freshness indicators, and account trend
+        arrows. Uses inline CSS only (no flexbox/grid) for Word paste
+        compatibility.
+    .PARAMETER HealthData
+        Hashtable output from Get-SPSourceAggregationHealth.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $health = Get-SPSourceAggregationHealth -MaxAcceptableStalenessHours 48
+        $path = Export-SPSourceAggregationHealthHtml -HealthData $health -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$HealthData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "SourceAggregationHealth-${timestamp}.html"
+
+    $summary = $HealthData['Summary']
+    $sources = @($HealthData['Sources'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary['TotalSources'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Healthy<br/><span style="font-size:22px;">$($summary['Healthy'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Warning<br/><span style="font-size:22px;">$($summary['Warning'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Critical<br/><span style="font-size:22px;">$($summary['Critical'])</span>
+</td>
+<td style="padding:12px 16px; background:#95a5a6; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Unknown<br/><span style="font-size:22px;">$($summary['Unknown'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Avg Freshness<br/><span style="font-size:22px;">$($summary['AvgFreshnessHours'])h</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Main source health table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Type', 'Health', 'Last Aggregation', 'Status',
+        'Freshness', 'Failures', 'Avg Duration', 'Accounts', 'Trend'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    # Sort: Critical first, then Warning, Healthy, Unknown
+    $statusOrder = @{ 'Critical' = 1; 'Warning' = 2; 'Healthy' = 3; 'Unknown' = 4 }
+    $sortedSources = $sources | Sort-Object { $statusOrder[$_['HealthStatus']] }
+
+    foreach ($src in $sortedSources) {
+        $rowIdx++
+
+        # Health status badge
+        $statusStyle = switch ($src['HealthStatus']) {
+            'Healthy'  { 'color:#fff; background:#27ae60;' }
+            'Warning'  { 'color:#fff; background:#f39c12;' }
+            'Critical' { 'color:#fff; background:#c0392b;' }
+            'Unknown'  { 'color:#fff; background:#95a5a6;' }
+            default    { 'color:#fff; background:#777777;' }
+        }
+        $statusBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $statusStyle"">$($src['HealthStatus'])</span>"
+
+        # Last aggregation info
+        $lastAggDisplay = '-'
+        $lastStatusDisplay = '-'
+        $accountDisplay = '-'
+
+        $lastAgg = $src['LastAggregation']
+        if ($null -ne $lastAgg) {
+            if (-not [string]::IsNullOrWhiteSpace($lastAgg['Completed'])) {
+                $lastAggDisplay = Format-HtmlDate -DateString $lastAgg['Completed']
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($lastAgg['Started'])) {
+                $lastAggDisplay = Format-HtmlDate -DateString $lastAgg['Started']
+            }
+            $lastStatusDisplay = $lastAgg['Status']
+            $accountDisplay = [string]$lastAgg['TotalAccounts']
+
+            # Color the aggregation status
+            $aggStatusStyle = switch ($lastAgg['Status']) {
+                'SUCCESS'    { 'color:#27ae60; font-weight:bold;' }
+                'ERROR'      { 'color:#c0392b; font-weight:bold;' }
+                'TERMINATED' { 'color:#e67e22; font-weight:bold;' }
+                default      { '' }
+            }
+            if ($aggStatusStyle) {
+                $lastStatusDisplay = "<span style=""$aggStatusStyle"">$($lastAgg['Status'])</span>"
+            }
+        }
+
+        # Freshness display
+        $freshnessDisplay = '-'
+        if ($null -ne $src['DataFreshnessHours']) {
+            $fh = $src['DataFreshnessHours']
+            $freshnessColor = if ($src['IsStale']) { 'color:#c0392b; font-weight:bold;' } else { 'color:#27ae60;' }
+            $freshnessDisplay = "<span style=""$freshnessColor"">${fh}h</span>"
+        }
+
+        # Failures
+        $failDisplay = [string]$src['ConsecutiveFailures']
+        if ($src['ConsecutiveFailures'] -gt 0) {
+            $failDisplay = "<span style=""color:#c0392b; font-weight:bold;"">$($src['ConsecutiveFailures'])</span>"
+        }
+
+        # Avg duration
+        $avgDurDisplay = if ($null -ne $src['AvgDurationMinutes']) { "$($src['AvgDurationMinutes']) min" } else { '-' }
+
+        # Account trend arrow
+        $trendArrow = switch ($src['AccountTrend']) {
+            'Increasing' { '<span style="color:#27ae60; font-weight:bold;">&#9650;</span>' }
+            'Decreasing' { '<span style="color:#c0392b; font-weight:bold;">&#9660;</span>' }
+            'Stable'     { '<span style="color:#888888;">&#9644;</span>' }
+            default      { '-' }
+        }
+        $trendDisplay = "$trendArrow $(ConvertTo-SafeHtml $src['AccountTrendDetail'])"
+
+        $cells = @(
+            (ConvertTo-SafeHtml $src['SourceName']),
+            (ConvertTo-SafeHtml $src['SourceType']),
+            $statusBadge,
+            $lastAggDisplay,
+            $lastStatusDisplay,
+            $freshnessDisplay,
+            $failDisplay,
+            $avgDurDisplay,
+            $accountDisplay,
+            $trendDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail cards ---
+    $detailCards = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($src in $sortedSources) {
+        $borderColor = switch ($src['HealthStatus']) {
+            'Healthy'  { '#27ae60' }
+            'Warning'  { '#f39c12' }
+            'Critical' { '#c0392b' }
+            'Unknown'  { '#95a5a6' }
+            default    { '#777777' }
+        }
+
+        $lastAgg = $src['LastAggregation']
+        $aggDetail = 'No aggregation history'
+        if ($null -ne $lastAgg) {
+            $aggDetail = "Status: $($lastAgg['Status']) | Accounts: $($lastAgg['TotalAccounts']) | Duration: $($lastAgg['DurationMinutes']) min | Errors: $($lastAgg['ErrorCount'])"
+        }
+
+        $freshnessDetail = if ($null -ne $src['DataFreshnessHours']) { "$($src['DataFreshnessHours']) hours since last successful sync" } else { 'No successful aggregation in recent history' }
+        $staleTag = if ($src['IsStale']) { ' <span style="color:#c0392b; font-weight:bold;">[STALE]</span>' } else { '' }
+
+        $cardHtml = @"
+<div style="margin-bottom:12px; padding:10px 14px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>$(ConvertTo-SafeHtml $src['SourceName'])</strong> ($(ConvertTo-SafeHtml $src['SourceType'])) - <em>$($src['HealthStatus'])</em>${staleTag}<br/>
+<span style="font-size:12px; color:#666666;">
+$aggDetail<br/>
+Freshness: $freshnessDetail | Consecutive Failures: $($src['ConsecutiveFailures']) | Trend: $($src['AccountTrend'])
+</span>
+</div>
+"@
+        $detailCards.Add($cardHtml)
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Critical Sources</strong><br/>
+Sources with 2+ consecutive aggregation failures require immediate attention. Check connector
+credentials, network connectivity, and source system availability. Review error logs in ISC
+for specific failure reasons.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Warning Sources</strong><br/>
+Sources with stale data or single failures should be monitored. If a source has a significant
+account count decrease (>10%), verify that accounts were intentionally removed and not lost
+due to a partial aggregation.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #95a5a6; background:#f5f5f5; vertical-align:top;">
+<strong>Unknown Sources</strong><br/>
+Sources with no aggregation history may be newly added or misconfigured. Trigger a manual
+test aggregation to verify connectivity and data flow.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Source Aggregation Health Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Source Aggregation Health Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Health Overview</h2>
+${tableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Details</h2>
+$($detailCards -join "`n")
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Source aggregation health HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceAggregationHealthHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8599,5 +8885,6 @@ Export-ModuleMember -Function @(
     'Export-SPIdentityAccessSpreadHtml'
 ,
     'Export-SPAuditPeriodComparisonHtml',
-    'Export-SPOrphanAccountHtml'
+    'Export-SPOrphanAccountHtml',
+    'Export-SPSourceAggregationHealthHtml'
 )
