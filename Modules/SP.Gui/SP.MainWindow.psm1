@@ -1262,7 +1262,7 @@ function Initialize-AuditTab {
                 $defaults   = Get-AuditQueryDialogDefaults
                 $dialogResult = Show-SPGuiDialog `
                     -XamlPath      $dialogXaml `
-                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan', 'CboType', 'TxtCreatedAfter', 'TxtCreatedBefore') `
                     -Defaults      $defaults
 
                 if ($null -ne $dialogResult) {
@@ -1350,7 +1350,7 @@ function Invoke-AuditCampaignQuery {
     $defaults   = Get-AuditQueryDialogDefaults
     $dialogResult = Show-SPGuiDialog `
         -XamlPath      $dialogXaml `
-        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan', 'CboType', 'TxtCreatedAfter', 'TxtCreatedBefore') `
         -Defaults      $defaults
 
     if ($null -eq $dialogResult) { return }
@@ -1386,10 +1386,28 @@ function Invoke-AuditCampaignQuery {
         $daysBack = $parsed
     }
 
+    $campaignType = $null
+    if ($dialogResult['CboType'] -and $dialogResult['CboType'] -ne '(All)') {
+        $campaignType = $dialogResult['CboType']
+    }
+
+    $createdAfter  = ''
+    if ($dialogResult['TxtCreatedAfter']) {
+        $createdAfter = $dialogResult['TxtCreatedAfter'].Trim()
+    }
+
+    $createdBefore = ''
+    if ($dialogResult['TxtCreatedBefore']) {
+        $createdBefore = $dialogResult['TxtCreatedBefore'].Trim()
+    }
+
     # Build parameters
     $queryParams = @{ DaysBack = $daysBack }
     if ($campaignName)  { $queryParams['CampaignNameContains'] = $campaignName }
-    if ($statusFilter)  { $queryParams['Status']       = $statusFilter }
+    if ($statusFilter)  { $queryParams['Status']               = $statusFilter }
+    if ($campaignType)  { $queryParams['CampaignType']         = $campaignType }
+    if ($createdAfter)  { $queryParams['CreatedAfter']         = $createdAfter }
+    if ($createdBefore) { $queryParams['CreatedBefore']        = $createdBefore }
 
     $result = Get-SPGuiAuditCampaigns @queryParams
 
@@ -1440,9 +1458,12 @@ function Get-AuditQueryDialogDefaults {
     }
 
     return @{
-        TxtCampaignName = ''
-        CboStatus       = '(All)'
-        CboTimespan     = '30 days'
+        TxtCampaignName  = ''
+        CboStatus        = '(All)'
+        CboTimespan      = '30 days'
+        CboType          = '(All)'
+        TxtCreatedAfter  = ''
+        TxtCreatedBefore = ''
     }
 }
 
@@ -1467,18 +1488,20 @@ function Update-AuditSummaryLabel {
 
     $status   = if ($params['CboStatus'])   { $params['CboStatus'] }   else { '(All)' }
     $timespan = if ($params['CboTimespan']) { $params['CboTimespan'] } else { '30 days' }
+    $type     = if ($params['CboType'] -and $params['CboType'] -ne '(All)') { $params['CboType'] } else { $null }
 
     $campaignName = ''
     if ($params['TxtCampaignName']) {
         $campaignName = $params['TxtCampaignName'].Trim()
     }
 
-    if ([string]::IsNullOrWhiteSpace($campaignName)) {
-        $label.Text = "Status: $status | Timespan: $timespan"
-    }
-    else {
-        $label.Text = "Campaign: $campaignName | Status: $status | Timespan: $timespan"
-    }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($campaignName)) { $parts.Add("Campaign: $campaignName") }
+    $parts.Add("Status: $status")
+    if ($null -ne $type) { $parts.Add("Type: $type") }
+    $parts.Add("Timespan: $timespan")
+
+    $label.Text = ($parts -join ' | ')
 }
 
 function Invoke-GuiAuditRun {

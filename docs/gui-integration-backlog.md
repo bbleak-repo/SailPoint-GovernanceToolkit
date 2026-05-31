@@ -20,7 +20,7 @@
 | GU-02 | Governance bridge functions | GU-01 | DONE |
 | GU-03 | Governance tab MainWindow wiring | GU-02 | DONE |
 | GU-04 | GovernanceRunDialog.xaml | GU-01 | DONE |
-| GU-05 | Enhanced AuditQueryDialog (type + dates) | none | PENDING |
+| GU-05 | Enhanced AuditQueryDialog (type + dates) | none | DONE |
 | GU-06 | Enhanced Delta Cert tab (batch status) | none | PENDING |
 | GU-07 | Settings tab governance section | none | PENDING |
 | GU-08 | Syntax + XAML validation | GU-07 | PENDING |
@@ -182,7 +182,7 @@ Row 4: Recent Governance Reports (ListBox, same pattern as Audit report list)
 
 ## GU-05: Enhanced AuditQueryDialog
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Add 2 controls to existing AuditQueryDialog.xaml:**

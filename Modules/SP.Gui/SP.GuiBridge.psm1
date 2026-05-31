@@ -454,7 +454,16 @@ function Get-SPGuiAuditCampaigns {
         [string]$Status,
 
         [Parameter()]
-        [int]$DaysBack = 3
+        [int]$DaysBack = 3,
+
+        [Parameter()]
+        [string]$CampaignType,
+
+        [Parameter()]
+        [string]$CreatedAfter,
+
+        [Parameter()]
+        [string]$CreatedBefore
     )
 
     try {
@@ -466,6 +475,24 @@ function Get-SPGuiAuditCampaigns {
 
         if (-not [string]::IsNullOrWhiteSpace($Status) -and $Status -ne '(All)') {
             $params['Status'] = @($Status)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CampaignType) -and $CampaignType -ne '(All)') {
+            $params['CampaignType'] = $CampaignType
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CreatedAfter)) {
+            $dtAfter = [DateTime]::MinValue
+            if ([DateTime]::TryParse($CreatedAfter, [ref]$dtAfter)) {
+                $params['CreatedAfter'] = $dtAfter
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CreatedBefore)) {
+            $dtBefore = [DateTime]::MinValue
+            if ([DateTime]::TryParse($CreatedBefore, [ref]$dtBefore)) {
+                $params['CreatedBefore'] = $dtBefore
+            }
         }
 
         $result = Get-SPAuditCampaigns @params

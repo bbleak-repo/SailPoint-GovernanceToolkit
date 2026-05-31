@@ -89,7 +89,7 @@
             <TextBox x:Name="TxtCampaignName" Style="{StaticResource FieldBox}" Margin="0,0,0,12"/>
 
             <!-- Status + Timespan side by side -->
-            <Grid Margin="0,0,0,20">
+            <Grid Margin="0,0,0,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="16"/>
@@ -126,6 +126,51 @@
                         <ComboBoxItem Content="180 days"/>
                         <ComboBoxItem Content="365 days"/>
                     </ComboBox>
+                </StackPanel>
+            </Grid>
+
+            <!-- Campaign Type -->
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Campaign Type:" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="CboType" Width="160" HorizontalAlignment="Left"
+                              Background="#2D2D44" Foreground="#E0E0E0"
+                              BorderBrush="#3D3D5C" BorderThickness="1"
+                              FontSize="12"
+                              SelectedIndex="0">
+                        <ComboBoxItem Content="(All)" IsSelected="True"/>
+                        <ComboBoxItem Content="MANAGER"/>
+                        <ComboBoxItem Content="SOURCE_OWNER"/>
+                        <ComboBoxItem Content="SEARCH"/>
+                        <ComboBoxItem Content="ROLE_COMPOSITION"/>
+                    </ComboBox>
+                </StackPanel>
+            </Grid>
+
+            <!-- Date Range -->
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Created After (YYYY-MM-DD):" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtCreatedAfter" Width="160" HorizontalAlignment="Left"
+                             Style="{StaticResource FieldBox}" Text=""/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Created Before (YYYY-MM-DD):" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtCreatedBefore" Width="160" HorizontalAlignment="Left"
+                             Style="{StaticResource FieldBox}" Text=""/>
                 </StackPanel>
             </Grid>
 
