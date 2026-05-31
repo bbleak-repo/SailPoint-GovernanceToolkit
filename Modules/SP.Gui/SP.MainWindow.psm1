@@ -1105,9 +1105,12 @@ function Save-SettingsForm {
         $clientSecretToWrite = 'CHANGE_ME_DO_NOT_USE_IN_PRODUCTION'
     }
 
-    $timeoutVal  = 60; [int]::TryParse((& $getField 'TxtApiTimeout'), [ref]$timeoutVal) | Out-Null
-    $retryVal    = 3;  [int]::TryParse((& $getField 'TxtRetryCount'), [ref]$retryVal) | Out-Null
-    $maxRunVal   = 10; [int]::TryParse((& $getField 'TxtMaxCampaignsPerRun'), [ref]$maxRunVal) | Out-Null
+    $timeoutVal     = 60; [int]::TryParse((& $getField 'TxtApiTimeout'),    [ref]$timeoutVal)     | Out-Null
+    $retryVal       = 3;  [int]::TryParse((& $getField 'TxtRetryCount'),    [ref]$retryVal)       | Out-Null
+    $maxRunVal      = 10; [int]::TryParse((& $getField 'TxtMaxCampaignsPerRun'), [ref]$maxRunVal) | Out-Null
+    $retryDelayVal  = 5;  [int]::TryParse((& $getField 'TxtRetryDelay'),    [ref]$retryDelayVal)  | Out-Null
+    $rateLimitVal   = 95; [int]::TryParse((& $getField 'TxtRateLimit'),     [ref]$rateLimitVal)   | Out-Null
+    $rateWindowVal  = 10; [int]::TryParse((& $getField 'TxtRateWindow'),    [ref]$rateWindowVal)  | Out-Null
 
     $newConfig = [ordered]@{
         Global = [ordered]@{
@@ -1139,9 +1142,9 @@ function Save-SettingsForm {
             BaseUrl                    = & $getField 'TxtApiBaseUrl'
             TimeoutSeconds             = $timeoutVal
             RetryCount                 = $retryVal
-            RetryDelaySeconds          = 5
-            RateLimitRequestsPerWindow = 95
-            RateLimitWindowSeconds     = 10
+            RetryDelaySeconds          = $retryDelayVal
+            RateLimitRequestsPerWindow = $rateLimitVal
+            RateLimitWindowSeconds     = $rateWindowVal
         }
         Testing = [ordered]@{
             IdentitiesCsvPath                = & $getField 'TxtIdentitiesCsvPath'

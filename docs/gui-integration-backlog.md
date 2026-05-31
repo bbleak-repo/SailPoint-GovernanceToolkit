@@ -24,7 +24,7 @@
 | GU-06 | Enhanced Delta Cert tab (batch status) | none | DONE |
 | GU-07 | Settings tab governance section | none | DONE |
 | GU-08 | Syntax + XAML validation | GU-07 | DONE |
-| GU-09 | Opus visual review + verification | GU-08 | PENDING |
+| GU-09 | Opus visual review + verification | GU-08 | DONE |
 
 ---
 
