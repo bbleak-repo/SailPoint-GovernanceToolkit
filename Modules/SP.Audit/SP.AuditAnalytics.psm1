@@ -4258,6 +4258,463 @@ function Get-SPCampaignCoverageGaps {
 
 #endregion
 
+#region P16-05: Access Certification Completion Predictor
+
+function Get-SPCampaignCompletionForecast {
+    <#
+    .SYNOPSIS
+        Predicts whether active campaigns will complete before their deadlines.
+    .DESCRIPTION
+        Analyzes decision velocity (decisions per hour) from campaign audit data
+        to project completion dates for active campaigns. Identifies bottleneck
+        reviewers who have the most remaining items and lowest personal velocity.
+
+        Decision velocity is measured in two windows:
+        - OverallVelocity: Total decisions / total elapsed hours since campaign start.
+        - RecentVelocity: Decisions in the last VelocityWindowHours / VelocityWindowHours.
+        - PeakVelocity: Highest decisions-per-hour in any rolling 24-hour window.
+
+        Projected completion uses business hours only (8 hours/day, weekdays).
+        Confidence is based on campaign completion percentage and decision sample size.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables from Get-SPAuditCampaignReport.
+        Each must contain: CampaignName, CampaignId, Status, Created, Decisions.
+    .PARAMETER CampaignHealthData
+        Optional array of campaign health hashtables from Get-SPCampaignHealth.
+        Used to extract deadline dates. If omitted, deadline extracted from
+        campaign audit metadata if available.
+    .PARAMETER VelocityWindowHours
+        Number of hours to look back for recent velocity calculation. Default: 48.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Forecasts = @(...); Summary = @{...} }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 30 | ForEach-Object { Get-SPAuditCampaignReport -CampaignId $_.id }
+        $forecast = Get-SPCampaignCompletionForecast -CampaignAudits $audits -VelocityWindowHours 48
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [hashtable[]]$CampaignHealthData,
+
+        [Parameter()]
+        [int]$VelocityWindowHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCompletionForecast: starting with $($CampaignAudits.Count) campaign(s), VelocityWindow=${VelocityWindowHours}h" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+        -CorrelationID $CorrelationID
+
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        Write-SPLog -Message "Get-SPCampaignCompletionForecast: no campaign audits provided" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+            -CorrelationID $CorrelationID
+        return @{
+            Forecasts = @()
+            Summary   = @{
+                ActiveCampaigns           = 0
+                OnTrack                   = 0
+                AtRisk                    = 0
+                WillMiss                  = 0
+                AvgCompletionPct          = 0.0
+                CampaignsNeedingAttention = @()
+            }
+        }
+    }
+
+    # Build health data lookup for deadline extraction
+    $healthLookup = @{}
+    if ($null -ne $CampaignHealthData) {
+        foreach ($hd in $CampaignHealthData) {
+            if ($null -eq $hd) { continue }
+            $hdId = ''
+            if ($hd -is [hashtable] -and $hd.ContainsKey('CampaignId')) {
+                $hdId = [string]$hd['CampaignId']
+            } elseif ($null -ne $hd.PSObject -and $null -ne $hd.PSObject.Properties['CampaignId']) {
+                $hdId = [string]$hd.CampaignId
+            }
+            if (-not [string]::IsNullOrWhiteSpace($hdId)) {
+                $healthLookup[$hdId] = $hd
+            }
+        }
+    }
+
+    $now = [datetime]::UtcNow
+    $forecasts = [System.Collections.Generic.List[hashtable]]::new()
+    $needingAttention = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        # Extract campaign metadata
+        $campaignId   = if ($audit.ContainsKey('CampaignId'))   { [string]$audit['CampaignId'] }   else { '' }
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { [string]$audit['CampaignName'] } else { '' }
+        $campaignStatus = if ($audit.ContainsKey('Status'))     { [string]$audit['Status'] }       else { '' }
+
+        # Skip completed/cancelled campaigns
+        $skipStatuses = @('COMPLETED', 'CANCELLED')
+        if ($skipStatuses -contains $campaignStatus.ToUpper()) { continue }
+
+        # Parse campaign created date
+        $campaignCreated = $null
+        $createdStr = if ($audit.ContainsKey('Created')) { $audit['Created'] } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+            try {
+                $campaignCreated = [datetime]::Parse([string]$createdStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            } catch { $campaignCreated = $null }
+        }
+
+        # Extract deadline from health data or campaign metadata
+        $deadlineDate = $null
+        if ($healthLookup.ContainsKey($campaignId)) {
+            $hd = $healthLookup[$campaignId]
+            $dlStr = ''
+            if ($hd -is [hashtable] -and $hd.ContainsKey('Deadline')) {
+                $dlStr = [string]$hd['Deadline']
+            } elseif ($null -ne $hd.PSObject -and $null -ne $hd.PSObject.Properties['Deadline']) {
+                $dlStr = [string]$hd.Deadline
+            }
+            if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+                try {
+                    $deadlineDate = [datetime]::Parse($dlStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $deadlineDate = $null }
+            }
+        }
+        if ($null -eq $deadlineDate -and $audit.ContainsKey('Deadline')) {
+            $dlStr = [string]$audit['Deadline']
+            if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+                try {
+                    $deadlineDate = [datetime]::Parse($dlStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $deadlineDate = $null }
+            }
+        }
+
+        # --- Extract all decisions with timestamps ---
+        $allDecisionTimestamps = [System.Collections.Generic.List[datetime]]::new()
+        $reviewerItems = @{}  # reviewer -> @{ Decided = 0; Pending = 0 }
+        $totalItems  = 0
+        $decidedItems = 0
+
+        $decisions = $null
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+        }
+
+        if ($null -ne $decisions) {
+            foreach ($category in @('Approved', 'Revoked')) {
+                $items = @()
+                if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                    $items = @($decisions[$category])
+                }
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+                    $totalItems++
+                    $decidedItems++
+
+                    # Extract timestamp
+                    $tsStr = ''
+                    if ($item -is [hashtable]) {
+                        if ($item.ContainsKey('CompletedDate')) { $tsStr = [string]$item['CompletedDate'] }
+                        elseif ($item.ContainsKey('Created'))   { $tsStr = [string]$item['Created'] }
+                    } else {
+                        if ($null -ne $item.PSObject.Properties['CompletedDate'] -and $null -ne $item.CompletedDate) {
+                            $tsStr = [string]$item.CompletedDate
+                        } elseif ($null -ne $item.PSObject.Properties['Created'] -and $null -ne $item.Created) {
+                            $tsStr = [string]$item.Created
+                        }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($tsStr)) {
+                        try {
+                            $ts = [datetime]::Parse($tsStr,
+                                [System.Globalization.CultureInfo]::InvariantCulture,
+                                [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                            $allDecisionTimestamps.Add($ts)
+                        } catch {}
+                    }
+
+                    # Track reviewer
+                    $rName = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('ReviewerName')) {
+                        $rName = [string]$item['ReviewerName']
+                    } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ReviewerName']) {
+                        $rName = [string]$item.ReviewerName
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                        if (-not $reviewerItems.ContainsKey($rName)) {
+                            $reviewerItems[$rName] = @{ Decided = 0; Pending = 0; Timestamps = [System.Collections.Generic.List[datetime]]::new() }
+                        }
+                        $reviewerItems[$rName]['Decided']++
+                        if ($allDecisionTimestamps.Count -gt 0) {
+                            $reviewerItems[$rName]['Timestamps'].Add($allDecisionTimestamps[$allDecisionTimestamps.Count - 1])
+                        }
+                    }
+                }
+            }
+
+            # Count pending items
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                $pendingItems = @($decisions['Pending'])
+                foreach ($item in $pendingItems) {
+                    if ($null -eq $item) { continue }
+                    $totalItems++
+
+                    $rName = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('ReviewerName')) {
+                        $rName = [string]$item['ReviewerName']
+                    } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ReviewerName']) {
+                        $rName = [string]$item.ReviewerName
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                        if (-not $reviewerItems.ContainsKey($rName)) {
+                            $reviewerItems[$rName] = @{ Decided = 0; Pending = 0; Timestamps = [System.Collections.Generic.List[datetime]]::new() }
+                        }
+                        $reviewerItems[$rName]['Pending']++
+                    }
+                }
+            }
+        }
+
+        $remainingItems = $totalItems - $decidedItems
+        $completionPct = if ($totalItems -gt 0) { [Math]::Round(($decidedItems / $totalItems) * 100, 1) } else { 0.0 }
+
+        # --- Calculate velocities ---
+        $overallVelocity = 0.0
+        $recentVelocity  = 0.0
+        $peakVelocity    = 0.0
+
+        if ($allDecisionTimestamps.Count -gt 0) {
+            $sortedTimestamps = @($allDecisionTimestamps | Sort-Object)
+
+            # Overall velocity: decisions / elapsed hours since campaign start
+            $startTime = if ($null -ne $campaignCreated) { $campaignCreated } else { $sortedTimestamps[0] }
+            $elapsedHours = ($now - $startTime).TotalHours
+            if ($elapsedHours -gt 0) {
+                $overallVelocity = [Math]::Round($decidedItems / $elapsedHours, 1)
+            }
+
+            # Recent velocity: decisions in last VelocityWindowHours
+            $windowStart = $now.AddHours(-$VelocityWindowHours)
+            $recentDecisions = @($sortedTimestamps | Where-Object { $_ -ge $windowStart }).Count
+            if ($VelocityWindowHours -gt 0) {
+                $recentVelocity = [Math]::Round($recentDecisions / $VelocityWindowHours, 1)
+            }
+
+            # Peak velocity: best 24-hour rolling window
+            if ($sortedTimestamps.Count -ge 2) {
+                $bestCount = 0
+                for ($i = 0; $i -lt $sortedTimestamps.Count; $i++) {
+                    $windowEnd = $sortedTimestamps[$i].AddHours(24)
+                    $count = 0
+                    for ($j = $i; $j -lt $sortedTimestamps.Count; $j++) {
+                        if ($sortedTimestamps[$j] -le $windowEnd) { $count++ }
+                        else { break }
+                    }
+                    if ($count -gt $bestCount) { $bestCount = $count }
+                }
+                $peakVelocity = [Math]::Round($bestCount / 24.0, 1)
+            } else {
+                $peakVelocity = $overallVelocity
+            }
+        }
+
+        # --- Project completion date using business hours ---
+        $projectedHours = 0.0
+        $projectedCompletion = $null
+        $willMeetDeadline = $false
+        $slackHours = 0.0
+        $deadlineDateStr = if ($null -ne $deadlineDate) { $deadlineDate.ToString('o') } else { $null }
+
+        if ($recentVelocity -gt 0 -and $remainingItems -gt 0) {
+            $projectedHours = [Math]::Round($remainingItems / $recentVelocity, 1)
+
+            # Convert projected hours to business hours (8h/day, skip weekends)
+            $projectedCompletion = $now
+            $hoursRemaining = $projectedHours
+            while ($hoursRemaining -gt 0) {
+                $dow = $projectedCompletion.DayOfWeek
+                if ($dow -eq [System.DayOfWeek]::Saturday) {
+                    $projectedCompletion = $projectedCompletion.AddDays(2)
+                    continue
+                }
+                if ($dow -eq [System.DayOfWeek]::Sunday) {
+                    $projectedCompletion = $projectedCompletion.AddDays(1)
+                    continue
+                }
+                $hoursToday = [Math]::Min($hoursRemaining, 8.0)
+                $projectedCompletion = $projectedCompletion.AddHours($hoursToday)
+                $hoursRemaining -= $hoursToday
+                if ($hoursRemaining -gt 0) {
+                    # Advance to next day start
+                    $projectedCompletion = $projectedCompletion.Date.AddDays(1).AddHours(9)
+                }
+            }
+
+            if ($null -ne $deadlineDate) {
+                $willMeetDeadline = $projectedCompletion -le $deadlineDate
+                $slackHours = [Math]::Round(($deadlineDate - $projectedCompletion).TotalHours, 1)
+            }
+        } elseif ($remainingItems -eq 0) {
+            # Already complete
+            $willMeetDeadline = $true
+            $projectedCompletion = $now
+            if ($null -ne $deadlineDate) {
+                $slackHours = [Math]::Round(($deadlineDate - $now).TotalHours, 1)
+            }
+        } else {
+            # Zero velocity -- cannot project
+            $projectedHours = 0.0
+            $willMeetDeadline = $false
+            if ($null -ne $deadlineDate) {
+                $slackHours = [Math]::Round(($deadlineDate - $now).TotalHours, 1)
+            }
+        }
+
+        $projectedCompletionStr = if ($null -ne $projectedCompletion -and $recentVelocity -gt 0) {
+            $projectedCompletion.ToString('o')
+        } elseif ($remainingItems -eq 0) {
+            $now.ToString('o')
+        } else {
+            'Unknown'
+        }
+
+        # --- Classify forecast confidence ---
+        $confidence = 'Low'
+        $recentWindowDecisions = if ($allDecisionTimestamps.Count -gt 0) {
+            $windowStart2 = $now.AddHours(-$VelocityWindowHours)
+            @($allDecisionTimestamps | Where-Object { $_ -ge $windowStart2 }).Count
+        } else { 0 }
+
+        if ($completionPct -ge 30 -and $recentWindowDecisions -ge 20) {
+            $confidence = 'High'
+        } elseif (($completionPct -ge 10 -and $completionPct -lt 30) -or
+                  ($recentWindowDecisions -ge 5 -and $recentWindowDecisions -lt 20)) {
+            $confidence = 'Medium'
+        }
+
+        # --- Identify bottleneck reviewers ---
+        $bottleneckReviewers = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($rName in $reviewerItems.Keys) {
+            $rData = $reviewerItems[$rName]
+            $rPending = $rData['Pending']
+            if ($rPending -le 0) { continue }
+
+            # Calculate personal velocity from timestamps
+            $personalVelocity = 0.0
+            $rTimestamps = @($rData['Timestamps'])
+            if ($rTimestamps.Count -gt 0 -and $null -ne $campaignCreated) {
+                $rElapsedHours = ($now - $campaignCreated).TotalHours
+                if ($rElapsedHours -gt 0) {
+                    $personalVelocity = [Math]::Round($rData['Decided'] / $rElapsedHours, 1)
+                }
+            }
+
+            $projHours = if ($personalVelocity -gt 0) {
+                [Math]::Round($rPending / $personalVelocity, 1)
+            } else { 0.0 }
+
+            $bottleneckReviewers.Add(@{
+                ReviewerName     = $rName
+                RemainingItems   = $rPending
+                PersonalVelocity = $personalVelocity
+                ProjectedHours   = $projHours
+            })
+        }
+
+        # Sort bottleneck reviewers by projected hours descending (worst first)
+        $sortedBottlenecks = @($bottleneckReviewers | Sort-Object { -($_['ProjectedHours']) })
+
+        # --- Classify forecast status ---
+        $forecastStatus = 'OnTrack'
+        if ($remainingItems -eq 0) {
+            $forecastStatus = 'OnTrack'
+        } elseif ($recentVelocity -le 0) {
+            $forecastStatus = 'WillMiss'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        } elseif ($null -ne $deadlineDate -and -not $willMeetDeadline) {
+            $forecastStatus = 'WillMiss'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        } elseif ($null -ne $deadlineDate -and $slackHours -ge 0 -and $slackHours -lt 24) {
+            $forecastStatus = 'AtRisk'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        }
+
+        $forecasts.Add(@{
+            CampaignId                = $campaignId
+            CampaignName              = $campaignName
+            TotalItems                = $totalItems
+            DecidedItems              = $decidedItems
+            RemainingItems            = $remainingItems
+            CompletionPct             = $completionPct
+            OverallVelocity           = $overallVelocity
+            RecentVelocity            = $recentVelocity
+            PeakVelocity              = $peakVelocity
+            ProjectedHoursToComplete  = $projectedHours
+            ProjectedCompletionDate   = $projectedCompletionStr
+            DeadlineDate              = $deadlineDateStr
+            WillMeetDeadline          = $willMeetDeadline
+            SlackHours                = $slackHours
+            Confidence                = $confidence
+            ForecastStatus            = $forecastStatus
+            BottleneckReviewers       = $sortedBottlenecks
+        })
+    }
+
+    # --- Build summary ---
+    $onTrackCount  = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'OnTrack' }).Count
+    $atRiskCount   = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'AtRisk' }).Count
+    $willMissCount = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'WillMiss' }).Count
+
+    $avgCompletion = 0.0
+    if ($forecasts.Count -gt 0) {
+        $totalPct = 0.0
+        foreach ($f in $forecasts) { $totalPct += $f['CompletionPct'] }
+        $avgCompletion = [Math]::Round($totalPct / $forecasts.Count, 1)
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCompletionForecast: $($forecasts.Count) active campaign(s), OnTrack=$onTrackCount, AtRisk=$atRiskCount, WillMiss=$willMissCount" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Forecasts = @($forecasts)
+        Summary   = @{
+            ActiveCampaigns           = $forecasts.Count
+            OnTrack                   = $onTrackCount
+            AtRisk                    = $atRiskCount
+            WillMiss                  = $willMissCount
+            AvgCompletionPct          = $avgCompletion
+            CampaignsNeedingAttention = @($needingAttention)
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -4270,5 +4727,6 @@ Export-ModuleMember -Function @(
     'Get-SPIdentityAccessSpread',
     'Compare-SPAuditPeriods',
     'Test-SPGovernancePolicy',
-    'Get-SPCampaignCoverageGaps'
+    'Get-SPCampaignCoverageGaps',
+    'Get-SPCampaignCompletionForecast'
 )

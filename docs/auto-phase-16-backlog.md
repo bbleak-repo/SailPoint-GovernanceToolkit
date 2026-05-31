@@ -52,7 +52,7 @@ Safe to modify:
 | P16-02 | Source Aggregation Health Monitor | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-03 | Identity Attribute Quality Score | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-04 | Campaign Coverage Gap Analysis | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
-| P16-05 | Access Certification Completion Predictor | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | PENDING |
+| P16-05 | Access Certification Completion Predictor | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-06 | Governance Metrics Time Series Store | none | SP.AuditOperations, SP.Audit.psd1, settings.json | PENDING |
 | P16-07 | Reviewer Delegation Audit Trail | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | PENDING |
 | P16-08 | Invoke-SPDataQualityReport.ps1 | P16-01, P16-03 | Scripts/ (new) | PENDING |
@@ -622,7 +622,7 @@ New function `Export-SPCampaignCoverageGapHtml`:
 
 ## P16-05: Access Certification Completion Predictor
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

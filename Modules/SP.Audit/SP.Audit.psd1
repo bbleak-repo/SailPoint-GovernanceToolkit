@@ -163,6 +163,12 @@
 
         # SP.AuditReportHtml - Campaign Coverage Gap Report (P16-04)
         'Export-SPCampaignCoverageGapHtml'
+
+        # SP.AuditAnalytics - Campaign Completion Forecast (P16-05)
+        'Get-SPCampaignCompletionForecast'
+
+        # SP.AuditReportHtml - Campaign Completion Forecast Report (P16-05)
+        'Export-SPCampaignCompletionForecastHtml'
     )
 
     # Do not export variables or aliases from nested modules

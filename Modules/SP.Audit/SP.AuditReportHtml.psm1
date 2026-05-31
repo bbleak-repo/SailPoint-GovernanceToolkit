@@ -9473,6 +9473,283 @@ ${recsHtml}
 
 #endregion
 
+#region P16-05: Campaign Completion Forecast HTML Report
+
+function Export-SPCampaignCompletionForecastHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPCampaignCompletionForecast output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-campaign forecast cards,
+        deadline countdown indicators, velocity comparison, bottleneck reviewer
+        tables, and summary distribution. Uses inline CSS only for Word compatibility.
+    .PARAMETER ForecastData
+        Hashtable output from Get-SPCampaignCompletionForecast.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $forecast = Get-SPCampaignCompletionForecast -CampaignAudits $audits
+        $path = Export-SPCampaignCompletionForecastHtml -ForecastData $forecast -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$ForecastData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignCompletionForecast-${timestamp}.html"
+
+    $summary   = $ForecastData['Summary']
+    $forecasts = @($ForecastData['Forecasts'])
+
+    # --- Summary card ---
+    $activeCount = if ($null -ne $summary['ActiveCampaigns']) { $summary['ActiveCampaigns'] } else { 0 }
+    $onTrack     = if ($null -ne $summary['OnTrack'])         { $summary['OnTrack'] }         else { 0 }
+    $atRisk      = if ($null -ne $summary['AtRisk'])          { $summary['AtRisk'] }          else { 0 }
+    $willMiss    = if ($null -ne $summary['WillMiss'])        { $summary['WillMiss'] }        else { 0 }
+    $avgPct      = if ($null -ne $summary['AvgCompletionPct']) { $summary['AvgCompletionPct'] } else { 0 }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Active Campaigns<br/><span style="font-size:22px;">${activeCount}</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+On Track<br/><span style="font-size:22px;">${onTrack}</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+At Risk<br/><span style="font-size:22px;">${atRisk}</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Will Miss<br/><span style="font-size:22px;">${willMiss}</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Completion<br/><span style="font-size:22px;">${avgPct}%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-campaign forecast cards ---
+    $campaignSections = [System.Collections.Generic.List[string]]::new()
+
+    $fIdx = 0
+    foreach ($fc in $forecasts) {
+        $fIdx++
+        $fcName     = if ($null -ne $fc['CampaignName'])   { $fc['CampaignName'] }   else { 'Unknown' }
+        $fcStatus   = if ($null -ne $fc['ForecastStatus']) { $fc['ForecastStatus'] } else { 'Unknown' }
+        $fcTotal    = if ($null -ne $fc['TotalItems'])     { $fc['TotalItems'] }     else { 0 }
+        $fcDecided  = if ($null -ne $fc['DecidedItems'])   { $fc['DecidedItems'] }   else { 0 }
+        $fcRemain   = if ($null -ne $fc['RemainingItems']) { $fc['RemainingItems'] } else { 0 }
+        $fcPct      = if ($null -ne $fc['CompletionPct'])  { $fc['CompletionPct'] }  else { 0 }
+        $fcOverall  = if ($null -ne $fc['OverallVelocity']) { $fc['OverallVelocity'] } else { 0 }
+        $fcRecent   = if ($null -ne $fc['RecentVelocity']) { $fc['RecentVelocity'] } else { 0 }
+        $fcPeak     = if ($null -ne $fc['PeakVelocity'])   { $fc['PeakVelocity'] }   else { 0 }
+        $fcProjDate = if ($null -ne $fc['ProjectedCompletionDate']) { $fc['ProjectedCompletionDate'] } else { 'Unknown' }
+        $fcDeadline = if ($null -ne $fc['DeadlineDate'])   { $fc['DeadlineDate'] }   else { $null }
+        $fcSlack    = if ($null -ne $fc['SlackHours'])     { $fc['SlackHours'] }     else { 0 }
+        $fcConf     = if ($null -ne $fc['Confidence'])     { $fc['Confidence'] }     else { 'Low' }
+        $fcProjHrs  = if ($null -ne $fc['ProjectedHoursToComplete']) { $fc['ProjectedHoursToComplete'] } else { 0 }
+
+        # Status color
+        $statusColor = switch ($fcStatus) {
+            'OnTrack'  { '#27ae60' }
+            'AtRisk'   { '#f39c12' }
+            'WillMiss' { '#c0392b' }
+            default    { '#777777' }
+        }
+        $statusLabel = switch ($fcStatus) {
+            'OnTrack'  { 'ON TRACK' }
+            'AtRisk'   { 'AT RISK' }
+            'WillMiss' { 'WILL MISS' }
+            default    { 'UNKNOWN' }
+        }
+
+        # Progress bar
+        $barColor = if ($fcPct -ge 80) { '#27ae60' } elseif ($fcPct -ge 50) { '#f39c12' } else { '#c0392b' }
+        $progressBar = @"
+<div style="background:#e0e0e0; width:100%; height:20px; border-radius:3px; overflow:hidden; margin:4px 0;">
+<div style="background:${barColor}; width:${fcPct}%; height:20px; min-width:1px;"></div>
+</div>
+<span style="font-size:12px; color:#666666;">${fcDecided} / ${fcTotal} decisions (${fcPct}%)</span>
+"@
+
+        # Deadline display
+        $deadlineDisplay = if ($null -ne $fcDeadline -and $fcDeadline -ne '') {
+            $slackDisplay = if ($fcSlack -ge 0) { "+${fcSlack}h slack" } else { "${fcSlack}h behind" }
+            $slackColor = if ($fcSlack -ge 24) { '#27ae60' } elseif ($fcSlack -ge 0) { '#f39c12' } else { '#c0392b' }
+            "Deadline: $(ConvertTo-SafeHtml $fcDeadline)<br/><span style=""color:${slackColor}; font-weight:bold;"">${slackDisplay}</span>"
+        } else {
+            '<span style="color:#888888;">No deadline set</span>'
+        }
+
+        # Confidence badge
+        $confColor = switch ($fcConf) {
+            'High'   { 'color:#fff; background:#27ae60;' }
+            'Medium' { 'color:#fff; background:#f39c12;' }
+            'Low'    { 'color:#fff; background:#c0392b;' }
+            default  { 'color:#fff; background:#777777;' }
+        }
+
+        # Velocity comparison
+        $velocityHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin:8px 0;">
+<tr>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Overall</strong><br/>${fcOverall} dec/hr</td>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Recent</strong><br/>${fcRecent} dec/hr</td>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Peak</strong><br/>${fcPeak} dec/hr</td>
+</tr>
+</table>
+"@
+
+        # Bottleneck reviewers
+        $bottleneckHtml = ''
+        $bottlenecks = @($fc['BottleneckReviewers'])
+        if ($bottlenecks.Count -gt 0) {
+            $bnHeader = Build-HtmlTableHeader -Headers @('Reviewer', 'Remaining Items', 'Velocity (dec/hr)', 'Projected Hours')
+            $bnRows = [System.Collections.Generic.List[string]]::new()
+            $bIdx = 0
+            foreach ($bn in $bottlenecks) {
+                if ($null -eq $bn) { continue }
+                $bIdx++
+                $cells = @(
+                    (ConvertTo-SafeHtml $bn['ReviewerName']),
+                    [string]$bn['RemainingItems'],
+                    [string]$bn['PersonalVelocity'],
+                    [string]$bn['ProjectedHours']
+                )
+                $bnRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($bIdx % 2) -eq 0)))
+            }
+            if ($bnRows.Count -gt 0) {
+                $bottleneckHtml = @"
+<p style="font-size:13px; font-weight:bold; margin:8px 0 4px 0;">Bottleneck Reviewers</p>
+<table style="width:100%; border-collapse:collapse; font-size:12px;">
+${bnHeader}
+<tbody>
+$($bnRows -join "`n")
+</tbody>
+</table>
+"@
+            }
+        }
+
+        $campaignSections.Add(@"
+<div style="border:1px solid #dddddd; padding:16px; margin-bottom:16px; border-left:4px solid ${statusColor};">
+<table style="width:100%; border-collapse:collapse;">
+<tr>
+<td style="vertical-align:top; width:70%;">
+<h3 style="font-size:15px; color:#2c3e50; margin:0 0 4px 0;">$(ConvertTo-SafeHtml $fcName)</h3>
+</td>
+<td style="vertical-align:top; text-align:right; width:30%;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:${statusColor};">${statusLabel}</span>
+<span style="display:inline-block; padding:4px 8px; border-radius:3px; font-size:11px; font-weight:bold; ${confColor}; margin-left:4px;">${fcConf} confidence</span>
+</td>
+</tr>
+</table>
+
+${progressBar}
+
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin:8px 0;">
+<tr>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;"><strong>Projected Completion</strong><br/>$(ConvertTo-SafeHtml $fcProjDate)</td>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;"><strong>Projected Hours</strong><br/>${fcProjHrs}h</td>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;">${deadlineDisplay}</td>
+</tr>
+</table>
+
+${velocityHtml}
+
+${bottleneckHtml}
+</div>
+"@)
+    }
+
+    $campaignContent = if ($campaignSections.Count -gt 0) {
+        @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Campaign Forecasts ($($forecasts.Count))</h2>
+$($campaignSections -join "`n")
+"@
+    } else {
+        @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Campaign Forecasts</h2>
+<p style="font-size:13px; color:#888888;">No active campaigns to forecast.</p>
+"@
+    }
+
+    # --- Needs attention callout ---
+    $attentionHtml = ''
+    $attention = @($summary['CampaignsNeedingAttention'])
+    if ($attention.Count -gt 0) {
+        $attentionList = ($attention | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join "`n"
+        $attentionHtml = @"
+<div style="border:2px solid #c0392b; background:#fdf2f2; padding:12px; margin-bottom:20px;">
+<h2 style="font-size:16px; color:#c0392b; margin-top:0; margin-bottom:8px;">Campaigns Needing Attention ($($attention.Count))</h2>
+<ul style="font-size:13px; margin:0; padding-left:20px;">
+${attentionList}
+</ul>
+</div>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Campaign Completion Forecast Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Campaign Completion Forecast Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${attentionHtml}
+
+${campaignContent}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign completion forecast HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionForecastHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -9502,5 +9779,6 @@ Export-ModuleMember -Function @(
     'Export-SPOrphanAccountHtml',
     'Export-SPSourceAggregationHealthHtml',
     'Export-SPIdentityDataQualityHtml',
-    'Export-SPCampaignCoverageGapHtml'
+    'Export-SPCampaignCoverageGapHtml',
+    'Export-SPCampaignCompletionForecastHtml'
 )
