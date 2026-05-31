@@ -35,7 +35,7 @@ Critical items first, then high, medium, low.
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | DONE |
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | DONE |
 | QH-18 | LOW | Update SP.Testing module for newer workflows | M | DONE |
-| QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | PENDING |
+| QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | DONE |
 | QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | PENDING |
 
 ---
@@ -403,7 +403,7 @@ Update SP.Assertions.psm1 with assertions relevant to delta cert and disconnecte
 
 ## QH-19: Split SP.AuditReport.psm1 (12K Lines)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** Single file with 40+ exported functions spanning audit grouping, HTML
@@ -417,7 +417,29 @@ source governance, notification, log retention. Difficult to maintain.
 - `SP.AuditOperations.psm1` (notification, retention, compliance packaging)
 Update SP.Audit.psd1 NestedModules.
 
-**Files:** `Modules/SP.Audit/SP.AuditReport.psm1` -> 4 files, `SP.Audit.psd1`
+**Resolution:** Split `SP.AuditReport.psm1` (12,694 lines, 50 functions) into 4
+sub-modules by responsibility:
+- `SP.AuditReportCore.psm1` (2,093 lines, 9 functions): Group-SP*, Measure-SP*
+  core categorization and metrics. No script-scope state.
+- `SP.AuditReportHtml.psm1` (7,214 lines, 29 functions): All Export-SP* rendering
+  functions plus 9 private HTML helpers (ConvertTo-SafeHtml, Format-HtmlDate,
+  Build-HtmlTableRow, Build-HtmlTableHeader, Format-HoursDisplay,
+  Format-RiskFlagBadges, Build-ExecutiveSummaryHtml, Build-SingleCampaignHtml,
+  Format-ComparisonCellValue). Owns `$script:AuditReportVersion`.
+- `SP.AuditAnalytics.psm1` (1,890 lines, 6 functions): Compare-SPCampaigns,
+  Get-SPAuditTrail, Measure-SPCampaignTrends, Measure-SPReviewerReputation,
+  Measure-SPIdentityRisk, Measure-SPSourceGovernance.
+- `SP.AuditOperations.psm1` (1,639 lines, 6 functions): Send-SPReport,
+  Export-SPCompliancePackage, Send-SPWebhook, Send-SPNotification,
+  Get-SPOrchestratorHistory, Invoke-SPLogRetention.
+Updated `SP.Audit.psd1` NestedModules to load 5 sub-modules in dependency order:
+Queries, Core, Analytics, Html, Operations. FunctionsToExport reorganized by
+sub-module with comments. Bug fix: `Export-SPRoleInventoryHtml` was listed in psd1
+FunctionsToExport but missing from the old psm1 Export-ModuleMember -- now correctly
+exported by SP.AuditReportHtml.psm1. Original `SP.AuditReport.psm1` removed.
+
+**Files:** `Modules/SP.Audit/SP.AuditReport.psm1` (removed) -> 4 new files,
+`Modules/SP.Audit/SP.Audit.psd1` (updated)
 
 ---
 

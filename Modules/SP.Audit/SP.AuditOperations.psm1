@@ -1,0 +1,1639 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    SailPoint ISC Governance Toolkit - Audit Operations
+.DESCRIPTION
+    Provides operational functions for report distribution, notification dispatch,
+    compliance evidence packaging, orchestrator history tracking, and log
+    retention/archival. These functions produce side effects (send email, write
+    archives, clean up old files).
+
+    HTML output uses inline CSS only and table-based layout for Word
+    copy-paste compatibility. No flexbox, no grid, no external stylesheets.
+.NOTES
+    Module: SP.Audit / SP.AuditOperations
+    Version: 1.0.0
+    Component: Audit Operations
+
+    Color taxonomy:
+        Green  #339933 - Approved / success
+        Red    #CC3333 - Revoked / error
+        Orange #FF8800 - Pending / warn
+        Blue   #336699 - Info / neutral
+        Gray   #777777 - N/A / footer
+#>
+
+#region Report Distribution
+
+function Send-SPReport {
+    <#
+    .SYNOPSIS
+        Sends a leadership report to a recipient via SMTP email.
+    .DESCRIPTION
+        Reads SMTP configuration from Audit.Smtp and sends the report file
+        as an attachment to the specified recipient. Requires Enabled field
+        in the Audit.Smtp config section.
+
+        When Audit.Smtp.Enabled is false, logs at DEBUG level and returns without sending.
+        When Audit.Smtp.Enabled is true, sends the report via Send-MailMessage.
+
+        SMTP fallback: if Audit.Smtp connection fields (Server, Port, From,
+        UseSsl) are empty, they are inherited from Notification.Smtp. This
+        allows a single SMTP config in the Notification section to serve both
+        notification delivery and report distribution. Audit.Smtp.Enabled and
+        Audit.Smtp.SubjectPrefix remain exclusive to this function.
+    .PARAMETER ReportPath
+        Full path to the HTML report file to send.
+    .PARAMETER RecipientEmail
+        Email address of the recipient.
+    .PARAMETER RecipientName
+        Display name of the recipient (for log messages and future Subject line).
+    .PARAMETER Subject
+        Optional email subject. Defaults to "{SubjectPrefix} Report for {RecipientName}".
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{Success; Data=@{Action; Recipient; File; Subject}; Error}
+    .EXAMPLE
+        Send-SPReport -ReportPath 'C:\Audit\leadership\executive-summary.html' `
+            -RecipientEmail 'vp@corp.com' -RecipientName 'VP Smith'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ReportPath,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$RecipientEmail,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$RecipientName,
+
+        [Parameter()]
+        [string]$Subject,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Load SMTP config -- primary: Audit.Smtp, fallback: Notification.Smtp
+    $smtpConfig = $null
+    $notifSmtpConfig = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config) {
+            if ($config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'Smtp') {
+                $smtpConfig = $config.Audit.Smtp
+            }
+            if ($config.PSObject.Properties.Name -contains 'Notification' -and
+                $config.Notification.PSObject.Properties.Name -contains 'Smtp') {
+                $notifSmtpConfig = $config.Notification.Smtp
+            }
+        }
+    }
+    catch {
+        # Config unavailable -- treat as disabled
+    }
+
+    $smtpEnabled = $false
+    if ($null -ne $smtpConfig -and
+        $smtpConfig.PSObject.Properties.Name -contains 'Enabled') {
+        $smtpEnabled = $smtpConfig.Enabled -eq $true
+    }
+
+    # Build subject line
+    $subjectPrefix = '[SailPoint Audit]'
+    if ($null -ne $smtpConfig -and
+        $smtpConfig.PSObject.Properties.Name -contains 'SubjectPrefix' -and
+        -not [string]::IsNullOrWhiteSpace($smtpConfig.SubjectPrefix)) {
+        $subjectPrefix = $smtpConfig.SubjectPrefix
+    }
+    if ([string]::IsNullOrWhiteSpace($Subject)) {
+        $Subject = "$subjectPrefix Report for $RecipientName"
+    }
+
+    $fileName = Split-Path -Path $ReportPath -Leaf
+
+    if (-not $smtpEnabled) {
+        # SMTP disabled -- log at DEBUG and return
+        $logMsg = "SMTP disabled -- would send '$fileName' to $RecipientEmail ($RecipientName)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $logMsg `
+                -Severity DEBUG -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient = $RecipientEmail
+                    File      = $ReportPath
+                    Subject   = $Subject
+                    SmtpState = 'Disabled'
+                }
+        }
+        Write-Verbose $logMsg
+
+        return @{
+            Success = $true
+            Data    = @{
+                Action    = 'Logged'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $null
+        }
+    }
+
+    # SMTP enabled -- read connection settings from Audit.Smtp
+    $smtpServer = ''
+    $smtpPort   = 587
+    $smtpFrom   = ''
+    $smtpUseSsl = $true
+    $smtpSource = 'Audit.Smtp'
+
+    if ($null -ne $smtpConfig) {
+        if ($smtpConfig.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConfig.Server }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'Port')   { $smtpPort   = $smtpConfig.Port }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'From')   { $smtpFrom   = $smtpConfig.From }
+        if ($smtpConfig.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConfig.UseSsl -eq $true }
+    }
+
+    # Fallback to Notification.Smtp when Audit.Smtp connection fields are empty
+    if (([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) -and
+        $null -ne $notifSmtpConfig) {
+        if ([string]::IsNullOrWhiteSpace($smtpServer) -and
+            $notifSmtpConfig.PSObject.Properties.Name -contains 'Server' -and
+            -not [string]::IsNullOrWhiteSpace($notifSmtpConfig.Server)) {
+            $smtpServer = $notifSmtpConfig.Server
+            $smtpSource = 'Notification.Smtp'
+        }
+        if ([string]::IsNullOrWhiteSpace($smtpFrom) -and
+            $notifSmtpConfig.PSObject.Properties.Name -contains 'From' -and
+            -not [string]::IsNullOrWhiteSpace($notifSmtpConfig.From)) {
+            $smtpFrom = $notifSmtpConfig.From
+            $smtpSource = 'Notification.Smtp'
+        }
+        # Inherit Port and UseSsl from fallback only if Server came from there
+        if ($smtpSource -eq 'Notification.Smtp') {
+            if ($null -ne $smtpConfig -and
+                -not ($smtpConfig.PSObject.Properties.Name -contains 'Port') -and
+                $notifSmtpConfig.PSObject.Properties.Name -contains 'Port') {
+                $smtpPort = $notifSmtpConfig.Port
+            }
+            if ($null -ne $smtpConfig -and
+                -not ($smtpConfig.PSObject.Properties.Name -contains 'UseSsl') -and
+                $notifSmtpConfig.PSObject.Properties.Name -contains 'UseSsl') {
+                $smtpUseSsl = $notifSmtpConfig.UseSsl -eq $true
+            }
+            $fallbackMsg = "Audit.Smtp connection fields empty -- using Notification.Smtp as fallback"
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $fallbackMsg `
+                    -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                    -CorrelationID $CorrelationID
+            }
+            Write-Verbose $fallbackMsg
+        }
+    }
+
+    # Validate required SMTP fields (after fallback)
+    if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
+        $warnMsg = "SMTP enabled but Server or From is empty in both Audit.Smtp and Notification.Smtp -- cannot send '$fileName' to $RecipientEmail"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                -Action 'Send-SPReport' -CorrelationID $CorrelationID
+        }
+        Write-Warning $warnMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $warnMsg
+        }
+    }
+
+    # Validate report file exists
+    if (-not (Test-Path -Path $ReportPath -PathType Leaf)) {
+        $errMsg = "Report file not found: $ReportPath"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+                -Action 'Send-SPReport' -CorrelationID $CorrelationID
+        }
+        Write-Warning $errMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $errMsg
+        }
+    }
+
+    try {
+        $mailParams = @{
+            SmtpServer    = $smtpServer
+            Port          = $smtpPort
+            From          = $smtpFrom
+            To            = $RecipientEmail
+            Subject       = $Subject
+            Body          = "Please find the attached leadership report for $RecipientName."
+            BodyAsHtml    = $false
+            UseSsl        = $smtpUseSsl
+            Attachments   = @($ReportPath)
+            ErrorAction   = 'Stop'
+            WarningAction = 'SilentlyContinue'
+        }
+
+        Send-MailMessage @mailParams
+
+        $logMsg = "Report '$fileName' sent to $RecipientEmail ($RecipientName) via $smtpSource"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $logMsg `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient  = $RecipientEmail
+                    File       = $ReportPath
+                    Subject    = $Subject
+                    Server     = $smtpServer
+                    Port       = $smtpPort
+                    SmtpSource = $smtpSource
+                }
+        }
+        Write-Verbose $logMsg
+
+        return @{
+            Success = $true
+            Data    = @{
+                Action    = 'Sent'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "SMTP send failed for '$fileName' to ${RecipientEmail}: $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg `
+                -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPReport' `
+                -CorrelationID $CorrelationID `
+                -AdditionalFields @{
+                    Recipient  = $RecipientEmail
+                    File       = $ReportPath
+                    Subject    = $Subject
+                    Server     = $smtpServer
+                    Port       = $smtpPort
+                    ErrorDetail = $_.Exception.Message
+                }
+        }
+        Write-Warning $errMsg
+
+        return @{
+            Success = $false
+            Data    = @{
+                Action    = 'Failed'
+                Recipient = $RecipientEmail
+                File      = $ReportPath
+                Subject   = $Subject
+            }
+            Error   = $errMsg
+        }
+    }
+}
+
+#endregion
+
+#region Compliance Evidence Package
+
+function Export-SPCompliancePackage {
+    <#
+    .SYNOPSIS
+        Bundles audit artifacts from a date range into a single ZIP evidence package.
+    .DESCRIPTION
+        Scans Audit and DeltaCert output directories for HTML, CSV, JSONL, and TXT
+        artifacts, then packages them into a single ZIP file with a JSON manifest
+        containing SHA256 hashes per artifact. Designed for SOX 404, SOC 2, and
+        ISO 27001 evidence delivery.
+    .PARAMETER After
+        Include artifacts modified after this datetime.
+    .PARAMETER Before
+        Include artifacts modified before this datetime.
+    .PARAMETER AuditOutputPath
+        Audit output directory. Resolved from config if omitted.
+    .PARAMETER DeltaCertOutputPath
+        DeltaCert output directory. Resolved from config if omitted.
+    .PARAMETER OutputPath
+        Directory for the output ZIP. Defaults to current directory.
+    .PARAMETER PackageName
+        Custom ZIP file name (without extension). Auto-generated from date range if omitted.
+    .PARAMETER Scope
+        Which directories to include: Full (both), AuditOnly, or DeltaCertOnly.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Package result with path, artifact count, and category breakdown.
+    .EXAMPLE
+        Export-SPCompliancePackage -After (Get-Date).AddDays(-90) -Before (Get-Date)
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][DateTime]$After,
+        [Parameter()][DateTime]$Before,
+        [Parameter()][string]$AuditOutputPath,
+        [Parameter()][string]$DeltaCertOutputPath,
+        [Parameter()][string]$OutputPath = '.',
+        [Parameter()][string]$PackageName,
+        [Parameter()][ValidateSet('Full','AuditOnly','DeltaCertOnly')]
+        [string]$Scope = 'Full',
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: starting (Scope=$Scope)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'Audit' -and
+                $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                $AuditOutputPath = $config.Audit.OutputPath
+            }
+            if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                $null -ne $config -and
+                $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+
+    # Resolve toolkit version
+    $toolkitVersion = 'Unknown'
+    try {
+        $cfgCheck = Get-SPConfig
+        if ($null -ne $cfgCheck -and
+            $cfgCheck.PSObject.Properties.Name -contains 'Global' -and
+            $cfgCheck.Global.PSObject.Properties.Name -contains 'ToolkitVersion') {
+            $toolkitVersion = $cfgCheck.Global.ToolkitVersion
+        }
+    } catch { }
+
+    # Ensure output directory exists
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # Supported artifact extensions
+    $supportedExtensions = @('.html', '.csv', '.jsonl', '.txt', '.json', '.log')
+
+    # Collect artifacts
+    $artifacts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Helper: scan a directory for matching files
+    function _ScanDirectory {
+        param(
+            [string]$Path,
+            [string]$Category,
+            [string]$ZipSubfolder
+        )
+        if (-not (Test-Path -Path $Path -PathType Container)) { return }
+        $files = Get-ChildItem -Path $Path -File -ErrorAction SilentlyContinue
+        foreach ($f in $files) {
+            if ($f.Extension -notin $supportedExtensions) { continue }
+            # Date range filter by last write time
+            if ($PSBoundParameters.ContainsKey('After') -or $After -ne $null) {
+                # Use the outer scope After/Before
+            }
+            if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+            if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+
+            # Determine sub-category
+            $subCategory = $Category
+            if ($f.Extension -eq '.csv') { $subCategory = 'CsvExports' }
+            elseif ($f.Extension -eq '.jsonl') { $subCategory = 'AuditTrails' }
+            elseif ($f.Extension -eq '.txt') { $subCategory = 'RemediationProof' }
+
+            # Determine zip subfolder for CSVs
+            $targetFolder = $ZipSubfolder
+            if ($f.Extension -eq '.csv') { $targetFolder = 'csv' }
+
+            $artifacts.Add(@{
+                FullPath     = $f.FullName
+                FileName     = $f.Name
+                Category     = $subCategory
+                ZipFolder    = $targetFolder
+                SizeBytes    = $f.Length
+                LastModified = $f.LastWriteTime
+            })
+        }
+    }
+
+    # Store filter dates in script scope for the helper
+    $script:filterAfter  = if ($PSBoundParameters.ContainsKey('After'))  { $After }  else { $null }
+    $script:filterBefore = if ($PSBoundParameters.ContainsKey('Before')) { $Before } else { $null }
+
+    # Scan directories based on scope
+    if ($Scope -ne 'DeltaCertOnly') {
+        _ScanDirectory -Path $AuditOutputPath -Category 'AuditReports' -ZipSubfolder 'audit'
+        # Scan leadership subdirectory
+        $leadershipPath = Join-Path -Path $AuditOutputPath -ChildPath 'leadership'
+        if (Test-Path -Path $leadershipPath -PathType Container) {
+            $leaderFiles = Get-ChildItem -Path $leadershipPath -File -ErrorAction SilentlyContinue
+            foreach ($f in $leaderFiles) {
+                if ($f.Extension -notin $supportedExtensions) { continue }
+                if ($null -ne $script:filterAfter -and $f.LastWriteTime -lt $script:filterAfter) { continue }
+                if ($null -ne $script:filterBefore -and $f.LastWriteTime -gt $script:filterBefore) { continue }
+                $artifacts.Add(@{
+                    FullPath     = $f.FullName
+                    FileName     = $f.Name
+                    Category     = 'LeadershipReports'
+                    ZipFolder    = 'leadership'
+                    SizeBytes    = $f.Length
+                    LastModified = $f.LastWriteTime
+                })
+            }
+        }
+    }
+
+    if ($Scope -ne 'AuditOnly') {
+        _ScanDirectory -Path $DeltaCertOutputPath -Category 'DeltaCertReports' -ZipSubfolder 'deltacert'
+    }
+
+    Write-SPLog -Message "Export-SPCompliancePackage: found $($artifacts.Count) artifacts" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    # Build package name
+    if ([string]::IsNullOrWhiteSpace($PackageName)) {
+        $afterStr  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('yyyy-MM-dd') }  else { 'all' }
+        $beforeStr = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('yyyy-MM-dd') } else { 'now' }
+        $PackageName = "compliance-evidence-${afterStr}-to-${beforeStr}"
+    }
+    $zipFileName = "${PackageName}.zip"
+    $zipFilePath = Join-Path -Path $OutputPath -ChildPath $zipFileName
+
+    # Remove existing ZIP if present (overwrite)
+    if (Test-Path -Path $zipFilePath) {
+        Remove-Item -Path $zipFilePath -Force
+    }
+
+    # Build manifest and create ZIP
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    $packageId    = [guid]::NewGuid().ToString()
+    $generatedAt  = (Get-Date).ToUniversalTime().ToString('o')
+    $manifestArts = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Compute SHA256 for each artifact
+    foreach ($art in $artifacts) {
+        $sha256 = ''
+        try {
+            $hashResult = Get-FileHash -Path $art.FullPath -Algorithm SHA256
+            $sha256 = $hashResult.Hash
+        } catch {
+            Write-SPLog -Message "Could not hash file $($art.FileName): $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+                -CorrelationID $CorrelationID
+        }
+
+        $manifestArts.Add(@{
+            FileName     = $art.FileName
+            OriginalPath = $art.FullPath
+            Type         = $art.ZipFolder
+            Category     = $art.Category
+            SizeBytes    = $art.SizeBytes
+            SHA256       = $sha256
+        })
+    }
+
+    # Build category counts
+    $categories = @{
+        AuditReports      = 0
+        CsvExports        = 0
+        AuditTrails       = 0
+        LeadershipReports = 0
+        DeltaCertReports  = 0
+        RemediationProof  = 0
+    }
+    foreach ($art in $artifacts) {
+        if ($categories.ContainsKey($art.Category)) {
+            $categories[$art.Category]++
+        }
+    }
+
+    $totalSizeBytes = 0
+    foreach ($art in $artifacts) { $totalSizeBytes += $art.SizeBytes }
+
+    $dateRange = @{
+        After  = if ($null -ne $script:filterAfter)  { $script:filterAfter.ToString('o') }  else { $null }
+        Before = if ($null -ne $script:filterBefore) { $script:filterBefore.ToString('o') } else { $null }
+    }
+
+    $manifest = @{
+        PackageId      = $packageId
+        GeneratedAt    = $generatedAt
+        DateRange      = $dateRange
+        ToolkitVersion = $toolkitVersion
+        Artifacts      = @($manifestArts)
+        Summary        = @{
+            TotalArtifacts = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+
+    # Create ZIP archive
+    try {
+        $zipStream  = [System.IO.File]::Create($zipFilePath)
+        $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+
+        # Add manifest.json at root
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $manifestEntry = $zipArchive.CreateEntry('manifest.json')
+        $manifestWriter = [System.IO.StreamWriter]::new($manifestEntry.Open())
+        $manifestWriter.Write($manifestJson)
+        $manifestWriter.Close()
+
+        # Add each artifact to its subfolder
+        foreach ($art in $artifacts) {
+            $entryName = "$($art.ZipFolder)/$($art.FileName)"
+            $entry = $zipArchive.CreateEntry($entryName)
+            $entryStream = $entry.Open()
+            try {
+                $fileBytes = [System.IO.File]::ReadAllBytes($art.FullPath)
+                $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+            } finally {
+                $entryStream.Close()
+            }
+        }
+
+        $zipArchive.Dispose()
+        $zipStream.Close()
+    }
+    catch {
+        Write-SPLog -Message "Failed to create ZIP: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Error   = "Failed to create ZIP: $($_.Exception.Message)"
+        }
+    }
+
+    $resolvedZipPath = (Resolve-Path -Path $zipFilePath).Path
+
+    Write-SPLog -Message "Export-SPCompliancePackage: created $resolvedZipPath ($($artifacts.Count) artifacts, $totalSizeBytes bytes)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCompliancePackage' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            PackagePath    = $resolvedZipPath
+            PackageId      = $packageId
+            ArtifactCount  = $artifacts.Count
+            TotalSizeBytes = $totalSizeBytes
+            Categories     = $categories
+        }
+    }
+}
+
+#endregion
+
+#region Notification Dispatch
+
+function Send-SPWebhook {
+    <#
+    .SYNOPSIS
+        Sends a JSON payload to an HTTP webhook endpoint.
+    .DESCRIPTION
+        Converts the payload hashtable to JSON and sends it via Invoke-RestMethod.
+        Returns a result hashtable with Success, StatusCode, Response, and Error fields.
+    .PARAMETER Url
+        The webhook endpoint URL.
+    .PARAMETER Payload
+        Hashtable to serialize as the JSON request body.
+    .PARAMETER Method
+        HTTP method. Defaults to POST.
+    .PARAMETER Headers
+        Optional hashtable of additional HTTP headers.
+    .PARAMETER TimeoutSeconds
+        Request timeout in seconds. Defaults to 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; StatusCode; Response; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Url,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Payload,
+
+        [Parameter()]
+        [string]$Method = 'POST',
+
+        [Parameter()]
+        [hashtable]$Headers,
+
+        [Parameter()]
+        [int]$TimeoutSeconds = 30,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        $json = $Payload | ConvertTo-Json -Depth 10 -Compress
+
+        $restParams = @{
+            Method      = $Method
+            Uri         = $Url
+            Body        = $json
+            ContentType = 'application/json'
+            TimeoutSec  = $TimeoutSeconds
+            ErrorAction = 'Stop'
+        }
+        if ($null -ne $Headers -and $Headers.Count -gt 0) {
+            $restParams['Headers'] = $Headers
+        }
+
+        $response = Invoke-RestMethod @restParams
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Webhook sent to $Url ($Method)" `
+                -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $true
+            StatusCode = 200
+            Response   = $response
+            Error      = $null
+        }
+    }
+    catch {
+        $statusCode = 0
+        if ($_.Exception.PSObject.Properties.Name -contains 'Response' -and
+            $null -ne $_.Exception.Response) {
+            try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { }
+        }
+
+        $errMsg = "Webhook call to $Url failed: $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $errMsg `
+                -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPWebhook' `
+                -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success    = $false
+            StatusCode = $statusCode
+            Response   = $null
+            Error      = $errMsg
+        }
+    }
+}
+
+function Send-SPNotification {
+    <#
+    .SYNOPSIS
+        Dispatches notifications via configured backends (Log, Smtp, Webhook).
+    .DESCRIPTION
+        Reads the Notification config section and delivers the message through
+        each active backend. The Log backend always runs. Smtp sends email via
+        Send-MailMessage. Webhook sends a JSON POST via Send-SPWebhook.
+
+        Missing or incomplete backend configuration produces a WARN log and
+        skips that backend (does not throw).
+    .PARAMETER Subject
+        Notification subject line.
+    .PARAMETER Body
+        Notification body content. For SMTP this is sent as HTML.
+    .PARAMETER Severity
+        Severity level: Info, Warning, or Critical. Maps to log severity and
+        is included in webhook payloads.
+    .PARAMETER Category
+        Notification category (e.g. HealthAlert, Escalation, Completion, Digest).
+    .PARAMETER Recipients
+        Email addresses for the SMTP backend.
+    .PARAMETER Attachments
+        File paths to attach (SMTP only). Non-existent files are skipped with WARN.
+    .PARAMETER Metadata
+        Extra fields included in the webhook JSON payload.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Backends=@(...) } }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Subject,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Body,
+
+        [Parameter()]
+        [ValidateSet('Info','Warning','Critical')]
+        [string]$Severity = 'Info',
+
+        [Parameter()]
+        [string]$Category,
+
+        [Parameter()]
+        [string[]]$Recipients,
+
+        [Parameter()]
+        [string[]]$Attachments,
+
+        [Parameter()]
+        [hashtable]$Metadata,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Load notification config
+    $notifConfig = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Notification') {
+            $notifConfig = $config.Notification
+        }
+    }
+    catch {
+        # Config unavailable -- fall back to Log only
+    }
+
+    # Determine active backends
+    $backends = @('Log')
+    if ($null -ne $notifConfig -and
+        $notifConfig.PSObject.Properties.Name -contains 'Backends') {
+        $configuredBackends = @($notifConfig.Backends)
+        if ($configuredBackends.Count -gt 0) {
+            $backends = $configuredBackends
+        }
+    }
+
+    # Ensure Log is always present
+    if ('Log' -notin $backends) {
+        $backends = @('Log') + $backends
+    }
+
+    $backendResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Map severity to Write-SPLog severity
+    $logSeverity = switch ($Severity) {
+        'Critical' { 'ERROR' }
+        'Warning'  { 'WARN'  }
+        default    { 'INFO'  }
+    }
+
+    # --- Log backend (always) ---
+    $logMsg = "[$Severity] $Subject -- $Body"
+    if (-not [string]::IsNullOrWhiteSpace($Category)) {
+        $logMsg = "[$Severity][$Category] $Subject -- $Body"
+    }
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message $logMsg `
+            -Severity $logSeverity -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+            -CorrelationID $CorrelationID
+    }
+    $backendResults.Add(@{ Backend = 'Log'; Status = 'Sent' })
+
+    # --- SMTP backend ---
+    if ('Smtp' -in $backends) {
+        $smtpResult = @{ Backend = 'Smtp'; Status = 'Skipped' }
+
+        # Read SMTP settings from Notification.Smtp config
+        $smtpConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Smtp') {
+            $smtpConf = $notifConfig.Smtp
+        }
+
+        $smtpServer = ''
+        $smtpPort   = 587
+        $smtpFrom   = ''
+        $smtpUseSsl = $true
+
+        if ($null -ne $smtpConf) {
+            if ($smtpConf.PSObject.Properties.Name -contains 'Server') { $smtpServer = $smtpConf.Server }
+            if ($smtpConf.PSObject.Properties.Name -contains 'Port')   { $smtpPort   = $smtpConf.Port }
+            if ($smtpConf.PSObject.Properties.Name -contains 'From')   { $smtpFrom   = $smtpConf.From }
+            if ($smtpConf.PSObject.Properties.Name -contains 'UseSsl') { $smtpUseSsl = $smtpConf.UseSsl -eq $true }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($smtpServer) -or [string]::IsNullOrWhiteSpace($smtpFrom)) {
+            $warnMsg = 'SMTP backend configured but Server or From is empty -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        elseif ($null -eq $Recipients -or $Recipients.Count -eq 0) {
+            $warnMsg = 'SMTP backend configured but no Recipients provided -- skipping SMTP delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            # Validate attachments
+            $validAttachments = @()
+            if ($null -ne $Attachments -and $Attachments.Count -gt 0) {
+                foreach ($att in $Attachments) {
+                    if (Test-Path -Path $att -PathType Leaf) {
+                        $validAttachments += $att
+                    }
+                    else {
+                        $attWarn = "Attachment not found, skipping: $att"
+                        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                            Write-SPLog -Message $attWarn -Severity WARN -Component 'SP.AuditReport' `
+                                -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+                        }
+                    }
+                }
+            }
+
+            try {
+                $mailParams = @{
+                    SmtpServer = $smtpServer
+                    Port       = $smtpPort
+                    From       = $smtpFrom
+                    To         = $Recipients
+                    Subject    = $Subject
+                    Body       = $Body
+                    BodyAsHtml = $true
+                    UseSsl     = $smtpUseSsl
+                    ErrorAction = 'Stop'
+                    WarningAction = 'SilentlyContinue'
+                }
+                if ($validAttachments.Count -gt 0) {
+                    $mailParams['Attachments'] = $validAttachments
+                }
+
+                Send-MailMessage @mailParams
+                $smtpResult['Status'] = 'Sent'
+
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP notification sent to $($Recipients -join ', ')" `
+                        -Severity INFO -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+            catch {
+                $smtpResult['Status'] = 'Failed'
+                $smtpResult['Error']  = $_.Exception.Message
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "SMTP send failed: $($_.Exception.Message)" `
+                        -Severity ERROR -Component 'SP.AuditReport' -Action 'Send-SPNotification' `
+                        -CorrelationID $CorrelationID
+                }
+            }
+        }
+
+        $backendResults.Add($smtpResult)
+    }
+
+    # --- Webhook backend ---
+    if ('Webhook' -in $backends) {
+        $webhookResult = @{ Backend = 'Webhook'; Status = 'Skipped' }
+
+        $webhookConf = $null
+        if ($null -ne $notifConfig -and
+            $notifConfig.PSObject.Properties.Name -contains 'Webhook') {
+            $webhookConf = $notifConfig.Webhook
+        }
+
+        $webhookUrl     = ''
+        $webhookMethod  = 'POST'
+        $webhookHeaders = @{}
+        $includePayload = $true
+
+        if ($null -ne $webhookConf) {
+            if ($webhookConf.PSObject.Properties.Name -contains 'Url')            { $webhookUrl     = $webhookConf.Url }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Method')         { $webhookMethod  = $webhookConf.Method }
+            if ($webhookConf.PSObject.Properties.Name -contains 'IncludePayload') { $includePayload = $webhookConf.IncludePayload -eq $true }
+            if ($webhookConf.PSObject.Properties.Name -contains 'Headers' -and
+                $null -ne $webhookConf.Headers) {
+                # Convert PSCustomObject headers to hashtable
+                $webhookHeaders = @{}
+                foreach ($prop in $webhookConf.Headers.PSObject.Properties) {
+                    $webhookHeaders[$prop.Name] = $prop.Value
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($webhookUrl)) {
+            $warnMsg = 'Webhook backend configured but Url is empty -- skipping webhook delivery'
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message $warnMsg -Severity WARN -Component 'SP.AuditReport' `
+                    -Action 'Send-SPNotification' -CorrelationID $CorrelationID
+            }
+        }
+        else {
+            $payload = @{
+                timestamp = (Get-Date).ToUniversalTime().ToString('o')
+                severity  = $Severity
+                subject   = $Subject
+            }
+            if (-not [string]::IsNullOrWhiteSpace($Category)) {
+                $payload['category'] = $Category
+            }
+            if ($includePayload) {
+                $payload['body'] = $Body
+            }
+            if ($null -ne $Metadata -and $Metadata.Count -gt 0) {
+                $payload['metadata'] = $Metadata
+            }
+
+            $whResult = Send-SPWebhook -Url $webhookUrl -Payload $payload `
+                -Method $webhookMethod -Headers $webhookHeaders -CorrelationID $CorrelationID
+
+            $webhookResult['Status']     = if ($whResult.Success) { 'Sent' } else { 'Failed' }
+            $webhookResult['StatusCode'] = $whResult.StatusCode
+            if (-not $whResult.Success) {
+                $webhookResult['Error'] = $whResult.Error
+            }
+        }
+
+        $backendResults.Add($webhookResult)
+    }
+
+    # Determine overall success -- true if at least one backend sent successfully
+    $overallSuccess = ($backendResults | Where-Object { $_.Status -eq 'Sent' }).Count -gt 0
+
+    return @{
+        Success = $overallSuccess
+        Data    = @{
+            Backends = @($backendResults)
+        }
+    }
+}
+
+#endregion
+
+#region Orchestrator Run History
+
+function Get-SPOrchestratorHistory {
+    <#
+    .SYNOPSIS
+        Parses orchestrator-audit.jsonl and produces operational run history metrics.
+    .DESCRIPTION
+        Reads the JSONL audit trail written by Invoke-SPDailyOrchestrator.ps1 and
+        calculates reliability, duration trends, step-level success rates, and
+        failure breakdowns for a configurable lookback window.
+    .PARAMETER JournalPath
+        Path to orchestrator-audit.jsonl. Defaults to {DeltaCert.OutputPath}/orchestrator-audit.jsonl.
+    .PARAMETER DaysBack
+        Number of days to include. Default 30.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] Runs array and Metrics summary.
+    .EXAMPLE
+        Get-SPOrchestratorHistory -DaysBack 7
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$JournalPath,
+        [Parameter()][int]$DaysBack = 30,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Parsing orchestrator run history (DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    # Resolve journal path from config if not provided
+    if ([string]::IsNullOrWhiteSpace($JournalPath)) {
+        try {
+            $cfg = Get-SPConfig
+            $dcOutput = $cfg.DeltaCert.OutputPath
+            if (-not [string]::IsNullOrWhiteSpace($dcOutput)) {
+                $JournalPath = Join-Path $dcOutput 'orchestrator-audit.jsonl'
+            }
+        }
+        catch {
+            # Config not available -- fall through to empty return
+        }
+    }
+
+    # Empty return structure
+    $emptyMetrics = @{
+        Runs    = @()
+        Metrics = @{
+            RunCount            = 0
+            SuccessRate         = 0.0
+            AvgDurationSeconds  = 0
+            DurationTrend       = 'N/A'
+            FailureBreakdown    = @{}
+            ConsecutiveFailures = 0
+            LastSuccessfulRun   = $null
+            StepReliability     = @{
+                Validation  = 0.0
+                Cleanup     = 0.0
+                DeltaCert   = 0.0
+                DeltaReport = 0.0
+                Escalation  = 0.0
+                HealthCheck = 0.0
+            }
+        }
+    }
+
+    # If no path or file missing, return empty
+    if ([string]::IsNullOrWhiteSpace($JournalPath) -or -not (Test-Path $JournalPath)) {
+        Write-SPLog -Message "Journal file not found: $JournalPath -- returning empty metrics" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Read and parse JSONL
+    $cutoffDate = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+    $runs = [System.Collections.ArrayList]::new()
+
+    try {
+        $lines = [System.IO.File]::ReadAllLines($JournalPath)
+    }
+    catch {
+        Write-SPLog -Message "Failed to read journal: $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+
+        try {
+            $parsed = $line | ConvertFrom-Json
+        }
+        catch {
+            Write-SPLog -Message "Malformed JSONL line: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Parse timestamp and apply date filter
+        $ts = $null
+        if ($null -ne $parsed.Timestamp) {
+            try { $ts = [datetime]::Parse([string]$parsed.Timestamp).ToUniversalTime() }
+            catch { $ts = $null }
+        }
+        if ($null -eq $ts) { continue }
+        if ($ts -lt $cutoffDate) { continue }
+
+        # Skip WhatIf runs -- they are not real executions
+        if ($null -ne $parsed.Data -and $parsed.Data.WhatIf -eq $true) { continue }
+
+        # Extract run data
+        $exitCode = 0
+        $duration = 0
+        $steps = @{}
+
+        if ($null -ne $parsed.Data) {
+            if ($null -ne $parsed.Data.ExitCode) { $exitCode = [int]$parsed.Data.ExitCode }
+            if ($null -ne $parsed.Data.DurationSeconds) { $duration = [double]$parsed.Data.DurationSeconds }
+
+            if ($null -ne $parsed.Data.Steps) {
+                $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+                foreach ($sn in $stepNames) {
+                    $stepData = $parsed.Data.Steps.$sn
+                    if ($null -ne $stepData) {
+                        $steps[$sn] = [string]$stepData.Status + ': ' + [string]$stepData.Detail
+                    }
+                    else {
+                        $steps[$sn] = 'Skipped'
+                    }
+                }
+            }
+        }
+
+        # PSCustomObject (not hashtable): later code uses
+        # `Measure-Object -Property DurationSeconds`, which requires
+        # reflection-accessible properties. Hashtable keys aren't visible
+        # through that path and caused AvgDuration to silently be 0.
+        $runEntry = [PSCustomObject]@{
+            Timestamp       = $ts.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            CorrelationID   = if ($null -ne $parsed.CorrelationID) { [string]$parsed.CorrelationID } else { '' }
+            ExitCode        = $exitCode
+            DurationSeconds = $duration
+            Steps           = $steps
+        }
+        [void]$runs.Add($runEntry)
+    }
+
+    # Sort by timestamp descending (most recent first)
+    $sortedRuns = @($runs | Sort-Object { $_.Timestamp } -Descending)
+
+    if ($sortedRuns.Count -eq 0) {
+        Write-SPLog -Message "No orchestrator runs found within $DaysBack days" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+            -CorrelationID $CorrelationID
+        return $emptyMetrics
+    }
+
+    # Calculate metrics
+    $runCount = $sortedRuns.Count
+    $successCount = @($sortedRuns | Where-Object { $_.ExitCode -eq 0 }).Count
+    $successRate = [math]::Round(($successCount / $runCount) * 100, 1)
+
+    $totalDuration = ($sortedRuns | Measure-Object -Property DurationSeconds -Sum).Sum
+    $avgDuration = [math]::Round($totalDuration / $runCount, 0)
+
+    # Duration trend: compare first half avg vs second half avg
+    $durationTrend = 'Stable'
+    if ($sortedRuns.Count -ge 4) {
+        $halfPoint = [math]::Floor($sortedRuns.Count / 2)
+        $recentHalf = $sortedRuns[0..($halfPoint - 1)]
+        $olderHalf = $sortedRuns[$halfPoint..($sortedRuns.Count - 1)]
+        $recentAvg = ($recentHalf | Measure-Object -Property DurationSeconds -Average).Average
+        $olderAvg = ($olderHalf | Measure-Object -Property DurationSeconds -Average).Average
+        if ($olderAvg -gt 0) {
+            $changePct = (($recentAvg - $olderAvg) / $olderAvg) * 100
+            if ($changePct -gt 15) { $durationTrend = 'Increasing' }
+            elseif ($changePct -lt -15) { $durationTrend = 'Decreasing' }
+        }
+    }
+
+    # Failure breakdown by exit code
+    $failureBreakdown = @{}
+    $failedRuns = @($sortedRuns | Where-Object { $_.ExitCode -ne 0 })
+    foreach ($fr in $failedRuns) {
+        $key = "ExitCode$($fr.ExitCode)"
+        if ($failureBreakdown.ContainsKey($key)) { $failureBreakdown[$key]++ }
+        else { $failureBreakdown[$key] = 1 }
+    }
+
+    # Consecutive failures from most recent
+    $consecutiveFailures = 0
+    foreach ($r in $sortedRuns) {
+        if ($r.ExitCode -ne 0) { $consecutiveFailures++ }
+        else { break }
+    }
+
+    # Last successful run
+    $lastSuccess = $sortedRuns | Where-Object { $_.ExitCode -eq 0 } | Select-Object -First 1
+    $lastSuccessfulRun = if ($null -ne $lastSuccess) { $lastSuccess.Timestamp } else { $null }
+
+    # Step reliability: per-step success rate
+    $stepNames = @('Validation','Cleanup','DeltaCert','DeltaReport','Escalation','HealthCheck')
+    $stepReliability = @{}
+    foreach ($sn in $stepNames) {
+        $totalWithStep = 0
+        $successWithStep = 0
+        foreach ($r in $sortedRuns) {
+            if ($r.Steps.ContainsKey($sn)) {
+                $stepVal = $r.Steps[$sn]
+                if ($stepVal -ne 'Skipped') {
+                    $totalWithStep++
+                    if ($stepVal -like 'Success*') {
+                        $successWithStep++
+                    }
+                }
+            }
+        }
+        if ($totalWithStep -gt 0) {
+            $stepReliability[$sn] = [math]::Round(($successWithStep / $totalWithStep) * 100, 1)
+        }
+        else {
+            $stepReliability[$sn] = 0.0
+        }
+    }
+
+    Write-SPLog -Message "Parsed $runCount runs: SuccessRate=$successRate% AvgDuration=${avgDuration}s" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPOrchestratorHistory' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Runs    = $sortedRuns
+        Metrics = @{
+            RunCount            = $runCount
+            SuccessRate         = $successRate
+            AvgDurationSeconds  = $avgDuration
+            DurationTrend       = $durationTrend
+            FailureBreakdown    = $failureBreakdown
+            ConsecutiveFailures = $consecutiveFailures
+            LastSuccessfulRun   = $lastSuccessfulRun
+            StepReliability     = $stepReliability
+        }
+    }
+}
+
+#endregion
+
+#region Log Retention and Archival
+
+function Invoke-SPLogRetention {
+    <#
+    .SYNOPSIS
+        Enforces retention policies on toolkit output directories.
+    .DESCRIPTION
+        Archives old files to monthly ZIP archives and deletes files past their
+        retention period. Only processes known toolkit-generated file extensions.
+        Requires Retention.Enabled = true in config (opt-in safety default).
+    .PARAMETER ArchiveDays
+        Files older than this many days are archived. Minimum 7.
+    .PARAMETER DeleteDays
+        Archive ZIPs older than this many days are deleted. Minimum 30. Must be > ArchiveDays.
+    .PARAMETER ArchivePath
+        Directory for archive ZIPs. Created if it does not exist.
+    .PARAMETER Paths
+        Array of directory names (relative to toolkit root) to process.
+    .PARAMETER WhatIf
+        Lists all actions without performing them.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Result with Archived, Deleted, and Skipped counts.
+    .EXAMPLE
+        Invoke-SPLogRetention -WhatIf
+    .EXAMPLE
+        Invoke-SPLogRetention -ArchiveDays 30 -DeleteDays 90
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$ArchiveDays,
+        [Parameter()][int]$DeleteDays,
+        [Parameter()][string]$ArchivePath,
+        [Parameter()][string[]]$Paths,
+        [Parameter()][switch]$WhatIf,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Invoke-SPLogRetention'
+
+    Write-SPLog -Message 'Invoke-SPLogRetention: starting' `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Load config for defaults
+    $retentionEnabled = $false
+    $toolkitRoot = $null
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Retention') {
+            $retCfg = $config.Retention
+            $retentionEnabled = if ($retCfg.PSObject.Properties.Name -contains 'Enabled') { $retCfg.Enabled } else { $false }
+            if ($ArchiveDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'ArchiveDays') {
+                $ArchiveDays = $retCfg.ArchiveDays
+            }
+            if ($DeleteDays -le 0 -and $retCfg.PSObject.Properties.Name -contains 'DeleteDays') {
+                $DeleteDays = $retCfg.DeleteDays
+            }
+            if ([string]::IsNullOrWhiteSpace($ArchivePath) -and $retCfg.PSObject.Properties.Name -contains 'ArchivePath') {
+                $ArchivePath = $retCfg.ArchivePath
+            }
+            if (($null -eq $Paths -or $Paths.Count -eq 0) -and $retCfg.PSObject.Properties.Name -contains 'Paths') {
+                $Paths = @($retCfg.Paths)
+            }
+        }
+    }
+    catch {
+        Write-SPLog -Message "Could not load config: $($_.Exception.Message)" `
+            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # Resolve toolkit root from module location
+    try {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..' ))
+    }
+    catch {
+        $toolkitRoot = (Get-Location).Path
+    }
+
+    # Apply defaults if still unset
+    if ($ArchiveDays -le 0) { $ArchiveDays = 30 }
+    if ($DeleteDays  -le 0) { $DeleteDays  = 90 }
+    if ([string]::IsNullOrWhiteSpace($ArchivePath)) { $ArchivePath = '.\Archive' }
+    if ($null -eq $Paths -or $Paths.Count -eq 0)    { $Paths = @('Audit', 'DeltaCert', 'Logs') }
+
+    # Check Retention.Enabled (unless parameters were provided explicitly, which implies intent)
+    if (-not $retentionEnabled -and -not $PSBoundParameters.ContainsKey('ArchiveDays') -and
+        -not $PSBoundParameters.ContainsKey('DeleteDays')) {
+        Write-SPLog -Message 'Retention.Enabled is false. No action taken. Set Retention.Enabled = true in config or pass explicit parameters.' `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                Archived = @{ FileCount = 0; TotalBytes = 0; Archives = @() }
+                Deleted  = @{ FileCount = 0; TotalBytes = 0; Files = @() }
+                Skipped  = @{ FileCount = 0; Reasons = @() }
+            }
+        }
+    }
+
+    # Validate constraints
+    if ($ArchiveDays -lt 7) {
+        Write-SPLog -Message "ArchiveDays ($ArchiveDays) is less than minimum 7. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "ArchiveDays must be at least 7 (got $ArchiveDays)" }
+        }
+    }
+    if ($DeleteDays -lt 30) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) is less than minimum 30. Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays must be at least 30 (got $DeleteDays)" }
+        }
+    }
+    if ($DeleteDays -le $ArchiveDays) {
+        Write-SPLog -Message "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays). Aborting." `
+            -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = "DeleteDays ($DeleteDays) must be greater than ArchiveDays ($ArchiveDays)" }
+        }
+    }
+
+    # Resolve archive path
+    if (-not [System.IO.Path]::IsPathRooted($ArchivePath)) {
+        $ArchivePath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $ArchivePath))
+    }
+
+    # Known safe extensions
+    $safeExtensions = @('.html', '.csv', '.jsonl', '.txt', '.log', '.json')
+
+    $now           = Get-Date
+    $archiveCutoff = $now.AddDays(-$ArchiveDays)
+    $deleteCutoff  = $now.AddDays(-$DeleteDays)
+
+    # Result accumulators
+    $archivedCount    = 0
+    $archivedBytes    = 0
+    $archiveFiles     = [System.Collections.Generic.List[string]]::new()
+    $deletedCount     = 0
+    $deletedBytes     = 0
+    $deletedFiles     = [System.Collections.Generic.List[string]]::new()
+    $skippedCount     = 0
+    $skippedReasons   = [System.Collections.Generic.List[string]]::new()
+
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    # Phase 1: Archive files older than ArchiveDays but younger than DeleteDays
+    foreach ($relPath in $Paths) {
+        $dirPath = $relPath
+        if (-not [System.IO.Path]::IsPathRooted($dirPath)) {
+            $dirPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $dirPath))
+        }
+        if (-not (Test-Path -Path $dirPath -PathType Container)) {
+            Write-SPLog -Message "Path not found, skipping: $dirPath" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Get files eligible for archival (older than archiveCutoff)
+        $files = Get-ChildItem -Path $dirPath -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $archiveCutoff }
+
+        if ($null -eq $files -or @($files).Count -eq 0) { continue }
+
+        # Group by month for monthly archives
+        $monthGroups = @($files) | Group-Object { $_.LastWriteTime.ToString('yyyy-MM') }
+        $dirName = Split-Path -Path $dirPath -Leaf
+
+        foreach ($group in $monthGroups) {
+            $monthLabel  = $group.Name
+            $zipName     = "${dirName}-${monthLabel}.zip"
+            $zipFullPath = Join-Path -Path $ArchivePath -ChildPath $zipName
+
+            $filesToArchive = @($group.Group | Where-Object {
+                $_.Extension -in $safeExtensions
+            })
+
+            $skippedInGroup = @($group.Group | Where-Object {
+                $_.Extension -notin $safeExtensions
+            })
+            foreach ($sf in $skippedInGroup) {
+                $skippedCount++
+                $skippedReasons.Add("Unknown extension: $($sf.Extension) ($($sf.Name))")
+            }
+
+            if ($filesToArchive.Count -eq 0) { continue }
+
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would archive $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $archivedCount++
+                    $archivedBytes += $f.Length
+                }
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+                continue
+            }
+
+            # Ensure archive directory exists
+            if (-not (Test-Path -Path $ArchivePath -PathType Container)) {
+                New-Item -Path $ArchivePath -ItemType Directory -Force | Out-Null
+            }
+
+            # Create or open the archive ZIP
+            try {
+                $zipMode = if (Test-Path -Path $zipFullPath) {
+                    [System.IO.Compression.ZipArchiveMode]::Update
+                } else {
+                    [System.IO.Compression.ZipArchiveMode]::Create
+                }
+                $zipStream  = [System.IO.File]::Open($zipFullPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite)
+                $zipArchive = [System.IO.Compression.ZipArchive]::new($zipStream, $zipMode)
+
+                foreach ($f in $filesToArchive) {
+                    try {
+                        # Check if entry already exists (for Update mode)
+                        $entryName = $f.Name
+                        $existing  = $zipArchive.GetEntry($entryName)
+                        if ($null -ne $existing) {
+                            $entryName = "$($f.BaseName)_$(Get-Date -Format 'yyyyMMddHHmmss')$($f.Extension)"
+                        }
+
+                        $entry       = $zipArchive.CreateEntry($entryName)
+                        $entryStream = $entry.Open()
+                        try {
+                            $fileBytes = [System.IO.File]::ReadAllBytes($f.FullName)
+                            $entryStream.Write($fileBytes, 0, $fileBytes.Length)
+                        } finally {
+                            $entryStream.Close()
+                        }
+
+                        # Remove the source file after successful archive
+                        try {
+                            Remove-Item -Path $f.FullName -Force -ErrorAction Stop
+                        }
+                        catch {
+                            $skippedCount++
+                            $skippedReasons.Add("File locked: $($f.Name)")
+                            continue
+                        }
+
+                        $archivedCount++
+                        $archivedBytes += $f.Length
+                    }
+                    catch {
+                        $skippedCount++
+                        $skippedReasons.Add("Archive error: $($f.Name) - $($_.Exception.Message)")
+                    }
+                }
+
+                $zipArchive.Dispose()
+                $zipStream.Close()
+
+                if ($zipFullPath -notin $archiveFiles) {
+                    $archiveFiles.Add($zipFullPath)
+                }
+
+                Write-SPLog -Message "Archived $($filesToArchive.Count) file(s) to $zipName" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                Write-SPLog -Message "Failed to create archive $zipName : $($_.Exception.Message)" `
+                    -Severity ERROR -Component $component -Action $action -CorrelationID $CorrelationID
+                foreach ($f in $filesToArchive) {
+                    $skippedCount++
+                    $skippedReasons.Add("Archive creation failed: $($f.Name)")
+                }
+            }
+        }
+    }
+
+    # Phase 2: Delete expired archives older than DeleteDays
+    if (Test-Path -Path $ArchivePath -PathType Container) {
+        $oldArchives = Get-ChildItem -Path $ArchivePath -File -Filter '*.zip' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt $deleteCutoff }
+
+        foreach ($arc in $oldArchives) {
+            if ($WhatIf) {
+                Write-SPLog -Message "WhatIf: Would delete expired archive $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                $deletedCount++
+                $deletedBytes += $arc.Length
+                $deletedFiles.Add($arc.FullName)
+                continue
+            }
+
+            try {
+                $arcSize = $arc.Length
+                Remove-Item -Path $arc.FullName -Force -ErrorAction Stop
+                $deletedCount++
+                $deletedBytes += $arcSize
+                $deletedFiles.Add($arc.FullName)
+                Write-SPLog -Message "Deleted expired archive: $($arc.Name)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+            catch {
+                $skippedCount++
+                $skippedReasons.Add("File locked: $($arc.Name)")
+                Write-SPLog -Message "Could not delete archive $($arc.Name): $($_.Exception.Message)" `
+                    -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+            }
+        }
+    }
+
+    $whatIfLabel = if ($WhatIf) { ' (WhatIf)' } else { '' }
+    Write-SPLog -Message "Invoke-SPLogRetention complete${whatIfLabel}: archived=$archivedCount, deleted=$deletedCount, skipped=$skippedCount" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            Archived = @{
+                FileCount  = $archivedCount
+                TotalBytes = $archivedBytes
+                Archives   = @($archiveFiles)
+            }
+            Deleted = @{
+                FileCount  = $deletedCount
+                TotalBytes = $deletedBytes
+                Files      = @($deletedFiles)
+            }
+            Skipped = @{
+                FileCount = $skippedCount
+                Reasons   = @($skippedReasons)
+            }
+        }
+    }
+}
+
+#endregion
+
+Export-ModuleMember -Function @(
+    'Send-SPReport',
+    'Export-SPCompliancePackage',
+    'Send-SPWebhook',
+    'Send-SPNotification',
+    'Get-SPOrchestratorHistory',
+    'Invoke-SPLogRetention'
+)

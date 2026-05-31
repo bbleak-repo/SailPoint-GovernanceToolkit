@@ -21,9 +21,14 @@
     RequiredModules   = @()
 
     # Sub-modules loaded as part of this module
+    # Order: Queries first, then Core (grouping/metrics), Analytics (trends/risk),
+    # Html (all exports), Operations (notification/retention/compliance)
     NestedModules     = @(
         'SP.AuditQueries.psm1'
-        'SP.AuditReport.psm1'
+        'SP.AuditReportCore.psm1'
+        'SP.AuditAnalytics.psm1'
+        'SP.AuditReportHtml.psm1'
+        'SP.AuditOperations.psm1'
     )
 
     # Public functions exported by this module
@@ -40,7 +45,7 @@
         'Get-SPIdentityDecisionHistory'
         'Get-SPSourceCampaignCoverage'
 
-        # SP.AuditReport - Categorization functions
+        # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
         'Group-SPReviewerActions'
         'Group-SPAuditIdentityEvents'
@@ -51,7 +56,15 @@
         'Get-SPAuditRiskFlags'
         'Group-SPAuditByLeadership'
 
-        # SP.AuditReport - Export functions
+        # SP.AuditAnalytics - Trends, risk scoring, comparison
+        'Compare-SPCampaigns'
+        'Get-SPAuditTrail'
+        'Measure-SPCampaignTrends'
+        'Measure-SPReviewerReputation'
+        'Measure-SPIdentityRisk'
+        'Measure-SPSourceGovernance'
+
+        # SP.AuditReportHtml - HTML, text, CSV, JSONL exports
         'Export-SPAuditHtml'
         'Export-SPAuditText'
         'Export-SPAuditJsonl'
@@ -59,80 +72,42 @@
         'Export-SPLeadershipDirectorHtml'
         'Export-SPLeadershipLevelHtml'
         'Export-SPLeadershipBandHtml'
-        'Send-SPReport'
-
-        # SP.AuditReport - Comparison functions
-        'Compare-SPCampaigns'
         'Export-SPCampaignComparisonHtml'
-
-        # SP.AuditReport - Audit Trail Consolidator (P11-02)
-        'Get-SPAuditTrail'
         'Export-SPAuditTrailHtml'
-
-        # SP.AuditReport - CSV Export (P11-03)
         'Export-SPAuditCsv'
+        'Export-SPCampaignTrendHtml'
+        'Export-SPEntitlementInventoryHtml'
+        'Export-SPAccessProfileInventoryHtml'
+        'Export-SPRoleInventoryHtml'
+        'Export-SPIdentityRiskHtml'
+        'Export-SPSourceGovernanceHtml'
+        'Export-SPStaleAccessHtml'
+        'Export-SPCampaignCompletionReport'
+        'Export-SPOrchestratorHistoryHtml'
+        'Export-SPGovernanceBIData'
+
+        # SP.AuditOperations - Notification, retention, compliance
+        'Send-SPReport'
+        'Export-SPCompliancePackage'
+        'Send-SPWebhook'
+        'Send-SPNotification'
+        'Get-SPOrchestratorHistory'
+        'Invoke-SPLogRetention'
 
         # SP.AuditQueries - Remediation Verification (P11-04)
         'Get-SPRemediationStatus'
 
-        # SP.AuditReport - Campaign Trend Analytics (P11-06)
-        'Measure-SPCampaignTrends'
-        'Export-SPCampaignTrendHtml'
-
         # SP.AuditQueries - Entitlement Inventory (P11-07)
         'Get-SPEntitlementInventory'
-
-        # SP.AuditReport - Entitlement Inventory HTML (P11-07)
-        'Export-SPEntitlementInventoryHtml'
-
-        # SP.AuditReport - Cross-Campaign Reviewer Analysis (P11-08)
-        'Measure-SPReviewerReputation'
-
-        # SP.AuditReport - Compliance Evidence Package (P12-01)
-        'Export-SPCompliancePackage'
-
-        # SP.AuditReport - Identity Risk Scoring (P12-02)
-        'Measure-SPIdentityRisk'
-        'Export-SPIdentityRiskHtml'
-
-        # SP.AuditReport - Source Governance Scorecard (P12-03)
-        'Measure-SPSourceGovernance'
-        'Export-SPSourceGovernanceHtml'
 
         # SP.AuditQueries - Stale Access Detector (P12-04)
         'Get-SPStaleAccess'
 
-        # SP.AuditReport - Stale Access HTML (P12-04)
-        'Export-SPStaleAccessHtml'
-
-        # SP.AuditReport - Campaign Completion Report (P12-05)
-        'Export-SPCampaignCompletionReport'
-
-        # SP.AuditReport - Notification Dispatcher (P12-06)
-        'Send-SPNotification'
-        'Send-SPWebhook'
-
-        # SP.AuditReport - Orchestrator Run History (P12-07)
-        'Get-SPOrchestratorHistory'
-        'Export-SPOrchestratorHistoryHtml'
-
-        # SP.AuditReport - Log Retention and Archival (P12-09)
-        'Invoke-SPLogRetention'
-
         # SP.AuditQueries - Access Profile Inventory (P13-01)
         'Get-SPAccessProfileInventory'
 
-        # SP.AuditReport - Access Profile Inventory HTML (P13-01)
-        'Export-SPAccessProfileInventoryHtml'
-
         # SP.AuditQueries - Role Inventory (P13-02)
         'Get-SPRoleInventory'
-
-        # SP.AuditReport - Role Inventory HTML (P13-02)
-        'Export-SPRoleInventoryHtml'
-
-        # SP.AuditReport - Power BI-Optimized CSV Export (QH-16)
-        'Export-SPGovernanceBIData'
     )
 
     # Do not export variables or aliases from nested modules
