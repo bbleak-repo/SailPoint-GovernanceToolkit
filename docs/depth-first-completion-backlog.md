@@ -15,7 +15,7 @@
 | ID | Feature | Source | Depends On | Status |
 |----|---------|--------|------------|--------|
 | DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | DONE |
-| DF-02 | Governance Dashboard Data Export | P13-08 | none | PENDING |
+| DF-02 | Governance Dashboard Data Export | P13-08 | none | DONE |
 | DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | PENDING |
 | DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | PENDING |
 | DF-05 | Audit Evidence Integrity Chain | P14-03 | none | PENDING |
@@ -47,7 +47,7 @@
 
 ## DF-02: Governance Dashboard Data Export (P13-08)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Export-SPGovernanceDashboardData` in SP.AuditOperations.psm1

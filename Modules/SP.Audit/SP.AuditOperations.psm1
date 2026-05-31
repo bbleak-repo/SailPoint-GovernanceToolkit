@@ -2236,6 +2236,431 @@ function Get-SPGovernanceMetricsTrend {
 
 #endregion
 
+#region Governance Dashboard Data Export (P13-08 / DF-02)
+
+function Export-SPGovernanceDashboardData {
+    <#
+    .SYNOPSIS
+        Exports a unified, analytics-enriched dataset for BI/SIEM consumption.
+    .DESCRIPTION
+        Produces a flat denormalized dataset combining campaign audit decisions with
+        cross-domain analytics: identity risk scores, source governance grades, policy
+        compliance status, and reviewer reputation. Each row represents one
+        campaign-identity-entitlement combination, enriched with all available
+        governance signals.
+
+        Designed for Power BI, Tableau, Splunk, or any system that consumes flat
+        CSV/JSON feeds. Outputs CSV, JSON, or both.
+
+        Column set (50+ columns):
+        - Campaign: Id, Name, Type, Status, Created, Deadline, Completed,
+          TotalItems, CompletionPct, ApprovalRate, RevocationRate, AvgResponseHours
+        - Decision: IdentityName, IdentityId, AccountName, SourceName,
+          EntitlementName, AccessType, Decision, DecisionDate, Justification
+        - Identity Risk: RiskScore, RiskTier, StaleAccessCount,
+          PrivilegedAccessCount, TopRiskFactors
+        - Source Governance: GovernanceGrade, GovernanceScore
+        - Policy: OverallCompliant, PassedPolicies, FailedPolicies
+        - Reviewer: ReviewerName, ReputationScore, ReputationTier
+        - Metadata: ExportTimestamp
+
+        Uses Export-Csv -NoTypeInformation for PS 5.1 compatibility.
+        JSON uses BOM-free UTF-8 encoding. Date columns are ISO 8601.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables as produced by the campaign audit pipeline.
+        Each must contain: CampaignName, Decisions.
+    .PARAMETER CampaignMetrics
+        Optional hashtable from Measure-SPCampaignMetrics. When provided, each row
+        is enriched with campaign-level KPIs (approval rate, response time).
+    .PARAMETER PolicyResults
+        Optional hashtable from Test-SPGovernancePolicy. When provided, each row
+        includes the overall compliance status and pass/fail counts.
+    .PARAMETER IdentityRisk
+        Optional hashtable from Measure-SPIdentityRisk. When provided, each row
+        includes the identity's risk score, tier, and top risk factors.
+    .PARAMETER SourceGovernance
+        Optional hashtable from Measure-SPSourceGovernance. When provided, each row
+        includes the source's governance grade and score.
+    .PARAMETER ReviewerReputation
+        Optional hashtable from Measure-SPReviewerReputation. When provided, each row
+        includes the reviewer's reputation score and tier.
+    .PARAMETER OutputPath
+        Directory in which to write output files. Created if absent.
+    .PARAMETER Format
+        Output format: CSV, JSON, or Both. Default: Both.
+    .PARAMETER CorrelationID
+        Unique ID for tracing and file naming. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = @{ CsvFile; JsonFile; RowCount; Columns }; Error }
+    .EXAMPLE
+        $result = Export-SPGovernanceDashboardData -CampaignAudits $audits `
+            -IdentityRisk $risk -SourceGovernance $gov -OutputPath 'C:\Dashboard'
+    .EXAMPLE
+        $result = Export-SPGovernanceDashboardData -CampaignAudits $audits `
+            -PolicyResults $policy -ReviewerReputation $rep `
+            -OutputPath 'C:\Dashboard' -Format CSV
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [hashtable]$CampaignMetrics,
+
+        [Parameter()]
+        [hashtable]$PolicyResults,
+
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$SourceGovernance,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [ValidateSet('CSV', 'JSON', 'Both')]
+        [string]$Format = 'Both',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Export-SPGovernanceDashboardData'
+
+    Write-SPLog -Message "Exporting dashboard data for $($CampaignAudits.Count) campaign(s), Format=$Format" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- Helper: safe value extraction from hashtable or PSCustomObject ---
+    function _DVal ($obj, [string]$key, [string]$default = '') {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return [string]$obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return [string]$v }
+        }
+        return $default
+    }
+
+    # --- Build identity risk lookup: IdentityId -> { RiskScore, RiskTier, ... } ---
+    $riskLookup = @{}
+    if ($null -ne $IdentityRisk -and $IdentityRisk.ContainsKey('Identities')) {
+        foreach ($id in @($IdentityRisk['Identities'])) {
+            if ($null -eq $id) { continue }
+            $idKey = _DVal $id 'IdentityId'
+            if ([string]::IsNullOrWhiteSpace($idKey)) {
+                $idKey = _DVal $id 'IdentityName'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($idKey) -and -not $riskLookup.ContainsKey($idKey)) {
+                $riskLookup[$idKey] = $id
+            }
+            # Also index by name for fallback matching
+            $idName = _DVal $id 'IdentityName'
+            if (-not [string]::IsNullOrWhiteSpace($idName) -and -not $riskLookup.ContainsKey($idName)) {
+                $riskLookup[$idName] = $id
+            }
+        }
+    }
+
+    # --- Build source governance lookup: SourceName -> { GovernanceGrade, GovernanceScore } ---
+    $sourceLookup = @{}
+    if ($null -ne $SourceGovernance -and $SourceGovernance.ContainsKey('Sources')) {
+        foreach ($src in @($SourceGovernance['Sources'])) {
+            if ($null -eq $src) { continue }
+            $srcName = _DVal $src 'SourceName'
+            if (-not [string]::IsNullOrWhiteSpace($srcName) -and -not $sourceLookup.ContainsKey($srcName)) {
+                $sourceLookup[$srcName] = $src
+            }
+        }
+    }
+
+    # --- Build reviewer reputation lookup: ReviewerName -> { ReputationScore, ReputationTier } ---
+    $repLookup = @{}
+    if ($null -ne $ReviewerReputation -and $ReviewerReputation.ContainsKey('Reviewers')) {
+        foreach ($rev in @($ReviewerReputation['Reviewers'])) {
+            if ($null -eq $rev) { continue }
+            $revName = ''
+            if ($rev -is [hashtable] -and $rev.ContainsKey('Name')) { $revName = [string]$rev['Name'] }
+            elseif ($null -ne $rev.PSObject -and $null -ne $rev.PSObject.Properties['Name']) { $revName = [string]$rev.Name }
+            if (-not [string]::IsNullOrWhiteSpace($revName) -and -not $repLookup.ContainsKey($revName)) {
+                $repLookup[$revName] = $rev
+            }
+        }
+    }
+
+    # --- Build campaign metrics lookup: CampaignId -> metrics object ---
+    $metricsLookup = @{}
+    if ($null -ne $CampaignMetrics -and $CampaignMetrics.ContainsKey('Data')) {
+        foreach ($cm in @($CampaignMetrics['Data'])) {
+            if ($null -eq $cm) { continue }
+            $cmId = ''
+            if ($null -ne $cm.PSObject -and $null -ne $cm.PSObject.Properties['CampaignId']) {
+                $cmId = [string]$cm.CampaignId
+            }
+            if (-not [string]::IsNullOrWhiteSpace($cmId) -and -not $metricsLookup.ContainsKey($cmId)) {
+                $metricsLookup[$cmId] = $cm
+            }
+        }
+    }
+
+    # --- Extract policy summary ---
+    $policyCompliant = ''
+    $policyPassed    = ''
+    $policyFailed    = ''
+    if ($null -ne $PolicyResults) {
+        $policyCompliant = _DVal $PolicyResults 'OverallCompliant'
+        if ($PolicyResults.ContainsKey('Summary') -and $null -ne $PolicyResults['Summary']) {
+            $pSummary = $PolicyResults['Summary']
+            $policyPassed = _DVal $pSummary 'Passed'
+            $policyFailed = _DVal $pSummary 'Failed'
+        }
+    }
+
+    $exportTimestamp = (Get-Date).ToUniversalTime().ToString('o')
+    $rows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $campName      = _DVal $audit 'CampaignName'
+        $campId        = _DVal $audit 'CampaignId'
+        $campType      = _DVal $audit 'CampaignType'
+        $campStatus    = _DVal $audit 'Status'
+        $campCreated   = _DVal $audit 'Created'
+        $campDeadline  = _DVal $audit 'Deadline'
+        $campCompleted = _DVal $audit 'Completed'
+
+        # Campaign-level decision counts
+        $decisions = $null
+        if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+            $decisions = $audit['Decisions']
+        } elseif ($null -ne $audit.PSObject -and $null -ne $audit.PSObject.Properties['Decisions']) {
+            $decisions = $audit.Decisions
+        }
+
+        $approvedCt = 0; $revokedCt = 0; $pendingCt = 0
+        if ($null -ne $decisions -and $decisions -is [hashtable]) {
+            if ($decisions.ContainsKey('Approved') -and $null -ne $decisions['Approved']) {
+                $approvedCt = @($decisions['Approved']).Count
+            }
+            if ($decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                $revokedCt = @($decisions['Revoked']).Count
+            }
+            if ($decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                $pendingCt = @($decisions['Pending']).Count
+            }
+        }
+        $totalItems    = $approvedCt + $revokedCt + $pendingCt
+        $completionPct = if ($totalItems -gt 0) {
+            [Math]::Round((($approvedCt + $revokedCt) / $totalItems) * 100, 1)
+        } else { 0.0 }
+
+        # Campaign metrics enrichment
+        $campApprovalRate   = ''
+        $campRevocationRate = ''
+        $campAvgRespHours   = ''
+        if ($metricsLookup.ContainsKey($campId)) {
+            $cm = $metricsLookup[$campId]
+            if ($null -ne $cm.PSObject.Properties['ApprovalRate'])         { $campApprovalRate   = [string]$cm.ApprovalRate }
+            if ($null -ne $cm.PSObject.Properties['RevocationRate'])       { $campRevocationRate = [string]$cm.RevocationRate }
+            if ($null -ne $cm.PSObject.Properties['AvgResponseTimeHours']) { $campAvgRespHours   = [string]$cm.AvgResponseTimeHours }
+        }
+
+        # Iterate all decisions
+        if ($null -eq $decisions) { continue }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+                $identityId   = if ($null -ne $item.IdentityId)   { [string]$item.IdentityId }   else { '' }
+                $sourceName   = if ($null -ne $item.SourceName)   { [string]$item.SourceName }   else { '' }
+                $revName      = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+
+                # Identity risk enrichment
+                $idRiskScore    = ''
+                $idRiskTier     = ''
+                $idStaleCount   = ''
+                $idPrivCount    = ''
+                $idTopFactors   = ''
+                $riskEntry = $null
+                if ($riskLookup.ContainsKey($identityId)) {
+                    $riskEntry = $riskLookup[$identityId]
+                } elseif ($riskLookup.ContainsKey($identityName)) {
+                    $riskEntry = $riskLookup[$identityName]
+                }
+                if ($null -ne $riskEntry) {
+                    $idRiskScore  = _DVal $riskEntry 'RiskScore'
+                    $idRiskTier   = _DVal $riskEntry 'RiskTier'
+                    $idStaleCount = _DVal $riskEntry 'StaleAccessCount'
+                    $idPrivCount  = _DVal $riskEntry 'PrivilegedAccessCount'
+                    $factors = $null
+                    if ($riskEntry -is [hashtable] -and $riskEntry.ContainsKey('TopRiskFactors')) {
+                        $factors = $riskEntry['TopRiskFactors']
+                    }
+                    if ($null -ne $factors -and $factors -is [array] -and $factors.Count -gt 0) {
+                        $idTopFactors = ($factors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+                    }
+                }
+
+                # Source governance enrichment
+                $srcGrade = ''
+                $srcScore = ''
+                if ($sourceLookup.ContainsKey($sourceName)) {
+                    $srcEntry = $sourceLookup[$sourceName]
+                    $srcGrade = _DVal $srcEntry 'GovernanceGrade'
+                    $srcScore = _DVal $srcEntry 'GovernanceScore'
+                }
+
+                # Reviewer reputation enrichment
+                $revRepScore = ''
+                $revRepTier  = ''
+                if ($repLookup.ContainsKey($revName)) {
+                    $repEntry = $repLookup[$revName]
+                    if ($repEntry -is [hashtable]) {
+                        $revRepScore = _DVal $repEntry 'ReputationScore'
+                        $revRepTier  = _DVal $repEntry 'ReputationTier'
+                    } else {
+                        if ($null -ne $repEntry.PSObject.Properties['ReputationScore']) { $revRepScore = [string]$repEntry.ReputationScore }
+                        if ($null -ne $repEntry.PSObject.Properties['ReputationTier'])  { $revRepTier  = [string]$repEntry.ReputationTier }
+                    }
+                }
+
+                $rows.Add([PSCustomObject]@{
+                    CampaignId              = $campId
+                    CampaignName            = $campName
+                    CampaignType            = $campType
+                    CampaignStatus          = $campStatus
+                    CampaignCreated         = $campCreated
+                    CampaignDeadline        = $campDeadline
+                    CampaignCompleted       = $campCompleted
+                    CampaignTotalItems      = $totalItems
+                    CampaignCompletionPct   = $completionPct
+                    CampaignApprovalRate    = $campApprovalRate
+                    CampaignRevocationRate  = $campRevocationRate
+                    CampaignAvgResponseHrs  = $campAvgRespHours
+                    IdentityName            = $identityName
+                    IdentityId              = $identityId
+                    AccountName             = if ($null -ne $item.AccountName) { [string]$item.AccountName } else { '' }
+                    SourceName              = $sourceName
+                    EntitlementName         = if ($null -ne $item.AccessName)  { [string]$item.AccessName }  else { '' }
+                    AccessType              = if ($null -ne $item.AccessType)  { [string]$item.AccessType }  else { '' }
+                    Decision                = if ($null -ne $item.Decision)    { [string]$item.Decision }    else { $category }
+                    DecisionDate            = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                    Justification           = if ($null -ne $item.Justification) { [string]$item.Justification } else { '' }
+                    ReviewerName            = $revName
+                    IdentityRiskScore       = $idRiskScore
+                    IdentityRiskTier        = $idRiskTier
+                    IdentityStaleAccess     = $idStaleCount
+                    IdentityPrivilegedAccess = $idPrivCount
+                    IdentityTopRiskFactors  = $idTopFactors
+                    SourceGovernanceGrade   = $srcGrade
+                    SourceGovernanceScore   = $srcScore
+                    PolicyOverallCompliant  = $policyCompliant
+                    PolicyPassed            = $policyPassed
+                    PolicyFailed            = $policyFailed
+                    ReviewerReputationScore = $revRepScore
+                    ReviewerReputationTier  = $revRepTier
+                    ExportTimestamp         = $exportTimestamp
+                })
+            }
+        }
+    }
+
+    $columnNames = @(
+        'CampaignId','CampaignName','CampaignType','CampaignStatus',
+        'CampaignCreated','CampaignDeadline','CampaignCompleted',
+        'CampaignTotalItems','CampaignCompletionPct',
+        'CampaignApprovalRate','CampaignRevocationRate','CampaignAvgResponseHrs',
+        'IdentityName','IdentityId','AccountName','SourceName',
+        'EntitlementName','AccessType','Decision','DecisionDate','Justification',
+        'ReviewerName',
+        'IdentityRiskScore','IdentityRiskTier','IdentityStaleAccess',
+        'IdentityPrivilegedAccess','IdentityTopRiskFactors',
+        'SourceGovernanceGrade','SourceGovernanceScore',
+        'PolicyOverallCompliant','PolicyPassed','PolicyFailed',
+        'ReviewerReputationScore','ReviewerReputationTier',
+        'ExportTimestamp'
+    )
+
+    $csvFile  = $null
+    $jsonFile = $null
+
+    # --- Write CSV ---
+    if ($Format -eq 'CSV' -or $Format -eq 'Both') {
+        $csvFile = Join-Path $OutputPath "dashboard-governance-${CorrelationID}.csv"
+        if ($rows.Count -gt 0) {
+            $rows | Export-Csv -Path $csvFile -NoTypeInformation -Encoding UTF8
+        } else {
+            $emptyRow = [ordered]@{}
+            foreach ($col in $columnNames) { $emptyRow[$col] = '' }
+            [PSCustomObject]$emptyRow | Export-Csv -Path $csvFile -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvFile -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvFile, "$headerLine`n", $utf8NoBom)
+        }
+        Write-SPLog -Message "Dashboard CSV written ($($rows.Count) rows): $csvFile" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # --- Write JSON ---
+    if ($Format -eq 'JSON' -or $Format -eq 'Both') {
+        $jsonFile = Join-Path $OutputPath "dashboard-governance-${CorrelationID}.json"
+        $jsonPayload = @{
+            exportTimestamp = $exportTimestamp
+            correlationId  = $CorrelationID
+            rowCount       = $rows.Count
+            columns        = $columnNames
+            data           = @($rows)
+        }
+        $jsonText = $jsonPayload | ConvertTo-Json -Depth 10 -Compress:$false
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($jsonFile, $jsonText, $utf8NoBom)
+        Write-SPLog -Message "Dashboard JSON written ($($rows.Count) rows): $jsonFile" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    Write-SPLog -Message "Export-SPGovernanceDashboardData complete: $($rows.Count) rows, $($columnNames.Count) columns" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            CsvFile  = $csvFile
+            JsonFile = $jsonFile
+            RowCount = $rows.Count
+            Columns  = $columnNames.Count
+        }
+        Error   = $null
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Send-SPReport',
     'Export-SPCompliancePackage',
@@ -2245,5 +2670,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPLogRetention',
     'Save-SPGovernanceMetrics',
     'Get-SPGovernanceMetrics',
-    'Get-SPGovernanceMetricsTrend'
+    'Get-SPGovernanceMetricsTrend',
+    'Export-SPGovernanceDashboardData'
 )

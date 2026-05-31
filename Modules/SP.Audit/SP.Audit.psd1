@@ -183,6 +183,9 @@
 
         # SP.AuditReportHtml - Policy Compliance Report (P13-05 / DF-01)
         'Export-SPPolicyComplianceHtml'
+
+        # SP.AuditOperations - Governance Dashboard Data Export (P13-08 / DF-02)
+        'Export-SPGovernanceDashboardData'
     )
 
     # Do not export variables or aliases from nested modules
