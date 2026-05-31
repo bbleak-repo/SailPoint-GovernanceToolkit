@@ -2236,6 +2236,1157 @@ function Get-SPGovernanceMetricsTrend {
 
 #endregion
 
+#region Governance Dashboard Data Export (P13-08 / DF-02)
+
+function Export-SPGovernanceDashboardData {
+    <#
+    .SYNOPSIS
+        Exports a unified, analytics-enriched dataset for BI/SIEM consumption.
+    .DESCRIPTION
+        Produces a flat denormalized dataset combining campaign audit decisions with
+        cross-domain analytics: identity risk scores, source governance grades, policy
+        compliance status, and reviewer reputation. Each row represents one
+        campaign-identity-entitlement combination, enriched with all available
+        governance signals.
+
+        Designed for Power BI, Tableau, Splunk, or any system that consumes flat
+        CSV/JSON feeds. Outputs CSV, JSON, or both.
+
+        Column set (50+ columns):
+        - Campaign: Id, Name, Type, Status, Created, Deadline, Completed,
+          TotalItems, CompletionPct, ApprovalRate, RevocationRate, AvgResponseHours
+        - Decision: IdentityName, IdentityId, AccountName, SourceName,
+          EntitlementName, AccessType, Decision, DecisionDate, Justification
+        - Identity Risk: RiskScore, RiskTier, StaleAccessCount,
+          PrivilegedAccessCount, TopRiskFactors
+        - Source Governance: GovernanceGrade, GovernanceScore
+        - Policy: OverallCompliant, PassedPolicies, FailedPolicies
+        - Reviewer: ReviewerName, ReputationScore, ReputationTier
+        - Metadata: ExportTimestamp
+
+        Uses Export-Csv -NoTypeInformation for PS 5.1 compatibility.
+        JSON uses BOM-free UTF-8 encoding. Date columns are ISO 8601.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables as produced by the campaign audit pipeline.
+        Each must contain: CampaignName, Decisions.
+    .PARAMETER CampaignMetrics
+        Optional hashtable from Measure-SPCampaignMetrics. When provided, each row
+        is enriched with campaign-level KPIs (approval rate, response time).
+    .PARAMETER PolicyResults
+        Optional hashtable from Test-SPGovernancePolicy. When provided, each row
+        includes the overall compliance status and pass/fail counts.
+    .PARAMETER IdentityRisk
+        Optional hashtable from Measure-SPIdentityRisk. When provided, each row
+        includes the identity's risk score, tier, and top risk factors.
+    .PARAMETER SourceGovernance
+        Optional hashtable from Measure-SPSourceGovernance. When provided, each row
+        includes the source's governance grade and score.
+    .PARAMETER ReviewerReputation
+        Optional hashtable from Measure-SPReviewerReputation. When provided, each row
+        includes the reviewer's reputation score and tier.
+    .PARAMETER OutputPath
+        Directory in which to write output files. Created if absent.
+    .PARAMETER Format
+        Output format: CSV, JSON, or Both. Default: Both.
+    .PARAMETER CorrelationID
+        Unique ID for tracing and file naming. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = @{ CsvFile; JsonFile; RowCount; Columns }; Error }
+    .EXAMPLE
+        $result = Export-SPGovernanceDashboardData -CampaignAudits $audits `
+            -IdentityRisk $risk -SourceGovernance $gov -OutputPath 'C:\Dashboard'
+    .EXAMPLE
+        $result = Export-SPGovernanceDashboardData -CampaignAudits $audits `
+            -PolicyResults $policy -ReviewerReputation $rep `
+            -OutputPath 'C:\Dashboard' -Format CSV
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [hashtable]$CampaignMetrics,
+
+        [Parameter()]
+        [hashtable]$PolicyResults,
+
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$SourceGovernance,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [ValidateSet('CSV', 'JSON', 'Both')]
+        [string]$Format = 'Both',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Export-SPGovernanceDashboardData'
+
+    Write-SPLog -Message "Exporting dashboard data for $($CampaignAudits.Count) campaign(s), Format=$Format" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- Helper: safe value extraction from hashtable or PSCustomObject ---
+    function _DVal ($obj, [string]$key, [string]$default = '') {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return [string]$obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return [string]$v }
+        }
+        return $default
+    }
+
+    # --- Build identity risk lookup: IdentityId -> { RiskScore, RiskTier, ... } ---
+    $riskLookup = @{}
+    if ($null -ne $IdentityRisk -and $IdentityRisk.ContainsKey('Identities')) {
+        foreach ($id in @($IdentityRisk['Identities'])) {
+            if ($null -eq $id) { continue }
+            $idKey = _DVal $id 'IdentityId'
+            if ([string]::IsNullOrWhiteSpace($idKey)) {
+                $idKey = _DVal $id 'IdentityName'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($idKey) -and -not $riskLookup.ContainsKey($idKey)) {
+                $riskLookup[$idKey] = $id
+            }
+            # Also index by name for fallback matching
+            $idName = _DVal $id 'IdentityName'
+            if (-not [string]::IsNullOrWhiteSpace($idName) -and -not $riskLookup.ContainsKey($idName)) {
+                $riskLookup[$idName] = $id
+            }
+        }
+    }
+
+    # --- Build source governance lookup: SourceName -> { GovernanceGrade, GovernanceScore } ---
+    $sourceLookup = @{}
+    if ($null -ne $SourceGovernance -and $SourceGovernance.ContainsKey('Sources')) {
+        foreach ($src in @($SourceGovernance['Sources'])) {
+            if ($null -eq $src) { continue }
+            $srcName = _DVal $src 'SourceName'
+            if (-not [string]::IsNullOrWhiteSpace($srcName) -and -not $sourceLookup.ContainsKey($srcName)) {
+                $sourceLookup[$srcName] = $src
+            }
+        }
+    }
+
+    # --- Build reviewer reputation lookup: ReviewerName -> { ReputationScore, ReputationTier } ---
+    $repLookup = @{}
+    if ($null -ne $ReviewerReputation -and $ReviewerReputation.ContainsKey('Reviewers')) {
+        foreach ($rev in @($ReviewerReputation['Reviewers'])) {
+            if ($null -eq $rev) { continue }
+            $revName = ''
+            if ($rev -is [hashtable] -and $rev.ContainsKey('Name')) { $revName = [string]$rev['Name'] }
+            elseif ($null -ne $rev.PSObject -and $null -ne $rev.PSObject.Properties['Name']) { $revName = [string]$rev.Name }
+            if (-not [string]::IsNullOrWhiteSpace($revName) -and -not $repLookup.ContainsKey($revName)) {
+                $repLookup[$revName] = $rev
+            }
+        }
+    }
+
+    # --- Build campaign metrics lookup: CampaignId -> metrics object ---
+    $metricsLookup = @{}
+    if ($null -ne $CampaignMetrics -and $CampaignMetrics.ContainsKey('Data')) {
+        foreach ($cm in @($CampaignMetrics['Data'])) {
+            if ($null -eq $cm) { continue }
+            $cmId = ''
+            if ($null -ne $cm.PSObject -and $null -ne $cm.PSObject.Properties['CampaignId']) {
+                $cmId = [string]$cm.CampaignId
+            }
+            if (-not [string]::IsNullOrWhiteSpace($cmId) -and -not $metricsLookup.ContainsKey($cmId)) {
+                $metricsLookup[$cmId] = $cm
+            }
+        }
+    }
+
+    # --- Extract policy summary ---
+    $policyCompliant = ''
+    $policyPassed    = ''
+    $policyFailed    = ''
+    if ($null -ne $PolicyResults) {
+        $policyCompliant = _DVal $PolicyResults 'OverallCompliant'
+        if ($PolicyResults.ContainsKey('Summary') -and $null -ne $PolicyResults['Summary']) {
+            $pSummary = $PolicyResults['Summary']
+            $policyPassed = _DVal $pSummary 'Passed'
+            $policyFailed = _DVal $pSummary 'Failed'
+        }
+    }
+
+    $exportTimestamp = (Get-Date).ToUniversalTime().ToString('o')
+    $rows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $campName      = _DVal $audit 'CampaignName'
+        $campId        = _DVal $audit 'CampaignId'
+        $campType      = _DVal $audit 'CampaignType'
+        $campStatus    = _DVal $audit 'Status'
+        $campCreated   = _DVal $audit 'Created'
+        $campDeadline  = _DVal $audit 'Deadline'
+        $campCompleted = _DVal $audit 'Completed'
+
+        # Campaign-level decision counts
+        $decisions = $null
+        if ($audit -is [hashtable] -and $audit.ContainsKey('Decisions')) {
+            $decisions = $audit['Decisions']
+        } elseif ($null -ne $audit.PSObject -and $null -ne $audit.PSObject.Properties['Decisions']) {
+            $decisions = $audit.Decisions
+        }
+
+        $approvedCt = 0; $revokedCt = 0; $pendingCt = 0
+        if ($null -ne $decisions -and $decisions -is [hashtable]) {
+            if ($decisions.ContainsKey('Approved') -and $null -ne $decisions['Approved']) {
+                $approvedCt = @($decisions['Approved']).Count
+            }
+            if ($decisions.ContainsKey('Revoked') -and $null -ne $decisions['Revoked']) {
+                $revokedCt = @($decisions['Revoked']).Count
+            }
+            if ($decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                $pendingCt = @($decisions['Pending']).Count
+            }
+        }
+        $totalItems    = $approvedCt + $revokedCt + $pendingCt
+        $completionPct = if ($totalItems -gt 0) {
+            [Math]::Round((($approvedCt + $revokedCt) / $totalItems) * 100, 1)
+        } else { 0.0 }
+
+        # Campaign metrics enrichment
+        $campApprovalRate   = ''
+        $campRevocationRate = ''
+        $campAvgRespHours   = ''
+        if ($metricsLookup.ContainsKey($campId)) {
+            $cm = $metricsLookup[$campId]
+            if ($null -ne $cm.PSObject.Properties['ApprovalRate'])         { $campApprovalRate   = [string]$cm.ApprovalRate }
+            if ($null -ne $cm.PSObject.Properties['RevocationRate'])       { $campRevocationRate = [string]$cm.RevocationRate }
+            if ($null -ne $cm.PSObject.Properties['AvgResponseTimeHours']) { $campAvgRespHours   = [string]$cm.AvgResponseTimeHours }
+        }
+
+        # Iterate all decisions
+        if ($null -eq $decisions) { continue }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $identityName = if ($null -ne $item.IdentityName) { [string]$item.IdentityName } else { '' }
+                $identityId   = if ($null -ne $item.IdentityId)   { [string]$item.IdentityId }   else { '' }
+                $sourceName   = if ($null -ne $item.SourceName)   { [string]$item.SourceName }   else { '' }
+                $revName      = if ($null -ne $item.ReviewerName) { [string]$item.ReviewerName } else { '' }
+
+                # Identity risk enrichment
+                $idRiskScore    = ''
+                $idRiskTier     = ''
+                $idStaleCount   = ''
+                $idPrivCount    = ''
+                $idTopFactors   = ''
+                $riskEntry = $null
+                if ($riskLookup.ContainsKey($identityId)) {
+                    $riskEntry = $riskLookup[$identityId]
+                } elseif ($riskLookup.ContainsKey($identityName)) {
+                    $riskEntry = $riskLookup[$identityName]
+                }
+                if ($null -ne $riskEntry) {
+                    $idRiskScore  = _DVal $riskEntry 'RiskScore'
+                    $idRiskTier   = _DVal $riskEntry 'RiskTier'
+                    $idStaleCount = _DVal $riskEntry 'StaleAccessCount'
+                    $idPrivCount  = _DVal $riskEntry 'PrivilegedAccessCount'
+                    $factors = $null
+                    if ($riskEntry -is [hashtable] -and $riskEntry.ContainsKey('TopRiskFactors')) {
+                        $factors = $riskEntry['TopRiskFactors']
+                    }
+                    if ($null -ne $factors -and $factors -is [array] -and $factors.Count -gt 0) {
+                        $idTopFactors = ($factors | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+                    }
+                }
+
+                # Source governance enrichment
+                $srcGrade = ''
+                $srcScore = ''
+                if ($sourceLookup.ContainsKey($sourceName)) {
+                    $srcEntry = $sourceLookup[$sourceName]
+                    $srcGrade = _DVal $srcEntry 'GovernanceGrade'
+                    $srcScore = _DVal $srcEntry 'GovernanceScore'
+                }
+
+                # Reviewer reputation enrichment
+                $revRepScore = ''
+                $revRepTier  = ''
+                if ($repLookup.ContainsKey($revName)) {
+                    $repEntry = $repLookup[$revName]
+                    if ($repEntry -is [hashtable]) {
+                        $revRepScore = _DVal $repEntry 'ReputationScore'
+                        $revRepTier  = _DVal $repEntry 'ReputationTier'
+                    } else {
+                        if ($null -ne $repEntry.PSObject.Properties['ReputationScore']) { $revRepScore = [string]$repEntry.ReputationScore }
+                        if ($null -ne $repEntry.PSObject.Properties['ReputationTier'])  { $revRepTier  = [string]$repEntry.ReputationTier }
+                    }
+                }
+
+                $rows.Add([PSCustomObject]@{
+                    CampaignId              = $campId
+                    CampaignName            = $campName
+                    CampaignType            = $campType
+                    CampaignStatus          = $campStatus
+                    CampaignCreated         = $campCreated
+                    CampaignDeadline        = $campDeadline
+                    CampaignCompleted       = $campCompleted
+                    CampaignTotalItems      = $totalItems
+                    CampaignCompletionPct   = $completionPct
+                    CampaignApprovalRate    = $campApprovalRate
+                    CampaignRevocationRate  = $campRevocationRate
+                    CampaignAvgResponseHrs  = $campAvgRespHours
+                    IdentityName            = $identityName
+                    IdentityId              = $identityId
+                    AccountName             = if ($null -ne $item.AccountName) { [string]$item.AccountName } else { '' }
+                    SourceName              = $sourceName
+                    EntitlementName         = if ($null -ne $item.AccessName)  { [string]$item.AccessName }  else { '' }
+                    AccessType              = if ($null -ne $item.AccessType)  { [string]$item.AccessType }  else { '' }
+                    Decision                = if ($null -ne $item.Decision)    { [string]$item.Decision }    else { $category }
+                    DecisionDate            = if ($null -ne $item.DecisionDate) { [string]$item.DecisionDate } else { '' }
+                    Justification           = if ($null -ne $item.Justification) { [string]$item.Justification } else { '' }
+                    ReviewerName            = $revName
+                    IdentityRiskScore       = $idRiskScore
+                    IdentityRiskTier        = $idRiskTier
+                    IdentityStaleAccess     = $idStaleCount
+                    IdentityPrivilegedAccess = $idPrivCount
+                    IdentityTopRiskFactors  = $idTopFactors
+                    SourceGovernanceGrade   = $srcGrade
+                    SourceGovernanceScore   = $srcScore
+                    PolicyOverallCompliant  = $policyCompliant
+                    PolicyPassed            = $policyPassed
+                    PolicyFailed            = $policyFailed
+                    ReviewerReputationScore = $revRepScore
+                    ReviewerReputationTier  = $revRepTier
+                    ExportTimestamp         = $exportTimestamp
+                })
+            }
+        }
+    }
+
+    $columnNames = @(
+        'CampaignId','CampaignName','CampaignType','CampaignStatus',
+        'CampaignCreated','CampaignDeadline','CampaignCompleted',
+        'CampaignTotalItems','CampaignCompletionPct',
+        'CampaignApprovalRate','CampaignRevocationRate','CampaignAvgResponseHrs',
+        'IdentityName','IdentityId','AccountName','SourceName',
+        'EntitlementName','AccessType','Decision','DecisionDate','Justification',
+        'ReviewerName',
+        'IdentityRiskScore','IdentityRiskTier','IdentityStaleAccess',
+        'IdentityPrivilegedAccess','IdentityTopRiskFactors',
+        'SourceGovernanceGrade','SourceGovernanceScore',
+        'PolicyOverallCompliant','PolicyPassed','PolicyFailed',
+        'ReviewerReputationScore','ReviewerReputationTier',
+        'ExportTimestamp'
+    )
+
+    $csvFile  = $null
+    $jsonFile = $null
+
+    # --- Write CSV ---
+    if ($Format -eq 'CSV' -or $Format -eq 'Both') {
+        $csvFile = Join-Path $OutputPath "dashboard-governance-${CorrelationID}.csv"
+        if ($rows.Count -gt 0) {
+            $rows | Export-Csv -Path $csvFile -NoTypeInformation -Encoding UTF8
+        } else {
+            $emptyRow = [ordered]@{}
+            foreach ($col in $columnNames) { $emptyRow[$col] = '' }
+            [PSCustomObject]$emptyRow | Export-Csv -Path $csvFile -NoTypeInformation -Encoding UTF8
+            $headerLine = (Get-Content -Path $csvFile -TotalCount 1)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($csvFile, "$headerLine`n", $utf8NoBom)
+        }
+        Write-SPLog -Message "Dashboard CSV written ($($rows.Count) rows): $csvFile" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # --- Write JSON ---
+    if ($Format -eq 'JSON' -or $Format -eq 'Both') {
+        $jsonFile = Join-Path $OutputPath "dashboard-governance-${CorrelationID}.json"
+        $jsonPayload = @{
+            exportTimestamp = $exportTimestamp
+            correlationId  = $CorrelationID
+            rowCount       = $rows.Count
+            columns        = $columnNames
+            data           = @($rows)
+        }
+        $jsonText = $jsonPayload | ConvertTo-Json -Depth 10 -Compress:$false
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($jsonFile, $jsonText, $utf8NoBom)
+        Write-SPLog -Message "Dashboard JSON written ($($rows.Count) rows): $jsonFile" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    Write-SPLog -Message "Export-SPGovernanceDashboardData complete: $($rows.Count) rows, $($columnNames.Count) columns" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            CsvFile  = $csvFile
+            JsonFile = $jsonFile
+            RowCount = $rows.Count
+            Columns  = $columnNames.Count
+        }
+        Error   = $null
+    }
+}
+
+#endregion
+
+#region Audit Evidence Integrity
+
+function New-SPAuditEvidenceChain {
+    <#
+    .SYNOPSIS
+        Creates a cryptographic integrity chain over JSONL audit trail files.
+    .DESCRIPTION
+        Scans audit output directories for JSONL files within a date range,
+        computes a SHA-256 hash for each file, and links hashes into a chain
+        where each entry includes the previous entry's hash. The resulting
+        manifest provides tamper-evident proof: if any file is modified after
+        the chain is built, re-verification will detect the broken link.
+
+        Chain algorithm:
+          - File 0: ChainHash = SHA256( SHA256(file) + "GENESIS" )
+          - File N: ChainHash = SHA256( SHA256(file) + ChainHash[N-1] )
+
+        The manifest JSON contains file paths, individual hashes, chain
+        hashes, file sizes, and timestamps. A companion Verify flag can be
+        passed to validate an existing manifest rather than create a new one.
+
+        Designed for SOX 404 / SOC 2 evidence integrity requirements.
+    .PARAMETER AuditOutputPath
+        Directory containing JSONL audit trail files. Resolved from
+        config (Audit.OutputPath) if omitted.
+    .PARAMETER DeltaCertOutputPath
+        DeltaCert output directory. Resolved from config if omitted.
+    .PARAMETER After
+        Include files modified after this datetime.
+    .PARAMETER Before
+        Include files modified before this datetime.
+    .PARAMETER OutputPath
+        Directory in which to write the evidence-chain manifest JSON.
+        Created if absent. Defaults to AuditOutputPath.
+    .PARAMETER ManifestName
+        Custom manifest file name (without extension). Defaults to
+        "evidence-chain-{yyyyMMdd-HHmmss}".
+    .PARAMETER Verify
+        Path to an existing manifest JSON to verify. When provided, the
+        function re-hashes each referenced file and checks the chain.
+        No new manifest is written.
+    .PARAMETER Scope
+        Which directories to include: Full (both), AuditOnly, or
+        DeltaCertOnly. Default: Full.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ ManifestPath; FileCount; ChainValid;
+        Violations }; Error }
+    .EXAMPLE
+        New-SPAuditEvidenceChain -After (Get-Date).AddDays(-30)
+    .EXAMPLE
+        New-SPAuditEvidenceChain -Verify 'C:\Audit\evidence-chain-20260531.json'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$AuditOutputPath,
+
+        [Parameter()]
+        [string]$DeltaCertOutputPath,
+
+        [Parameter()]
+        [DateTime]$After,
+
+        [Parameter()]
+        [DateTime]$Before,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$ManifestName,
+
+        [Parameter()]
+        [string]$Verify,
+
+        [Parameter()]
+        [ValidateSet('Full', 'AuditOnly', 'DeltaCertOnly')]
+        [string]$Scope = 'Full',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'New-SPAuditEvidenceChain'
+
+    # --- Verify mode: validate an existing manifest ---
+    if (-not [string]::IsNullOrWhiteSpace($Verify)) {
+        Write-SPLog -Message "Verifying evidence chain from $Verify" `
+            -Severity INFO -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+
+        if (-not (Test-Path -Path $Verify -PathType Leaf)) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Manifest file not found: $Verify"
+            }
+        }
+
+        try {
+            $manifestJson = Get-Content -Path $Verify -Raw -ErrorAction Stop
+            $manifest = $manifestJson | ConvertFrom-Json
+        }
+        catch {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to parse manifest: $($_.Exception.Message)"
+            }
+        }
+
+        $violations   = [System.Collections.Generic.List[hashtable]]::new()
+        $previousHash = 'GENESIS'
+        $fileCount    = 0
+
+        foreach ($entry in @($manifest.Files)) {
+            $fileCount++
+            $filePath = $entry.FilePath
+
+            # Check file exists
+            if (-not (Test-Path -Path $filePath -PathType Leaf)) {
+                $violations.Add(@{
+                    File   = $filePath
+                    Reason = 'File missing'
+                })
+                $previousHash = $entry.ChainHash
+                continue
+            }
+
+            # Recompute file hash
+            try {
+                $currentHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash
+            }
+            catch {
+                $violations.Add(@{
+                    File   = $filePath
+                    Reason = "Hash computation failed: $($_.Exception.Message)"
+                })
+                $previousHash = $entry.ChainHash
+                continue
+            }
+
+            # Check file hash
+            if ($currentHash -ne $entry.FileHash) {
+                $violations.Add(@{
+                    File     = $filePath
+                    Reason   = 'File content modified'
+                    Expected = $entry.FileHash
+                    Actual   = $currentHash
+                })
+            }
+
+            # Recompute chain hash
+            $chainInput    = $currentHash + $previousHash
+            $chainBytes    = [System.Text.Encoding]::UTF8.GetBytes($chainInput)
+            $sha           = [System.Security.Cryptography.SHA256]::Create()
+            $chainHashBytes = $sha.ComputeHash($chainBytes)
+            $computedChain = [BitConverter]::ToString($chainHashBytes) -replace '-', ''
+            $sha.Dispose()
+
+            if ($computedChain -ne $entry.ChainHash) {
+                $violations.Add(@{
+                    File     = $filePath
+                    Reason   = 'Chain link broken'
+                    Expected = $entry.ChainHash
+                    Actual   = $computedChain
+                })
+            }
+
+            $previousHash = $entry.ChainHash
+        }
+
+        $chainValid = ($violations.Count -eq 0)
+
+        Write-SPLog -Message "Evidence chain verification complete: $fileCount files, $($violations.Count) violation(s)" `
+            -Severity $(if ($chainValid) { 'INFO' } else { 'WARN' }) `
+            -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                ManifestPath = $Verify
+                FileCount    = $fileCount
+                ChainValid   = $chainValid
+                Violations   = @($violations)
+            }
+            Error   = $null
+        }
+    }
+
+    # --- Create mode: build a new evidence chain ---
+
+    Write-SPLog -Message "Building evidence chain (Scope=$Scope)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ($null -ne $config) {
+                if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                    $config.PSObject.Properties.Name -contains 'Audit' -and
+                    $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                    -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                    $AuditOutputPath = $config.Audit.OutputPath
+                }
+                if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                    $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                    $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                    -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                    $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+    if ([string]::IsNullOrWhiteSpace($OutputPath))          { $OutputPath          = $AuditOutputPath }
+
+    # Collect JSONL files
+    $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+
+    if ($Scope -ne 'DeltaCertOnly' -and (Test-Path -Path $AuditOutputPath -PathType Container)) {
+        $found = Get-ChildItem -Path $AuditOutputPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $found) { $jsonlFiles.Add($f) }
+    }
+
+    if ($Scope -ne 'AuditOnly' -and (Test-Path -Path $DeltaCertOutputPath -PathType Container)) {
+        $found = Get-ChildItem -Path $DeltaCertOutputPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $found) { $jsonlFiles.Add($f) }
+    }
+
+    # Apply date range filter
+    if ($PSBoundParameters.ContainsKey('After')) {
+        $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]@(
+            $jsonlFiles | Where-Object { $_.LastWriteTime -ge $After }
+        )
+    }
+    if ($PSBoundParameters.ContainsKey('Before')) {
+        $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]@(
+            $jsonlFiles | Where-Object { $_.LastWriteTime -le $Before }
+        )
+    }
+
+    # Sort by last write time for deterministic chain order
+    $sortedFiles = @($jsonlFiles | Sort-Object -Property LastWriteTime, FullName)
+
+    if ($sortedFiles.Count -eq 0) {
+        Write-SPLog -Message "No JSONL files found in specified path(s) and date range" `
+            -Severity WARN -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                ManifestPath = $null
+                FileCount    = 0
+                ChainValid   = $true
+                Violations   = @()
+            }
+            Error   = $null
+        }
+    }
+
+    # Build the chain
+    $chainEntries = [System.Collections.Generic.List[hashtable]]::new()
+    $previousHash = 'GENESIS'
+    $totalBytes   = 0
+
+    foreach ($file in $sortedFiles) {
+        # Compute file hash
+        try {
+            $fileHash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
+        }
+        catch {
+            Write-SPLog -Message "Failed to hash $($file.Name): $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Compute chain hash: SHA256( fileHash + previousChainHash )
+        $chainInput     = $fileHash + $previousHash
+        $chainBytes     = [System.Text.Encoding]::UTF8.GetBytes($chainInput)
+        $sha            = [System.Security.Cryptography.SHA256]::Create()
+        $chainHashBytes = $sha.ComputeHash($chainBytes)
+        $chainHash      = [BitConverter]::ToString($chainHashBytes) -replace '-', ''
+        $sha.Dispose()
+
+        $totalBytes += $file.Length
+
+        $chainEntries.Add(@{
+            FilePath     = $file.FullName
+            FileName     = $file.Name
+            FileHash     = $fileHash
+            ChainHash    = $chainHash
+            SizeBytes    = $file.Length
+            LastModified = $file.LastWriteTime.ToUniversalTime().ToString('o')
+        })
+
+        $previousHash = $chainHash
+    }
+
+    # Resolve toolkit version
+    $toolkitVersion = 'Unknown'
+    try {
+        $cfgCheck = Get-SPConfig
+        if ($null -ne $cfgCheck -and
+            $cfgCheck.PSObject.Properties.Name -contains 'Global' -and
+            $cfgCheck.Global.PSObject.Properties.Name -contains 'ToolkitVersion') {
+            $toolkitVersion = $cfgCheck.Global.ToolkitVersion
+        }
+    } catch { }
+
+    # Build manifest
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $manifest = @{
+        ManifestId      = [guid]::NewGuid().ToString()
+        GeneratedAt     = $generatedAt
+        CorrelationID   = $CorrelationID
+        ToolkitVersion  = $toolkitVersion
+        Algorithm       = 'SHA-256'
+        ChainAlgorithm  = 'SHA256(FileHash + PreviousChainHash)'
+        GenesisValue    = 'GENESIS'
+        Scope           = $Scope
+        DateRange       = @{
+            After  = if ($PSBoundParameters.ContainsKey('After'))  { $After.ToUniversalTime().ToString('o') }  else { $null }
+            Before = if ($PSBoundParameters.ContainsKey('Before')) { $Before.ToUniversalTime().ToString('o') } else { $null }
+        }
+        Files           = @($chainEntries)
+        Summary         = @{
+            FileCount   = $chainEntries.Count
+            TotalBytes  = $totalBytes
+            FinalChainHash = if ($chainEntries.Count -gt 0) { $chainEntries[$chainEntries.Count - 1].ChainHash } else { $null }
+        }
+    }
+
+    # Write manifest
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ManifestName)) {
+        $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $ManifestName = "evidence-chain-${ts}"
+    }
+    $manifestPath = Join-Path -Path $OutputPath -ChildPath "${ManifestName}.json"
+
+    try {
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $utf8NoBom    = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
+    }
+    catch {
+        Write-SPLog -Message "Failed to write manifest: $($_.Exception.Message)" `
+            -Severity ERROR -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Failed to write manifest: $($_.Exception.Message)"
+        }
+    }
+
+    $resolvedPath = (Resolve-Path -Path $manifestPath).Path
+
+    Write-SPLog -Message "Evidence chain created: $resolvedPath ($($chainEntries.Count) files, $totalBytes bytes)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ManifestPath = $resolvedPath
+            FileCount    = $chainEntries.Count
+            ChainValid   = $true
+            Violations   = @()
+        }
+        Error   = $null
+    }
+}
+
+#endregion
+
+#region Remediation Ticket Export
+
+function Export-SPRemediationTickets {
+    <#
+    .SYNOPSIS
+        Exports revocation decisions as ITSM-ready ticket rows for ServiceNow or Jira import.
+    .DESCRIPTION
+        Reads revocation decisions from campaign audit data (Group-SPAuditRemediationProof
+        output) and optionally from disconnected app remediation tracker files. Produces
+        a CSV formatted for bulk import into ServiceNow or Jira.
+
+        Columns: TicketType, Priority, AssignedTo, AppName, IdentityName, AccountId,
+        EntitlementRevoked, ReviewerName, DecisionDate, DueDate, Description
+
+        Each revocation = one ticket row. Priority is derived from remediation status:
+        overdue items get P2, pending items get P3.
+
+        For disconnected apps: reads remediation-tracker.json files from the configured
+        DisconnectedApps.Reports directory. Only PENDING records are exported as tickets.
+    .PARAMETER RemediationProof
+        Hashtable output from Group-SPAuditRemediationProof. Must contain a RevokedItems
+        array with PSCustomObjects having: IdentityName, AccessName, SourceName,
+        ReviewerName, DecisionDate, RemediationComplete, AccountIdentifier.
+    .PARAMETER DisconnectedAppPath
+        Path to the disconnected apps report directory. Each subdirectory should contain
+        a remediation-tracker.json. Resolved from config (DisconnectedApps.Reports) if
+        omitted. Pass $null or empty string to skip disconnected app processing.
+    .PARAMETER SkipDisconnectedApps
+        Skip reading disconnected app remediation trackers entirely.
+    .PARAMETER SlaBusinessDays
+        Number of business days for the remediation SLA. Used to compute DueDate
+        from DecisionDate. Default: 5.
+    .PARAMETER AssignedTo
+        Default assignee for tickets when no specific owner can be determined.
+        Default: 'IAM Operations'.
+    .PARAMETER OutputPath
+        Directory in which to write the CSV file. Created if absent.
+    .PARAMETER FileName
+        Custom CSV file name (without extension). Defaults to
+        "remediation-tickets-{yyyyMMdd-HHmmss}".
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = @{ CsvPath; TicketCount;
+        ConnectedCount; DisconnectedCount }; Error }
+    .EXAMPLE
+        $proof = Group-SPAuditRemediationProof -Items $items -Certifications $certs
+        $result = Export-SPRemediationTickets -RemediationProof $proof -OutputPath 'C:\Tickets'
+    .EXAMPLE
+        Export-SPRemediationTickets -RemediationProof $proof -SkipDisconnectedApps `
+            -SlaBusinessDays 3 -OutputPath 'C:\Tickets'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RemediationProof,
+
+        [Parameter()]
+        [string]$DisconnectedAppPath,
+
+        [Parameter()]
+        [switch]$SkipDisconnectedApps,
+
+        [Parameter()]
+        [ValidateRange(1, 30)]
+        [int]$SlaBusinessDays = 5,
+
+        [Parameter()]
+        [string]$AssignedTo = 'IAM Operations',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$FileName,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Export-SPRemediationTickets'
+
+    Write-SPLog -Message "Exporting remediation tickets (SLA=${SlaBusinessDays} days)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    try {
+        $tickets = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $connectedCount     = 0
+        $disconnectedCount  = 0
+
+        # --- Helper: add business days to a date ---
+        $addBusinessDays = {
+            param([DateTime]$StartDate, [int]$Days)
+            $current = $StartDate
+            $added   = 0
+            while ($added -lt $Days) {
+                $current = $current.AddDays(1)
+                if ($current.DayOfWeek -ne [DayOfWeek]::Saturday -and
+                    $current.DayOfWeek -ne [DayOfWeek]::Sunday) {
+                    $added++
+                }
+            }
+            return $current
+        }
+
+        # --- Connected app revocations from RemediationProof ---
+        $revokedItems = @()
+        if ($RemediationProof.ContainsKey('RevokedItems') -and
+            $null -ne $RemediationProof['RevokedItems']) {
+            $revokedItems = @($RemediationProof['RevokedItems'])
+        }
+
+        foreach ($item in $revokedItems) {
+            # Skip items already remediated
+            if ($item.RemediationComplete -eq $true) { continue }
+
+            # Parse decision date
+            $decisionDt = $null
+            if (-not [string]::IsNullOrWhiteSpace($item.DecisionDate)) {
+                try { $decisionDt = [DateTime]::Parse($item.DecisionDate) }
+                catch { $decisionDt = $null }
+            }
+
+            # Compute due date
+            $dueDateStr = ''
+            if ($null -ne $decisionDt) {
+                $dueDate    = & $addBusinessDays $decisionDt $SlaBusinessDays
+                $dueDateStr = $dueDate.ToString('yyyy-MM-dd')
+            }
+
+            # Determine priority: overdue = P2, pending = P3
+            $priority = 'P3 - Medium'
+            if ($null -ne $decisionDt) {
+                $slaCutoff = & $addBusinessDays $decisionDt $SlaBusinessDays
+                if ((Get-Date) -gt $slaCutoff) {
+                    $priority = 'P2 - High'
+                }
+            }
+
+            $description = "Revoke access [$($item.AccessName)] from [$($item.IdentityName)] " +
+                           "on source [$($item.SourceName)]. Reviewer: $($item.ReviewerName). " +
+                           "Decision date: $($item.DecisionDate)."
+
+            $tickets.Add([PSCustomObject]@{
+                TicketType         = 'Access Revocation'
+                Priority           = $priority
+                AssignedTo         = $AssignedTo
+                AppName            = $item.SourceName
+                IdentityName       = $item.IdentityName
+                AccountId          = $item.AccountIdentifier
+                EntitlementRevoked = $item.AccessName
+                ReviewerName       = $item.ReviewerName
+                DecisionDate       = $item.DecisionDate
+                DueDate            = $dueDateStr
+                Description        = $description
+            })
+            $connectedCount++
+        }
+
+        # --- Disconnected app revocations from remediation-tracker.json ---
+        if (-not $SkipDisconnectedApps) {
+            # Resolve path from config if not provided
+            if ([string]::IsNullOrWhiteSpace($DisconnectedAppPath)) {
+                try {
+                    $config = Get-SPConfig
+                    if ($null -ne $config -and
+                        $config.PSObject.Properties.Name -contains 'DisconnectedApps' -and
+                        $config.DisconnectedApps.PSObject.Properties.Name -contains 'Reports' -and
+                        -not [string]::IsNullOrWhiteSpace($config.DisconnectedApps.Reports)) {
+                        $DisconnectedAppPath = $config.DisconnectedApps.Reports
+                    }
+                }
+                catch {
+                    Write-SPLog -Message "Could not load config for disconnected app path: $($_.Exception.Message)" `
+                        -Severity WARN -Component $component -Action $action `
+                        -CorrelationID $CorrelationID
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($DisconnectedAppPath) -and
+                (Test-Path -Path $DisconnectedAppPath -PathType Container)) {
+
+                $trackerFiles = Get-ChildItem -Path $DisconnectedAppPath -Filter 'remediation-tracker.json' `
+                    -Recurse -File -ErrorAction SilentlyContinue
+
+                foreach ($trackerFile in $trackerFiles) {
+                    try {
+                        $raw = Get-Content -Path $trackerFile.FullName -Encoding UTF8 -Raw
+                        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+
+                        $records = @($raw | ConvertFrom-Json)
+                    }
+                    catch {
+                        Write-SPLog -Message "Failed to parse tracker: $($trackerFile.FullName) - $($_.Exception.Message)" `
+                            -Severity WARN -Component $component -Action $action `
+                            -CorrelationID $CorrelationID
+                        continue
+                    }
+
+                    foreach ($rec in $records) {
+                        # Only export PENDING records
+                        $status = ''
+                        if ($null -ne $rec.PSObject.Properties['Status']) {
+                            $status = [string]$rec.Status
+                        }
+                        if ($status -ne 'Pending') { continue }
+
+                        # Parse decision date
+                        $decisionDt = $null
+                        $decisionDateStr = ''
+                        if ($null -ne $rec.PSObject.Properties['DecisionDate'] -and
+                            -not [string]::IsNullOrWhiteSpace($rec.DecisionDate)) {
+                            $decisionDateStr = [string]$rec.DecisionDate
+                            try { $decisionDt = [DateTime]::Parse($decisionDateStr) }
+                            catch { $decisionDt = $null }
+                        }
+
+                        # Compute due date and priority
+                        $dueDateStr = ''
+                        $priority   = 'P3 - Medium'
+                        if ($null -ne $decisionDt) {
+                            $dueDate    = & $addBusinessDays $decisionDt $SlaBusinessDays
+                            $dueDateStr = $dueDate.ToString('yyyy-MM-dd')
+                            if ((Get-Date) -gt $dueDate) {
+                                $priority = 'P2 - High'
+                            }
+                        }
+
+                        $appName       = if ($null -ne $rec.PSObject.Properties['AppName'])      { [string]$rec.AppName }      else { '' }
+                        $identityName  = if ($null -ne $rec.PSObject.Properties['IdentityName']) { [string]$rec.IdentityName } else { '' }
+                        $accountId     = if ($null -ne $rec.PSObject.Properties['AccountId'])    { [string]$rec.AccountId }    else { '' }
+                        $entitlement   = if ($null -ne $rec.PSObject.Properties['Entitlement'])  { [string]$rec.Entitlement }  else { '' }
+                        $reviewerName  = if ($null -ne $rec.PSObject.Properties['ReviewerName']) { [string]$rec.ReviewerName } else { '' }
+
+                        $description = "Revoke access [$entitlement] from [$identityName] " +
+                                       "on disconnected app [$appName]. Reviewer: $reviewerName. " +
+                                       "Decision date: $decisionDateStr. Manual removal required."
+
+                        $tickets.Add([PSCustomObject]@{
+                            TicketType         = 'Disconnected App Revocation'
+                            Priority           = $priority
+                            AssignedTo         = $AssignedTo
+                            AppName            = $appName
+                            IdentityName       = $identityName
+                            AccountId          = $accountId
+                            EntitlementRevoked = $entitlement
+                            ReviewerName       = $reviewerName
+                            DecisionDate       = $decisionDateStr
+                            DueDate            = $dueDateStr
+                            Description        = $description
+                        })
+                        $disconnectedCount++
+                    }
+                }
+            }
+            else {
+                Write-SPLog -Message 'No disconnected app report path configured or found -- skipping' `
+                    -Severity DEBUG -Component $component -Action $action `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # --- Write CSV ---
+        if ($tickets.Count -eq 0) {
+            Write-SPLog -Message 'No pending remediation tickets to export' `
+                -Severity INFO -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    CsvPath           = $null
+                    TicketCount       = 0
+                    ConnectedCount    = 0
+                    DisconnectedCount = 0
+                }
+                Error   = $null
+            }
+        }
+
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($FileName)) {
+            $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+            $FileName = "remediation-tickets-${ts}"
+        }
+        $csvPath = Join-Path -Path $OutputPath -ChildPath "${FileName}.csv"
+
+        $tickets | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+        $resolvedPath = (Resolve-Path -Path $csvPath).Path
+
+        Write-SPLog -Message "Exported $($tickets.Count) remediation ticket(s) to $resolvedPath (connected=$connectedCount, disconnected=$disconnectedCount)" `
+            -Severity INFO -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                CsvPath           = $resolvedPath
+                TicketCount       = $tickets.Count
+                ConnectedCount    = $connectedCount
+                DisconnectedCount = $disconnectedCount
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Export-SPRemediationTickets failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = $_.Exception.Message
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Send-SPReport',
     'Export-SPCompliancePackage',
@@ -2245,5 +3396,8 @@ Export-ModuleMember -Function @(
     'Invoke-SPLogRetention',
     'Save-SPGovernanceMetrics',
     'Get-SPGovernanceMetrics',
-    'Get-SPGovernanceMetricsTrend'
+    'Get-SPGovernanceMetricsTrend',
+    'Export-SPGovernanceDashboardData',
+    'New-SPAuditEvidenceChain',
+    'Export-SPRemediationTickets'
 )

@@ -180,6 +180,27 @@
 
         # SP.AuditReportHtml - Reviewer Delegation Report (P16-07)
         'Export-SPReviewerDelegationHtml'
+
+        # SP.AuditReportHtml - Policy Compliance Report (P13-05 / DF-01)
+        'Export-SPPolicyComplianceHtml'
+
+        # SP.AuditOperations - Governance Dashboard Data Export (P13-08 / DF-02)
+        'Export-SPGovernanceDashboardData'
+
+        # SP.AuditOperations - Audit Evidence Integrity Chain (P14-03 / DF-05)
+        'New-SPAuditEvidenceChain'
+
+        # SP.AuditQueries - Source Onboarding Readiness (P14-04 / DF-06)
+        'Test-SPSourceOnboardingReadiness'
+
+        # SP.AuditAnalytics - Configuration Drift Comparison (P14-07 / DF-07)
+        'Compare-SPConfigurationSnapshots'
+
+        # SP.AuditReportHtml - Configuration Drift Report (P14-07 / DF-07)
+        'Export-SPConfigDriftHtml'
+
+        # SP.AuditOperations - Bulk Remediation Ticket Export (P15-04 / DF-09)
+        'Export-SPRemediationTickets'
     )
 
     # Do not export variables or aliases from nested modules

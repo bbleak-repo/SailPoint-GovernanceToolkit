@@ -14,22 +14,22 @@
 
 | ID | Feature | Source | Depends On | Status |
 |----|---------|--------|------------|--------|
-| DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | PENDING |
-| DF-02 | Governance Dashboard Data Export | P13-08 | none | PENDING |
-| DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | PENDING |
-| DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | PENDING |
-| DF-05 | Audit Evidence Integrity Chain | P14-03 | none | PENDING |
-| DF-06 | Source Onboarding Readiness | P14-04 | none | PENDING |
-| DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | PENDING |
-| DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | PENDING |
-| DF-09 | Bulk Remediation Ticket Export | P15-04 | none | PENDING |
-| DF-10 | Phase 16 Pester Tests | P16-10 | none | PENDING |
+| DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | DONE |
+| DF-02 | Governance Dashboard Data Export | P13-08 | none | DONE |
+| DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | DONE |
+| DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | DONE |
+| DF-05 | Audit Evidence Integrity Chain | P14-03 | none | DONE |
+| DF-06 | Source Onboarding Readiness | P14-04 | none | DONE |
+| DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | DONE |
+| DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | DONE |
+| DF-09 | Bulk Remediation Ticket Export | P15-04 | none | DONE |
+| DF-10 | Phase 16 Pester Tests | P16-10 | none | DONE |
 
 ---
 
 ## DF-01: Policy Compliance Report (P13-05)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P13-04 Governance Policy Engine (DONE)
 
 **What exists:** `Test-SPGovernancePolicy` returns pass/fail results per policy.
@@ -47,7 +47,7 @@
 
 ## DF-02: Governance Dashboard Data Export (P13-08)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Export-SPGovernanceDashboardData` in SP.AuditOperations.psm1
@@ -62,7 +62,7 @@
 
 ## DF-03: Invoke-SPGovernanceReport.ps1 (P13-09)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** DF-02
 
 **The "run everything" script.** Single command that produces a complete governance
@@ -86,20 +86,27 @@ dashboard export. The script an auditor asks for.
 
 ## DF-04: Phase 13 Pester Tests (P13-10)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** DF-03
 
-**Tests for P13 functions:** Test-SPGovernancePolicy, Export-SPPolicyComplianceHtml,
-Measure-SPAuditPeriodComparison, Get-SPAccessProfileInventory, Get-SPRoleInventory,
-Get-SPMultiSourceIdentityCorrelation, Export-SPGovernanceDashboardData.
+**Tests for P13 functions:** Get-SPAccessProfileInventory, Get-SPRoleInventory,
+Get-SPIdentityAccessSpread, Test-SPGovernancePolicy, Compare-SPAuditPeriods,
+Export-SPPolicyComplianceHtml, Export-SPGovernanceDashboardData.
 
-**Files:** Tests/SP.GovernanceDepth.Tests.ps1 (NEW)
+**Tests:** P13-T01 through P13-T07 (7 Describe blocks, ~50 assertions).
+
+**Also fixed:** Import-TestModules.ps1 `-Audit` switch updated from
+`SP.AuditReport.psm1` (no longer exists) to the five split sub-modules:
+SP.AuditQueries, SP.AuditReportCore, SP.AuditAnalytics, SP.AuditReportHtml,
+SP.AuditOperations.
+
+**Files:** Tests/SP.GovernanceDepth.Tests.ps1 (NEW), Tests/Import-TestModules.ps1
 
 ---
 
 ## DF-05: Audit Evidence Integrity Chain (P14-03)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `New-SPAuditEvidenceChain` in SP.AuditOperations.psm1
@@ -118,7 +125,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-06: Source Onboarding Readiness (P14-04)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Test-SPSourceOnboardingReadiness` in SP.AuditQueries.psm1
@@ -133,7 +140,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-07: Configuration Drift Report (P14-07)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P14-06 Configuration Snapshot (DONE)
 
 **What exists:** `Save-SPConfigurationSnapshot` and `Get-SPConfigurationSnapshot`.
@@ -151,7 +158,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-08: Invoke-SPGovernanceHealthCheck.ps1 (P14-09)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** DF-07
 
 **Build:** CLI script that runs all health checks in one command:
@@ -170,7 +177,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-09: Bulk Remediation Ticket Export (P15-04)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Export-SPRemediationTickets` in SP.AuditOperations.psm1
@@ -187,11 +194,18 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-10: Phase 16 Pester Tests (P16-10)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Tests for P16 functions:** Get-SPOrphanAccounts, Get-SPSourceAggregationHealth,
-Measure-SPIdentityAttributeQuality, Get-SPCampaignCoverageGaps,
-Predict-SPCampaignCompletion, Save-SPGovernanceMetrics, Get-SPReviewerDelegationAudit.
+Measure-SPIdentityDataQuality, Get-SPCampaignCoverageGaps,
+Get-SPCampaignCompletionForecast, Save-SPGovernanceMetrics, Get-SPReviewerDelegations.
+
+**Tests:** P16-T01 through P16-T07 (7 Describe blocks, 18 Contexts, ~55 assertions).
+
+**Note:** Backlog used proposed names; actual implemented names differ for three functions:
+- `Measure-SPIdentityAttributeQuality` -> `Measure-SPIdentityDataQuality`
+- `Predict-SPCampaignCompletion` -> `Get-SPCampaignCompletionForecast`
+- `Get-SPReviewerDelegationAudit` -> `Get-SPReviewerDelegations`
 
 **Files:** Tests/SP.DataQuality.Tests.ps1 (NEW)

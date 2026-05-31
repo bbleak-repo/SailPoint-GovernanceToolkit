@@ -4715,6 +4715,429 @@ function Get-SPCampaignCompletionForecast {
 
 #endregion
 
+#region Configuration Drift Comparison (P14-07 / DF-07)
+
+function Compare-SPConfigurationSnapshots {
+    <#
+    .SYNOPSIS
+        Compares two configuration snapshots and produces a structured drift report.
+    .DESCRIPTION
+        Accepts two snapshot hashtables (from Get-SPConfigurationSnapshot) and detects:
+        - Sources added or removed
+        - Source property changes (owner, enabled, connector type, description)
+        - Account count deltas
+        - Entitlement changes (added/removed entitlement names, count changes)
+        - Access profile changes (added/removed, count changes)
+        - Role changes (added/removed, membership type changes, access profile assignment changes)
+        - Settings hash changes
+
+        Each change is classified as Added (new in snapshot B), Removed (gone from B),
+        or Changed (property differs between A and B).
+    .PARAMETER SnapshotA
+        The baseline (older) snapshot hashtable.
+    .PARAMETER SnapshotB
+        The comparison (newer) snapshot hashtable.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = $true; Data = @{ Changes; Summary; SnapshotA; SnapshotB } }
+    .EXAMPLE
+        $a = Get-SPConfigurationSnapshot -Path '.\Audit\snapshots\snapshot-2026-05-01.json'
+        $b = Get-SPConfigurationSnapshot -Path '.\Audit\snapshots\snapshot-2026-05-15.json'
+        $drift = Compare-SPConfigurationSnapshots -SnapshotA $a -SnapshotB $b
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$SnapshotA,
+
+        [Parameter(Mandatory)]
+        [hashtable]$SnapshotB,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $capturedA = if ($SnapshotA.ContainsKey('capturedAt')) { $SnapshotA['capturedAt'] } else { 'unknown' }
+    $capturedB = if ($SnapshotB.ContainsKey('capturedAt')) { $SnapshotB['capturedAt'] } else { 'unknown' }
+
+    Write-SPLog -Message "Compare-SPConfigurationSnapshots: A='$capturedA' vs B='$capturedB'" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPConfigurationSnapshots' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $changes = [System.Collections.Generic.List[hashtable]]::new()
+
+        # --- Helper: extract source list as id-keyed hashtable ---
+        function Build-SourceIndex {
+            param([object]$Sources)
+            $index = @{}
+            if ($null -eq $Sources) { return $index }
+            $srcList = @($Sources)
+            foreach ($src in $srcList) {
+                $srcId = $null
+                if ($src -is [hashtable]) {
+                    if ($src.ContainsKey('Id')) { $srcId = [string]$src['Id'] }
+                } else {
+                    if ($null -ne $src.Id) { $srcId = [string]$src.Id }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($srcId)) {
+                    $index[$srcId] = $src
+                }
+            }
+            return $index
+        }
+
+        # --- Helper: get value from hashtable or PSCustomObject ---
+        function Get-PropValue {
+            param([object]$Obj, [string]$Key)
+            if ($null -eq $Obj) { return $null }
+            if ($Obj -is [hashtable]) {
+                if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }
+                return $null
+            }
+            if ($null -ne $Obj.PSObject -and $Obj.PSObject.Properties.Name -contains $Key) {
+                return $Obj.$Key
+            }
+            return $null
+        }
+
+        # ------------------------------------------------------------------
+        # Step 1: Compare settings hash
+        # ------------------------------------------------------------------
+        $hashA = if ($SnapshotA.ContainsKey('settingsHash')) { [string]$SnapshotA['settingsHash'] } else { '' }
+        $hashB = if ($SnapshotB.ContainsKey('settingsHash')) { [string]$SnapshotB['settingsHash'] } else { '' }
+
+        if ($hashA -ne $hashB -and -not [string]::IsNullOrWhiteSpace($hashA) -and -not [string]::IsNullOrWhiteSpace($hashB)) {
+            $changes.Add(@{
+                Category   = 'Settings'
+                ChangeType = 'Changed'
+                Item       = 'settings.json'
+                Property   = 'SHA256 Hash'
+                OldValue   = $hashA
+                NewValue   = $hashB
+            })
+        }
+
+        # ------------------------------------------------------------------
+        # Step 2: Compare sources
+        # ------------------------------------------------------------------
+        $sourcesA = Build-SourceIndex -Sources (Get-PropValue $SnapshotA 'sources')
+        $sourcesB = Build-SourceIndex -Sources (Get-PropValue $SnapshotB 'sources')
+
+        # Sources removed (in A but not in B)
+        foreach ($srcId in $sourcesA.Keys) {
+            if (-not $sourcesB.ContainsKey($srcId)) {
+                $srcName = [string](Get-PropValue $sourcesA[$srcId] 'Name')
+                $changes.Add(@{
+                    Category   = 'Source'
+                    ChangeType = 'Removed'
+                    Item       = $srcName
+                    ItemId     = $srcId
+                    Property   = 'Source'
+                    OldValue   = $srcName
+                    NewValue   = $null
+                })
+            }
+        }
+
+        # Sources added (in B but not in A)
+        foreach ($srcId in $sourcesB.Keys) {
+            if (-not $sourcesA.ContainsKey($srcId)) {
+                $srcName = [string](Get-PropValue $sourcesB[$srcId] 'Name')
+                $changes.Add(@{
+                    Category   = 'Source'
+                    ChangeType = 'Added'
+                    Item       = $srcName
+                    ItemId     = $srcId
+                    Property   = 'Source'
+                    OldValue   = $null
+                    NewValue   = $srcName
+                })
+            }
+        }
+
+        # Sources changed (in both -- compare properties)
+        $sourceProps = @('Name', 'Enabled', 'OwnerName', 'OwnerId', 'ConnectorType', 'Description', 'AccountCount')
+        foreach ($srcId in $sourcesA.Keys) {
+            if (-not $sourcesB.ContainsKey($srcId)) { continue }
+
+            $srcA = $sourcesA[$srcId]
+            $srcB = $sourcesB[$srcId]
+            $srcName = [string](Get-PropValue $srcA 'Name')
+
+            foreach ($prop in $sourceProps) {
+                $valA = Get-PropValue $srcA $prop
+                $valB = Get-PropValue $srcB $prop
+
+                $strA = if ($null -eq $valA) { '' } else { [string]$valA }
+                $strB = if ($null -eq $valB) { '' } else { [string]$valB }
+
+                if ($strA -ne $strB) {
+                    $changes.Add(@{
+                        Category   = 'Source'
+                        ChangeType = 'Changed'
+                        Item       = $srcName
+                        ItemId     = $srcId
+                        Property   = $prop
+                        OldValue   = $strA
+                        NewValue   = $strB
+                    })
+                }
+            }
+
+            # Compare entitlement names if present
+            $entNamesA = @(Get-PropValue $srcA 'EntitlementNames')
+            $entNamesB = @(Get-PropValue $srcB 'EntitlementNames')
+            if ($null -eq $entNamesA[0]) { $entNamesA = @() }
+            if ($null -eq $entNamesB[0]) { $entNamesB = @() }
+
+            if ($entNamesA.Count -gt 0 -or $entNamesB.Count -gt 0) {
+                $setA = @{}; foreach ($e in $entNamesA) { if (-not [string]::IsNullOrWhiteSpace($e)) { $setA[[string]$e] = $true } }
+                $setB = @{}; foreach ($e in $entNamesB) { if (-not [string]::IsNullOrWhiteSpace($e)) { $setB[[string]$e] = $true } }
+
+                foreach ($eName in $setA.Keys) {
+                    if (-not $setB.ContainsKey($eName)) {
+                        $changes.Add(@{
+                            Category   = 'Entitlement'
+                            ChangeType = 'Removed'
+                            Item       = $eName
+                            ItemId     = $srcId
+                            Property   = "Source: $srcName"
+                            OldValue   = $eName
+                            NewValue   = $null
+                        })
+                    }
+                }
+                foreach ($eName in $setB.Keys) {
+                    if (-not $setA.ContainsKey($eName)) {
+                        $changes.Add(@{
+                            Category   = 'Entitlement'
+                            ChangeType = 'Added'
+                            Item       = $eName
+                            ItemId     = $srcId
+                            Property   = "Source: $srcName"
+                            OldValue   = $null
+                            NewValue   = $eName
+                        })
+                    }
+                }
+            }
+
+            # Compare access profile names if present
+            $apNamesA = @(Get-PropValue $srcA 'AccessProfileNames')
+            $apNamesB = @(Get-PropValue $srcB 'AccessProfileNames')
+            if ($null -eq $apNamesA[0]) { $apNamesA = @() }
+            if ($null -eq $apNamesB[0]) { $apNamesB = @() }
+
+            if ($apNamesA.Count -gt 0 -or $apNamesB.Count -gt 0) {
+                $apSetA = @{}; foreach ($ap in $apNamesA) { if (-not [string]::IsNullOrWhiteSpace($ap)) { $apSetA[[string]$ap] = $true } }
+                $apSetB = @{}; foreach ($ap in $apNamesB) { if (-not [string]::IsNullOrWhiteSpace($ap)) { $apSetB[[string]$ap] = $true } }
+
+                foreach ($apName in $apSetA.Keys) {
+                    if (-not $apSetB.ContainsKey($apName)) {
+                        $changes.Add(@{
+                            Category   = 'AccessProfile'
+                            ChangeType = 'Removed'
+                            Item       = $apName
+                            ItemId     = $srcId
+                            Property   = "Source: $srcName"
+                            OldValue   = $apName
+                            NewValue   = $null
+                        })
+                    }
+                }
+                foreach ($apName in $apSetB.Keys) {
+                    if (-not $apSetA.ContainsKey($apName)) {
+                        $changes.Add(@{
+                            Category   = 'AccessProfile'
+                            ChangeType = 'Added'
+                            Item       = $apName
+                            ItemId     = $srcId
+                            Property   = "Source: $srcName"
+                            OldValue   = $null
+                            NewValue   = $apName
+                        })
+                    }
+                }
+            }
+        }
+
+        # ------------------------------------------------------------------
+        # Step 3: Compare roles
+        # ------------------------------------------------------------------
+        $rolesA = @()
+        $rolesB = @()
+        if ($SnapshotA.ContainsKey('roles') -and $null -ne $SnapshotA['roles']) { $rolesA = @($SnapshotA['roles']) }
+        if ($SnapshotB.ContainsKey('roles') -and $null -ne $SnapshotB['roles']) { $rolesB = @($SnapshotB['roles']) }
+
+        if ($rolesA.Count -gt 0 -or $rolesB.Count -gt 0) {
+            $roleIndexA = @{}
+            foreach ($r in $rolesA) {
+                $rId = [string](Get-PropValue $r 'Id')
+                if (-not [string]::IsNullOrWhiteSpace($rId)) { $roleIndexA[$rId] = $r }
+            }
+            $roleIndexB = @{}
+            foreach ($r in $rolesB) {
+                $rId = [string](Get-PropValue $r 'Id')
+                if (-not [string]::IsNullOrWhiteSpace($rId)) { $roleIndexB[$rId] = $r }
+            }
+
+            foreach ($rId in $roleIndexA.Keys) {
+                if (-not $roleIndexB.ContainsKey($rId)) {
+                    $rName = [string](Get-PropValue $roleIndexA[$rId] 'Name')
+                    $changes.Add(@{
+                        Category   = 'Role'
+                        ChangeType = 'Removed'
+                        Item       = $rName
+                        ItemId     = $rId
+                        Property   = 'Role'
+                        OldValue   = $rName
+                        NewValue   = $null
+                    })
+                }
+            }
+
+            foreach ($rId in $roleIndexB.Keys) {
+                if (-not $roleIndexA.ContainsKey($rId)) {
+                    $rName = [string](Get-PropValue $roleIndexB[$rId] 'Name')
+                    $changes.Add(@{
+                        Category   = 'Role'
+                        ChangeType = 'Added'
+                        Item       = $rName
+                        ItemId     = $rId
+                        Property   = 'Role'
+                        OldValue   = $null
+                        NewValue   = $rName
+                    })
+                }
+            }
+
+            $roleProps = @('Name', 'MembershipType', 'Enabled', 'AccessProfileCount')
+            foreach ($rId in $roleIndexA.Keys) {
+                if (-not $roleIndexB.ContainsKey($rId)) { continue }
+                $rA = $roleIndexA[$rId]
+                $rB = $roleIndexB[$rId]
+                $rName = [string](Get-PropValue $rA 'Name')
+
+                foreach ($prop in $roleProps) {
+                    $valA = Get-PropValue $rA $prop
+                    $valB = Get-PropValue $rB $prop
+                    $strA = if ($null -eq $valA) { '' } else { [string]$valA }
+                    $strB = if ($null -eq $valB) { '' } else { [string]$valB }
+
+                    if ($strA -ne $strB) {
+                        $changes.Add(@{
+                            Category   = 'Role'
+                            ChangeType = 'Changed'
+                            Item       = $rName
+                            ItemId     = $rId
+                            Property   = $prop
+                            OldValue   = $strA
+                            NewValue   = $strB
+                        })
+                    }
+                }
+
+                # Compare role access profile assignments
+                $rApA = @(Get-PropValue $rA 'AccessProfileNames')
+                $rApB = @(Get-PropValue $rB 'AccessProfileNames')
+                if ($null -eq $rApA[0]) { $rApA = @() }
+                if ($null -eq $rApB[0]) { $rApB = @() }
+
+                if ($rApA.Count -gt 0 -or $rApB.Count -gt 0) {
+                    $rApSetA = @{}; foreach ($ap in $rApA) { if (-not [string]::IsNullOrWhiteSpace($ap)) { $rApSetA[[string]$ap] = $true } }
+                    $rApSetB = @{}; foreach ($ap in $rApB) { if (-not [string]::IsNullOrWhiteSpace($ap)) { $rApSetB[[string]$ap] = $true } }
+
+                    foreach ($apName in $rApSetA.Keys) {
+                        if (-not $rApSetB.ContainsKey($apName)) {
+                            $changes.Add(@{
+                                Category   = 'Role'
+                                ChangeType = 'Changed'
+                                Item       = $rName
+                                ItemId     = $rId
+                                Property   = 'AccessProfile Removed'
+                                OldValue   = $apName
+                                NewValue   = $null
+                            })
+                        }
+                    }
+                    foreach ($apName in $rApSetB.Keys) {
+                        if (-not $rApSetA.ContainsKey($apName)) {
+                            $changes.Add(@{
+                                Category   = 'Role'
+                                ChangeType = 'Changed'
+                                Item       = $rName
+                                ItemId     = $rId
+                                Property   = 'AccessProfile Added'
+                                OldValue   = $null
+                                NewValue   = $apName
+                            })
+                        }
+                    }
+                }
+            }
+        }
+
+        # ------------------------------------------------------------------
+        # Step 4: Build summary
+        # ------------------------------------------------------------------
+        $addedCount   = ($changes | Where-Object { $_['ChangeType'] -eq 'Added' }).Count
+        $removedCount = ($changes | Where-Object { $_['ChangeType'] -eq 'Removed' }).Count
+        $changedCount = ($changes | Where-Object { $_['ChangeType'] -eq 'Changed' }).Count
+
+        $categorySummary = @{}
+        foreach ($c in $changes) {
+            $cat = $c['Category']
+            if (-not $categorySummary.ContainsKey($cat)) { $categorySummary[$cat] = 0 }
+            $categorySummary[$cat]++
+        }
+
+        $hasDrift = $changes.Count -gt 0
+
+        Write-SPLog -Message "Compare-SPConfigurationSnapshots: $($changes.Count) drift items (Added=$addedCount, Removed=$removedCount, Changed=$changedCount)" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPConfigurationSnapshots' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Changes   = @($changes)
+                HasDrift  = $hasDrift
+                Summary   = @{
+                    TotalChanges = $changes.Count
+                    Added        = $addedCount
+                    Removed      = $removedCount
+                    Changed      = $changedCount
+                    ByCategory   = $categorySummary
+                }
+                SnapshotA = @{
+                    Id         = if ($SnapshotA.ContainsKey('snapshotId')) { $SnapshotA['snapshotId'] } else { '' }
+                    CapturedAt = $capturedA
+                }
+                SnapshotB = @{
+                    Id         = if ($SnapshotB.ContainsKey('snapshotId')) { $SnapshotB['snapshotId'] } else { '' }
+                    CapturedAt = $capturedB
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Compare-SPConfigurationSnapshots failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReport' `
+            -Action 'Compare-SPConfigurationSnapshots' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -4728,5 +5151,6 @@ Export-ModuleMember -Function @(
     'Compare-SPAuditPeriods',
     'Test-SPGovernancePolicy',
     'Get-SPCampaignCoverageGaps',
-    'Get-SPCampaignCompletionForecast'
+    'Get-SPCampaignCompletionForecast',
+    'Compare-SPConfigurationSnapshots'
 )

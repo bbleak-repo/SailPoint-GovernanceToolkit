@@ -35,7 +35,8 @@ function Import-SPTestModules {
     .PARAMETER Api
         Imports SP.ApiClient, SP.Campaigns, SP.Certifications, SP.Decisions.
     .PARAMETER Audit
-        Imports SP.AuditQueries, SP.AuditReport.
+        Imports SP.AuditQueries, SP.AuditReportCore, SP.AuditAnalytics,
+        SP.AuditReportHtml, SP.AuditOperations.
     .PARAMETER Testing
         Imports SP.TestLoader, SP.Assertions, SP.Evidence, SP.BatchRunner.
     .PARAMETER DeltaCert
@@ -69,8 +70,11 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Decisions.psm1')      -Force -DisableNameChecking
     }
     if ($Audit) {
-        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditQueries.psm1') -Force -DisableNameChecking
-        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditReport.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditQueries.psm1')    -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditReportCore.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditAnalytics.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditReportHtml.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditOperations.psm1') -Force -DisableNameChecking
     }
     if ($Testing) {
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.TestLoader.psm1') -Force -DisableNameChecking
