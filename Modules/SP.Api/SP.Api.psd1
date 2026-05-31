@@ -40,6 +40,7 @@
         'Get-SPCampaignDeadlineStatus'
         'Complete-SPCampaign'
         'Get-SPCampaignHealth'
+        'Get-SPAccessRequestActivity'
 
         # SP.Certifications
         'Get-SPCertifications'

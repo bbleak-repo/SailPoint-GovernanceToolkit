@@ -1343,6 +1343,334 @@ function Get-SPCampaignHealth {
 
 #endregion
 
+function Get-SPAccessRequestActivity {
+    <#
+    .SYNOPSIS
+        Retrieves access request approval activity from ISC.
+    .DESCRIPTION
+        Paginates GET /v3/access-request-approvals to retrieve recent access
+        request and approval patterns. Calculates activity metrics including
+        approval rate, average approval time, top requesters, and top requested
+        items. Designed for governance gap analysis -- surfaces access grants
+        that happen outside of certification campaigns.
+    .PARAMETER DaysBack
+        Number of calendar days to look back for access requests. Default: 30.
+    .PARAMETER RequestedFor
+        Optional array of identity IDs to filter requests for specific identities.
+    .PARAMETER Status
+        Filter by request status. Valid values: PENDING, APPROVED, DENIED,
+        CANCELLED, ALL. Default: ALL.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Requests=@(...); Summary=@{...}}
+    .EXAMPLE
+        $result = Get-SPAccessRequestActivity -DaysBack 30 -Status ALL
+        $result.Summary.TotalRequests
+    .EXAMPLE
+        $result = Get-SPAccessRequestActivity -Status PENDING
+        $result.Requests | ForEach-Object { $_.RequestedItemName }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string[]]$RequestedFor,
+
+        [Parameter()]
+        [ValidateSet('PENDING', 'APPROVED', 'DENIED', 'CANCELLED', 'ALL')]
+        [string]$Status = 'ALL',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting access request activity: DaysBack=$DaysBack, Status=$Status" `
+        -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPAccessRequestActivity' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $queryParams = @{
+            'limit'  = '250'
+            'offset' = '0'
+        }
+
+        $allApprovals = [System.Collections.Generic.List[object]]::new()
+        $pageSize     = 250
+        $offset       = 0
+        $pageNum      = 0
+
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages fetched ($($allApprovals.Count) approvals). Raise Api.MaxPaginationPages if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+                    -Action 'Get-SPAccessRequestActivity' -CorrelationID $CorrelationID
+                return @{ Requests = @(); Summary = @{ TotalRequests = 0; Approved = 0; Denied = 0; Pending = 0; Cancelled = 0; AvgApprovalHours = 0; TopRequesters = @(); TopRequestedItems = @() } }
+            }
+
+            $queryParams['offset'] = $offset.ToString()
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/access-request-approvals' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                Write-SPLog -Message "Get-SPAccessRequestActivity failed at page $pageNum`: $($result.Error)" `
+                    -Severity ERROR -Component 'SP.Campaigns' -Action 'Get-SPAccessRequestActivity' `
+                    -CorrelationID $CorrelationID
+                return @{ Requests = @(); Summary = @{ TotalRequests = 0; Approved = 0; Denied = 0; Pending = 0; Cancelled = 0; AvgApprovalHours = 0; TopRequesters = @(); TopRequestedItems = @() } }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($item in $page) {
+                    $allApprovals.Add($item)
+                }
+            }
+
+            Write-SPLog -Message "Access request approvals page ${pageNum}: $($page.Count) items (total: $($allApprovals.Count))" `
+                -Severity DEBUG -Component 'SP.Campaigns' -Action 'Get-SPAccessRequestActivity' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+
+        # Parse and filter approvals
+        $nowUtc    = (Get-Date).ToUniversalTime()
+        $cutoffUtc = $nowUtc.AddDays(-$DaysBack)
+
+        $requests        = [System.Collections.Generic.List[hashtable]]::new()
+        $approvedCount   = 0
+        $deniedCount     = 0
+        $pendingCount    = 0
+        $cancelledCount  = 0
+        $approvalHoursSum = 0.0
+        $approvalHoursN   = 0
+        $requesterCounts     = @{}
+        $requestedItemCounts = @{}
+
+        foreach ($raw in $allApprovals) {
+            if ($null -eq $raw) { continue }
+
+            # Extract fields safely
+            $requestId = ''
+            if ($null -ne $raw.PSObject.Properties['id']) {
+                $requestId = [string]$raw.id
+            }
+
+            $requesterName = ''
+            $requesterId   = ''
+            if ($null -ne $raw.PSObject.Properties['requester'] -and $null -ne $raw.requester) {
+                if ($null -ne $raw.requester.PSObject.Properties['name']) {
+                    $requesterName = [string]$raw.requester.name
+                }
+                if ($null -ne $raw.requester.PSObject.Properties['id']) {
+                    $requesterId = [string]$raw.requester.id
+                }
+            }
+
+            $requestedForName = ''
+            $requestedForId   = ''
+            if ($null -ne $raw.PSObject.Properties['requestedFor'] -and $null -ne $raw.requestedFor) {
+                if ($null -ne $raw.requestedFor.PSObject.Properties['name']) {
+                    $requestedForName = [string]$raw.requestedFor.name
+                }
+                if ($null -ne $raw.requestedFor.PSObject.Properties['id']) {
+                    $requestedForId = [string]$raw.requestedFor.id
+                }
+            }
+
+            $requestedItemName = ''
+            $requestedItemType = ''
+            if ($null -ne $raw.PSObject.Properties['requestedObject'] -and $null -ne $raw.requestedObject) {
+                if ($null -ne $raw.requestedObject.PSObject.Properties['name']) {
+                    $requestedItemName = [string]$raw.requestedObject.name
+                }
+                if ($null -ne $raw.requestedObject.PSObject.Properties['type']) {
+                    $requestedItemType = [string]$raw.requestedObject.type
+                }
+            }
+
+            $approverName = ''
+            $approverId   = ''
+            if ($null -ne $raw.PSObject.Properties['approver'] -and $null -ne $raw.approver) {
+                if ($null -ne $raw.approver.PSObject.Properties['name']) {
+                    $approverName = [string]$raw.approver.name
+                }
+                if ($null -ne $raw.approver.PSObject.Properties['id']) {
+                    $approverId = [string]$raw.approver.id
+                }
+            }
+
+            $reqStatus = ''
+            if ($null -ne $raw.PSObject.Properties['status']) {
+                $reqStatus = [string]$raw.status
+            }
+
+            $createdStr  = ''
+            $modifiedStr = ''
+            if ($null -ne $raw.PSObject.Properties['created'])  { $createdStr  = [string]$raw.created }
+            if ($null -ne $raw.PSObject.Properties['modified']) { $modifiedStr = [string]$raw.modified }
+
+            # Date filter
+            $createdUtc = $null
+            if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+                try {
+                    if ($createdStr -is [datetime]) {
+                        $createdUtc = ([datetime]$createdStr).ToUniversalTime()
+                    } else {
+                        $createdUtc = [datetime]::Parse($createdStr).ToUniversalTime()
+                    }
+                } catch { }
+            }
+
+            if ($null -ne $createdUtc -and $createdUtc -lt $cutoffUtc) {
+                continue
+            }
+
+            # RequestedFor filter
+            if ($null -ne $RequestedFor -and $RequestedFor.Count -gt 0) {
+                if ($requestedForId -notin $RequestedFor) {
+                    continue
+                }
+            }
+
+            # Status filter
+            if ($Status -ne 'ALL' -and $reqStatus -ne $Status) {
+                continue
+            }
+
+            # Calculate approval hours
+            $approvalHours = $null
+            if ($reqStatus -eq 'APPROVED' -and
+                -not [string]::IsNullOrWhiteSpace($createdStr) -and
+                -not [string]::IsNullOrWhiteSpace($modifiedStr)) {
+                try {
+                    $cDate = [datetime]::Parse($createdStr).ToUniversalTime()
+                    $mDate = [datetime]::Parse($modifiedStr).ToUniversalTime()
+                    $hours = ($mDate - $cDate).TotalHours
+                    # Clamp negative values (clock skew) to 0
+                    if ($hours -lt 0) { $hours = 0.0 }
+                    $approvalHours = [math]::Round($hours, 1)
+                    $approvalHoursSum += $approvalHours
+                    $approvalHoursN++
+                } catch { }
+            }
+
+            # Track counts
+            switch ($reqStatus) {
+                'APPROVED'  { $approvedCount++ }
+                'DENIED'    { $deniedCount++ }
+                'PENDING'   { $pendingCount++ }
+                'CANCELLED' { $cancelledCount++ }
+            }
+
+            # Top requesters
+            if (-not [string]::IsNullOrWhiteSpace($requesterName)) {
+                if (-not $requesterCounts.ContainsKey($requesterName)) {
+                    $requesterCounts[$requesterName] = 0
+                }
+                $requesterCounts[$requesterName]++
+            }
+
+            # Top requested items
+            $itemKey = $requestedItemName
+            if (-not [string]::IsNullOrWhiteSpace($itemKey)) {
+                if (-not $requestedItemCounts.ContainsKey($itemKey)) {
+                    $requestedItemCounts[$itemKey] = @{ Name = $requestedItemName; Type = $requestedItemType; Count = 0 }
+                }
+                $requestedItemCounts[$itemKey].Count++
+            }
+
+            $requests.Add(@{
+                RequestId        = $requestId
+                RequesterName    = $requesterName
+                RequesterId      = $requesterId
+                RequestedForName = $requestedForName
+                RequestedForId   = $requestedForId
+                RequestedItemName = $requestedItemName
+                RequestedItemType = $requestedItemType
+                ApproverName     = $approverName
+                ApproverId       = $approverId
+                Status           = $reqStatus
+                Created          = $createdStr
+                Modified         = $modifiedStr
+                ApprovalHours    = $approvalHours
+            })
+        }
+
+        # Build top requesters (sorted desc, limit 10)
+        $topRequesters = @($requesterCounts.GetEnumerator() |
+            Sort-Object -Property Value -Descending |
+            Select-Object -First 10 |
+            ForEach-Object {
+                @{ Name = $_.Key; Count = $_.Value }
+            })
+
+        # Build top requested items (sorted desc, limit 10)
+        $topRequestedItems = @($requestedItemCounts.Values |
+            Sort-Object -Property { $_.Count } -Descending |
+            Select-Object -First 10 |
+            ForEach-Object {
+                @{ Name = $_.Name; Type = $_.Type; Count = $_.Count }
+            })
+
+        $avgApprovalHours = if ($approvalHoursN -gt 0) {
+            [math]::Round($approvalHoursSum / $approvalHoursN, 1)
+        } else { 0.0 }
+
+        $summary = @{
+            TotalRequests    = $requests.Count
+            Approved         = $approvedCount
+            Denied           = $deniedCount
+            Pending          = $pendingCount
+            Cancelled        = $cancelledCount
+            AvgApprovalHours = $avgApprovalHours
+            TopRequesters    = $topRequesters
+            TopRequestedItems = $topRequestedItems
+        }
+
+        Write-SPLog -Message "Get-SPAccessRequestActivity: $($requests.Count) requests found (Approved=$approvedCount, Denied=$deniedCount, Pending=$pendingCount, Cancelled=$cancelledCount)" `
+            -Severity INFO -Component 'SP.Campaigns' -Action 'Get-SPAccessRequestActivity' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Requests = $requests.ToArray()
+            Summary  = $summary
+        }
+    }
+    catch {
+        $errMsg = "Get-SPAccessRequestActivity failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
+            -Action 'Get-SPAccessRequestActivity' -CorrelationID $CorrelationID
+        return @{ Requests = @(); Summary = @{ TotalRequests = 0; Approved = 0; Denied = 0; Pending = 0; Cancelled = 0; AvgApprovalHours = 0; TopRequesters = @(); TopRequestedItems = @() } }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'New-SPCampaign',
     'Start-SPCampaign',
@@ -1351,5 +1679,6 @@ Export-ModuleMember -Function @(
     'Search-SPCampaigns',
     'Get-SPCampaignDeadlineStatus',
     'Complete-SPCampaign',
-    'Get-SPCampaignHealth'
+    'Get-SPCampaignHealth',
+    'Get-SPAccessRequestActivity'
 )

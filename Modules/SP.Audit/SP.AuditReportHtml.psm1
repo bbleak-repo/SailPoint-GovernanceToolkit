@@ -7803,6 +7803,263 @@ ${concentrationHtml}
 
 #endregion Entitlement Ownership Health Report
 
+#region P15-03: Access Request Activity Report
+
+function Export-SPAccessRequestHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML access request activity report.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with:
+        - Request timeline table sorted by date descending
+        - Status badges: APPROVED (green), DENIED (red), PENDING (yellow), CANCELLED (gray)
+        - Top requesters section with request count (flags identities with >5 requests)
+        - Top requested items section
+        - Summary card with approval rate and average approval hours
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER Requests
+        Hashtable output from Get-SPAccessRequestActivity.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $activity = Get-SPAccessRequestActivity -DaysBack 30
+        $path = Export-SPAccessRequestHtml -Requests $activity -OutputPath '.\Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Requests,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+    }
+
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
+    $htmlFile    = Join-Path $OutputPath "access-request-activity-$(Get-Date -Format 'yyyy-MM-dd').html"
+
+    $summary    = $Requests['Summary']
+    $reqList    = @($Requests['Requests'])
+    $totalReqs  = if ($null -ne $summary) { $summary['TotalRequests'] } else { 0 }
+    $approved   = if ($null -ne $summary) { $summary['Approved'] } else { 0 }
+    $denied     = if ($null -ne $summary) { $summary['Denied'] } else { 0 }
+    $pending    = if ($null -ne $summary) { $summary['Pending'] } else { 0 }
+    $cancelled  = if ($null -ne $summary) { $summary['Cancelled'] } else { 0 }
+    $avgHours   = if ($null -ne $summary) { $summary['AvgApprovalHours'] } else { 0 }
+    $approvalRate = if ($totalReqs -gt 0) { [math]::Round(($approved / $totalReqs) * 100, 1) } else { 0.0 }
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#eaf2f8; border:1px solid #d4e6f1; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#2c3e50;">$totalReqs</div>
+<div style="font-size:11px; color:#777777;">Total Requests</div>
+</td>
+<td style="padding:12px 16px; background:#eafaf1; border:1px solid #d5f5e3; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#339933;">$approved</div>
+<div style="font-size:11px; color:#777777;">Approved</div>
+</td>
+<td style="padding:12px 16px; background:#fdedec; border:1px solid #fadbd8; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#CC3333;">$denied</div>
+<div style="font-size:11px; color:#777777;">Denied</div>
+</td>
+<td style="padding:12px 16px; background:#fef9e7; border:1px solid #fdebd0; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#FF8800;">$pending</div>
+<div style="font-size:11px; color:#777777;">Pending</div>
+</td>
+<td style="padding:12px 16px; background:#f2f3f4; border:1px solid #e5e7e9; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#777777;">$cancelled</div>
+<div style="font-size:11px; color:#777777;">Cancelled</div>
+</td>
+<td style="padding:12px 16px; background:#eaf2f8; border:1px solid #d4e6f1; width:16%; text-align:center;">
+<div style="font-size:24px; font-weight:bold; color:#336699;">$avgHours h</div>
+<div style="font-size:11px; color:#777777;">Avg Approval Time</div>
+</td>
+</tr>
+<tr>
+<td colspan="6" style="padding:8px 16px; background:#fafafa; border:1px solid #e0e0e0; text-align:center; font-size:13px; color:#555555;">
+Approval Rate: <strong>${approvalRate}%</strong>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Request timeline table ---
+    $timelineHtml = ''
+    if ($reqList.Count -gt 0) {
+        $headerRow = Build-HtmlTableHeader -Headers @('Date', 'Requester', 'Requested For', 'Item', 'Type', 'Approver', 'Status', 'Hours')
+        $bodyRows  = [System.Collections.Generic.List[string]]::new()
+
+        # Sort by Created descending
+        $sorted = @($reqList | Sort-Object -Property { $_.Created } -Descending)
+        $rowIdx = 0
+
+        foreach ($req in $sorted) {
+            $rowIdx++
+
+            # Status badge
+            $statusVal  = if ($null -ne $req['Status']) { [string]$req['Status'] } else { '' }
+            $statusHtml = switch ($statusVal) {
+                'APPROVED'  { '<span style="background:#339933; color:#fff; padding:2px 8px; border-radius:3px; font-size:11px;">APPROVED</span>' }
+                'DENIED'    { '<span style="background:#CC3333; color:#fff; padding:2px 8px; border-radius:3px; font-size:11px;">DENIED</span>' }
+                'PENDING'   { '<span style="background:#FF8800; color:#fff; padding:2px 8px; border-radius:3px; font-size:11px;">PENDING</span>' }
+                'CANCELLED' { '<span style="background:#777777; color:#fff; padding:2px 8px; border-radius:3px; font-size:11px;">CANCELLED</span>' }
+                default     { (ConvertTo-SafeHtml $statusVal) }
+            }
+
+            $hoursDisplay = ''
+            if ($null -ne $req['ApprovalHours']) {
+                $hoursDisplay = [string]$req['ApprovalHours']
+            }
+
+            $cells = @(
+                (Format-HtmlDate $req['Created']),
+                (ConvertTo-SafeHtml $req['RequesterName']),
+                (ConvertTo-SafeHtml $req['RequestedForName']),
+                (ConvertTo-SafeHtml $req['RequestedItemName']),
+                (ConvertTo-SafeHtml $req['RequestedItemType']),
+                (ConvertTo-SafeHtml $req['ApproverName']),
+                $statusHtml,
+                $hoursDisplay
+            )
+            $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+        }
+
+        $timelineHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Request Timeline</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+    } else {
+        $timelineHtml = @"
+<div style="padding:16px; background:#eafaf1; border:1px solid #d5f5e3; border-radius:4px; margin:16px 0; color:#339933; font-size:14px;">
+No access requests found in the selected period.
+</div>
+"@
+    }
+
+    # --- Top requesters section ---
+    $topRequestersHtml = ''
+    $topRequesters = if ($null -ne $summary) { @($summary['TopRequesters']) } else { @() }
+    if ($topRequesters.Count -gt 0) {
+        $trHeaderRow = Build-HtmlTableHeader -Headers @('Requester', 'Request Count', 'Flag')
+        $trBodyRows  = [System.Collections.Generic.List[string]]::new()
+        $trRowIdx    = 0
+
+        foreach ($tr in $topRequesters) {
+            $trRowIdx++
+            $count    = [int]$tr['Count']
+            $flagHtml = if ($count -gt 5) {
+                '<span style="background:#FF8800; color:#fff; padding:2px 8px; border-radius:3px; font-size:11px;">HIGH VOLUME</span>'
+            } else { '' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $tr['Name']),
+                [string]$count,
+                $flagHtml
+            )
+            $trBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($trRowIdx % 2) -eq 0)))
+        }
+
+        $topRequestersHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Top Requesters</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${trHeaderRow}
+<tbody>
+$($trBodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Top requested items section ---
+    $topItemsHtml = ''
+    $topItems = if ($null -ne $summary) { @($summary['TopRequestedItems']) } else { @() }
+    if ($topItems.Count -gt 0) {
+        $tiHeaderRow = Build-HtmlTableHeader -Headers @('Item Name', 'Type', 'Request Count')
+        $tiBodyRows  = [System.Collections.Generic.List[string]]::new()
+        $tiRowIdx    = 0
+
+        foreach ($ti in $topItems) {
+            $tiRowIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $ti['Name']),
+                (ConvertTo-SafeHtml $ti['Type']),
+                [string]$ti['Count']
+            )
+            $tiBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($tiRowIdx % 2) -eq 0)))
+        }
+
+        $topItemsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Top Requested Items</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${tiHeaderRow}
+<tbody>
+$($tiBodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Access Request Activity Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Access Request Activity Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${timelineHtml}
+
+${topRequestersHtml}
+
+${topItemsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Access request activity HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAccessRequestHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion Access Request Activity Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7825,5 +8082,6 @@ Export-ModuleMember -Function @(
     'Export-SPOrchestratorHistoryHtml',
     'Export-SPGovernanceBIData',
     'Export-SPSodViolationHtml',
-    'Export-SPOwnershipHealthHtml'
+    'Export-SPOwnershipHealthHtml',
+    'Export-SPAccessRequestHtml'
 )

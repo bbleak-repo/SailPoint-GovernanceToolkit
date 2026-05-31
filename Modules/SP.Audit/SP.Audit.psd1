@@ -121,6 +121,9 @@
 
         # SP.AuditReportHtml - Entitlement Ownership Health Report (P15-02)
         'Export-SPOwnershipHealthHtml'
+
+        # SP.AuditReportHtml - Access Request Activity Report (P15-03)
+        'Export-SPAccessRequestHtml'
     )
 
     # Do not export variables or aliases from nested modules
