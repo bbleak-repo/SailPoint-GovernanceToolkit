@@ -2508,6 +2508,800 @@ function Measure-SPGovernanceMaturity {
 
 #endregion
 
+#region Multi-Source Identity Correlation (P13-03)
+
+function Get-SPIdentityAccessSpread {
+    <#
+    .SYNOPSIS
+        Analyzes campaign audit data to identify identities with access spanning multiple sources.
+    .DESCRIPTION
+        Iterates campaign audit decision items to build a per-identity map of unique
+        sources they hold access on. Filters to identities meeting a minimum source
+        count threshold, with optional filtering to privileged-only sources.
+
+        Answers: "Which identities have the broadest access footprint across our
+        environment? Who has accounts on 5+ sources? Where is privilege concentrated?"
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions (Approved/Revoked/Pending arrays).
+    .PARAMETER MinSources
+        Minimum number of unique sources an identity must have access on to be included. Default 3.
+    .PARAMETER PrivilegedOnly
+        When set, only count sources where the identity holds at least one privileged entitlement.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); Summary = @{...} }
+    .EXAMPLE
+        $spread = Get-SPIdentityAccessSpread -CampaignAudits $audits -MinSources 3
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$MinSources = 3,
+
+        [Parameter()]
+        [switch]$PrivilegedOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPIdentityAccessSpread: starting with $($CampaignAudits.Count) campaign(s), MinSources=$MinSources, PrivilegedOnly=$PrivilegedOnly" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityAccessSpread' `
+        -CorrelationID $CorrelationID
+
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Identities = @()
+            Summary    = @{
+                TotalIdentitiesAnalyzed        = 0
+                IdentitiesAboveThreshold       = 0
+                AvgSourceCount                 = 0
+                MaxSourceCount                 = 0
+                IdentitiesWithPrivilegedSpread = 0
+            }
+        }
+    }
+
+    $identityMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $identityId   = ''
+                $identityName = ''
+                $sourceName   = ''
+                $accessName   = ''
+                $decisionDate = ''
+                $decision     = ''
+                $riskFlags    = @()
+
+                if ($item -is [hashtable]) {
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $decision     = if ($item.ContainsKey('Decision'))     { [string]$item['Decision'] }     else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $nmProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $nmProp -and $null -ne $nmProp.Value) { [string]$nmProp.Value } else { '' }
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $dcProp = $item.PSObject.Properties['Decision']
+                    $decision = if ($null -ne $dcProp -and $null -ne $dcProp.Value) { [string]$dcProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($identityId)) { continue }
+                if ([string]::IsNullOrWhiteSpace($sourceName)) { continue }
+
+                $isPrivileged = $false
+                foreach ($flag in $riskFlags) {
+                    if ($flag -eq 'PRIVILEGED') { $isPrivileged = $true; break }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($decision)) {
+                    $decision = switch ($category) {
+                        'Approved' { 'APPROVE' }
+                        'Revoked'  { 'REVOKE' }
+                        default    { '' }
+                    }
+                }
+
+                if (-not $identityMap.ContainsKey($identityId)) {
+                    $identityMap[$identityId] = @{
+                        IdentityId    = $identityId
+                        IdentityName  = $identityName
+                        Sources       = @{}
+                        HasRevocation = $false
+                    }
+                }
+
+                $idRec = $identityMap[$identityId]
+
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    $idRec['IdentityName'] = $identityName
+                }
+
+                if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+                    $idRec['HasRevocation'] = $true
+                }
+
+                if (-not $idRec['Sources'].ContainsKey($sourceName)) {
+                    $idRec['Sources'][$sourceName] = @{
+                        SourceName       = $sourceName
+                        EntitlementCount = 0
+                        PrivilegedCount  = 0
+                        LastReviewDate   = $null
+                        Entitlements     = @{}
+                    }
+                }
+
+                $srcRec = $idRec['Sources'][$sourceName]
+
+                if (-not [string]::IsNullOrWhiteSpace($accessName) -and -not $srcRec['Entitlements'].ContainsKey($accessName)) {
+                    $srcRec['Entitlements'][$accessName] = $true
+                    $srcRec['EntitlementCount']++
+                    if ($isPrivileged) {
+                        $srcRec['PrivilegedCount']++
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $srcRec['LastReviewDate'] -or $dt -gt $srcRec['LastReviewDate']) {
+                            $srcRec['LastReviewDate'] = $dt
+                        }
+                    } catch { }
+                }
+            }
+        }
+    }
+
+    $totalAnalyzed = $identityMap.Count
+    $identityResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    foreach ($idKey in $identityMap.Keys) {
+        $idRec = $identityMap[$idKey]
+        $sources = $idRec['Sources']
+
+        $effectiveSources = @{}
+        foreach ($srcName in $sources.Keys) {
+            $srcRec = $sources[$srcName]
+            if ($PrivilegedOnly) {
+                if ($srcRec['PrivilegedCount'] -gt 0) {
+                    $effectiveSources[$srcName] = $srcRec
+                }
+            } else {
+                $effectiveSources[$srcName] = $srcRec
+            }
+        }
+
+        $sourceCount = $effectiveSources.Count
+        if ($sourceCount -lt $MinSources) { continue }
+
+        $totalEntitlements = 0
+        $privilegedEntitlements = 0
+        $broadestSourceName = ''
+        $broadestSourceCount = 0
+
+        $sourceDetails = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($srcName in $effectiveSources.Keys) {
+            $srcRec = $effectiveSources[$srcName]
+            $totalEntitlements += $srcRec['EntitlementCount']
+            $privilegedEntitlements += $srcRec['PrivilegedCount']
+
+            if ($srcRec['EntitlementCount'] -gt $broadestSourceCount) {
+                $broadestSourceCount = $srcRec['EntitlementCount']
+                $broadestSourceName = $srcName
+            }
+
+            $lastReviewStr = if ($null -ne $srcRec['LastReviewDate']) {
+                $srcRec['LastReviewDate'].ToString('yyyy-MM-dd')
+            } else { $null }
+
+            $sourceDetails.Add(@{
+                SourceId         = ''
+                SourceName       = $srcName
+                EntitlementCount = $srcRec['EntitlementCount']
+                PrivilegedCount  = $srcRec['PrivilegedCount']
+                LastReviewDate   = $lastReviewStr
+            })
+        }
+
+        $sortedSources = @($sourceDetails | Sort-Object { $_['EntitlementCount'] } -Descending)
+
+        $identityResults.Add(@{
+            IdentityId             = $idRec['IdentityId']
+            IdentityName           = $idRec['IdentityName']
+            SourceCount            = $sourceCount
+            TotalEntitlements      = $totalEntitlements
+            PrivilegedEntitlements = $privilegedEntitlements
+            ApprovalOnlyFlag       = (-not $idRec['HasRevocation'])
+            BroadestSource         = $broadestSourceName
+            Sources                = $sortedSources
+        })
+    }
+
+    $sorted = @($identityResults | Sort-Object @(
+        @{ Expression = { $_['SourceCount'] }; Descending = $true },
+        @{ Expression = { $_['PrivilegedEntitlements'] }; Descending = $true }
+    ))
+
+    $aboveThreshold = $sorted.Count
+    $maxSourceCount = 0
+    $totalSourceCounts = 0
+    $privilegedSpreadCount = 0
+
+    foreach ($id in $sorted) {
+        $totalSourceCounts += $id['SourceCount']
+        if ($id['SourceCount'] -gt $maxSourceCount) {
+            $maxSourceCount = $id['SourceCount']
+        }
+        $privSourceCount = 0
+        foreach ($src in $id['Sources']) {
+            if ($src['PrivilegedCount'] -gt 0) { $privSourceCount++ }
+        }
+        if ($privSourceCount -ge 2) { $privilegedSpreadCount++ }
+    }
+
+    $avgSourceCount = if ($aboveThreshold -gt 0) {
+        [Math]::Round($totalSourceCounts / $aboveThreshold, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Get-SPIdentityAccessSpread: analyzed $totalAnalyzed identities, $aboveThreshold above threshold (MinSources=$MinSources)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityAccessSpread' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Identities = $sorted
+        Summary    = @{
+            TotalIdentitiesAnalyzed        = $totalAnalyzed
+            IdentitiesAboveThreshold       = $aboveThreshold
+            AvgSourceCount                 = $avgSourceCount
+            MaxSourceCount                 = $maxSourceCount
+            IdentitiesWithPrivilegedSpread = $privilegedSpreadCount
+        }
+    }
+}
+
+#endregion
+
+
+#region P13-06: Audit Period Comparison
+
+function Compare-SPAuditPeriods {
+    <#
+    .SYNOPSIS
+        Compares two time windows across all governance dimensions.
+    .DESCRIPTION
+        Accepts two period hashtables, each containing pre-computed analytics output
+        (campaign metrics, identity risk, source governance, reviewer reputation,
+        stale access, remediation status), and produces a structured side-by-side
+        comparison with delta calculations and governance direction classification.
+
+        Direction classification:
+        - Improved: Metric moved in the governance-positive direction
+        - Degraded: Metric moved in the governance-negative direction
+        - Stable: Change within +/- 2% threshold
+
+        Answers: "How did our governance posture change between Q1 and Q2?"
+    .PARAMETER PeriodA
+        Hashtable for the baseline period. Expected keys: Label, DateRange,
+        CampaignMetrics, IdentityRisk, SourceGovernance, ReviewerReputation,
+        StaleAccess, RemediationStatus (optional).
+    .PARAMETER PeriodB
+        Hashtable for the comparison period (same structure as PeriodA).
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Comparison result with Dimensions, OverallDirection, Summary.
+    .EXAMPLE
+        $q1 = @{ Label='Q1 2026'; DateRange=@{After='2026-01-01';Before='2026-03-31'}; CampaignMetrics=$cm1; IdentityRisk=$ir1 }
+        $q2 = @{ Label='Q2 2026'; DateRange=@{After='2026-04-01';Before='2026-06-30'}; CampaignMetrics=$cm2; IdentityRisk=$ir2 }
+        $result = Compare-SPAuditPeriods -PeriodA $q1 -PeriodB $q2
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$PeriodA,
+
+        [Parameter(Mandatory)]
+        [hashtable]$PeriodB,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Compare-SPAuditPeriods: comparing '$($PeriodA['Label'])' vs '$($PeriodB['Label'])'" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPAuditPeriods' `
+        -CorrelationID $CorrelationID
+
+    # --- Helper: safe hashtable key access ---
+    function Get-SafeValue {
+        param([object]$Obj, [string]$Key)
+        if ($null -eq $Obj) { return $null }
+        if ($Obj -is [hashtable]) {
+            if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }
+            return $null
+        }
+        $prop = $Obj.PSObject.Properties[$Key]
+        if ($null -ne $prop) { return $prop.Value }
+        return $null
+    }
+
+    # --- Helper: classify governance direction ---
+    function Get-Direction {
+        param(
+            [object]$ValA,
+            [object]$ValB,
+            [string]$PositiveDirection,  # 'higher', 'lower', 'none'
+            [double]$Threshold = 2.0
+        )
+        if ($null -eq $ValA -or $null -eq $ValB) { return 'N/A' }
+        $a = [double]$ValA
+        $b = [double]$ValB
+        $delta = [Math]::Round($b - $a, 2)
+        if ([Math]::Abs($delta) -le $Threshold) { return 'Stable' }
+        if ($PositiveDirection -eq 'none') { return 'Stable' }
+        if ($PositiveDirection -eq 'higher') {
+            return $(if ($delta -gt 0) { 'Improved' } else { 'Degraded' })
+        }
+        if ($PositiveDirection -eq 'lower') {
+            return $(if ($delta -lt 0) { 'Improved' } else { 'Degraded' })
+        }
+        return 'Stable'
+    }
+
+    # --- Helper: build metric comparison object ---
+    function New-MetricComparison {
+        param(
+            [object]$ValA,
+            [object]$ValB,
+            [string]$PositiveDirection,
+            [double]$Threshold = 2.0
+        )
+        if ($null -eq $ValA -and $null -eq $ValB) {
+            return @{ A = $null; B = $null; Delta = $null; Direction = 'N/A' }
+        }
+        if ($null -eq $ValA -or $null -eq $ValB) {
+            return @{
+                A = $ValA
+                B = $ValB
+                Delta = $null
+                Direction = 'N/A'
+            }
+        }
+        $a = [Math]::Round([double]$ValA, 1)
+        $b = [Math]::Round([double]$ValB, 1)
+        $delta = [Math]::Round($b - $a, 1)
+        $direction = Get-Direction -ValA $a -ValB $b -PositiveDirection $PositiveDirection -Threshold $Threshold
+        return @{ A = $a; B = $b; Delta = $delta; Direction = $direction }
+    }
+
+    # Direction counters for overall summary
+    $improvedCount = 0
+    $degradedCount = 0
+    $stableCount = 0
+
+    function Update-DirectionCounts {
+        param([string]$Dir)
+        switch ($Dir) {
+            'Improved' { $script:improvedCount++ }
+            'Degraded' { $script:degradedCount++ }
+            'Stable'   { $script:stableCount++ }
+        }
+    }
+
+    # ========================================
+    # 1. Campaign Metrics Delta
+    # ========================================
+    $campaignMetricsDim = $null
+    $cmA = Get-SafeValue $PeriodA 'CampaignMetrics'
+    $cmB = Get-SafeValue $PeriodB 'CampaignMetrics'
+
+    if ($null -ne $cmA -or $null -ne $cmB) {
+        # Extract aggregate values from Measure-SPCampaignMetrics output
+        # Output is @{ Success; Data = @(PSCustomObject[]) }
+        function Get-CampaignAggregates {
+            param([object]$CmOutput)
+            if ($null -eq $CmOutput) { return $null }
+            $data = $null
+            if ($CmOutput -is [hashtable] -and $CmOutput.ContainsKey('Data') -and $null -ne $CmOutput['Data']) {
+                $data = @($CmOutput['Data'])
+            } elseif ($CmOutput -is [array]) {
+                $data = @($CmOutput)
+            } else {
+                return $null
+            }
+            if ($data.Count -eq 0) { return $null }
+            $totalCampaigns = $data.Count
+            $sumApproval = 0.0; $sumRevocation = 0.0; $sumResponse = 0.0; $sumCompletion = 0.0
+            $responseCount = 0
+            foreach ($c in $data) {
+                $ar = Get-SafeValue $c 'ApprovalRate'
+                $rr = Get-SafeValue $c 'RevocationRate'
+                $rt = Get-SafeValue $c 'AvgResponseTimeHours'
+                $cr = Get-SafeValue $c 'CompletionRate'
+                if ($null -ne $ar) { $sumApproval += [double]$ar }
+                if ($null -ne $rr) { $sumRevocation += [double]$rr }
+                if ($null -ne $rt -and [double]$rt -gt 0) { $sumResponse += [double]$rt; $responseCount++ }
+                if ($null -ne $cr) { $sumCompletion += [double]$cr }
+            }
+            return @{
+                TotalCampaigns = $totalCampaigns
+                AvgApprovalRate = [Math]::Round($sumApproval / $totalCampaigns, 1)
+                AvgRevocationRate = [Math]::Round($sumRevocation / $totalCampaigns, 1)
+                AvgResponseHrs = if ($responseCount -gt 0) { [Math]::Round($sumResponse / $responseCount, 1) } else { $null }
+                AvgCompletionRate = [Math]::Round($sumCompletion / $totalCampaigns, 1)
+            }
+        }
+
+        $aggA = Get-CampaignAggregates $cmA
+        $aggB = Get-CampaignAggregates $cmB
+
+        $approvalComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgApprovalRate') `
+            -ValB (Get-SafeValue $aggB 'AvgApprovalRate') -PositiveDirection 'none'
+        Update-DirectionCounts $approvalComp['Direction']
+
+        $revocationComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgRevocationRate') `
+            -ValB (Get-SafeValue $aggB 'AvgRevocationRate') -PositiveDirection 'higher'
+        Update-DirectionCounts $revocationComp['Direction']
+
+        $responseComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgResponseHrs') `
+            -ValB (Get-SafeValue $aggB 'AvgResponseHrs') -PositiveDirection 'lower'
+        Update-DirectionCounts $responseComp['Direction']
+
+        $completionComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgCompletionRate') `
+            -ValB (Get-SafeValue $aggB 'AvgCompletionRate') -PositiveDirection 'higher'
+        Update-DirectionCounts $completionComp['Direction']
+
+        $campaignMetricsDim = @{
+            ApprovalRate   = $approvalComp
+            RevocationRate = $revocationComp
+            AvgResponseHrs = $responseComp
+            CompletionRate = $completionComp
+        }
+    }
+
+    # ========================================
+    # 2. Identity Risk Delta
+    # ========================================
+    $identityRiskDim = $null
+    $irA = Get-SafeValue $PeriodA 'IdentityRisk'
+    $irB = Get-SafeValue $PeriodB 'IdentityRisk'
+
+    if ($null -ne $irA -or $null -ne $irB) {
+        $irSumA = Get-SafeValue $irA 'Summary'
+        $irSumB = Get-SafeValue $irB 'Summary'
+
+        $highComp = New-MetricComparison -ValA (Get-SafeValue $irSumA 'High') `
+            -ValB (Get-SafeValue $irSumB 'High') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $highComp['Direction']
+
+        $avgRiskComp = New-MetricComparison -ValA (Get-SafeValue $irSumA 'AvgRiskScore') `
+            -ValB (Get-SafeValue $irSumB 'AvgRiskScore') -PositiveDirection 'lower'
+        Update-DirectionCounts $avgRiskComp['Direction']
+
+        # Identify new High-risk identities in B not in A
+        $newHighRisk = @()
+        $identsA = Get-SafeValue $irA 'Identities'
+        $identsB = Get-SafeValue $irB 'Identities'
+        if ($null -ne $identsA -and $null -ne $identsB) {
+            $highA = @{}
+            foreach ($id in @($identsA)) {
+                $tier = Get-SafeValue $id 'RiskTier'
+                if ($tier -eq 'High') {
+                    $idId = Get-SafeValue $id 'IdentityId'
+                    if (-not [string]::IsNullOrWhiteSpace($idId)) { $highA[$idId] = $true }
+                }
+            }
+            foreach ($id in @($identsB)) {
+                $tier = Get-SafeValue $id 'RiskTier'
+                if ($tier -eq 'High') {
+                    $idId = Get-SafeValue $id 'IdentityId'
+                    $idName = Get-SafeValue $id 'IdentityName'
+                    if (-not [string]::IsNullOrWhiteSpace($idId) -and -not $highA.ContainsKey($idId)) {
+                        $newHighRisk += if (-not [string]::IsNullOrWhiteSpace($idName)) { $idName } else { $idId }
+                    }
+                }
+            }
+        }
+
+        $identityRiskDim = @{
+            HighCount    = $highComp
+            AvgRiskScore = $avgRiskComp
+            NewHighRisk  = $newHighRisk
+        }
+    }
+
+    # ========================================
+    # 3. Source Governance Delta
+    # ========================================
+    $sourceGovernanceDim = $null
+    $sgA = Get-SafeValue $PeriodA 'SourceGovernance'
+    $sgB = Get-SafeValue $PeriodB 'SourceGovernance'
+
+    if ($null -ne $sgA -or $null -ne $sgB) {
+        $sgSumA = Get-SafeValue $sgA 'Summary'
+        $sgSumB = Get-SafeValue $sgB 'Summary'
+
+        $coverageComp = New-MetricComparison -ValA (Get-SafeValue $sgSumA 'OverallCoveragePct') `
+            -ValB (Get-SafeValue $sgSumB 'OverallCoveragePct') -PositiveDirection 'higher'
+        Update-DirectionCounts $coverageComp['Direction']
+
+        # Per-source grade changes
+        $gradeChanges = @()
+        $sourcesA = Get-SafeValue $sgA 'Sources'
+        $sourcesB = Get-SafeValue $sgB 'Sources'
+        if ($null -ne $sourcesA -and $null -ne $sourcesB) {
+            $gradeOrder = @{ 'A' = 5; 'B' = 4; 'C' = 3; 'D' = 2; 'F' = 1 }
+            $srcMapA = @{}
+            foreach ($s in @($sourcesA)) {
+                $sName = Get-SafeValue $s 'SourceName'
+                $sId = Get-SafeValue $s 'SourceId'
+                $key = if (-not [string]::IsNullOrWhiteSpace($sId)) { $sId } else { $sName }
+                if (-not [string]::IsNullOrWhiteSpace($key)) { $srcMapA[$key] = $s }
+            }
+            foreach ($sB in @($sourcesB)) {
+                $sName = Get-SafeValue $sB 'SourceName'
+                $sId = Get-SafeValue $sB 'SourceId'
+                $key = if (-not [string]::IsNullOrWhiteSpace($sId)) { $sId } else { $sName }
+                if ([string]::IsNullOrWhiteSpace($key)) { continue }
+                if ($srcMapA.ContainsKey($key)) {
+                    $sA = $srcMapA[$key]
+                    $gradeA = [string](Get-SafeValue $sA 'GovernanceGrade')
+                    $gradeB = [string](Get-SafeValue $sB 'GovernanceGrade')
+                    if ($gradeA -ne $gradeB) {
+                        $ordA = if ($gradeOrder.ContainsKey($gradeA)) { $gradeOrder[$gradeA] } else { 0 }
+                        $ordB = if ($gradeOrder.ContainsKey($gradeB)) { $gradeOrder[$gradeB] } else { 0 }
+                        $dir = if ($ordB -gt $ordA) { 'Improved' } elseif ($ordB -lt $ordA) { 'Degraded' } else { 'Stable' }
+                        $displayName = if (-not [string]::IsNullOrWhiteSpace($sName)) { $sName } else { $key }
+                        $gradeChanges += @{
+                            Source     = $displayName
+                            GradeA     = $gradeA
+                            GradeB     = $gradeB
+                            Direction  = $dir
+                        }
+                    }
+                }
+            }
+        }
+
+        $sourceGovernanceDim = @{
+            OverallCoverage = $coverageComp
+            GradeChanges    = $gradeChanges
+        }
+    }
+
+    # ========================================
+    # 4. Reviewer Reputation Delta
+    # ========================================
+    $reviewerReputationDim = $null
+    $rrA = Get-SafeValue $PeriodA 'ReviewerReputation'
+    $rrB = Get-SafeValue $PeriodB 'ReviewerReputation'
+
+    if ($null -ne $rrA -or $null -ne $rrB) {
+        # Compute average reputation score from Reviewers array
+        function Get-AvgReputationScore {
+            param([object]$RepData)
+            if ($null -eq $RepData) { return $null }
+            $reviewers = Get-SafeValue $RepData 'Reviewers'
+            if ($null -eq $reviewers -or @($reviewers).Count -eq 0) { return $null }
+            $total = 0.0
+            $count = 0
+            foreach ($r in @($reviewers)) {
+                $score = Get-SafeValue $r 'ReputationScore'
+                if ($null -ne $score) { $total += [double]$score; $count++ }
+            }
+            if ($count -eq 0) { return $null }
+            return [Math]::Round($total / $count, 1)
+        }
+
+        $avgScoreComp = New-MetricComparison -ValA (Get-AvgReputationScore $rrA) `
+            -ValB (Get-AvgReputationScore $rrB) -PositiveDirection 'higher'
+        Update-DirectionCounts $avgScoreComp['Direction']
+
+        # New At Risk reviewers in B not in A
+        $newAtRisk = @()
+        $tierImprovements = @()
+        $reviewersA = Get-SafeValue $rrA 'Reviewers'
+        $reviewersB = Get-SafeValue $rrB 'Reviewers'
+        if ($null -ne $reviewersA -and $null -ne $reviewersB) {
+            $tierMapA = @{}
+            foreach ($r in @($reviewersA)) {
+                $rName = Get-SafeValue $r 'ReviewerName'
+                $rTier = Get-SafeValue $r 'ReputationTier'
+                if (-not [string]::IsNullOrWhiteSpace($rName)) { $tierMapA[$rName] = $rTier }
+            }
+            foreach ($r in @($reviewersB)) {
+                $rName = Get-SafeValue $r 'ReviewerName'
+                $rTierB = Get-SafeValue $r 'ReputationTier'
+                if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+                $rTierA = if ($tierMapA.ContainsKey($rName)) { $tierMapA[$rName] } else { $null }
+
+                if ($rTierB -eq 'At Risk' -and $rTierA -ne 'At Risk') {
+                    $newAtRisk += $rName
+                }
+                # Detect tier improvements
+                if ($null -ne $rTierA -and $rTierA -ne $rTierB) {
+                    $tierOrder = @{ 'At Risk' = 1; 'Needs Attention' = 2; 'Good' = 3; 'Excellent' = 4 }
+                    $ordA = if ($tierOrder.ContainsKey($rTierA)) { $tierOrder[$rTierA] } else { 0 }
+                    $ordB = if ($tierOrder.ContainsKey($rTierB)) { $tierOrder[$rTierB] } else { 0 }
+                    if ($ordB -gt $ordA) {
+                        $tierImprovements += "${rName}: ${rTierA} -> ${rTierB}"
+                    }
+                }
+            }
+        }
+
+        $reviewerReputationDim = @{
+            AvgScore         = $avgScoreComp
+            NewAtRisk        = $newAtRisk
+            TierImprovements = $tierImprovements
+        }
+    }
+
+    # ========================================
+    # 5. Stale Access Delta
+    # ========================================
+    $staleAccessDim = $null
+    $saA = Get-SafeValue $PeriodA 'StaleAccess'
+    $saB = Get-SafeValue $PeriodB 'StaleAccess'
+
+    if ($null -ne $saA -or $null -ne $saB) {
+        $saSumA = Get-SafeValue $saA 'Summary'
+        $saSumB = Get-SafeValue $saB 'Summary'
+
+        $totalStaleComp = New-MetricComparison -ValA (Get-SafeValue $saSumA 'TotalStaleItems') `
+            -ValB (Get-SafeValue $saSumB 'TotalStaleItems') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $totalStaleComp['Direction']
+
+        $neverReviewedComp = New-MetricComparison -ValA (Get-SafeValue $saSumA 'NeverReviewed') `
+            -ValB (Get-SafeValue $saSumB 'NeverReviewed') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $neverReviewedComp['Direction']
+
+        $staleAccessDim = @{
+            TotalStale    = $totalStaleComp
+            NeverReviewed = $neverReviewedComp
+        }
+    }
+
+    # ========================================
+    # 6. Remediation Delta
+    # ========================================
+    $remediationDim = $null
+    $remA = Get-SafeValue $PeriodA 'RemediationStatus'
+    $remB = Get-SafeValue $PeriodB 'RemediationStatus'
+
+    if ($null -ne $remA -or $null -ne $remB) {
+        # RemediationStatus output: @{ Success; Data = @{ Items; Summary } }
+        function Get-RemediationSummary {
+            param([object]$RemOutput)
+            if ($null -eq $RemOutput) { return $null }
+            if ($RemOutput -is [hashtable] -and $RemOutput.ContainsKey('Data') -and $null -ne $RemOutput['Data']) {
+                $data = $RemOutput['Data']
+                if ($data -is [hashtable] -and $data.ContainsKey('Summary')) { return $data['Summary'] }
+            }
+            if ($RemOutput -is [hashtable] -and $RemOutput.ContainsKey('Summary')) { return $RemOutput['Summary'] }
+            return $null
+        }
+
+        $remSumA = Get-RemediationSummary $remA
+        $remSumB = Get-RemediationSummary $remB
+
+        # SLA compliance = (Provisioned / Total) * 100
+        function Get-SlaComplianceRate {
+            param([object]$Summary)
+            if ($null -eq $Summary) { return $null }
+            $total = Get-SafeValue $Summary 'Total'
+            $provisioned = Get-SafeValue $Summary 'Provisioned'
+            if ($null -eq $total -or [int]$total -eq 0) { return $null }
+            return [Math]::Round(([double]$provisioned / [double]$total) * 100, 1)
+        }
+
+        $slaComp = New-MetricComparison -ValA (Get-SlaComplianceRate $remSumA) `
+            -ValB (Get-SlaComplianceRate $remSumB) -PositiveDirection 'higher'
+        Update-DirectionCounts $slaComp['Direction']
+
+        $avgDaysComp = New-MetricComparison -ValA (Get-SafeValue $remSumA 'AvgDaysToRemediate') `
+            -ValB (Get-SafeValue $remSumB 'AvgDaysToRemediate') -PositiveDirection 'lower'
+        Update-DirectionCounts $avgDaysComp['Direction']
+
+        $remediationDim = @{
+            SlaCompliance      = $slaComp
+            AvgDaysToRemediate = $avgDaysComp
+        }
+    }
+
+    # ========================================
+    # Overall Direction (majority vote)
+    # ========================================
+    $overallDirection = 'Stable'
+    if ($improvedCount -gt $degradedCount -and $improvedCount -gt $stableCount) {
+        $overallDirection = 'Improved'
+    } elseif ($degradedCount -gt $improvedCount -and $degradedCount -gt $stableCount) {
+        $overallDirection = 'Degraded'
+    }
+
+    # Handle all-N/A case
+    $totalDirectional = $improvedCount + $degradedCount + $stableCount
+    if ($totalDirectional -eq 0) {
+        $overallDirection = 'N/A'
+    }
+
+    $dimensions = @{}
+    if ($null -ne $campaignMetricsDim)   { $dimensions['CampaignMetrics']    = $campaignMetricsDim }
+    if ($null -ne $identityRiskDim)      { $dimensions['IdentityRisk']       = $identityRiskDim }
+    if ($null -ne $sourceGovernanceDim)  { $dimensions['SourceGovernance']   = $sourceGovernanceDim }
+    if ($null -ne $reviewerReputationDim){ $dimensions['ReviewerReputation'] = $reviewerReputationDim }
+    if ($null -ne $staleAccessDim)       { $dimensions['StaleAccess']        = $staleAccessDim }
+    if ($null -ne $remediationDim)       { $dimensions['Remediation']        = $remediationDim }
+
+    Write-SPLog -Message "Compare-SPAuditPeriods: completed -- Improved=$improvedCount, Degraded=$degradedCount, Stable=$stableCount, Overall=$overallDirection" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPAuditPeriods' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        PeriodA          = @{
+            Label     = Get-SafeValue $PeriodA 'Label'
+            DateRange = Get-SafeValue $PeriodA 'DateRange'
+        }
+        PeriodB          = @{
+            Label     = Get-SafeValue $PeriodB 'Label'
+            DateRange = Get-SafeValue $PeriodB 'DateRange'
+        }
+        Dimensions       = $dimensions
+        OverallDirection = $overallDirection
+        Summary          = @{
+            Improved = $improvedCount
+            Degraded = $degradedCount
+            Stable   = $stableCount
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -2515,5 +3309,7 @@ Export-ModuleMember -Function @(
     'Measure-SPReviewerReputation',
     'Measure-SPIdentityRisk',
     'Measure-SPSourceGovernance',
-    'Measure-SPGovernanceMaturity'
+    'Measure-SPGovernanceMaturity',
+    'Get-SPIdentityAccessSpread',
+    'Compare-SPAuditPeriods'
 )

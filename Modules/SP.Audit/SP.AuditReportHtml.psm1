@@ -7411,6 +7411,280 @@ ${tableHtml}
 
 #endregion Remediation Priority Report
 
+#region Governance Maturity Report (P14-01)
+
+function Export-SPGovernanceMaturityHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML governance maturity scorecard from Measure-SPGovernanceMaturity output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with:
+        - Overall maturity level badge with level name and score
+        - Radar/spider chart visualization of 6 dimensions (HTML table-based)
+        - Per-dimension detail cards with score, level, key factors, and improvement action
+        - Top 3 improvement recommendations section
+        - Summary card with weighted overall score
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER MaturityData
+        Hashtable output from Measure-SPGovernanceMaturity.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $maturity = Measure-SPGovernanceMaturity -SourceGovernance $gov -ReviewerReputation $rep
+        $path = Export-SPGovernanceMaturityHtml -MaturityData $maturity -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$MaturityData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "GovernanceMaturity-${timestamp}.html"
+
+    $overallScore = $MaturityData['OverallScore']
+    $overallLevel = $MaturityData['OverallLevel']
+    $overallName  = $MaturityData['OverallLevelName']
+    $evaluatedAt  = $MaturityData['EvaluatedAt']
+    $dimensions   = $MaturityData['Dimensions']
+    $topImprovements = $MaturityData['TopImprovements']
+
+    # Level color mapping
+    $levelColor = switch ([int]$overallLevel) {
+        1 { 'background:#c0392b; color:#ffffff;' }
+        2 { 'background:#e74c3c; color:#ffffff;' }
+        3 { 'background:#e67e22; color:#ffffff;' }
+        4 { 'background:#2980b9; color:#ffffff;' }
+        5 { 'background:#27ae60; color:#ffffff;' }
+        default { 'background:#777777; color:#ffffff;' }
+    }
+
+    # --- Overall maturity badge ---
+    $badgeHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:16px 20px; $levelColor font-weight:bold; border:1px solid #dddddd; text-align:center; font-size:16px;">
+Level $overallLevel -- $(ConvertTo-SafeHtml $overallName)<br/>
+<span style="font-size:28px;">$overallScore / 100</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Dimension summary table (radar chart substitute) ---
+    $dimOrder = @('Coverage', 'Timeliness', 'Enforcement', 'Accountability', 'Documentation', 'Automation')
+    $dimWeights = @{
+        Coverage       = '20%'
+        Timeliness     = '20%'
+        Enforcement    = '20%'
+        Accountability = '15%'
+        Documentation  = '10%'
+        Automation     = '15%'
+    }
+
+    $dimHeaderRow = Build-HtmlTableHeader -Headers @('Dimension', 'Score', 'Level', 'Weight', 'Bar')
+    $dimBodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($dimName in $dimOrder) {
+        $rowIdx++
+        $dim = $dimensions[$dimName]
+        $dimScore = [double]$dim['Score']
+        $dimLevel = [int]$dim['Level']
+
+        $dimLevelName = switch ($dimLevel) {
+            1 { 'Initial' }
+            2 { 'Developing' }
+            3 { 'Defined' }
+            4 { 'Managed' }
+            5 { 'Optimizing' }
+            default { 'Unknown' }
+        }
+
+        $dimLevelColor = switch ($dimLevel) {
+            1 { 'color:#ffffff; background:#c0392b;' }
+            2 { 'color:#ffffff; background:#e74c3c;' }
+            3 { 'color:#ffffff; background:#e67e22;' }
+            4 { 'color:#ffffff; background:#2980b9;' }
+            5 { 'color:#ffffff; background:#27ae60;' }
+            default { 'color:#ffffff; background:#777777;' }
+        }
+
+        $levelBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:12px; font-weight:bold; $dimLevelColor"">$dimLevelName</span>"
+
+        # Score bar
+        $barPct = [Math]::Min(100, [Math]::Max(0, [int]$dimScore))
+        $barColor = if ($dimScore -ge 81) { '#27ae60' } elseif ($dimScore -ge 61) { '#2980b9' } elseif ($dimScore -ge 41) { '#e67e22' } else { '#c0392b' }
+        $barHtml = "<div style=""width:120px; height:12px; background:#eeeeee; display:inline-block; vertical-align:middle;""><div style=""width:${barPct}%; height:12px; background:${barColor};""></div></div>"
+
+        $cells = @(
+            (ConvertTo-SafeHtml $dimName),
+            [string]$dimScore,
+            $levelBadge,
+            $dimWeights[$dimName],
+            $barHtml
+        )
+
+        $dimBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $dimTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Dimension Scores</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${dimHeaderRow}
+<tbody>
+$($dimBodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-dimension detail cards ---
+    $detailCards = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($dimName in $dimOrder) {
+        $dim = $dimensions[$dimName]
+        $dimScore = [double]$dim['Score']
+        $dimLevel = [int]$dim['Level']
+        $keyFactors = @($dim['KeyFactors'])
+        $improvement = [string]$dim['Improvement']
+
+        $dimLevelColor = switch ($dimLevel) {
+            1 { 'background:#c0392b; color:#ffffff;' }
+            2 { 'background:#e74c3c; color:#ffffff;' }
+            3 { 'background:#e67e22; color:#ffffff;' }
+            4 { 'background:#2980b9; color:#ffffff;' }
+            5 { 'background:#27ae60; color:#ffffff;' }
+            default { 'background:#777777; color:#ffffff;' }
+        }
+
+        $factorsHtml = ''
+        if ($keyFactors.Count -gt 0) {
+            $factorItems = ($keyFactors | ForEach-Object {
+                "<li style=""margin-bottom:4px;"">$(ConvertTo-SafeHtml $_)</li>"
+            }) -join "`n"
+            $factorsHtml = "<ul style=""margin:8px 0; padding-left:20px;"">$factorItems</ul>"
+        }
+
+        $cardHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:16px; border:1px solid #dddddd;">
+<tr>
+<td style="padding:10px 14px; $dimLevelColor font-weight:bold; font-size:14px; width:30%;">
+$(ConvertTo-SafeHtml $dimName)<br/><span style="font-size:20px;">$dimScore</span> / 100
+</td>
+<td style="padding:10px 14px; vertical-align:top; font-size:13px;">
+<strong>Key Factors:</strong>
+$factorsHtml
+<strong>Improvement:</strong> $(ConvertTo-SafeHtml $improvement)
+</td>
+</tr>
+</table>
+"@
+        $detailCards.Add($cardHtml)
+    }
+
+    $detailHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Dimension Details</h2>
+$($detailCards -join "`n")
+"@
+
+    # --- Top improvements section ---
+    $improvementsHtml = ''
+    if ($null -ne $topImprovements -and @($topImprovements).Count -gt 0) {
+        $impItems = (@($topImprovements) | ForEach-Object {
+            "<li style=""margin-bottom:6px; font-size:13px;"">$(ConvertTo-SafeHtml $_)</li>"
+        }) -join "`n"
+
+        $improvementsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Top Improvement Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px; border:1px solid #dddddd;">
+<tr>
+<td style="padding:12px 16px; background:#fdf2e9; font-size:13px;">
+<ol style="margin:0; padding-left:20px;">
+$impItems
+</ol>
+</td>
+</tr>
+</table>
+"@
+    }
+
+    # --- Maturity level reference ---
+    $levelRefHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Maturity Level Reference</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+$(Build-HtmlTableHeader -Headers @('Level', 'Name', 'Score Range', 'Description'))
+<tbody>
+$(Build-HtmlTableRow -Cells @('<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-weight:bold; background:#c0392b; color:#fff;">1</span>', 'Initial', '0 - 20', 'Ad-hoc governance, no consistent processes') -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-weight:bold; background:#e74c3c; color:#fff;">2</span>', 'Developing', '21 - 40', 'Some processes defined, significant gaps') -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-weight:bold; background:#e67e22; color:#fff;">3</span>', 'Defined', '41 - 60', 'Processes documented, partially implemented') -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-weight:bold; background:#2980b9; color:#fff;">4</span>', 'Managed', '61 - 80', 'Measured and controlled governance') -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-weight:bold; background:#27ae60; color:#fff;">5</span>', 'Optimizing', '81 - 100', 'Continuous improvement, near-full coverage') -IsAlternate $false)
+</tbody>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Governance Maturity Scorecard</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Governance Maturity Scorecard</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Evaluated: $(ConvertTo-SafeHtml $evaluatedAt) | Generated: ${generatedAt}</p>
+
+${badgeHtml}
+
+${dimTableHtml}
+
+${detailHtml}
+
+${improvementsHtml}
+
+${levelRefHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Governance maturity HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPGovernanceMaturityHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion Governance Maturity Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7432,5 +7706,6 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignCompletionReport',
     'Export-SPOrchestratorHistoryHtml',
     'Export-SPGovernanceBIData',
-    'Export-SPRemediationPriorityHtml'
+    'Export-SPRemediationPriorityHtml',
+    'Export-SPGovernanceMaturityHtml'
 )

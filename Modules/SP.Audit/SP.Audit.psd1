@@ -124,6 +124,12 @@
 
         # SP.AuditReportHtml - Remediation Priority Report (P14-02)
         'Export-SPRemediationPriorityHtml'
+
+        # SP.AuditAnalytics - Governance Maturity Scorecard (P14-01)
+        'Measure-SPGovernanceMaturity'
+
+        # SP.AuditReportHtml - Governance Maturity Report (P14-01)
+        'Export-SPGovernanceMaturityHtml'
     )
 
     # Do not export variables or aliases from nested modules

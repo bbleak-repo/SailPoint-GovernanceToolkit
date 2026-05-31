@@ -44,7 +44,7 @@ Safe to modify:
 
 | ID | Feature | Depends On | Status |
 |----|---------|------------|--------|
-| P14-01 | Governance Maturity Scorecard | none | PENDING |
+| P14-01 | Governance Maturity Scorecard | none | DONE |
 | P14-02 | Remediation Priority Queue | none | DONE |
 | P14-03 | Audit Evidence Integrity Chain | none | PENDING |
 | P14-04 | Source Onboarding Readiness | none | PENDING |
@@ -90,7 +90,7 @@ Safe to modify:
 
 ## P14-01: Governance Maturity Scorecard
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**
