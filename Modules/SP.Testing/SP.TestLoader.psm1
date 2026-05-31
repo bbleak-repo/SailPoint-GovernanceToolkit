@@ -397,8 +397,233 @@ function Test-SPTestData {
 
 #endregion
 
+#region DeltaCert Test Data Loaders
+
+function Import-SPDeltaCertTestCases {
+    <#
+    .SYNOPSIS
+        Import and validate delta cert test cases from CSV.
+    .DESCRIPTION
+        Reads a CSV file containing delta cert test case definitions.
+        Validates required columns and returns an ordered array of test cases
+        suitable for Invoke-SPDeltaCertTest.
+    .PARAMETER CsvPath
+        Absolute path to the delta cert test cases CSV file.
+        Required columns: TestId, TestName, LookbackHours, MinimumEvents,
+        ExpectCampaignCount, CampaignNamePrefix, FallbackReviewerIdentityId,
+        Priority, Tags.
+    .OUTPUTS
+        @{Success=$true; Data=@([PSCustomObject]@{TestId=...},...); Error=$null}
+    .EXAMPLE
+        $result = Import-SPDeltaCertTestCases -CsvPath "C:\toolkit\Config\delta-cert-tests.csv"
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CsvPath
+    )
+
+    $requiredColumns = @(
+        'TestId', 'TestName', 'LookbackHours', 'MinimumEvents',
+        'ExpectCampaignCount', 'Priority', 'Tags'
+    )
+
+    try {
+        if (-not (Test-Path -Path $CsvPath -PathType Leaf)) {
+            return @{ Success = $false; Data = $null; Error = "DeltaCert test CSV not found: $CsvPath" }
+        }
+
+        $rows = Import-Csv -Path $CsvPath -ErrorAction Stop
+        if ($null -eq $rows -or $rows.Count -eq 0) {
+            return @{ Success = $false; Data = $null; Error = "DeltaCert test CSV is empty: $CsvPath" }
+        }
+
+        $firstRow = $rows | Select-Object -First 1
+        $actualColumns = $firstRow.PSObject.Properties.Name
+        $missingColumns = $requiredColumns | Where-Object { $actualColumns -notcontains $_ }
+
+        if ($missingColumns.Count -gt 0) {
+            return @{ Success = $false; Data = $null; Error = "DeltaCert test CSV missing required columns: $($missingColumns -join ', ')" }
+        }
+
+        $testCases = @()
+        $rowNum = 1
+
+        foreach ($row in $rows) {
+            $rowNum++
+            $testId = ($row.TestId).Trim()
+            if ([string]::IsNullOrWhiteSpace($testId)) {
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "Row $rowNum has empty TestId, skipping" `
+                        -Severity WARN -Component "SP.TestLoader" -Action "ImportDeltaCertTestCases"
+                }
+                continue
+            }
+
+            $priority = 99
+            if (-not [int]::TryParse(($row.Priority).Trim(), [ref]$priority)) { $priority = 99 }
+
+            $lookback = 24
+            if (-not [int]::TryParse(($row.LookbackHours).Trim(), [ref]$lookback)) { $lookback = 24 }
+
+            $minEvents = 1
+            if (-not [int]::TryParse(($row.MinimumEvents).Trim(), [ref]$minEvents)) { $minEvents = 1 }
+
+            $expectCampaigns = 1
+            if (-not [int]::TryParse(($row.ExpectCampaignCount).Trim(), [ref]$expectCampaigns)) { $expectCampaigns = 1 }
+
+            $testCase = [PSCustomObject]@{
+                TestId                      = $testId
+                TestName                    = ($row.TestName).Trim()
+                LookbackHours               = $lookback
+                MinimumEvents               = $minEvents
+                ExpectCampaignCount         = $expectCampaigns
+                CampaignNamePrefix          = if ($actualColumns -contains 'CampaignNamePrefix') { ($row.CampaignNamePrefix).Trim() } else { '' }
+                FallbackReviewerIdentityId  = if ($actualColumns -contains 'FallbackReviewerIdentityId') { ($row.FallbackReviewerIdentityId).Trim() } else { '' }
+                Priority                    = $priority
+                Tags                        = ($row.Tags).Trim()
+            }
+
+            $testCases += $testCase
+        }
+
+        $testCases = $testCases | Sort-Object -Property Priority
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Loaded $($testCases.Count) delta cert test case(s) from $CsvPath" `
+                -Severity INFO -Component "SP.TestLoader" -Action "ImportDeltaCertTestCases"
+        }
+
+        return @{ Success = $true; Data = @($testCases); Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Failed to import delta cert test cases: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
+#region DisconnectedApp Test Data Loaders
+
+function Import-SPDisconnectedAppTestCases {
+    <#
+    .SYNOPSIS
+        Import and validate disconnected app test cases from CSV.
+    .DESCRIPTION
+        Reads a CSV file containing disconnected app test case definitions.
+        Validates required columns and returns an ordered array of test cases
+        suitable for Invoke-SPDisconnectedAppTest.
+    .PARAMETER CsvPath
+        Absolute path to the disconnected app test cases CSV file.
+        Required columns: TestId, TestName, AppName, AccountFilePath,
+        ExpectChanges, Priority, Tags.
+        Optional columns: EntitlementFilePath.
+    .OUTPUTS
+        @{Success=$true; Data=@([PSCustomObject]@{TestId=...},...); Error=$null}
+    .EXAMPLE
+        $result = Import-SPDisconnectedAppTestCases -CsvPath "C:\toolkit\Config\disconnected-app-tests.csv"
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CsvPath
+    )
+
+    $requiredColumns = @(
+        'TestId', 'TestName', 'AppName', 'AccountFilePath',
+        'ExpectChanges', 'Priority', 'Tags'
+    )
+
+    try {
+        if (-not (Test-Path -Path $CsvPath -PathType Leaf)) {
+            return @{ Success = $false; Data = $null; Error = "DisconnectedApp test CSV not found: $CsvPath" }
+        }
+
+        $rows = Import-Csv -Path $CsvPath -ErrorAction Stop
+        if ($null -eq $rows -or $rows.Count -eq 0) {
+            return @{ Success = $false; Data = $null; Error = "DisconnectedApp test CSV is empty: $CsvPath" }
+        }
+
+        $firstRow = $rows | Select-Object -First 1
+        $actualColumns = $firstRow.PSObject.Properties.Name
+        $missingColumns = $requiredColumns | Where-Object { $actualColumns -notcontains $_ }
+
+        if ($missingColumns.Count -gt 0) {
+            return @{ Success = $false; Data = $null; Error = "DisconnectedApp test CSV missing required columns: $($missingColumns -join ', ')" }
+        }
+
+        $testCases = @()
+        $validationWarnings = @()
+        $rowNum = 1
+
+        foreach ($row in $rows) {
+            $rowNum++
+            $testId = ($row.TestId).Trim()
+            if ([string]::IsNullOrWhiteSpace($testId)) {
+                if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                    Write-SPLog -Message "Row $rowNum has empty TestId, skipping" `
+                        -Severity WARN -Component "SP.TestLoader" -Action "ImportDisconnectedAppTestCases"
+                }
+                continue
+            }
+
+            $priority = 99
+            if (-not [int]::TryParse(($row.Priority).Trim(), [ref]$priority)) { $priority = 99 }
+
+            $acctPath = ($row.AccountFilePath).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($acctPath) -and -not (Test-Path -Path $acctPath -PathType Leaf)) {
+                $validationWarnings += "${testId}: AccountFilePath '$acctPath' does not exist"
+            }
+
+            $entPath = ''
+            if ($actualColumns -contains 'EntitlementFilePath') {
+                $entPath = ($row.EntitlementFilePath).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($entPath) -and -not (Test-Path -Path $entPath -PathType Leaf)) {
+                    $validationWarnings += "${testId}: EntitlementFilePath '$entPath' does not exist"
+                }
+            }
+
+            $testCase = [PSCustomObject]@{
+                TestId               = $testId
+                TestName             = ($row.TestName).Trim()
+                AppName              = ($row.AppName).Trim()
+                AccountFilePath      = $acctPath
+                EntitlementFilePath  = $entPath
+                ExpectChanges        = ($row.ExpectChanges).Trim() -eq 'true'
+                Priority             = $priority
+                Tags                 = ($row.Tags).Trim()
+            }
+
+            $testCases += $testCase
+        }
+
+        if ($validationWarnings.Count -gt 0 -and (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue)) {
+            foreach ($warn in $validationWarnings) {
+                Write-SPLog -Message "Validation warning: $warn" `
+                    -Severity WARN -Component "SP.TestLoader" -Action "ImportDisconnectedAppTestCases"
+            }
+        }
+
+        $testCases = $testCases | Sort-Object -Property Priority
+
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "Loaded $($testCases.Count) disconnected app test case(s) from $CsvPath" `
+                -Severity INFO -Component "SP.TestLoader" -Action "ImportDisconnectedAppTestCases"
+        }
+
+        return @{ Success = $true; Data = @($testCases); Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Failed to import disconnected app test cases: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Import-SPTestIdentities',
     'Import-SPTestCampaigns',
-    'Test-SPTestData'
+    'Test-SPTestData',
+    'Import-SPDeltaCertTestCases',
+    'Import-SPDisconnectedAppTestCases'
 )

@@ -1,7 +1,7 @@
 @{
     # Module identity
     GUID              = 'c4e8a1f2-7b3d-4e9a-8c5f-2d6e1a0b4c7f'
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '2.0.0'
     PowerShellVersion = '5.1'
 
     # Authoring
@@ -27,12 +27,24 @@
         'Import-SPTestIdentities',
         'Import-SPTestCampaigns',
         'Test-SPTestData',
+        'Import-SPDeltaCertTestCases',
+        'Import-SPDisconnectedAppTestCases',
 
-        # SP.Assertions
+        # SP.Assertions - Campaign
         'Assert-SPCampaignStatus',
         'Assert-SPCertificationCount',
         'Assert-SPDecisionAccepted',
         'Assert-SPRemediationComplete',
+
+        # SP.Assertions - DeltaCert
+        'Assert-SPDeltaGrantEventCount',
+        'Assert-SPDeltaManagerGrouping',
+
+        # SP.Assertions - DisconnectedApps
+        'Assert-SPDisconnectedAppFileValid',
+        'Assert-SPDisconnectedAppDeltaDetected',
+        'Assert-SPDeletionThresholdSafe',
+        'Assert-SPAggregationComplete',
 
         # SP.Evidence
         'New-SPCampaignEvidencePath',
@@ -42,7 +54,9 @@
 
         # SP.BatchRunner
         'Invoke-SPTestSuite',
-        'Invoke-SPSingleTest'
+        'Invoke-SPSingleTest',
+        'Invoke-SPDeltaCertTest',
+        'Invoke-SPDisconnectedAppTest'
     )
 
     # Do not export variables or aliases
@@ -55,7 +69,7 @@
         PSData = @{
             Tags         = @('SailPoint', 'ISC', 'Governance', 'Testing', 'Certification', 'UAT')
             ProjectUri   = ''
-            ReleaseNotes = 'Initial release: Test orchestration for SailPoint ISC certification campaign UAT.'
+            ReleaseNotes = 'v2.0: Added DeltaCert and DisconnectedApps test workflows, 6 new assertions, 2 new CSV loaders.'
         }
     }
 }

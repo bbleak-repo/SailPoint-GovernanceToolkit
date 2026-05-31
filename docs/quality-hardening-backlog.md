@@ -34,7 +34,7 @@ Critical items first, then high, medium, low.
 | QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | DONE |
 | QH-16 | LOW | Add Power BI-optimized CSV export | M | DONE |
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | DONE |
-| QH-18 | LOW | Update SP.Testing module for newer workflows | M | PENDING |
+| QH-18 | LOW | Update SP.Testing module for newer workflows | M | DONE |
 | QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | PENDING |
 | QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | PENDING |
 
@@ -372,7 +372,7 @@ in SP.Core.psd1.
 
 ## QH-18: Update SP.Testing Module for Newer Workflows
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** SP.Testing module (5 files) hasn't been updated since Feb 2026. Does not
@@ -381,7 +381,23 @@ handle DeltaCert, DisconnectedApps, or newer report types.
 **Fix:** Review and update SP.BatchRunner.psm1 to orchestrate tests for newer workflows.
 Update SP.Assertions.psm1 with assertions relevant to delta cert and disconnected apps.
 
-**Files:** `Modules/SP.Testing/*.psm1`
+**Resolution:** Updated all 4 SP.Testing sub-modules to v2.0.0:
+- **SP.Assertions.psm1**: Added 6 new assertions -- `Assert-SPDeltaGrantEventCount` and
+  `Assert-SPDeltaManagerGrouping` for delta cert workflows; `Assert-SPDisconnectedAppFileValid`,
+  `Assert-SPDisconnectedAppDeltaDetected`, `Assert-SPDeletionThresholdSafe`, and
+  `Assert-SPAggregationComplete` for disconnected app workflows. All follow the existing
+  `@{Pass; Actual; Message}` return pattern.
+- **SP.BatchRunner.psm1**: Added `Invoke-SPDeltaCertTest` (5-step workflow: QueryGrantEvents,
+  FilterIdentities, GroupByManager, CreateCampaigns, AssertCampaignsCreated) and
+  `Invoke-SPDisconnectedAppTest` (7-step workflow: ValidateFiles, Snapshot, CompareDelta,
+  CheckThreshold, ResolveIdentities, CreateCampaigns, PushToISC). Both follow the same
+  abort-on-failure, evidence-recording, and WhatIf patterns as `Invoke-SPSingleTest`.
+- **SP.TestLoader.psm1**: Added `Import-SPDeltaCertTestCases` and
+  `Import-SPDisconnectedAppTestCases` CSV loaders with column validation and priority sorting.
+- **SP.Testing.psd1**: Updated FunctionsToExport from 12 to 22 functions. Version bumped to 2.0.0.
+
+**Files:** `Modules/SP.Testing/SP.Assertions.psm1`, `Modules/SP.Testing/SP.BatchRunner.psm1`,
+`Modules/SP.Testing/SP.TestLoader.psm1`, `Modules/SP.Testing/SP.Testing.psd1`
 
 ---
 
