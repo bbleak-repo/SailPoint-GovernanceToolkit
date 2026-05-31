@@ -8060,6 +8060,313 @@ ${topItemsHtml}
 
 #endregion Access Request Activity Report
 
+#region Bulk Remediation Ticket Export
+
+function Export-SPRemediationTickets {
+    <#
+    .SYNOPSIS
+        Exports remediation data as ITSM-formatted tickets for ServiceNow, Jira, or generic JSON.
+    .DESCRIPTION
+        Takes remediation data from Get-SPRemediationStatus and generates structured
+        ticket files suitable for import into ServiceNow, Jira Service Management, or
+        any ITSM platform via REST API (generic JSON).
+
+        Output formats:
+        - ServiceNow CSV: columns matching ServiceNow import set schema
+        - Jira CSV: columns matching Jira External System Import
+        - Generic JSON: normalized JSON array for REST API import
+
+        Each ticket includes a unique governance reference ID for traceability.
+    .PARAMETER RemediationData
+        Hashtable from Get-SPRemediationStatus output. Must contain a Data property
+        with Items array and Summary hashtable.
+    .PARAMETER OutputPath
+        Directory in which to write ticket files. Created if absent.
+    .PARAMETER Format
+        ITSM format: ServiceNow, Jira, or Generic. Default: Generic.
+    .PARAMETER AssignmentGroup
+        Assignment group or team name populated on all tickets.
+    .PARAMETER Priority
+        Default priority for tickets without severity-based mapping. Default: Medium.
+    .PARAMETER Category
+        ITSM category field value. Default: Access Governance.
+    .PARAMETER CorrelationID
+        Unique ID for tracing. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ OutputPath; Format; TicketCount; Files; PriorityBreakdown } }
+    .EXAMPLE
+        $remediation = Get-SPRemediationStatus -RevocationDecisions $revocations
+        Export-SPRemediationTickets -RemediationData $remediation -OutputPath '.\Audit\tickets' -Format ServiceNow
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RemediationData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [ValidateSet('ServiceNow', 'Jira', 'Generic')]
+        [string]$Format = 'Generic',
+
+        [Parameter()]
+        [string]$AssignmentGroup,
+
+        [Parameter()]
+        [string]$Priority = 'Medium',
+
+        [Parameter()]
+        [string]$Category = 'Access Governance',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting remediation tickets, format=$Format" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRemediationTickets' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- Extract items from RemediationData ---
+    $items = @()
+    if ($null -ne $RemediationData -and $RemediationData.ContainsKey('Data') -and
+        $null -ne $RemediationData['Data']) {
+        $data = $RemediationData['Data']
+        if ($data -is [hashtable] -and $data.ContainsKey('Items') -and $null -ne $data['Items']) {
+            $items = @($data['Items'])
+        }
+    }
+
+    # --- Priority mapping from remediation status to ITSM priority ---
+    $priorityMap = @{
+        'Overdue' = @{ ServiceNow = '1'; Jira = 'Highest'; Generic = 'Critical' }
+        'Failed'  = @{ ServiceNow = '2'; Jira = 'High';    Generic = 'High' }
+        'Pending' = @{ ServiceNow = '3'; Jira = 'Medium';  Generic = 'Medium' }
+        'Provisioned' = @{ ServiceNow = '4'; Jira = 'Low'; Generic = 'Low' }
+    }
+
+    # Default priority for unmapped statuses
+    $defaultPriorityMap = @{ ServiceNow = '3'; Jira = 'Medium'; Generic = 'Medium' }
+
+    # --- Helper: escape CSV field ---
+    function _EscapeCsvField ([string]$value) {
+        if ([string]::IsNullOrEmpty($value)) { return '""' }
+        # If the field contains comma, quote, newline, or leading/trailing space, quote it
+        if ($value -match '[,"\r\n]' -or $value -ne $value.Trim()) {
+            return '"' + ($value -replace '"', '""') + '"'
+        }
+        return $value
+    }
+
+    # --- Build ticket objects ---
+    $dateStamp = (Get-Date).ToString('yyyy-MM-dd')
+    $tickets = [System.Collections.Generic.List[hashtable]]::new()
+    $priorityBreakdown = @{}
+
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $item = $items[$i]
+        if ($null -eq $item) { continue }
+
+        # Extract fields (support hashtable)
+        $identityName   = if ($item -is [hashtable] -and $item.ContainsKey('IdentityName'))   { $item['IdentityName'] }   else { '' }
+        $entitlementName = if ($item -is [hashtable] -and $item.ContainsKey('EntitlementName')) { $item['EntitlementName'] } else { '' }
+        $sourceName     = if ($item -is [hashtable] -and $item.ContainsKey('SourceName'))     { $item['SourceName'] }     else { '' }
+        $decisionDate   = if ($item -is [hashtable] -and $item.ContainsKey('DecisionDate'))   { $item['DecisionDate'] }   else { '' }
+        $status         = if ($item -is [hashtable] -and $item.ContainsKey('Status'))         { $item['Status'] }         else { 'Pending' }
+        $daysToRemediate = if ($item -is [hashtable] -and $item.ContainsKey('DaysToRemediate')) { $item['DaysToRemediate'] } else { $null }
+
+        # Map priority
+        $pMap = $defaultPriorityMap
+        if ($priorityMap.ContainsKey($status)) {
+            $pMap = $priorityMap[$status]
+        }
+        $ticketPriority = $pMap[$Format]
+        if ([string]::IsNullOrWhiteSpace($ticketPriority)) { $ticketPriority = $Priority }
+
+        # Track priority breakdown
+        $pKey = "P$($pMap['ServiceNow'])"
+        if (-not $priorityBreakdown.ContainsKey($pKey)) { $priorityBreakdown[$pKey] = 0 }
+        $priorityBreakdown[$pKey]++
+
+        # Generate governance reference ID
+        $govRef = "GOV-REM-$dateStamp-$($i + 1)"
+
+        # Calculate due date based on status/SLA
+        $dueDate = ''
+        if ($status -eq 'Overdue') {
+            $dueDate = (Get-Date).ToString('yyyy-MM-dd')
+        } elseif ($status -eq 'Failed') {
+            $dueDate = (Get-Date).AddDays(1).ToString('yyyy-MM-dd')
+        } elseif ($status -eq 'Pending') {
+            $dueDate = (Get-Date).AddDays(3).ToString('yyyy-MM-dd')
+        }
+
+        # Build short description
+        $shortDesc = "[Access Governance] Revoke $entitlementName from $identityName"
+
+        # Build detailed description
+        $descLines = @(
+            "Action Required: Revoke access entitlement"
+            ""
+            "Identity: $identityName"
+            "Entitlement: $entitlementName"
+            "Source System: $sourceName"
+            "Decision Date: $decisionDate"
+            "Remediation Status: $status"
+        )
+        if ($null -ne $daysToRemediate) {
+            $descLines += "Days Since Decision: $daysToRemediate"
+        }
+        $descLines += ""
+        $descLines += "Governance Reference: $govRef"
+        $descLines += "Generated by SailPoint Governance Toolkit"
+
+        $description = $descLines -join "`n"
+
+        $tickets.Add(@{
+            Index            = $i + 1
+            ShortDescription = $shortDesc
+            Description      = $description
+            Priority         = $ticketPriority
+            PrioritySNow     = $pMap['ServiceNow']
+            PriorityJira     = $pMap['Jira']
+            Category         = $Category
+            Subcategory      = 'Remediation'
+            AssignmentGroup  = if (-not [string]::IsNullOrWhiteSpace($AssignmentGroup)) { $AssignmentGroup } else { '' }
+            IdentityName     = $identityName
+            SourceName       = $sourceName
+            EntitlementName  = $entitlementName
+            ActionRequired   = "Revoke entitlement"
+            DueDate          = $dueDate
+            GovReference     = $govRef
+            Status           = $status
+        })
+    }
+
+    # --- Write output files ---
+    $outputFiles = @()
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    if ($Format -eq 'ServiceNow') {
+        $fileName = "remediation-tickets-$dateStamp.csv"
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+
+        $header = 'number,short_description,description,assignment_group,priority,category,subcategory,u_identity_name,u_source_system,u_entitlement,u_action_required,u_due_date,u_governance_reference'
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add($header)
+
+        foreach ($ticket in $tickets) {
+            $row = @(
+                _EscapeCsvField $ticket.GovReference
+                _EscapeCsvField $ticket.ShortDescription
+                _EscapeCsvField $ticket.Description
+                _EscapeCsvField $ticket.AssignmentGroup
+                _EscapeCsvField $ticket.PrioritySNow
+                _EscapeCsvField $ticket.Category
+                _EscapeCsvField $ticket.Subcategory
+                _EscapeCsvField $ticket.IdentityName
+                _EscapeCsvField $ticket.SourceName
+                _EscapeCsvField $ticket.EntitlementName
+                _EscapeCsvField $ticket.ActionRequired
+                _EscapeCsvField $ticket.DueDate
+                _EscapeCsvField $ticket.GovReference
+            ) -join ','
+            $lines.Add($row)
+        }
+
+        [System.IO.File]::WriteAllText($filePath, ($lines -join "`n") + "`n", $utf8NoBom)
+        $outputFiles += $fileName
+
+    } elseif ($Format -eq 'Jira') {
+        $fileName = "remediation-tickets-$dateStamp.csv"
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+
+        $header = 'Summary,Description,Priority,Labels,Assignee,Due Date,Custom field (Identity),Custom field (Source),Custom field (Entitlement),Custom field (Action)'
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add($header)
+
+        foreach ($ticket in $tickets) {
+            $row = @(
+                _EscapeCsvField $ticket.ShortDescription
+                _EscapeCsvField $ticket.Description
+                _EscapeCsvField $ticket.PriorityJira
+                _EscapeCsvField 'access-governance remediation automated'
+                _EscapeCsvField $ticket.AssignmentGroup
+                _EscapeCsvField $ticket.DueDate
+                _EscapeCsvField $ticket.IdentityName
+                _EscapeCsvField $ticket.SourceName
+                _EscapeCsvField $ticket.EntitlementName
+                _EscapeCsvField $ticket.ActionRequired
+            ) -join ','
+            $lines.Add($row)
+        }
+
+        [System.IO.File]::WriteAllText($filePath, ($lines -join "`n") + "`n", $utf8NoBom)
+        $outputFiles += $fileName
+
+    } else {
+        # Generic JSON
+        $fileName = "remediation-tickets-$dateStamp.json"
+        $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
+
+        $jsonTickets = [System.Collections.Generic.List[object]]::new()
+        foreach ($ticket in $tickets) {
+            $jsonTickets.Add([ordered]@{
+                governanceReference = $ticket.GovReference
+                shortDescription    = $ticket.ShortDescription
+                description         = $ticket.Description
+                priority            = $ticket.Priority
+                category            = $ticket.Category
+                subcategory         = $ticket.Subcategory
+                assignmentGroup     = $ticket.AssignmentGroup
+                identityName        = $ticket.IdentityName
+                sourceSystem        = $ticket.SourceName
+                entitlement         = $ticket.EntitlementName
+                actionRequired      = $ticket.ActionRequired
+                dueDate             = $ticket.DueDate
+                status              = $ticket.Status
+                labels              = @('access-governance', 'remediation', 'automated')
+            })
+        }
+
+        $jsonContent = $jsonTickets | ConvertTo-Json -Depth 5
+        # ConvertTo-Json returns a bare object (not array) for single items
+        if ($jsonTickets.Count -eq 1) {
+            $jsonContent = "[$jsonContent]"
+        } elseif ($jsonTickets.Count -eq 0) {
+            $jsonContent = '[]'
+        }
+        [System.IO.File]::WriteAllText($filePath, $jsonContent + "`n", $utf8NoBom)
+        $outputFiles += $fileName
+    }
+
+    Write-SPLog -Message "Remediation tickets exported: $($tickets.Count) tickets, format=$Format, path=$filePath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRemediationTickets' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            OutputPath        = $OutputPath
+            Format            = $Format
+            TicketCount       = $tickets.Count
+            Files             = $outputFiles
+            PriorityBreakdown = $priorityBreakdown
+        }
+    }
+}
+
+#endregion Bulk Remediation Ticket Export
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8083,5 +8390,6 @@ Export-ModuleMember -Function @(
     'Export-SPGovernanceBIData',
     'Export-SPSodViolationHtml',
     'Export-SPOwnershipHealthHtml',
-    'Export-SPAccessRequestHtml'
+    'Export-SPAccessRequestHtml',
+    'Export-SPRemediationTickets'
 )

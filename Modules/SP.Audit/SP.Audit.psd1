@@ -124,6 +124,9 @@
 
         # SP.AuditReportHtml - Access Request Activity Report (P15-03)
         'Export-SPAccessRequestHtml'
+
+        # SP.AuditReportHtml - Bulk Remediation Ticket Export (P15-04)
+        'Export-SPRemediationTickets'
     )
 
     # Do not export variables or aliases from nested modules
