@@ -3302,6 +3302,352 @@ function Compare-SPAuditPeriods {
 
 #endregion
 
+#region P14-02: Remediation Priority Queue
+
+function Get-SPRemediationPriority {
+    <#
+    .SYNOPSIS
+        Produces a ranked queue of actionable remediation items across all governance dimensions.
+    .DESCRIPTION
+        Synthesizes identity risk, stale access, policy violations, remediation status,
+        and reviewer reputation into a single ranked list of specific, actionable
+        remediation items. Each item has a priority score, severity, and rationale.
+
+        Action types:
+        - RevokeAccess: Identity with high risk + stale/privileged entitlement
+        - CompletePendingRemediation: Revocation decided but not yet provisioned
+        - ReviewStaleEntitlement: Entitlement never reviewed or review expired
+        - AddressReviewerPerformance: Reviewer at At Risk tier
+        - RemediatePolicyViolation: Policy in FAIL state
+
+        Items are deduplicated by identity+entitlement pair (highest priority kept)
+        and sorted by priority descending.
+    .PARAMETER IdentityRisk
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER StaleAccess
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER PolicyCompliance
+        Hashtable output from Test-SPGovernancePolicy.
+    .PARAMETER RemediationStatus
+        Hashtable output from Get-SPRemediationStatus.
+    .PARAMETER ReviewerReputation
+        Hashtable output from Measure-SPReviewerReputation.
+    .PARAMETER MaxItems
+        Maximum number of items to return. Default 50.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Items = @(...); Summary = @{...} }
+    .EXAMPLE
+        $queue = Get-SPRemediationPriority -IdentityRisk $risk -StaleAccess $stale -MaxItems 20
+        $queue.Items | Where-Object { $_.Severity -eq 'Critical' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$StaleAccess,
+
+        [Parameter()]
+        [hashtable]$PolicyCompliance,
+
+        [Parameter()]
+        [hashtable]$RemediationStatus,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [int]$MaxItems = 50,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPRemediationPriority: starting priority queue generation, MaxItems=$MaxItems" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPRemediationPriority' `
+        -CorrelationID $CorrelationID
+
+    $candidates = [System.Collections.Generic.List[hashtable]]::new()
+    $dedupMap = @{}
+
+    function _SafeVal ($obj, [string]$key, $default = $null) {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return $obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return $v }
+        }
+        return $default
+    }
+
+    function _Severity ([int]$priority) {
+        if ($priority -ge 80) { return 'Critical' }
+        if ($priority -ge 60) { return 'High' }
+        if ($priority -ge 40) { return 'Medium' }
+        return 'Low'
+    }
+
+    # Action Type 1: RevokeAccess (from IdentityRisk + StaleAccess)
+    if ($null -ne $IdentityRisk -and $IdentityRisk.ContainsKey('Identities')) {
+        foreach ($identity in @($IdentityRisk['Identities'])) {
+            if ($null -eq $identity) { continue }
+            $riskScore    = [int](_SafeVal $identity 'RiskScore' 0)
+            $riskTier     = [string](_SafeVal $identity 'RiskTier' 'Low')
+            $identityId   = [string](_SafeVal $identity 'IdentityId' '')
+            $identityName = [string](_SafeVal $identity 'IdentityName' '')
+            if ($riskTier -eq 'Low') { continue }
+            $privCount  = [int](_SafeVal $identity 'PrivilegedAccessCount' 0)
+            $staleCount = [int](_SafeVal $identity 'StaleAccessCount' 0)
+            if ($privCount -gt 0 -or $staleCount -gt 0) {
+                $isPrivileged = ($privCount -gt 0)
+                $isStale = ($staleCount -gt 0)
+                $priority = $riskScore + $(if ($isPrivileged) { 20 } else { 0 }) + $(if ($isStale) { 15 } else { 0 })
+                $priority = [Math]::Min(100, $priority)
+                $rationale = [System.Collections.Generic.List[string]]::new()
+                $rationale.Add("Identity risk score $riskScore ($riskTier tier)")
+                if ($isPrivileged) { $rationale.Add('Privileged entitlement') }
+                if ($isStale) { $rationale.Add('Stale access detected') }
+                $candidates.Add(@{
+                    ActionType      = 'RevokeAccess'
+                    Priority        = $priority
+                    Severity        = (_Severity $priority)
+                    Summary         = "Revoke access for $identityName (risk $riskScore)"
+                    IdentityName    = $identityName
+                    IdentityId      = $identityId
+                    SourceName      = ''
+                    EntitlementName = 'Privileged/Stale Access'
+                    Rationale       = @($rationale)
+                    EstimatedEffort = $(if ($isPrivileged) { 'Medium' } else { 'Low' })
+                })
+            }
+        }
+    }
+
+    # Action Type 2: CompletePendingRemediation (from RemediationStatus)
+    if ($null -ne $RemediationStatus) {
+        $remData = $null
+        if ($RemediationStatus.ContainsKey('Data') -and $null -ne $RemediationStatus['Data']) {
+            $remData = $RemediationStatus['Data']
+        } elseif ($RemediationStatus.ContainsKey('Items')) {
+            $remData = $RemediationStatus
+        }
+        if ($null -ne $remData -and $remData.ContainsKey('Items')) {
+            foreach ($remItem in @($remData['Items'])) {
+                if ($null -eq $remItem) { continue }
+                $status = [string](_SafeVal $remItem 'Status' '')
+                if ($status -ne 'Pending' -and $status -ne 'Overdue') { continue }
+                $isOverdue = ($status -eq 'Overdue')
+                $daysOverdue = 0
+                $decisionDateStr = [string](_SafeVal $remItem 'DecisionDate' '')
+                if ($isOverdue -and -not [string]::IsNullOrWhiteSpace($decisionDateStr)) {
+                    try {
+                        $decDt = [datetime]::Parse($decisionDateStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $daysOverdue = [int]((Get-Date) - $decDt).TotalDays
+                    } catch { }
+                }
+                $priority = 80 + $(if ($isOverdue) { 20 } else { 0 }) + [Math]::Min($daysOverdue * 2, 20)
+                $priority = [Math]::Min(100, $priority)
+                $identityName    = [string](_SafeVal $remItem 'IdentityName' 'Unknown')
+                $identityId      = [string](_SafeVal $remItem 'IdentityId' '')
+                $entitlementName = [string](_SafeVal $remItem 'EntitlementName' '')
+                $sourceName      = [string](_SafeVal $remItem 'SourceName' '')
+                $rationale = [System.Collections.Generic.List[string]]::new()
+                $rationale.Add("Revocation decided but not provisioned ($status)")
+                if ($isOverdue) { $rationale.Add("$daysOverdue days overdue") }
+                $candidates.Add(@{
+                    ActionType      = 'CompletePendingRemediation'
+                    Priority        = $priority
+                    Severity        = (_Severity $priority)
+                    Summary         = "Complete pending remediation: $entitlementName for $identityName"
+                    IdentityName    = $identityName
+                    IdentityId      = $identityId
+                    SourceName      = $sourceName
+                    EntitlementName = $entitlementName
+                    Rationale       = @($rationale)
+                    EstimatedEffort = 'Low'
+                })
+            }
+        }
+    }
+
+    # Action Type 3: ReviewStaleEntitlement (from StaleAccess)
+    if ($null -ne $StaleAccess -and $StaleAccess.ContainsKey('StaleItems')) {
+        foreach ($staleItem in @($StaleAccess['StaleItems'])) {
+            if ($null -eq $staleItem) { continue }
+            $isPrivileged    = [bool](_SafeVal $staleItem 'Privileged' $false)
+            $classification  = [string](_SafeVal $staleItem 'Classification' '')
+            $isNeverReviewed = ($classification -eq 'NeverReviewed')
+            $priority = 50 + $(if ($isPrivileged) { 25 } else { 0 }) + $(if ($isNeverReviewed) { 15 } else { 0 })
+            $priority = [Math]::Min(100, $priority)
+            $entitlementName = [string](_SafeVal $staleItem 'EntitlementName' '')
+            $sourceName      = [string](_SafeVal $staleItem 'SourceName' '')
+            $daysSince       = _SafeVal $staleItem 'DaysSinceReview' $null
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            if ($isNeverReviewed) {
+                $rationale.Add('Entitlement has never been reviewed')
+            } else {
+                $rationale.Add($(if ($null -ne $daysSince) { "$daysSince days since last review" } else { 'Review expired' }))
+            }
+            if ($isPrivileged) { $rationale.Add('Privileged entitlement') }
+            $candidates.Add(@{
+                ActionType      = 'ReviewStaleEntitlement'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Review stale entitlement: $entitlementName on $sourceName"
+                IdentityName    = ''
+                IdentityId      = ''
+                SourceName      = $sourceName
+                EntitlementName = $entitlementName
+                Rationale       = @($rationale)
+                EstimatedEffort = $(if ($isPrivileged) { 'Medium' } else { 'Low' })
+            })
+        }
+    }
+
+    # Action Type 4: AddressReviewerPerformance (from ReviewerReputation)
+    if ($null -ne $ReviewerReputation -and $ReviewerReputation.ContainsKey('Reviewers')) {
+        foreach ($reviewer in @($ReviewerReputation['Reviewers'])) {
+            if ($null -eq $reviewer) { continue }
+            $repTier = [string](_SafeVal $reviewer 'ReputationTier' '')
+            if ($repTier -ne 'At Risk') { continue }
+            $repScore = [int](_SafeVal $reviewer 'ReputationScore' 50)
+            $priority = 60 + $(if ($repScore -lt 20) { 20 } else { 0 })
+            $priority = [Math]::Min(100, $priority)
+            $reviewerName = [string](_SafeVal $reviewer 'ReviewerName' 'Unknown')
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            $rationale.Add("Reviewer reputation score $repScore (At Risk tier)")
+            $rationale.Add('Reviewer needs coaching or reassignment')
+            $candidates.Add(@{
+                ActionType      = 'AddressReviewerPerformance'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Address reviewer performance: $reviewerName"
+                IdentityName    = $reviewerName
+                IdentityId      = [string](_SafeVal $reviewer 'ReviewerIdentityId' '')
+                SourceName      = ''
+                EntitlementName = ''
+                Rationale       = @($rationale)
+                EstimatedEffort = 'Medium'
+            })
+        }
+    }
+
+    # Action Type 5: RemediatePolicyViolation (from PolicyCompliance)
+    if ($null -ne $PolicyCompliance -and $PolicyCompliance.ContainsKey('Policies')) {
+        foreach ($policy in @($PolicyCompliance['Policies'])) {
+            if ($null -eq $policy) { continue }
+            $result = [string](_SafeVal $policy 'Result' '')
+            if ($result -ne 'FAIL') { continue }
+            $severity    = [string](_SafeVal $policy 'Severity' 'Warning')
+            $isCritical  = ($severity -eq 'Critical')
+            $violations  = @(_SafeVal $policy 'Violations' @())
+            $violationCount = $violations.Count
+            $priority = $(if ($isCritical) { 90 } else { 60 }) + [Math]::Min($violationCount, 10)
+            $priority = [Math]::Min(100, $priority)
+            $policyName = [string](_SafeVal $policy 'Name' 'Unknown Policy')
+            $policyId   = [string](_SafeVal $policy 'Id' '')
+            $details    = [string](_SafeVal $policy 'Details' '')
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            $rationale.Add("Policy $policyId ($policyName) in FAIL state")
+            if (-not [string]::IsNullOrWhiteSpace($details)) { $rationale.Add($details) }
+            $rationale.Add("Severity: $severity")
+            $candidates.Add(@{
+                ActionType      = 'RemediatePolicyViolation'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Remediate policy violation: $policyName"
+                IdentityName    = ''
+                IdentityId      = ''
+                SourceName      = ''
+                EntitlementName = $policyId
+                Rationale       = @($rationale)
+                EstimatedEffort = $(if ($isCritical) { 'High' } else { 'Medium' })
+            })
+        }
+    }
+
+    # Deduplication: same identity + entitlement pair keeps highest priority
+    $deduped = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($item in $candidates) {
+        $idVal  = $item['IdentityId']
+        $entVal = $item['EntitlementName']
+        if ([string]::IsNullOrWhiteSpace($idVal) -or [string]::IsNullOrWhiteSpace($entVal)) {
+            $deduped.Add($item)
+            continue
+        }
+        $dedupKey = "$idVal|$entVal"
+        if ($dedupMap.ContainsKey($dedupKey)) {
+            $existingIdx = $dedupMap[$dedupKey]
+            if ($item['Priority'] -gt $deduped[$existingIdx]['Priority']) {
+                $deduped[$existingIdx] = $item
+            }
+        } else {
+            $dedupMap[$dedupKey] = $deduped.Count
+            $deduped.Add($item)
+        }
+    }
+
+    # Sort by priority descending and apply MaxItems
+    $sorted = @($deduped | Sort-Object { $_['Priority'] } -Descending)
+    if ($sorted.Count -gt $MaxItems) {
+        $sorted = @($sorted[0..($MaxItems - 1)])
+    }
+
+    # Assign ranks and build summary
+    $rank = 0
+    $criticalCount = 0; $highCount = 0; $mediumCount = 0; $lowCount = 0
+    $actionBreakdown = @{
+        RevokeAccess               = 0
+        CompletePendingRemediation = 0
+        ReviewStaleEntitlement     = 0
+        AddressReviewerPerformance = 0
+        RemediatePolicyViolation   = 0
+    }
+    foreach ($item in $sorted) {
+        $rank++
+        $item['Rank'] = $rank
+        switch ($item['Severity']) {
+            'Critical' { $criticalCount++ }
+            'High'     { $highCount++ }
+            'Medium'   { $mediumCount++ }
+            'Low'      { $lowCount++ }
+        }
+        $at = $item['ActionType']
+        if ($actionBreakdown.ContainsKey($at)) { $actionBreakdown[$at]++ }
+    }
+
+    Write-SPLog -Message "Get-SPRemediationPriority: generated $($sorted.Count) items (Critical=$criticalCount, High=$highCount, Medium=$mediumCount, Low=$lowCount)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPRemediationPriority' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Items   = $sorted
+        Summary = @{
+            TotalItems          = $sorted.Count
+            CriticalItems       = $criticalCount
+            HighItems           = $highCount
+            MediumItems         = $mediumCount
+            LowItems            = $lowCount
+            ActionTypeBreakdown = $actionBreakdown
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -3310,6 +3656,7 @@ Export-ModuleMember -Function @(
     'Measure-SPIdentityRisk',
     'Measure-SPSourceGovernance',
     'Measure-SPGovernanceMaturity',
+    'Get-SPRemediationPriority',
     'Get-SPIdentityAccessSpread',
     'Compare-SPAuditPeriods'
 )
