@@ -130,6 +130,12 @@
 
         # SP.AuditReportHtml - Governance Maturity Report (P14-01)
         'Export-SPGovernanceMaturityHtml'
+
+        # SP.AuditAnalytics - Audit Period Comparison (P13-06)
+        'Compare-SPAuditPeriods'
+
+        # SP.AuditReportHtml - Audit Period Comparison Report (P13-06)
+        'Export-SPAuditPeriodComparisonHtml'
     )
 
     # Do not export variables or aliases from nested modules

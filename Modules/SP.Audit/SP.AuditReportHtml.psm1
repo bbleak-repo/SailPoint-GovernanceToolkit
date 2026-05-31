@@ -7685,6 +7685,607 @@ ${levelRefHtml}
 
 #endregion Governance Maturity Report
 
+#region Identity Access Spread Report (P13-03)
+
+function Export-SPIdentityAccessSpreadHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML identity access spread report from Get-SPIdentityAccessSpread output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report showing identities with access spanning
+        multiple sources. Includes source count badges (green <3, yellow 3-5, red 6+),
+        expandable source detail tables, and privileged entitlements highlighted in red.
+    .PARAMETER SpreadData
+        Hashtable output from Get-SPIdentityAccessSpread.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $spread = Get-SPIdentityAccessSpread -CampaignAudits $audits -MinSources 3
+        $path = Export-SPIdentityAccessSpreadHtml -SpreadData $spread -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$SpreadData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "IdentityAccessSpread-${timestamp}.html"
+
+    $summary    = $SpreadData['Summary']
+    $identities = @($SpreadData['Identities'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Identities Analyzed<br/><span style="font-size:22px;">$($summary['TotalIdentitiesAnalyzed'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Above Threshold<br/><span style="font-size:22px;">$($summary['IdentitiesAboveThreshold'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Sources<br/><span style="font-size:22px;">$($summary['AvgSourceCount'])</span>
+</td>
+<td style="padding:12px 16px; background:#2c3e50; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Max Sources<br/><span style="font-size:22px;">$($summary['MaxSourceCount'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Privileged Spread<br/><span style="font-size:22px;">$($summary['IdentitiesWithPrivilegedSpread'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Identity overview table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Identity', 'Sources', 'Total Entitlements', 'Privileged',
+        'Broadest Source', 'Approval Only'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($id in $identities) {
+        $rowIdx++
+
+        $srcCount = $id['SourceCount']
+        $srcColor = if ($srcCount -ge 6) { 'color:#fff; background:#c0392b;' }
+                    elseif ($srcCount -ge 3) { 'color:#fff; background:#e67e22;' }
+                    else { 'color:#fff; background:#27ae60;' }
+        $srcBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $srcColor"">$srcCount</span>"
+
+        $approvalDisplay = if ($id['ApprovalOnlyFlag']) {
+            '<span style="color:#c0392b; font-weight:bold;">Yes (never revoked)</span>'
+        } else { 'No' }
+
+        $privDisplay = if ($id['PrivilegedEntitlements'] -gt 0) {
+            "<span style=""color:#c0392b; font-weight:bold;"">$($id['PrivilegedEntitlements'])</span>"
+        } else { '0' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $id['IdentityName']),
+            $srcBadge,
+            [string]$id['TotalEntitlements'],
+            $privDisplay,
+            (ConvertTo-SafeHtml $id['BroadestSource']),
+            $approvalDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-identity detail cards with source breakdown ---
+    $detailSections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($id in $identities) {
+        $nameHtml = ConvertTo-SafeHtml $id['IdentityName']
+        $srcCount = $id['SourceCount']
+        $borderColor = if ($srcCount -ge 6) { '#c0392b' }
+                       elseif ($srcCount -ge 3) { '#e67e22' }
+                       else { '#27ae60' }
+
+        $approvalWarning = ''
+        if ($id['ApprovalOnlyFlag']) {
+            $approvalWarning = '<div style="margin-top:4px; padding:4px 8px; background:#fff3cd; border:1px solid #ffc107; font-size:12px;">WARNING: This identity has never had access revoked across all campaigns.</div>'
+        }
+
+        $srcHeaderRow = Build-HtmlTableHeader -Headers @(
+            'Source', 'Entitlements', 'Privileged', 'Last Review'
+        )
+
+        $srcBodyRows = [System.Collections.Generic.List[string]]::new()
+        $srcIdx = 0
+        foreach ($src in $id['Sources']) {
+            $srcIdx++
+
+            $privSrcDisplay = if ($src['PrivilegedCount'] -gt 0) {
+                "<span style=""color:#c0392b; font-weight:bold;"">$($src['PrivilegedCount'])</span>"
+            } else { '0' }
+
+            $lastReview = if (-not [string]::IsNullOrWhiteSpace($src['LastReviewDate'])) {
+                ConvertTo-SafeHtml $src['LastReviewDate']
+            } else { 'Never' }
+
+            $srcCells = @(
+                (ConvertTo-SafeHtml $src['SourceName']),
+                [string]$src['EntitlementCount'],
+                $privSrcDisplay,
+                $lastReview
+            )
+
+            $srcBodyRows.Add((Build-HtmlTableRow -Cells $srcCells -IsAlternate (($srcIdx % 2) -eq 0)))
+        }
+
+        $srcTableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:8px;">
+${srcHeaderRow}
+<tbody>
+$($srcBodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+        $detailSections.Add(@"
+<div style="margin-bottom:16px; padding:10px 14px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>${nameHtml}</strong> -- $srcCount sources, $($id['TotalEntitlements']) entitlements ($($id['PrivilegedEntitlements']) privileged)
+${approvalWarning}
+<details style="margin-top:6px;">
+<summary style="cursor:pointer; font-size:12px; color:#336699;">Source Details</summary>
+${srcTableHtml}
+</details>
+</div>
+"@)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Access Spread Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Access Spread Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Identities by Source Spread</h2>
+${tableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Identity Detail</h2>
+$($detailSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Identity access spread HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityAccessSpreadHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion Identity Access Spread Report
+
+
+#region P13-06: Audit Period Comparison HTML
+
+function Export-SPAuditPeriodComparisonHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML side-by-side comparison report from Compare-SPAuditPeriods output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with side-by-side period comparison
+        including directional arrows and color coding (green improved, red degraded,
+        gray stable), per-dimension detail tables, and an overall governance direction
+        badge. Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER ComparisonData
+        Hashtable output from Compare-SPAuditPeriods.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $result = Compare-SPAuditPeriods -PeriodA $q1 -PeriodB $q2
+        $path = Export-SPAuditPeriodComparisonHtml -ComparisonData $result -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$ComparisonData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "AuditPeriodComparison-${timestamp}.html"
+
+    $periodA = $ComparisonData['PeriodA']
+    $periodB = $ComparisonData['PeriodB']
+    $dimensions = $ComparisonData['Dimensions']
+    $overallDir = $ComparisonData['OverallDirection']
+    $summary = $ComparisonData['Summary']
+
+    $labelA = if ($null -ne $periodA -and $periodA.ContainsKey('Label')) { ConvertTo-SafeHtml $periodA['Label'] } else { 'Period A' }
+    $labelB = if ($null -ne $periodB -and $periodB.ContainsKey('Label')) { ConvertTo-SafeHtml $periodB['Label'] } else { 'Period B' }
+
+    # Direction badge helper
+    function Get-DirectionBadge {
+        param([string]$Direction)
+        switch ($Direction) {
+            'Improved' { return '<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#27ae60;">Improved</span>' }
+            'Degraded' { return '<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">Degraded</span>' }
+            'Stable'   { return '<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#7f8c8d;">Stable</span>' }
+            'N/A'      { return '<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#bdc3c7;">N/A</span>' }
+            default    { return '<span style="display:inline-block; padding:2px 10px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#bdc3c7;">--</span>' }
+        }
+    }
+
+    # Delta display helper
+    function Format-Delta {
+        param([object]$Delta, [string]$Direction)
+        if ($null -eq $Delta) { return 'N/A' }
+        $sign = if ([double]$Delta -gt 0) { '+' } else { '' }
+        $color = switch ($Direction) {
+            'Improved' { '#27ae60' }
+            'Degraded' { '#c0392b' }
+            default    { '#7f8c8d' }
+        }
+        $arrow = switch ($Direction) {
+            'Improved' { '&#9650;' }   # up triangle
+            'Degraded' { '&#9660;' }   # down triangle
+            'Stable'   { '&#9644;' }   # horizontal bar
+            default    { '' }
+        }
+        return "<span style=""color:${color}; font-weight:bold;"">${arrow} ${sign}${Delta}</span>"
+    }
+
+    # Metric row helper
+    function Build-MetricRow {
+        param([string]$Label, [hashtable]$Metric, [bool]$IsAlternate)
+        if ($null -eq $Metric) { return '' }
+        $bgStyle = if ($IsAlternate) { ' style="background:#f9f9f9;"' } else { '' }
+        $tdStyle = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0; vertical-align:top;"'
+        $valA = if ($null -ne $Metric['A']) { [string]$Metric['A'] } else { 'N/A' }
+        $valB = if ($null -ne $Metric['B']) { [string]$Metric['B'] } else { 'N/A' }
+        $deltaHtml = Format-Delta -Delta $Metric['Delta'] -Direction $Metric['Direction']
+        $dirBadge = Get-DirectionBadge $Metric['Direction']
+        return "<tr${bgStyle}><td ${tdStyle}><strong>$(ConvertTo-SafeHtml $Label)</strong></td><td ${tdStyle}>${valA}</td><td ${tdStyle}>${valB}</td><td ${tdStyle}>${deltaHtml}</td><td ${tdStyle}>${dirBadge}</td></tr>"
+    }
+
+    # --- Overall direction badge ---
+    $overallBadgeColor = switch ($overallDir) {
+        'Improved' { '#27ae60' }
+        'Degraded' { '#c0392b' }
+        'Stable'   { '#7f8c8d' }
+        default    { '#bdc3c7' }
+    }
+    $improvedN = if ($null -ne $summary -and $summary.ContainsKey('Improved')) { $summary['Improved'] } else { 0 }
+    $degradedN = if ($null -ne $summary -and $summary.ContainsKey('Degraded')) { $summary['Degraded'] } else { 0 }
+    $stableN = if ($null -ne $summary -and $summary.ContainsKey('Stable')) { $summary['Stable'] } else { 0 }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:${overallBadgeColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Overall Direction<br/><span style="font-size:20px;">${overallDir}</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Improved<br/><span style="font-size:20px;">${improvedN}</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Degraded<br/><span style="font-size:20px;">${degradedN}</span>
+</td>
+<td style="padding:12px 16px; background:#7f8c8d; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:25%; text-align:center;">
+Stable<br/><span style="font-size:20px;">${stableN}</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Build dimension sections ---
+    $dimensionSections = [System.Collections.Generic.List[string]]::new()
+
+    $thStyle = 'style="background:#34495e; color:#fff; padding:8px 10px; text-align:left; font-size:13px;"'
+
+    # Common table header for metric dimensions
+    $metricTableHeader = "<thead><tr><th ${thStyle}>Metric</th><th ${thStyle}>${labelA}</th><th ${thStyle}>${labelB}</th><th ${thStyle}>Delta</th><th ${thStyle}>Direction</th></tr></thead>"
+
+    # 1. Campaign Metrics
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('CampaignMetrics')) {
+        $cm = $dimensions['CampaignMetrics']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        $idx = 0
+        foreach ($metricName in @('ApprovalRate', 'RevocationRate', 'AvgResponseHrs', 'CompletionRate')) {
+            $label = switch ($metricName) {
+                'ApprovalRate'   { 'Approval Rate (%)' }
+                'RevocationRate' { 'Revocation Rate (%)' }
+                'AvgResponseHrs' { 'Avg Response (hours)' }
+                'CompletionRate' { 'Completion Rate (%)' }
+            }
+            if ($cm.ContainsKey($metricName)) {
+                $rows.Add((Build-MetricRow -Label $label -Metric $cm[$metricName] -IsAlternate (($idx % 2) -eq 1)))
+                $idx++
+            }
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Campaign Metrics</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # 2. Identity Risk
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('IdentityRisk')) {
+        $ir = $dimensions['IdentityRisk']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        $idx = 0
+        foreach ($metricName in @('HighCount', 'AvgRiskScore')) {
+            $label = switch ($metricName) {
+                'HighCount'    { 'High-Risk Identities' }
+                'AvgRiskScore' { 'Avg Risk Score' }
+            }
+            if ($ir.ContainsKey($metricName)) {
+                $rows.Add((Build-MetricRow -Label $label -Metric $ir[$metricName] -IsAlternate (($idx % 2) -eq 1)))
+                $idx++
+            }
+        }
+        # New High-Risk identities callout
+        $newHighHtml = ''
+        if ($ir.ContainsKey('NewHighRisk') -and @($ir['NewHighRisk']).Count -gt 0) {
+            $names = @($ir['NewHighRisk']) | ForEach-Object { ConvertTo-SafeHtml $_ }
+            $newHighHtml = @"
+<div style="margin-top:8px; padding:8px 12px; border-left:4px solid #c0392b; background:#fdf2f2;">
+<strong style="color:#c0392b;">New High-Risk Identities in ${labelB}:</strong> $($names -join ', ')
+</div>
+"@
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Identity Risk</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:8px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+${newHighHtml}
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # 3. Source Governance
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('SourceGovernance')) {
+        $sg = $dimensions['SourceGovernance']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        if ($sg.ContainsKey('OverallCoverage')) {
+            $rows.Add((Build-MetricRow -Label 'Overall Coverage (%)' -Metric $sg['OverallCoverage'] -IsAlternate $false))
+        }
+        # Grade changes table
+        $gradeHtml = ''
+        if ($sg.ContainsKey('GradeChanges') -and @($sg['GradeChanges']).Count -gt 0) {
+            $gradeRows = [System.Collections.Generic.List[string]]::new()
+            $gIdx = 0
+            foreach ($gc in @($sg['GradeChanges'])) {
+                $bgS = if (($gIdx % 2) -eq 1) { ' style="background:#f9f9f9;"' } else { '' }
+                $tdS = 'style="padding:8px 10px; border-bottom:1px solid #e0e0e0;"'
+                $dirBadge = Get-DirectionBadge $gc['Direction']
+                $gradeRows.Add("<tr${bgS}><td ${tdS}>$(ConvertTo-SafeHtml $gc['Source'])</td><td ${tdS}>$($gc['GradeA'])</td><td ${tdS}>$($gc['GradeB'])</td><td ${tdS}>${dirBadge}</td></tr>")
+                $gIdx++
+            }
+            $gradeHtml = @"
+<p style="font-size:13px; font-weight:bold; color:#555; margin-top:12px;">Grade Changes</p>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:8px;">
+<thead><tr><th ${thStyle}>Source</th><th ${thStyle}>${labelA}</th><th ${thStyle}>${labelB}</th><th ${thStyle}>Direction</th></tr></thead>
+<tbody>
+$($gradeRows -join "`n")
+</tbody>
+</table>
+"@
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Governance</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:8px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+${gradeHtml}
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # 4. Reviewer Reputation
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('ReviewerReputation')) {
+        $rr = $dimensions['ReviewerReputation']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        if ($rr.ContainsKey('AvgScore')) {
+            $rows.Add((Build-MetricRow -Label 'Avg Reputation Score' -Metric $rr['AvgScore'] -IsAlternate $false))
+        }
+        # Callout boxes
+        $calloutHtml = ''
+        if ($rr.ContainsKey('NewAtRisk') -and @($rr['NewAtRisk']).Count -gt 0) {
+            $names = @($rr['NewAtRisk']) | ForEach-Object { ConvertTo-SafeHtml $_ }
+            $calloutHtml += @"
+<div style="margin-top:8px; padding:8px 12px; border-left:4px solid #c0392b; background:#fdf2f2;">
+<strong style="color:#c0392b;">New At-Risk Reviewers in ${labelB}:</strong> $($names -join ', ')
+</div>
+"@
+        }
+        if ($rr.ContainsKey('TierImprovements') -and @($rr['TierImprovements']).Count -gt 0) {
+            $items = @($rr['TierImprovements']) | ForEach-Object { ConvertTo-SafeHtml $_ }
+            $calloutHtml += @"
+<div style="margin-top:8px; padding:8px 12px; border-left:4px solid #27ae60; background:#f0faf0;">
+<strong style="color:#27ae60;">Tier Improvements:</strong> $($items -join '; ')
+</div>
+"@
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Reviewer Reputation</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:8px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+${calloutHtml}
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # 5. Stale Access
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('StaleAccess')) {
+        $sa = $dimensions['StaleAccess']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        $idx = 0
+        foreach ($metricName in @('TotalStale', 'NeverReviewed')) {
+            $label = switch ($metricName) {
+                'TotalStale'    { 'Total Stale Items' }
+                'NeverReviewed' { 'Never Reviewed' }
+            }
+            if ($sa.ContainsKey($metricName)) {
+                $rows.Add((Build-MetricRow -Label $label -Metric $sa[$metricName] -IsAlternate (($idx % 2) -eq 1)))
+                $idx++
+            }
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Stale Access</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # 6. Remediation
+    if ($null -ne $dimensions -and $dimensions.ContainsKey('Remediation')) {
+        $rem = $dimensions['Remediation']
+        $rows = [System.Collections.Generic.List[string]]::new()
+        $idx = 0
+        foreach ($metricName in @('SlaCompliance', 'AvgDaysToRemediate')) {
+            $label = switch ($metricName) {
+                'SlaCompliance'      { 'SLA Compliance (%)' }
+                'AvgDaysToRemediate' { 'Avg Days to Remediate' }
+            }
+            if ($rem.ContainsKey($metricName)) {
+                $rows.Add((Build-MetricRow -Label $label -Metric $rem[$metricName] -IsAlternate (($idx % 2) -eq 1)))
+                $idx++
+            }
+        }
+        $sectionHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Remediation</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${metricTableHeader}
+<tbody>
+$($rows -join "`n")
+</tbody>
+</table>
+"@
+        $dimensionSections.Add($sectionHtml)
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Audit Period Comparison: ${labelA} vs ${labelB}</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Audit Period Comparison</h1>
+<p style="font-size:14px; color:#555555; margin-top:0;">
+${labelA} vs ${labelB}
+</p>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+$($dimensionSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Audit period comparison HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditPeriodComparisonHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7707,5 +8308,8 @@ Export-ModuleMember -Function @(
     'Export-SPOrchestratorHistoryHtml',
     'Export-SPGovernanceBIData',
     'Export-SPRemediationPriorityHtml',
-    'Export-SPGovernanceMaturityHtml'
+    'Export-SPGovernanceMaturityHtml',
+    'Export-SPIdentityAccessSpreadHtml'
+,
+    'Export-SPAuditPeriodComparisonHtml'
 )
