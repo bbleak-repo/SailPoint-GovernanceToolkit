@@ -198,6 +198,9 @@
 
         # SP.AuditReportHtml - Configuration Drift Report (P14-07 / DF-07)
         'Export-SPConfigDriftHtml'
+
+        # SP.AuditOperations - Bulk Remediation Ticket Export (P15-04 / DF-09)
+        'Export-SPRemediationTickets'
     )
 
     # Do not export variables or aliases from nested modules

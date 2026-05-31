@@ -3059,6 +3059,334 @@ function New-SPAuditEvidenceChain {
 
 #endregion
 
+#region Remediation Ticket Export
+
+function Export-SPRemediationTickets {
+    <#
+    .SYNOPSIS
+        Exports revocation decisions as ITSM-ready ticket rows for ServiceNow or Jira import.
+    .DESCRIPTION
+        Reads revocation decisions from campaign audit data (Group-SPAuditRemediationProof
+        output) and optionally from disconnected app remediation tracker files. Produces
+        a CSV formatted for bulk import into ServiceNow or Jira.
+
+        Columns: TicketType, Priority, AssignedTo, AppName, IdentityName, AccountId,
+        EntitlementRevoked, ReviewerName, DecisionDate, DueDate, Description
+
+        Each revocation = one ticket row. Priority is derived from remediation status:
+        overdue items get P2, pending items get P3.
+
+        For disconnected apps: reads remediation-tracker.json files from the configured
+        DisconnectedApps.Reports directory. Only PENDING records are exported as tickets.
+    .PARAMETER RemediationProof
+        Hashtable output from Group-SPAuditRemediationProof. Must contain a RevokedItems
+        array with PSCustomObjects having: IdentityName, AccessName, SourceName,
+        ReviewerName, DecisionDate, RemediationComplete, AccountIdentifier.
+    .PARAMETER DisconnectedAppPath
+        Path to the disconnected apps report directory. Each subdirectory should contain
+        a remediation-tracker.json. Resolved from config (DisconnectedApps.Reports) if
+        omitted. Pass $null or empty string to skip disconnected app processing.
+    .PARAMETER SkipDisconnectedApps
+        Skip reading disconnected app remediation trackers entirely.
+    .PARAMETER SlaBusinessDays
+        Number of business days for the remediation SLA. Used to compute DueDate
+        from DecisionDate. Default: 5.
+    .PARAMETER AssignedTo
+        Default assignee for tickets when no specific owner can be determined.
+        Default: 'IAM Operations'.
+    .PARAMETER OutputPath
+        Directory in which to write the CSV file. Created if absent.
+    .PARAMETER FileName
+        Custom CSV file name (without extension). Defaults to
+        "remediation-tickets-{yyyyMMdd-HHmmss}".
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = @{ CsvPath; TicketCount;
+        ConnectedCount; DisconnectedCount }; Error }
+    .EXAMPLE
+        $proof = Group-SPAuditRemediationProof -Items $items -Certifications $certs
+        $result = Export-SPRemediationTickets -RemediationProof $proof -OutputPath 'C:\Tickets'
+    .EXAMPLE
+        Export-SPRemediationTickets -RemediationProof $proof -SkipDisconnectedApps `
+            -SlaBusinessDays 3 -OutputPath 'C:\Tickets'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$RemediationProof,
+
+        [Parameter()]
+        [string]$DisconnectedAppPath,
+
+        [Parameter()]
+        [switch]$SkipDisconnectedApps,
+
+        [Parameter()]
+        [ValidateRange(1, 30)]
+        [int]$SlaBusinessDays = 5,
+
+        [Parameter()]
+        [string]$AssignedTo = 'IAM Operations',
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$FileName,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Export-SPRemediationTickets'
+
+    Write-SPLog -Message "Exporting remediation tickets (SLA=${SlaBusinessDays} days)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    try {
+        $tickets = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $connectedCount     = 0
+        $disconnectedCount  = 0
+
+        # --- Helper: add business days to a date ---
+        $addBusinessDays = {
+            param([DateTime]$StartDate, [int]$Days)
+            $current = $StartDate
+            $added   = 0
+            while ($added -lt $Days) {
+                $current = $current.AddDays(1)
+                if ($current.DayOfWeek -ne [DayOfWeek]::Saturday -and
+                    $current.DayOfWeek -ne [DayOfWeek]::Sunday) {
+                    $added++
+                }
+            }
+            return $current
+        }
+
+        # --- Connected app revocations from RemediationProof ---
+        $revokedItems = @()
+        if ($RemediationProof.ContainsKey('RevokedItems') -and
+            $null -ne $RemediationProof['RevokedItems']) {
+            $revokedItems = @($RemediationProof['RevokedItems'])
+        }
+
+        foreach ($item in $revokedItems) {
+            # Skip items already remediated
+            if ($item.RemediationComplete -eq $true) { continue }
+
+            # Parse decision date
+            $decisionDt = $null
+            if (-not [string]::IsNullOrWhiteSpace($item.DecisionDate)) {
+                try { $decisionDt = [DateTime]::Parse($item.DecisionDate) }
+                catch { $decisionDt = $null }
+            }
+
+            # Compute due date
+            $dueDateStr = ''
+            if ($null -ne $decisionDt) {
+                $dueDate    = & $addBusinessDays $decisionDt $SlaBusinessDays
+                $dueDateStr = $dueDate.ToString('yyyy-MM-dd')
+            }
+
+            # Determine priority: overdue = P2, pending = P3
+            $priority = 'P3 - Medium'
+            if ($null -ne $decisionDt) {
+                $slaCutoff = & $addBusinessDays $decisionDt $SlaBusinessDays
+                if ((Get-Date) -gt $slaCutoff) {
+                    $priority = 'P2 - High'
+                }
+            }
+
+            $description = "Revoke access [$($item.AccessName)] from [$($item.IdentityName)] " +
+                           "on source [$($item.SourceName)]. Reviewer: $($item.ReviewerName). " +
+                           "Decision date: $($item.DecisionDate)."
+
+            $tickets.Add([PSCustomObject]@{
+                TicketType         = 'Access Revocation'
+                Priority           = $priority
+                AssignedTo         = $AssignedTo
+                AppName            = $item.SourceName
+                IdentityName       = $item.IdentityName
+                AccountId          = $item.AccountIdentifier
+                EntitlementRevoked = $item.AccessName
+                ReviewerName       = $item.ReviewerName
+                DecisionDate       = $item.DecisionDate
+                DueDate            = $dueDateStr
+                Description        = $description
+            })
+            $connectedCount++
+        }
+
+        # --- Disconnected app revocations from remediation-tracker.json ---
+        if (-not $SkipDisconnectedApps) {
+            # Resolve path from config if not provided
+            if ([string]::IsNullOrWhiteSpace($DisconnectedAppPath)) {
+                try {
+                    $config = Get-SPConfig
+                    if ($null -ne $config -and
+                        $config.PSObject.Properties.Name -contains 'DisconnectedApps' -and
+                        $config.DisconnectedApps.PSObject.Properties.Name -contains 'Reports' -and
+                        -not [string]::IsNullOrWhiteSpace($config.DisconnectedApps.Reports)) {
+                        $DisconnectedAppPath = $config.DisconnectedApps.Reports
+                    }
+                }
+                catch {
+                    Write-SPLog -Message "Could not load config for disconnected app path: $($_.Exception.Message)" `
+                        -Severity WARN -Component $component -Action $action `
+                        -CorrelationID $CorrelationID
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($DisconnectedAppPath) -and
+                (Test-Path -Path $DisconnectedAppPath -PathType Container)) {
+
+                $trackerFiles = Get-ChildItem -Path $DisconnectedAppPath -Filter 'remediation-tracker.json' `
+                    -Recurse -File -ErrorAction SilentlyContinue
+
+                foreach ($trackerFile in $trackerFiles) {
+                    try {
+                        $raw = Get-Content -Path $trackerFile.FullName -Encoding UTF8 -Raw
+                        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+
+                        $records = @($raw | ConvertFrom-Json)
+                    }
+                    catch {
+                        Write-SPLog -Message "Failed to parse tracker: $($trackerFile.FullName) - $($_.Exception.Message)" `
+                            -Severity WARN -Component $component -Action $action `
+                            -CorrelationID $CorrelationID
+                        continue
+                    }
+
+                    foreach ($rec in $records) {
+                        # Only export PENDING records
+                        $status = ''
+                        if ($null -ne $rec.PSObject.Properties['Status']) {
+                            $status = [string]$rec.Status
+                        }
+                        if ($status -ne 'Pending') { continue }
+
+                        # Parse decision date
+                        $decisionDt = $null
+                        $decisionDateStr = ''
+                        if ($null -ne $rec.PSObject.Properties['DecisionDate'] -and
+                            -not [string]::IsNullOrWhiteSpace($rec.DecisionDate)) {
+                            $decisionDateStr = [string]$rec.DecisionDate
+                            try { $decisionDt = [DateTime]::Parse($decisionDateStr) }
+                            catch { $decisionDt = $null }
+                        }
+
+                        # Compute due date and priority
+                        $dueDateStr = ''
+                        $priority   = 'P3 - Medium'
+                        if ($null -ne $decisionDt) {
+                            $dueDate    = & $addBusinessDays $decisionDt $SlaBusinessDays
+                            $dueDateStr = $dueDate.ToString('yyyy-MM-dd')
+                            if ((Get-Date) -gt $dueDate) {
+                                $priority = 'P2 - High'
+                            }
+                        }
+
+                        $appName       = if ($null -ne $rec.PSObject.Properties['AppName'])      { [string]$rec.AppName }      else { '' }
+                        $identityName  = if ($null -ne $rec.PSObject.Properties['IdentityName']) { [string]$rec.IdentityName } else { '' }
+                        $accountId     = if ($null -ne $rec.PSObject.Properties['AccountId'])    { [string]$rec.AccountId }    else { '' }
+                        $entitlement   = if ($null -ne $rec.PSObject.Properties['Entitlement'])  { [string]$rec.Entitlement }  else { '' }
+                        $reviewerName  = if ($null -ne $rec.PSObject.Properties['ReviewerName']) { [string]$rec.ReviewerName } else { '' }
+
+                        $description = "Revoke access [$entitlement] from [$identityName] " +
+                                       "on disconnected app [$appName]. Reviewer: $reviewerName. " +
+                                       "Decision date: $decisionDateStr. Manual removal required."
+
+                        $tickets.Add([PSCustomObject]@{
+                            TicketType         = 'Disconnected App Revocation'
+                            Priority           = $priority
+                            AssignedTo         = $AssignedTo
+                            AppName            = $appName
+                            IdentityName       = $identityName
+                            AccountId          = $accountId
+                            EntitlementRevoked = $entitlement
+                            ReviewerName       = $reviewerName
+                            DecisionDate       = $decisionDateStr
+                            DueDate            = $dueDateStr
+                            Description        = $description
+                        })
+                        $disconnectedCount++
+                    }
+                }
+            }
+            else {
+                Write-SPLog -Message 'No disconnected app report path configured or found -- skipping' `
+                    -Severity DEBUG -Component $component -Action $action `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # --- Write CSV ---
+        if ($tickets.Count -eq 0) {
+            Write-SPLog -Message 'No pending remediation tickets to export' `
+                -Severity INFO -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{
+                    CsvPath           = $null
+                    TicketCount       = 0
+                    ConnectedCount    = 0
+                    DisconnectedCount = 0
+                }
+                Error   = $null
+            }
+        }
+
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        if ([string]::IsNullOrWhiteSpace($FileName)) {
+            $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+            $FileName = "remediation-tickets-${ts}"
+        }
+        $csvPath = Join-Path -Path $OutputPath -ChildPath "${FileName}.csv"
+
+        $tickets | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8 -Force
+        $resolvedPath = (Resolve-Path -Path $csvPath).Path
+
+        Write-SPLog -Message "Exported $($tickets.Count) remediation ticket(s) to $resolvedPath (connected=$connectedCount, disconnected=$disconnectedCount)" `
+            -Severity INFO -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                CsvPath           = $resolvedPath
+                TicketCount       = $tickets.Count
+                ConnectedCount    = $connectedCount
+                DisconnectedCount = $disconnectedCount
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Export-SPRemediationTickets failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = $_.Exception.Message
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Send-SPReport',
     'Export-SPCompliancePackage',
@@ -3070,5 +3398,6 @@ Export-ModuleMember -Function @(
     'Get-SPGovernanceMetrics',
     'Get-SPGovernanceMetricsTrend',
     'Export-SPGovernanceDashboardData',
-    'New-SPAuditEvidenceChain'
+    'New-SPAuditEvidenceChain',
+    'Export-SPRemediationTickets'
 )

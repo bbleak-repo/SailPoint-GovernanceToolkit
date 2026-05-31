@@ -22,7 +22,7 @@
 | DF-06 | Source Onboarding Readiness | P14-04 | none | DONE |
 | DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | DONE |
 | DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | DONE |
-| DF-09 | Bulk Remediation Ticket Export | P15-04 | none | PENDING |
+| DF-09 | Bulk Remediation Ticket Export | P15-04 | none | DONE |
 | DF-10 | Phase 16 Pester Tests | P16-10 | none | PENDING |
 
 ---
@@ -177,7 +177,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-09: Bulk Remediation Ticket Export (P15-04)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Export-SPRemediationTickets` in SP.AuditOperations.psm1
