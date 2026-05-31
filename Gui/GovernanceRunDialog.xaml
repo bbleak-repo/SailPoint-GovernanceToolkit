@@ -1,0 +1,170 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Governance Report Options"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        MinWidth="450"
+        Background="#1E1E2E"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        FontSize="13">
+
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#AAAACC"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="FieldBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#2D2D44"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderBrush" Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style x:Key="OptionCheck" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#AAAACC"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="FontStyle" Value="Italic"/>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#5B9BD5"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#6DACE0"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#4A85BB"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#2D2D44"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderBrush" Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#3D3D5C"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Padding="20" Background="#1E1E2E">
+        <StackPanel>
+            <!-- Section header -->
+            <TextBlock Text="Select report sections to include:" Style="{StaticResource SectionLabel}"/>
+
+            <!-- Checkboxes -->
+            <CheckBox x:Name="ChkIncludeCampaignAudit"
+                      Content="Include Campaign Audit"
+                      IsChecked="True"
+                      Style="{StaticResource OptionCheck}"/>
+            <CheckBox x:Name="ChkIncludeLeadershipRollup"
+                      Content="Include Leadership Rollup"
+                      IsChecked="True"
+                      Style="{StaticResource OptionCheck}"/>
+            <CheckBox x:Name="ChkIncludePolicyCheck"
+                      Content="Include Policy Compliance Check"
+                      IsChecked="False"
+                      Style="{StaticResource OptionCheck}"/>
+            <CheckBox x:Name="ChkIncludeDataQuality"
+                      Content="Include Data Quality Analysis"
+                      IsChecked="False"
+                      Style="{StaticResource OptionCheck}"/>
+            <CheckBox x:Name="ChkIncludeDashboardExport"
+                      Content="Include Dashboard Data Export (CSV)"
+                      IsChecked="False"
+                      Style="{StaticResource OptionCheck}"
+                      Margin="0,0,0,16"/>
+
+            <!-- Status + Days Back side by side -->
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Status:" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="CboStatus" Width="160" HorizontalAlignment="Left"
+                              Background="#2D2D44" Foreground="#E0E0E0"
+                              BorderBrush="#3D3D5C" BorderThickness="1"
+                              FontSize="12"
+                              SelectedIndex="0">
+                        <ComboBoxItem Content="COMPLETED" IsSelected="True"/>
+                        <ComboBoxItem Content="ACTIVE"/>
+                        <ComboBoxItem Content="STAGED"/>
+                        <ComboBoxItem Content="COMPLETING"/>
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtDaysBack" Style="{StaticResource FieldBox}"
+                             Width="80" HorizontalAlignment="Left" Text="90"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- Buttons -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="1" x:Name="BtnOK" Content="Generate Report"
+                        Style="{StaticResource PrimaryButton}" IsDefault="True"/>
+                <Button Grid.Column="3" x:Name="BtnCancel" Content="Cancel"
+                        Style="{StaticResource SecondaryButton}" IsCancel="True"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>
