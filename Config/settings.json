@@ -211,6 +211,10 @@
             "_note": "CampaignNamePrefix defaults to DeltaCert.CampaignNamePrefix when empty. Only set if escalation campaigns need a distinct prefix."
         }
     },
+    "Governance": {
+        "MetricsOutputPath": ".\\GovernanceMetrics",
+        "HealthCheckOnStartup": false
+    },
     "GovernancePolicy": {
         "Enabled": true,
         "Policies": [

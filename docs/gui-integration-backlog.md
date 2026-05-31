@@ -257,7 +257,7 @@ SP.MainWindow.psm1 (Load/Save Settings)
 
 ## GU-08: Syntax + XAML Validation
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** GU-07
 
 **Run validation on all modified files:**
@@ -272,7 +272,7 @@ SP.MainWindow.psm1 (Load/Save Settings)
 
 ## GU-09: Opus Visual Review + Verification
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** GU-08
 
 **Opus agent reads the code and verifies:**
