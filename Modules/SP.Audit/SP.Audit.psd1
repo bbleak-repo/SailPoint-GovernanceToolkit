@@ -180,6 +180,9 @@
 
         # SP.AuditReportHtml - Reviewer Delegation Report (P16-07)
         'Export-SPReviewerDelegationHtml'
+
+        # SP.AuditReportHtml - Policy Compliance Report (P13-05 / DF-01)
+        'Export-SPPolicyComplianceHtml'
     )
 
     # Do not export variables or aliases from nested modules

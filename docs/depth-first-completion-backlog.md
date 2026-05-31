@@ -14,7 +14,7 @@
 
 | ID | Feature | Source | Depends On | Status |
 |----|---------|--------|------------|--------|
-| DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | PENDING |
+| DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | DONE |
 | DF-02 | Governance Dashboard Data Export | P13-08 | none | PENDING |
 | DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | PENDING |
 | DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | PENDING |
@@ -29,7 +29,7 @@
 
 ## DF-01: Policy Compliance Report (P13-05)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P13-04 Governance Policy Engine (DONE)
 
 **What exists:** `Test-SPGovernancePolicy` returns pass/fail results per policy.

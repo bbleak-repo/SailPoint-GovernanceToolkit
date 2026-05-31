@@ -10124,6 +10124,269 @@ ${recsHtml}
 
 #endregion
 
+#region DF-01: Policy Compliance Report (P13-05)
+
+function Export-SPPolicyComplianceHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML policy compliance dashboard from Test-SPGovernancePolicy output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with pass/fail badges per policy,
+        overall compliance status, violation detail tables, and recommendations.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER PolicyResults
+        Hashtable output from Test-SPGovernancePolicy.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $results = Test-SPGovernancePolicy -IdentityRisk $risk -SourceGovernance $gov
+        $path = Export-SPPolicyComplianceHtml -PolicyResults $results -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$PolicyResults,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "PolicyCompliance-${timestamp}.html"
+
+    $summary  = $PolicyResults['Summary']
+    $policies = @($PolicyResults['Policies'])
+    $overall  = $PolicyResults['OverallCompliant']
+    $evalAt   = $PolicyResults['EvaluatedAt']
+
+    # --- Overall status banner ---
+    $overallColor = if ($overall) { '#339933' } else { '#CC3333' }
+    $overallLabel = if ($overall) { 'COMPLIANT' } else { 'NON-COMPLIANT' }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:16px 20px; background:${overallColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center; font-size:18px;">
+${overallLabel}
+</td>
+<td style="padding:12px 16px; background:#339933; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Passed<br/><span style="font-size:22px;">$($summary['Passed'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Failed<br/><span style="font-size:22px;">$($summary['Failed'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Critical<br/><span style="font-size:22px;">$($summary['CriticalFailures'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Warning<br/><span style="font-size:22px;">$($summary['WarningFailures'])</span>
+</td>
+<td style="padding:12px 16px; background:#777777; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Skipped<br/><span style="font-size:22px;">$($summary['Skipped'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Policy results table ---
+    $policyHeader = Build-HtmlTableHeader -Headers @('Status', 'Severity', 'Policy Name', 'Details', 'Violations')
+    $policyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($pol in $policies) {
+        if ($null -eq $pol) { continue }
+        $rowIdx++
+
+        $result   = $pol['Result']
+        $severity = $pol['Severity']
+        $polName  = $pol['Name']
+        $details  = $pol['Details']
+        $viols    = @($pol['Violations'])
+
+        # Status badge
+        $badgeColor = switch ($result) {
+            'PASS'    { '#339933' }
+            'FAIL'    { '#CC3333' }
+            'SKIPPED' { '#777777' }
+            default   { '#777777' }
+        }
+        $badgeHtml = "<span style=`"display:inline-block; padding:3px 8px; background:${badgeColor}; color:#ffffff; font-size:11px; font-weight:bold;`">${result}</span>"
+
+        # Severity badge
+        $sevColor = switch ($severity) {
+            'Critical' { '#CC3333' }
+            'Warning'  { '#FF8800' }
+            default    { '#777777' }
+        }
+        $sevHtml = "<span style=`"display:inline-block; padding:2px 6px; background:${sevColor}; color:#ffffff; font-size:11px;`">${severity}</span>"
+
+        # Violation count
+        $violCount = if ($viols.Count -gt 0 -and $null -ne $viols[0]) { $viols.Count } else { 0 }
+        $violLabel = if ($violCount -gt 0) { "$violCount item(s)" } else { '-' }
+
+        $cells = @(
+            $badgeHtml,
+            $sevHtml,
+            (ConvertTo-SafeHtml $polName),
+            (ConvertTo-SafeHtml $details),
+            $violLabel
+        )
+        $policyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $policyTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Policy Evaluation Results</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${policyHeader}
+<tbody>
+$($policyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Violation detail sections ---
+    $violationSections = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($pol in $policies) {
+        if ($null -eq $pol) { continue }
+        if ($pol['Result'] -ne 'FAIL') { continue }
+        $viols = @($pol['Violations'])
+        if ($viols.Count -eq 0 -or $null -eq $viols[0]) { continue }
+
+        $polName = ConvertTo-SafeHtml $pol['Name']
+        $polId   = ConvertTo-SafeHtml $pol['Id']
+
+        # Determine columns based on violation keys
+        $sampleViol = $viols[0]
+        $violKeys = @()
+        if ($sampleViol -is [hashtable]) {
+            $violKeys = @($sampleViol.Keys | Where-Object { $_ -ne 'Item' -and $_ -ne 'Source' } | Sort-Object)
+        }
+
+        $headers = @('Item', 'Source') + $violKeys
+        $vHeader = Build-HtmlTableHeader -Headers $headers
+        $vRows = [System.Collections.Generic.List[string]]::new()
+        $vIdx = 0
+
+        foreach ($viol in $viols) {
+            if ($null -eq $viol) { continue }
+            $vIdx++
+            $vCells = @(
+                (ConvertTo-SafeHtml (if ($viol -is [hashtable]) { $viol['Item'] } else { $viol.Item })),
+                (ConvertTo-SafeHtml (if ($viol -is [hashtable]) { $viol['Source'] } else { $viol.Source }))
+            )
+            foreach ($vk in $violKeys) {
+                $vVal = if ($viol -is [hashtable]) { $viol[$vk] } else { $viol.PSObject.Properties[$vk].Value }
+                $vCells += (ConvertTo-SafeHtml $vVal)
+            }
+            $vRows.Add((Build-HtmlTableRow -Cells $vCells -IsAlternate (($vIdx % 2) -eq 0)))
+        }
+
+        $sectionHtml = @"
+<h3 style="font-size:14px; color:#CC3333; margin-top:20px; margin-bottom:6px;">FAILED: ${polName} (${polId})</h3>
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+${vHeader}
+<tbody>
+$($vRows -join "`n")
+</tbody>
+</table>
+"@
+        $violationSections.Add($sectionHtml)
+    }
+
+    $violationHtml = ''
+    if ($violationSections.Count -gt 0) {
+        $violationHtml = @"
+<h2 style="font-size:16px; color:#CC3333; margin-top:28px; margin-bottom:8px;">Violation Details</h2>
+$($violationSections -join "`n")
+"@
+    }
+
+    # --- Recommendations ---
+    $recsItems = [System.Collections.Generic.List[string]]::new()
+    foreach ($pol in $policies) {
+        if ($null -eq $pol -or $pol['Result'] -ne 'FAIL') { continue }
+        $polType = ''
+        if ($pol.ContainsKey('Id')) { $polType = $pol['Id'] }
+        $recText = switch -Wildcard ($polType) {
+            '*ReviewFrequency*' { "Schedule certification campaigns to cover stale entitlements within the configured review window." }
+            '*SourceCoverage*'  { "Create campaigns targeting low-coverage sources or expand existing campaign scope." }
+            '*IdentityRisk*'    { "Investigate high-risk identities for excessive access and initiate targeted reviews." }
+            '*StaleAccess*'     { "Review and remediate stale access assignments or include them in next campaign cycle." }
+            '*ReviewerPerf*'    { "Coach underperforming reviewers or reassign their certifications to higher-performing peers." }
+            default             { "Review failed policy '$($pol['Name'])' and address identified violations." }
+        }
+        $recsItems.Add("<li style=`"margin-bottom:6px;`">$(ConvertTo-SafeHtml $recText)</li>")
+    }
+
+    $recsHtml = ''
+    if ($recsItems.Count -gt 0) {
+        $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:28px; margin-bottom:8px;">Recommendations</h2>
+<ul style="font-size:13px; color:#333333; line-height:1.6;">
+$($recsItems -join "`n")
+</ul>
+"@
+    }
+
+    # --- Full HTML document ---
+    $evalAtFormatted = Format-HtmlDate $evalAt
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Policy Compliance Report - ${generatedAt}</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:14px; color:#333333; max-width:1100px; margin:0 auto; padding:20px;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Governance Policy Compliance Report</h1>
+<p style="font-size:12px; color:#777777; margin-top:0;">Evaluated: ${evalAtFormatted} | Policies: $($summary['TotalPolicies'])</p>
+
+${summaryHtml}
+
+${policyTableHtml}
+
+${violationHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Policy compliance HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPPolicyComplianceHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -10154,5 +10417,6 @@ Export-ModuleMember -Function @(
     'Export-SPIdentityDataQualityHtml',
     'Export-SPCampaignCoverageGapHtml',
     'Export-SPCampaignCompletionForecastHtml',
-    'Export-SPReviewerDelegationHtml'
+    'Export-SPReviewerDelegationHtml',
+    'Export-SPPolicyComplianceHtml'
 )
