@@ -104,6 +104,11 @@
             "IncludePayload": true
         }
     },
+    "Metrics": {
+        "Path": ".\\Audit\\metrics",
+        "RetentionDays": 365,
+        "AutoCapture": true
+    },
     "Retention": {
         "Enabled": false,
         "ArchiveDays": 30,

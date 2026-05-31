@@ -169,6 +169,11 @@
 
         # SP.AuditReportHtml - Campaign Completion Forecast Report (P16-05)
         'Export-SPCampaignCompletionForecastHtml'
+
+        # SP.AuditOperations - Governance Metrics Time Series (P16-06)
+        'Save-SPGovernanceMetrics'
+        'Get-SPGovernanceMetrics'
+        'Get-SPGovernanceMetricsTrend'
     )
 
     # Do not export variables or aliases from nested modules

@@ -1629,11 +1629,621 @@ function Invoke-SPLogRetention {
 
 #endregion
 
+#region Governance Metrics Time Series
+
+function Save-SPGovernanceMetrics {
+    <#
+    .SYNOPSIS
+        Persists governance KPIs to a local JSONL time-series file.
+    .DESCRIPTION
+        Extracts key metrics from analytics outputs (identity risk, source governance,
+        campaign metrics, reviewer reputation, stale access, governance maturity,
+        orchestrator history) and appends a timestamped record to a JSONL file for
+        historical trend analysis. Applies retention to remove records older than
+        the configured RetentionDays.
+
+        The JSONL file uses BOM-free UTF-8 encoding, matching the convention used
+        by Export-SPAuditJsonl.
+    .PARAMETER IdentityRisk
+        Output from Measure-SPIdentityRisk.
+    .PARAMETER SourceGovernance
+        Output from Measure-SPSourceGovernance.
+    .PARAMETER CampaignMetrics
+        Output from Measure-SPCampaignMetrics.
+    .PARAMETER ReviewerReputation
+        Output from Measure-SPReviewerReputation.
+    .PARAMETER StaleAccess
+        Output from Get-SPStaleAccess.
+    .PARAMETER GovernanceMaturity
+        Output from Measure-SPGovernanceMaturity.
+    .PARAMETER OrchestratorHistory
+        Output from Get-SPOrchestratorHistory.
+    .PARAMETER Label
+        Optional label for the metrics record (e.g. 'weekly-digest-2026-05-30').
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Timestamp; MetricCount; FilePath } }
+    .EXAMPLE
+        Save-SPGovernanceMetrics -IdentityRisk $risk -GovernanceMaturity $maturity `
+            -Label 'daily-2026-05-30'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][hashtable]$IdentityRisk,
+        [Parameter()][hashtable]$SourceGovernance,
+        [Parameter()][hashtable]$CampaignMetrics,
+        [Parameter()][hashtable]$ReviewerReputation,
+        [Parameter()][hashtable]$StaleAccess,
+        [Parameter()][hashtable]$GovernanceMaturity,
+        [Parameter()][hashtable]$OrchestratorHistory,
+        [Parameter()][string]$Label,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Save-SPGovernanceMetrics'
+
+    Write-SPLog -Message 'Save-SPGovernanceMetrics: starting' `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Resolve metrics path and retention from config
+    $metricsPath   = '.\Audit\metrics'
+    $retentionDays = 365
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Metrics') {
+            $metricsCfg = $config.Metrics
+            if ($metricsCfg.PSObject.Properties.Name -contains 'Path' -and
+                -not [string]::IsNullOrWhiteSpace($metricsCfg.Path)) {
+                $metricsPath = $metricsCfg.Path
+            }
+            if ($metricsCfg.PSObject.Properties.Name -contains 'RetentionDays' -and
+                $null -ne $metricsCfg.RetentionDays) {
+                $retentionDays = [int]$metricsCfg.RetentionDays
+            }
+        }
+    }
+    catch {
+        Write-SPLog -Message "Could not load Metrics config, using defaults: $($_.Exception.Message)" `
+            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+    }
+
+    # Ensure metrics directory exists
+    if (-not (Test-Path -Path $metricsPath -PathType Container)) {
+        New-Item -Path $metricsPath -ItemType Directory -Force | Out-Null
+    }
+
+    $filePath = Join-Path -Path $metricsPath -ChildPath 'governance-metrics.jsonl'
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    # Extract KPIs from each analytics output
+    $metrics = [ordered]@{}
+
+    # Identity Risk
+    if ($null -ne $IdentityRisk) {
+        $irSummary = $null
+        if ($IdentityRisk.ContainsKey('Summary')) { $irSummary = $IdentityRisk['Summary'] }
+        if ($null -ne $irSummary) {
+            $metrics['identityRisk.highCount'] = if ($irSummary.ContainsKey('HighRiskCount')) { $irSummary['HighRiskCount'] } else { $null }
+            $metrics['identityRisk.avgScore']  = if ($irSummary.ContainsKey('AvgRiskScore'))  { $irSummary['AvgRiskScore'] }  else { $null }
+        } else {
+            $metrics['identityRisk.highCount'] = $null
+            $metrics['identityRisk.avgScore']  = $null
+        }
+    } else {
+        $metrics['identityRisk.highCount'] = $null
+        $metrics['identityRisk.avgScore']  = $null
+    }
+
+    # Source Governance
+    if ($null -ne $SourceGovernance) {
+        $sgSummary = $null
+        if ($SourceGovernance.ContainsKey('Summary')) { $sgSummary = $SourceGovernance['Summary'] }
+        if ($null -ne $sgSummary) {
+            $metrics['sourceGovernance.coveragePct'] = if ($sgSummary.ContainsKey('OverallCoveragePct')) { $sgSummary['OverallCoveragePct'] } else { $null }
+            $metrics['sourceGovernance.avgScore']    = if ($sgSummary.ContainsKey('AvgGovernanceScore')) { $sgSummary['AvgGovernanceScore'] } else { $null }
+        } else {
+            $metrics['sourceGovernance.coveragePct'] = $null
+            $metrics['sourceGovernance.avgScore']    = $null
+        }
+    } else {
+        $metrics['sourceGovernance.coveragePct'] = $null
+        $metrics['sourceGovernance.avgScore']    = $null
+    }
+
+    # Campaign Metrics
+    if ($null -ne $CampaignMetrics) {
+        $cmSummary = $null
+        if ($CampaignMetrics.ContainsKey('Summary')) { $cmSummary = $CampaignMetrics['Summary'] }
+        if ($null -ne $cmSummary) {
+            $metrics['campaigns.total']            = if ($cmSummary.ContainsKey('TotalCampaigns'))   { $cmSummary['TotalCampaigns'] }   else { $null }
+            $metrics['campaigns.avgApprovalRate']   = if ($cmSummary.ContainsKey('AvgApprovalRate'))  { $cmSummary['AvgApprovalRate'] }  else { $null }
+            $metrics['campaigns.avgResponseHours']  = if ($cmSummary.ContainsKey('AvgResponseHours')) { $cmSummary['AvgResponseHours'] } else { $null }
+        } else {
+            $metrics['campaigns.total']            = $null
+            $metrics['campaigns.avgApprovalRate']   = $null
+            $metrics['campaigns.avgResponseHours']  = $null
+        }
+    } else {
+        $metrics['campaigns.total']            = $null
+        $metrics['campaigns.avgApprovalRate']   = $null
+        $metrics['campaigns.avgResponseHours']  = $null
+    }
+
+    # Reviewer Reputation
+    if ($null -ne $ReviewerReputation) {
+        $rrSummary = $null
+        if ($ReviewerReputation.ContainsKey('Summary')) { $rrSummary = $ReviewerReputation['Summary'] }
+        if ($null -ne $rrSummary) {
+            $metrics['reviewers.avgScore']    = if ($rrSummary.ContainsKey('AvgReputationScore')) { $rrSummary['AvgReputationScore'] } else { $null }
+            $metrics['reviewers.atRiskCount'] = if ($rrSummary.ContainsKey('AtRiskCount'))        { $rrSummary['AtRiskCount'] }        else { $null }
+        } else {
+            $metrics['reviewers.avgScore']    = $null
+            $metrics['reviewers.atRiskCount'] = $null
+        }
+    } else {
+        $metrics['reviewers.avgScore']    = $null
+        $metrics['reviewers.atRiskCount'] = $null
+    }
+
+    # Stale Access
+    if ($null -ne $StaleAccess) {
+        $saSummary = $null
+        if ($StaleAccess.ContainsKey('Summary')) { $saSummary = $StaleAccess['Summary'] }
+        if ($null -ne $saSummary) {
+            $metrics['staleAccess.totalItems']    = if ($saSummary.ContainsKey('TotalStaleItems'))    { $saSummary['TotalStaleItems'] }    else { $null }
+            $metrics['staleAccess.neverReviewed']  = if ($saSummary.ContainsKey('NeverReviewedCount')) { $saSummary['NeverReviewedCount'] } else { $null }
+        } else {
+            $metrics['staleAccess.totalItems']    = $null
+            $metrics['staleAccess.neverReviewed']  = $null
+        }
+    } else {
+        $metrics['staleAccess.totalItems']    = $null
+        $metrics['staleAccess.neverReviewed']  = $null
+    }
+
+    # Governance Maturity
+    if ($null -ne $GovernanceMaturity) {
+        $gmData = $null
+        if ($GovernanceMaturity.ContainsKey('Data')) { $gmData = $GovernanceMaturity['Data'] }
+        if ($null -ne $gmData) {
+            $metrics['maturity.overallScore'] = if ($gmData.ContainsKey('OverallScore')) { $gmData['OverallScore'] } else { $null }
+            $metrics['maturity.overallLevel'] = if ($gmData.ContainsKey('OverallLevel')) { $gmData['OverallLevel'] } else { $null }
+        } else {
+            $metrics['maturity.overallScore'] = $null
+            $metrics['maturity.overallLevel'] = $null
+        }
+    } else {
+        $metrics['maturity.overallScore'] = $null
+        $metrics['maturity.overallLevel'] = $null
+    }
+
+    # Orchestrator History
+    if ($null -ne $OrchestratorHistory) {
+        $ohMetrics = $null
+        if ($OrchestratorHistory.ContainsKey('Metrics')) { $ohMetrics = $OrchestratorHistory['Metrics'] }
+        if ($null -ne $ohMetrics) {
+            $metrics['orchestrator.successRate'] = if ($ohMetrics.ContainsKey('SuccessRate')) { $ohMetrics['SuccessRate'] } else { $null }
+        } else {
+            $metrics['orchestrator.successRate'] = $null
+        }
+    } else {
+        $metrics['orchestrator.successRate'] = $null
+    }
+
+    # Build the record
+    $record = [ordered]@{
+        timestamp = $timestamp
+        label     = if ([string]::IsNullOrWhiteSpace($Label)) { $null } else { $Label }
+        metrics   = $metrics
+    }
+
+    $metricCount = 0
+    foreach ($v in $metrics.Values) {
+        if ($null -ne $v) { $metricCount++ }
+    }
+
+    # Write to temp file then rename for atomic append
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $jsonLine  = $record | ConvertTo-Json -Depth 5 -Compress
+
+    $tmpPath = "${filePath}.tmp"
+    try {
+        # If the file already exists, copy it to tmp; otherwise start fresh
+        if (Test-Path -Path $filePath) {
+            Copy-Item -Path $filePath -Destination $tmpPath -Force
+        } else {
+            # Create empty tmp file
+            [System.IO.File]::WriteAllText($tmpPath, '', $utf8NoBom)
+        }
+
+        # Append the new record
+        [System.IO.File]::AppendAllText($tmpPath, "$jsonLine`n", $utf8NoBom)
+
+        # Apply retention: remove lines older than RetentionDays
+        $retentionCutoff = (Get-Date).AddDays(-$retentionDays).ToUniversalTime()
+        $lines = [System.IO.File]::ReadAllLines($tmpPath, $utf8NoBom)
+        $keptLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in $lines) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try {
+                $parsed = $line | ConvertFrom-Json
+                $lineTs = $null
+                if ($null -ne $parsed.timestamp) {
+                    $lineTs = [datetime]::Parse([string]$parsed.timestamp).ToUniversalTime()
+                }
+                if ($null -ne $lineTs -and $lineTs -lt $retentionCutoff) {
+                    continue
+                }
+            }
+            catch {
+                # Keep unparseable lines to avoid data loss
+            }
+            $keptLines.Add($line)
+        }
+
+        # Write retained lines back
+        $content = ($keptLines -join "`n")
+        if ($keptLines.Count -gt 0) { $content += "`n" }
+        [System.IO.File]::WriteAllText($tmpPath, $content, $utf8NoBom)
+
+        # Atomic rename
+        if (Test-Path -Path $filePath) {
+            Remove-Item -Path $filePath -Force
+        }
+        Move-Item -Path $tmpPath -Destination $filePath -Force
+    }
+    catch {
+        # Clean up tmp on failure
+        if (Test-Path -Path $tmpPath) {
+            Remove-Item -Path $tmpPath -Force -ErrorAction SilentlyContinue
+        }
+        $errMsg = "Failed to save governance metrics: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component $component `
+            -Action $action -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{ Error = $errMsg }
+        }
+    }
+
+    Write-SPLog -Message "Save-SPGovernanceMetrics: saved $metricCount metrics to $filePath" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            Timestamp   = $timestamp
+            MetricCount = $metricCount
+            FilePath    = $filePath
+        }
+    }
+}
+
+function Get-SPGovernanceMetrics {
+    <#
+    .SYNOPSIS
+        Reads governance metrics from the JSONL time-series file.
+    .DESCRIPTION
+        Reads the governance-metrics.jsonl file and returns records within the
+        specified DaysBack window, sorted by timestamp ascending.
+    .PARAMETER DaysBack
+        Number of days to include. Default 90.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable[]] Array of metric records sorted by timestamp ascending.
+    .EXAMPLE
+        $metrics = Get-SPGovernanceMetrics -DaysBack 30
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable[]])]
+    param(
+        [Parameter()][int]$DaysBack = 90,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Get-SPGovernanceMetrics'
+
+    # Resolve metrics path from config
+    $metricsPath = '.\Audit\metrics'
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Metrics') {
+            $metricsCfg = $config.Metrics
+            if ($metricsCfg.PSObject.Properties.Name -contains 'Path' -and
+                -not [string]::IsNullOrWhiteSpace($metricsCfg.Path)) {
+                $metricsPath = $metricsCfg.Path
+            }
+        }
+    }
+    catch { }
+
+    $filePath = Join-Path -Path $metricsPath -ChildPath 'governance-metrics.jsonl'
+
+    if (-not (Test-Path -Path $filePath)) {
+        Write-SPLog -Message "Metrics file not found: $filePath -- returning empty" `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return @()
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $cutoff = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+    $records = [System.Collections.Generic.List[hashtable]]::new()
+
+    try {
+        $lines = [System.IO.File]::ReadAllLines($filePath, $utf8NoBom)
+    }
+    catch {
+        Write-SPLog -Message "Failed to read metrics file: $($_.Exception.Message)" `
+            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        return @()
+    }
+
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $parsed = $line | ConvertFrom-Json
+            $ts = $null
+            if ($null -ne $parsed.timestamp) {
+                $ts = [datetime]::Parse([string]$parsed.timestamp).ToUniversalTime()
+            }
+            if ($null -eq $ts) { continue }
+            if ($ts -lt $cutoff) { continue }
+
+            # Convert metrics PSCustomObject to hashtable
+            $metricsHt = [ordered]@{}
+            if ($null -ne $parsed.metrics) {
+                foreach ($prop in $parsed.metrics.PSObject.Properties) {
+                    $metricsHt[$prop.Name] = $prop.Value
+                }
+            }
+
+            $records.Add(@{
+                timestamp = [string]$parsed.timestamp
+                label     = if ($null -ne $parsed.label) { [string]$parsed.label } else { $null }
+                metrics   = $metricsHt
+            })
+        }
+        catch {
+            continue
+        }
+    }
+
+    # Sort ascending by timestamp
+    $sorted = @($records | Sort-Object { $_.timestamp })
+
+    Write-SPLog -Message "Get-SPGovernanceMetrics: returning $($sorted.Count) records (DaysBack=$DaysBack)" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return $sorted
+}
+
+function Get-SPGovernanceMetricsTrend {
+    <#
+    .SYNOPSIS
+        Computes trend analysis from governance metrics time series.
+    .DESCRIPTION
+        Reads metrics within DaysBack, groups by Granularity (Daily/Weekly/Monthly),
+        and for each metric computes min, max, avg, latest per period plus
+        period-over-period change and overall direction.
+    .PARAMETER DaysBack
+        Number of days to include. Default 180.
+    .PARAMETER MetricNames
+        Filter to specific metric names. Default: all metrics.
+    .PARAMETER Granularity
+        Grouping period: Daily, Weekly, or Monthly. Default Weekly.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Trends; Summary }
+    .EXAMPLE
+        $trend = Get-SPGovernanceMetricsTrend -DaysBack 180 -Granularity Weekly
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$DaysBack = 180,
+        [Parameter()][string[]]$MetricNames,
+        [Parameter()][ValidateSet('Daily','Weekly','Monthly')]
+        [string]$Granularity = 'Weekly',
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'Get-SPGovernanceMetricsTrend'
+
+    Write-SPLog -Message "Get-SPGovernanceMetricsTrend: DaysBack=$DaysBack Granularity=$Granularity" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    # Get raw metrics
+    $records = Get-SPGovernanceMetrics -DaysBack $DaysBack -CorrelationID $CorrelationID
+
+    $emptyResult = @{
+        Trends  = @{}
+        Summary = @{
+            MetricsTracked   = 0
+            DataPointCount   = 0
+            OldestRecord     = $null
+            NewestRecord     = $null
+            ImprovingMetrics = 0
+            DecliningMetrics = 0
+            StableMetrics    = 0
+        }
+    }
+
+    if ($null -eq $records -or @($records).Count -eq 0) {
+        Write-SPLog -Message 'No metrics data available for trend analysis' `
+            -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+        return $emptyResult
+    }
+
+    $records = @($records)
+
+    # Collect all metric names from data
+    $allMetricNames = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($rec in $records) {
+        if ($null -ne $rec.metrics) {
+            foreach ($key in $rec.metrics.Keys) {
+                [void]$allMetricNames.Add($key)
+            }
+        }
+    }
+
+    # Filter to requested metric names
+    if ($null -ne $MetricNames -and $MetricNames.Count -gt 0) {
+        $filtered = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($mn in $MetricNames) {
+            if ($allMetricNames.Contains($mn)) {
+                [void]$filtered.Add($mn)
+            }
+        }
+        $allMetricNames = $filtered
+    }
+
+    if ($allMetricNames.Count -eq 0) {
+        return $emptyResult
+    }
+
+    # Helper: get period key for a timestamp
+    function _GetPeriodKey {
+        param([datetime]$Dt, [string]$Gran)
+        switch ($Gran) {
+            'Daily'   { return $Dt.ToString('yyyy-MM-dd') }
+            'Weekly'  {
+                $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
+                $weekNum = $cal.GetWeekOfYear($Dt, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek,
+                    [System.DayOfWeek]::Monday)
+                return "$($Dt.ToString('yyyy'))-W$($weekNum.ToString('D2'))"
+            }
+            'Monthly' { return $Dt.ToString('yyyy-MM') }
+        }
+    }
+
+    # Build per-metric period buckets
+    $trends = @{}
+    foreach ($metricName in $allMetricNames) {
+        $periodBuckets = [ordered]@{}
+
+        foreach ($rec in $records) {
+            $ts = [datetime]::Parse($rec.timestamp).ToUniversalTime()
+            $periodKey = _GetPeriodKey -Dt $ts -Gran $Granularity
+
+            $value = $null
+            if ($null -ne $rec.metrics -and $rec.metrics.ContainsKey($metricName)) {
+                $value = $rec.metrics[$metricName]
+            }
+            if ($null -eq $value) { continue }
+
+            $numVal = 0
+            try { $numVal = [double]$value } catch { continue }
+
+            if (-not $periodBuckets.Contains($periodKey)) {
+                $periodBuckets[$periodKey] = [System.Collections.Generic.List[double]]::new()
+            }
+            $periodBuckets[$periodKey].Add($numVal)
+        }
+
+        if ($periodBuckets.Count -eq 0) { continue }
+
+        $periods = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($pk in $periodBuckets.Keys) {
+            $vals = $periodBuckets[$pk]
+            $min  = ($vals | Measure-Object -Minimum).Minimum
+            $max  = ($vals | Measure-Object -Maximum).Maximum
+            $avg  = [math]::Round(($vals | Measure-Object -Average).Average, 1)
+            $latest = $vals[$vals.Count - 1]
+
+            $periods.Add(@{
+                Period = $pk
+                Min    = $min
+                Max    = $max
+                Avg    = $avg
+                Latest = $latest
+            })
+        }
+
+        # Calculate overall direction from first to last period
+        $firstPeriodAvg = $periods[0].Avg
+        $lastPeriodAvg  = $periods[$periods.Count - 1].Avg
+        $totalChange    = [math]::Round($lastPeriodAvg - $firstPeriodAvg, 1)
+        $changePct      = 0.0
+        if ($firstPeriodAvg -ne 0) {
+            $changePct = [math]::Round(($totalChange / [math]::Abs($firstPeriodAvg)) * 100, 1)
+        }
+
+        $direction = 'Stable'
+        if ($changePct -gt 2)  { $direction = 'Improving' }
+        if ($changePct -lt -2) { $direction = 'Declining' }
+
+        $trends[$metricName] = @{
+            Periods          = @($periods)
+            OverallDirection = $direction
+            TotalChange      = $totalChange
+            ChangePercent    = $changePct
+        }
+    }
+
+    # Build summary
+    $improving = 0
+    $declining = 0
+    $stable    = 0
+    foreach ($t in $trends.Values) {
+        switch ($t.OverallDirection) {
+            'Improving' { $improving++ }
+            'Declining' { $declining++ }
+            'Stable'    { $stable++ }
+        }
+    }
+
+    $oldestRec = $records[0].timestamp
+    $newestRec = $records[$records.Count - 1].timestamp
+
+    $totalDataPoints = 0
+    foreach ($rec in $records) { $totalDataPoints++ }
+
+    Write-SPLog -Message "Get-SPGovernanceMetricsTrend: $($trends.Count) metrics tracked, $totalDataPoints data points" `
+        -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+
+    return @{
+        Trends  = $trends
+        Summary = @{
+            MetricsTracked   = $trends.Count
+            DataPointCount   = $totalDataPoints
+            OldestRecord     = $oldestRec
+            NewestRecord     = $newestRec
+            ImprovingMetrics = $improving
+            DecliningMetrics = $declining
+            StableMetrics    = $stable
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Send-SPReport',
     'Export-SPCompliancePackage',
     'Send-SPWebhook',
     'Send-SPNotification',
     'Get-SPOrchestratorHistory',
-    'Invoke-SPLogRetention'
+    'Invoke-SPLogRetention',
+    'Save-SPGovernanceMetrics',
+    'Get-SPGovernanceMetrics',
+    'Get-SPGovernanceMetricsTrend'
 )
