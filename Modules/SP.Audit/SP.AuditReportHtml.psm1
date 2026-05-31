@@ -10387,6 +10387,198 @@ ${recsHtml}
 
 #endregion
 
+#region Configuration Drift HTML Report (P14-07 / DF-07)
+
+function Export-SPConfigDriftHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML configuration drift report from Compare-SPConfigurationSnapshots output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report showing configuration differences between
+        two snapshots. Uses diff-style color coding: green for additions, red for removals,
+        orange for modifications. Groups changes by category with summary badges.
+    .PARAMETER DriftResult
+        Hashtable output from Compare-SPConfigurationSnapshots (the .Data property).
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $drift = Compare-SPConfigurationSnapshots -SnapshotA $a -SnapshotB $b
+        $path = Export-SPConfigDriftHtml -DriftResult $drift.Data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DriftResult,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "ConfigDrift-${timestamp}.html"
+
+    $summary  = $DriftResult['Summary']
+    $changes  = @($DriftResult['Changes'])
+    $hasDrift = $DriftResult['HasDrift']
+    $snapA    = $DriftResult['SnapshotA']
+    $snapB    = $DriftResult['SnapshotB']
+
+    $capturedA = if ($null -ne $snapA -and $snapA.ContainsKey('CapturedAt')) { $snapA['CapturedAt'] } else { 'N/A' }
+    $capturedB = if ($null -ne $snapB -and $snapB.ContainsKey('CapturedAt')) { $snapB['CapturedAt'] } else { 'N/A' }
+
+    # --- Overall status banner ---
+    $overallColor = if ($hasDrift) { '#FF6600' } else { '#339933' }
+    $overallLabel = if ($hasDrift) { 'DRIFT DETECTED' } else { 'NO DRIFT' }
+
+    $totalChanges = if ($null -ne $summary) { $summary['TotalChanges'] } else { 0 }
+    $addedCount   = if ($null -ne $summary) { $summary['Added'] } else { 0 }
+    $removedCount = if ($null -ne $summary) { $summary['Removed'] } else { 0 }
+    $changedCount = if ($null -ne $summary) { $summary['Changed'] } else { 0 }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:16px 20px; background:${overallColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:22%; text-align:center; font-size:18px;">
+${overallLabel}
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Total<br/><span style="font-size:22px;">${totalChanges}</span>
+</td>
+<td style="padding:12px 16px; background:#339933; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Added<br/><span style="font-size:22px;">${addedCount}</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Removed<br/><span style="font-size:22px;">${removedCount}</span>
+</td>
+<td style="padding:12px 16px; background:#FF6600; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:13%; text-align:center;">
+Changed<br/><span style="font-size:22px;">${changedCount}</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Snapshot comparison header ---
+    $snapshotInfoHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:13px;">
+<tr>
+<td style="padding:8px 12px; border:1px solid #dddddd; background:#f5f5f5; font-weight:bold; width:15%;">Baseline (A)</td>
+<td style="padding:8px 12px; border:1px solid #dddddd;">$(ConvertTo-SafeHtml (Format-HtmlDate $capturedA))</td>
+<td style="padding:8px 12px; border:1px solid #dddddd; background:#f5f5f5; font-weight:bold; width:15%;">Comparison (B)</td>
+<td style="padding:8px 12px; border:1px solid #dddddd;">$(ConvertTo-SafeHtml (Format-HtmlDate $capturedB))</td>
+</tr>
+</table>
+"@
+
+    # --- Changes table grouped by category ---
+    $changesSectionHtml = ''
+    if ($changes.Count -gt 0 -and $null -ne $changes[0]) {
+        $categories = @($changes | ForEach-Object { $_['Category'] } | Sort-Object -Unique)
+
+        $categorySections = [System.Collections.Generic.List[string]]::new()
+        foreach ($cat in $categories) {
+            $catChanges = @($changes | Where-Object { $_['Category'] -eq $cat })
+            $catCount = $catChanges.Count
+
+            $catHeader = Build-HtmlTableHeader -Headers @('Change', 'Item', 'Property', 'Old Value', 'New Value')
+            $catRows = [System.Collections.Generic.List[string]]::new()
+            $rowIdx = 0
+
+            foreach ($change in $catChanges) {
+                $rowIdx++
+                $changeType = $change['ChangeType']
+
+                # Badge for change type
+                $badgeColor = switch ($changeType) {
+                    'Added'   { '#339933' }
+                    'Removed' { '#CC3333' }
+                    'Changed' { '#FF6600' }
+                    default   { '#777777' }
+                }
+                $badgeHtml = "<span style=`"display:inline-block; padding:3px 8px; background:${badgeColor}; color:#ffffff; font-size:11px; font-weight:bold;`">${changeType}</span>"
+
+                $itemName  = ConvertTo-SafeHtml $change['Item']
+                $propName  = ConvertTo-SafeHtml $change['Property']
+                $oldVal    = if ($null -eq $change['OldValue']) { '<span style="color:#999999;">-</span>' } else { ConvertTo-SafeHtml $change['OldValue'] }
+                $newVal    = if ($null -eq $change['NewValue']) { '<span style="color:#999999;">-</span>' } else { ConvertTo-SafeHtml $change['NewValue'] }
+
+                $cells = @($badgeHtml, $itemName, $propName, $oldVal, $newVal)
+                $catRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+            }
+
+            $catSection = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">${cat} Changes (${catCount})</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${catHeader}
+<tbody>
+$($catRows -join "`n")
+</tbody>
+</table>
+"@
+            $categorySections.Add($catSection)
+        }
+
+        $changesSectionHtml = $categorySections -join "`n"
+    } else {
+        $changesSectionHtml = @"
+<p style="font-size:14px; color:#339933; margin-top:20px; font-weight:bold;">No configuration drift detected between these snapshots.</p>
+"@
+    }
+
+    # --- Full HTML document ---
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Configuration Drift Report - ${generatedAt}</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:14px; color:#333333; max-width:1100px; margin:0 auto; padding:20px;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Configuration Drift Report</h1>
+<p style="font-size:12px; color:#777777; margin-top:0;">Generated: ${generatedAt} | Changes: ${totalChanges}</p>
+
+${snapshotInfoHtml}
+
+${summaryHtml}
+
+${changesSectionHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Config drift HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPConfigDriftHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -10418,5 +10610,6 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignCoverageGapHtml',
     'Export-SPCampaignCompletionForecastHtml',
     'Export-SPReviewerDelegationHtml',
-    'Export-SPPolicyComplianceHtml'
+    'Export-SPPolicyComplianceHtml',
+    'Export-SPConfigDriftHtml'
 )

@@ -192,6 +192,12 @@
 
         # SP.AuditQueries - Source Onboarding Readiness (P14-04 / DF-06)
         'Test-SPSourceOnboardingReadiness'
+
+        # SP.AuditAnalytics - Configuration Drift Comparison (P14-07 / DF-07)
+        'Compare-SPConfigurationSnapshots'
+
+        # SP.AuditReportHtml - Configuration Drift Report (P14-07 / DF-07)
+        'Export-SPConfigDriftHtml'
     )
 
     # Do not export variables or aliases from nested modules
