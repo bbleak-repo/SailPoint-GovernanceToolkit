@@ -4630,6 +4630,1528 @@ function Get-SPConfigurationSnapshot {
 
 #endregion
 
+#region Orphan Account Detection (P16-01)
+
+function Get-SPOrphanAccounts {
+    <#
+    .SYNOPSIS
+        Detects accounts not correlated to any active identity.
+    .DESCRIPTION
+        For each source, queries /v3/accounts and classifies orphan accounts:
+        - Uncorrelated: identityId is null (no identity link)
+        - TerminatedOwner: identity lifecycle state is TERMINATED or INACTIVE
+        - DanglingReference: identityId present but identity not found (404)
+        Service accounts (svc-, sa-, service., or AD machine accounts with $)
+        and disabled accounts can optionally be included.
+    .PARAMETER SourceIds
+        Array of SailPoint source IDs to scan for orphan accounts.
+    .PARAMETER IncludeDisabledAccounts
+        When set, includes disabled orphan accounts in results.
+    .PARAMETER IncludeServiceAccounts
+        When set, includes service accounts in results.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ OrphanAccounts = @(...); Summary = @{...} }
+    .EXAMPLE
+        $result = Get-SPOrphanAccounts -SourceIds @('src-ad-001') -IncludeServiceAccounts
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$IncludeDisabledAccounts,
+
+        [Parameter()]
+        [switch]$IncludeServiceAccounts,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: scanning $($SourceIds.Count) source(s), IncludeDisabled=$IncludeDisabledAccounts, IncludeService=$IncludeServiceAccounts" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    $orphanAccounts = [System.Collections.Generic.List[hashtable]]::new()
+    $totalScanned = 0
+    $perSource = @{}
+
+    # Collect identity IDs that need lifecycle state lookup
+    $identityIdsToCheck = [System.Collections.Generic.Dictionary[string,bool]]::new()
+    # Track account-to-identityId mapping for deferred classification
+    $accountsPendingIdentityCheck = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    foreach ($sourceId in $SourceIds) {
+        $sourceName = Get-SPAuditSourceName -SourceId $sourceId -CorrelationID $CorrelationID
+        $sourceAccountCount = 0
+        $sourceOrphanCount = 0
+
+        # Paginate through /v3/accounts for this source
+        $pageSize = 250
+        $offset = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                Write-SPLog -Message "Get-SPOrphanAccounts: pagination ceiling reached for source '$sourceName' at page $pageNum" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $queryParams = @{
+                'limit'   = $pageSize.ToString()
+                'offset'  = $offset.ToString()
+                'filters' = "sourceId eq `"$sourceId`""
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/accounts' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                Write-SPLog -Message "Get-SPOrphanAccounts: API error for source '$sourceName' at page $pageNum: $($result.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            foreach ($acct in $page) {
+                $sourceAccountCount++
+
+                $acctId = $acct.id
+                $acctName = $acct.name
+                $nativeIdentity = $acct.nativeIdentity
+                $identityId = $acct.identityId
+                $disabled = if ($null -ne $acct.disabled) { [bool]$acct.disabled } else { $false }
+                $entitlementCount = 0
+                if ($null -ne $acct.entitlementAttributes -and $acct.entitlementAttributes.Count -gt 0) {
+                    $entitlementCount = $acct.entitlementAttributes.Count
+                }
+                $hasEntitlements = $entitlementCount -gt 0
+                $created = if ($null -ne $acct.created) { [string]$acct.created } else { '' }
+
+                # Detect service account by name pattern
+                $isServiceAccount = $false
+                if (-not [string]::IsNullOrWhiteSpace($acctName)) {
+                    $lowerName = $acctName.ToLower()
+                    if ($lowerName.StartsWith('svc-') -or
+                        $lowerName.StartsWith('sa-') -or
+                        $lowerName.StartsWith('service.') -or
+                        $acctName.Contains('$')) {
+                        $isServiceAccount = $true
+                    }
+                }
+
+                if ($null -eq $identityId -or [string]::IsNullOrWhiteSpace($identityId)) {
+                    # Uncorrelated account
+                    # Skip disabled unless requested
+                    if ($disabled -and -not $IncludeDisabledAccounts) { continue }
+                    # Skip service accounts unless requested
+                    if ($isServiceAccount -and -not $IncludeServiceAccounts) { continue }
+
+                    $orphanAccounts.Add(@{
+                        AccountId        = $acctId
+                        AccountName      = $acctName
+                        SourceId         = $sourceId
+                        SourceName       = $sourceName
+                        NativeIdentity   = $nativeIdentity
+                        Disabled         = $disabled
+                        HasEntitlements  = $hasEntitlements
+                        EntitlementCount = $entitlementCount
+                        Created          = $created
+                        OrphanType       = 'Uncorrelated'
+                        IsServiceAccount = $isServiceAccount
+                    })
+                    $sourceOrphanCount++
+                }
+                else {
+                    # Correlated -- queue for identity lifecycle check
+                    if (-not $identityIdsToCheck.ContainsKey($identityId)) {
+                        $identityIdsToCheck[$identityId] = $true
+                    }
+                    $accountsPendingIdentityCheck.Add(@{
+                        AccountId        = $acctId
+                        AccountName      = $acctName
+                        SourceId         = $sourceId
+                        SourceName       = $sourceName
+                        NativeIdentity   = $nativeIdentity
+                        Disabled         = $disabled
+                        HasEntitlements  = $hasEntitlements
+                        EntitlementCount = $entitlementCount
+                        Created          = $created
+                        IdentityId       = $identityId
+                        IsServiceAccount = $isServiceAccount
+                    })
+                }
+            }
+
+            Write-SPLog -Message "Get-SPOrphanAccounts: source '$sourceName' page $pageNum, $($page.Count) accounts" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+
+        $totalScanned += $sourceAccountCount
+        $perSource[$sourceName] = @{
+            Total     = $sourceAccountCount
+            Orphans   = $sourceOrphanCount
+            OrphanPct = if ($sourceAccountCount -gt 0) { [math]::Round(($sourceOrphanCount / $sourceAccountCount) * 100, 1) } else { 0 }
+        }
+    }
+
+    # Batch identity lifecycle lookups (deduplicated)
+    $identityStates = @{}
+    $uniqueIds = @($identityIdsToCheck.Keys)
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: checking lifecycle state for $($uniqueIds.Count) correlated identities" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    foreach ($iid in $uniqueIds) {
+        try {
+            $idResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/public-identities/$iid" `
+                -CorrelationID $CorrelationID
+
+            if ($idResult.Success -and $null -ne $idResult.Data) {
+                $lcState = ''
+                if ($null -ne $idResult.Data.lifecycle_state) {
+                    $lcState = [string]$idResult.Data.lifecycle_state
+                }
+                elseif ($null -ne $idResult.Data.lifecycleState) {
+                    $lcState = [string]$idResult.Data.lifecycleState
+                }
+                $identityStates[$iid] = $lcState.ToUpper()
+            }
+            else {
+                # Identity not found or API error -- treat as DanglingReference
+                $identityStates[$iid] = 'NOT_FOUND'
+            }
+        }
+        catch {
+            $identityStates[$iid] = 'NOT_FOUND'
+        }
+    }
+
+    # Classify pending accounts based on identity state
+    foreach ($pendingAcct in $accountsPendingIdentityCheck) {
+        $iid = $pendingAcct['IdentityId']
+        $state = if ($identityStates.ContainsKey($iid)) { $identityStates[$iid] } else { 'NOT_FOUND' }
+
+        $orphanType = $null
+        if ($state -eq 'NOT_FOUND') {
+            $orphanType = 'DanglingReference'
+        }
+        elseif ($state -eq 'TERMINATED' -or $state -eq 'INACTIVE') {
+            $orphanType = 'TerminatedOwner'
+        }
+        else {
+            # Active identity -- not an orphan
+            continue
+        }
+
+        $orphanAccounts.Add(@{
+            AccountId        = $pendingAcct['AccountId']
+            AccountName      = $pendingAcct['AccountName']
+            SourceId         = $pendingAcct['SourceId']
+            SourceName       = $pendingAcct['SourceName']
+            NativeIdentity   = $pendingAcct['NativeIdentity']
+            Disabled         = $pendingAcct['Disabled']
+            HasEntitlements  = $pendingAcct['HasEntitlements']
+            EntitlementCount = $pendingAcct['EntitlementCount']
+            Created          = $pendingAcct['Created']
+            OrphanType       = $orphanType
+            IsServiceAccount = $pendingAcct['IsServiceAccount']
+        })
+
+        # Update per-source counts
+        $sName = $pendingAcct['SourceName']
+        if ($perSource.ContainsKey($sName)) {
+            $perSource[$sName]['Orphans']++
+            $srcTotal = $perSource[$sName]['Total']
+            $perSource[$sName]['OrphanPct'] = if ($srcTotal -gt 0) {
+                [math]::Round(($perSource[$sName]['Orphans'] / $srcTotal) * 100, 1)
+            } else { 0 }
+        }
+    }
+
+    # Build summary counts
+    $uncorrelatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'Uncorrelated' }).Count
+    $terminatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'TerminatedOwner' }).Count
+    $danglingCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'DanglingReference' }).Count
+    $disabledCount = @($orphanAccounts | Where-Object { $_['Disabled'] -eq $true }).Count
+    $serviceCount = @($orphanAccounts | Where-Object { $_['IsServiceAccount'] -eq $true }).Count
+    $withEntitlements = @($orphanAccounts | Where-Object { $_['HasEntitlements'] -eq $true }).Count
+
+    $result = @{
+        OrphanAccounts = @($orphanAccounts)
+        Summary = @{
+            TotalAccountsScanned    = $totalScanned
+            TotalOrphans            = $orphanAccounts.Count
+            Uncorrelated            = $uncorrelatedCount
+            TerminatedOwner         = $terminatedCount
+            DanglingReference       = $danglingCount
+            DisabledOrphans         = $disabledCount
+            ServiceAccountOrphans   = $serviceCount
+            OrphansWithEntitlements = $withEntitlements
+            PerSource               = $perSource
+        }
+    }
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: found $($orphanAccounts.Count) orphans across $totalScanned accounts ($uncorrelatedCount uncorrelated, $terminatedCount terminated, $danglingCount dangling)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+#region P16-02: Source Aggregation Health Monitor
+
+function Get-SPSourceAggregationHealth {
+    <#
+    .SYNOPSIS
+        Evaluates source connection status and recent aggregation history.
+    .DESCRIPTION
+        Queries /v3/sources and /v3/account-aggregations to detect sources that
+        have stopped syncing or are experiencing data freshness issues.
+        Classifies each source as Healthy, Warning, Critical, or Unknown based
+        on aggregation success rate, staleness, and account count trends.
+    .PARAMETER SourceIds
+        Optional array of source IDs to check. If omitted, queries all enabled sources.
+    .PARAMETER MaxAcceptableStalenessHours
+        Hours after which a source with no successful aggregation is considered stale.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Sources = @(...); Summary = @{...} }
+    .EXAMPLE
+        $health = Get-SPSourceAggregationHealth -MaxAcceptableStalenessHours 48
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$MaxAcceptableStalenessHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sourceFilter = if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) { "$($SourceIds.Count) specified" } else { 'all enabled' }
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: checking $sourceFilter source(s), MaxStaleness=${MaxAcceptableStalenessHours}h" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    # Step 1: Get sources
+    $allSources = [System.Collections.Generic.List[hashtable]]::new()
+
+    if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) {
+        # Query each specified source by ID
+        foreach ($sid in $SourceIds) {
+            try {
+                $srcResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$sid" `
+                    -CorrelationID $CorrelationID
+                if ($srcResult.Success -and $null -ne $srcResult.Data) {
+                    $allSources.Add(@{
+                        Id            = $srcResult.Data.id
+                        Name          = $srcResult.Data.name
+                        Type          = if ($null -ne $srcResult.Data.type) { [string]$srcResult.Data.type } else { '' }
+                        ConnectorType = if ($null -ne $srcResult.Data.connectorAttributes -and
+                                           $null -ne $srcResult.Data.connectorAttributes.connectorName) {
+                                           [string]$srcResult.Data.connectorAttributes.connectorName
+                                       } else { '' }
+                        Enabled       = if ($null -ne $srcResult.Data.healthy) { [bool]$srcResult.Data.healthy } else { $true }
+                    })
+                }
+            }
+            catch {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: failed to query source '$sid': $_" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+    }
+    else {
+        # Paginate through all sources
+        $pageSize = 250
+        $offset = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: pagination ceiling reached at page $pageNum" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $queryParams = @{
+                'limit'  = $pageSize.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            $srcResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/sources' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $srcResult.Success) {
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: API error querying sources at page ${pageNum}: $($srcResult.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $page = $srcResult.Data
+            if ($null -ne $srcResult.Data -and $srcResult.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $srcResult.Data.items
+            }
+            $page = @($page)
+
+            foreach ($src in $page) {
+                $isEnabled = $true
+                if ($null -ne $src.healthy) { $isEnabled = [bool]$src.healthy }
+
+                # Skip disabled sources unless explicitly requested via SourceIds
+                if (-not $isEnabled) { continue }
+
+                $allSources.Add(@{
+                    Id            = $src.id
+                    Name          = $src.name
+                    Type          = if ($null -ne $src.type) { [string]$src.type } else { '' }
+                    ConnectorType = if ($null -ne $src.connectorAttributes -and
+                                       $null -ne $src.connectorAttributes.connectorName) {
+                                       [string]$src.connectorAttributes.connectorName
+                                   } else { '' }
+                    Enabled       = $isEnabled
+                })
+            }
+
+            Write-SPLog -Message "Get-SPSourceAggregationHealth: sources page $pageNum, $($page.Count) items" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+    }
+
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: evaluating $($allSources.Count) source(s)" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    $now = [datetime]::UtcNow
+    $sourceResults = [System.Collections.Generic.List[hashtable]]::new()
+    $healthyCt = 0; $warningCt = 0; $criticalCt = 0; $unknownCt = 0
+    $staleCt = 0; $withFailuresCt = 0
+    $totalFreshness = 0.0; $freshnessCount = 0
+
+    foreach ($source in $allSources) {
+        $sourceId = $source['Id']
+        $sourceName = $source['Name']
+
+        # Step 2: Query recent aggregations for this source
+        $aggQueryParams = @{
+            'filters' = "sourceId eq `"$sourceId`""
+            'sorters' = '-started'
+            'limit'   = '5'
+        }
+
+        $aggResult = $null
+        try {
+            $aggResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/account-aggregations' `
+                -QueryParams $aggQueryParams -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Get-SPSourceAggregationHealth: failed to query aggregations for '$sourceName': $_" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+                -CorrelationID $CorrelationID
+        }
+
+        $aggregations = @()
+        if ($null -ne $aggResult -and $aggResult.Success -and $null -ne $aggResult.Data) {
+            $aggData = $aggResult.Data
+            if ($null -ne $aggResult.Data.PSObject.Properties.Name -and
+                $aggResult.Data.PSObject.Properties.Name -contains 'items') {
+                $aggData = $aggResult.Data.items
+            }
+            $aggregations = @($aggData)
+        }
+
+        if ($aggregations.Count -eq 0) {
+            # No aggregation history
+            $unknownCt++
+            $sourceResults.Add(@{
+                SourceId              = $sourceId
+                SourceName            = $sourceName
+                SourceType            = $source['Type']
+                Enabled               = $source['Enabled']
+                HealthStatus          = 'Unknown'
+                LastAggregation       = $null
+                DataFreshnessHours    = $null
+                IsStale               = $false
+                ConsecutiveFailures   = 0
+                AvgDurationMinutes    = $null
+                AccountTrend          = 'Unknown'
+                AccountTrendDetail    = 'No aggregation history found'
+            })
+            continue
+        }
+
+        # Step 3: Extract last aggregation details
+        $lastAgg = $aggregations[0]
+
+        $lastStarted   = if ($null -ne $lastAgg.started) { [string]$lastAgg.started } else { '' }
+        $lastCompleted = if ($null -ne $lastAgg.completed) { [string]$lastAgg.completed } else { '' }
+        $lastStatus    = if ($null -ne $lastAgg.status) { [string]$lastAgg.status } else { 'UNKNOWN' }
+        $totalAccounts = if ($null -ne $lastAgg.totalAccounts) { [int]$lastAgg.totalAccounts } else { 0 }
+        $errorCount    = if ($null -ne $lastAgg.errors) { @($lastAgg.errors).Count } else { 0 }
+        if ($null -ne $lastAgg.errorCount) { $errorCount = [int]$lastAgg.errorCount }
+
+        $durationMinutes = 0
+        if (-not [string]::IsNullOrWhiteSpace($lastStarted) -and
+            -not [string]::IsNullOrWhiteSpace($lastCompleted)) {
+            try {
+                $startDt = [datetime]::Parse($lastStarted)
+                $endDt   = [datetime]::Parse($lastCompleted)
+                $durationMinutes = [math]::Round(($endDt - $startDt).TotalMinutes, 1)
+            } catch { }
+        }
+
+        # Step 4: Calculate health indicators
+        # DataFreshnessHours: hours since last SUCCESSFUL aggregation completed
+        $dataFreshnessHours = $null
+        $lastSuccessfulCompleted = $null
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -eq 'SUCCESS' -and -not [string]::IsNullOrWhiteSpace($agg.completed)) {
+                $lastSuccessfulCompleted = $agg.completed
+                break
+            }
+        }
+
+        if ($null -ne $lastSuccessfulCompleted) {
+            try {
+                $successDt = [datetime]::Parse($lastSuccessfulCompleted)
+                $dataFreshnessHours = [math]::Round(($now - $successDt).TotalHours, 1)
+            } catch { }
+        }
+
+        $isStale = $false
+        if ($null -ne $dataFreshnessHours) {
+            $isStale = $dataFreshnessHours -gt $MaxAcceptableStalenessHours
+        }
+        elseif ($lastStatus -ne 'SUCCESS') {
+            # No successful aggregation found in recent history
+            $isStale = $true
+        }
+
+        # ConsecutiveFailures: count of non-SUCCESS from most recent
+        $consecutiveFailures = 0
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -ne 'SUCCESS') {
+                $consecutiveFailures++
+            }
+            else {
+                break
+            }
+        }
+
+        # AvgDurationMinutes from successful aggregations
+        $avgDuration = $null
+        $durationSum = 0.0
+        $durationCount = 0
+        foreach ($agg in $aggregations) {
+            $aggStatus = if ($null -ne $agg.status) { [string]$agg.status } else { '' }
+            if ($aggStatus -eq 'SUCCESS' -and
+                -not [string]::IsNullOrWhiteSpace($agg.started) -and
+                -not [string]::IsNullOrWhiteSpace($agg.completed)) {
+                try {
+                    $s = [datetime]::Parse($agg.started)
+                    $e = [datetime]::Parse($agg.completed)
+                    $durationSum += ($e - $s).TotalMinutes
+                    $durationCount++
+                } catch { }
+            }
+        }
+        if ($durationCount -gt 0) {
+            $avgDuration = [math]::Round($durationSum / $durationCount, 1)
+        }
+
+        # AccountTrend: compare two most recent successful aggregations
+        $accountTrend = 'Unknown'
+        $accountTrendDetail = 'Insufficient data for trend'
+        $successfulAggs = @($aggregations | Where-Object {
+            $null -ne $_.status -and [string]$_.status -eq 'SUCCESS'
+        })
+        if ($successfulAggs.Count -ge 2) {
+            $newestCount = if ($null -ne $successfulAggs[0].totalAccounts) { [int]$successfulAggs[0].totalAccounts } else { 0 }
+            $prevCount   = if ($null -ne $successfulAggs[1].totalAccounts) { [int]$successfulAggs[1].totalAccounts } else { 0 }
+            $diff = $newestCount - $prevCount
+
+            if ($prevCount -gt 0) {
+                $pctChange = [math]::Abs($diff / $prevCount * 100)
+            }
+            else {
+                $pctChange = 0
+            }
+
+            if ($diff -gt 0) {
+                $accountTrend = 'Increasing'
+                $accountTrendDetail = "+$diff accounts since previous aggregation"
+            }
+            elseif ($diff -lt 0) {
+                $accountTrend = 'Decreasing'
+                $accountTrendDetail = "$diff accounts since previous aggregation"
+            }
+            else {
+                $accountTrend = 'Stable'
+                $accountTrendDetail = "+0 accounts since previous aggregation"
+            }
+        }
+        elseif ($successfulAggs.Count -eq 1) {
+            $accountTrend = 'Stable'
+            $accountTrendDetail = 'Only one successful aggregation available'
+        }
+
+        # Step 5: Classify source health
+        $healthStatus = 'Healthy'
+        $significantDrop = $false
+        if ($accountTrend -eq 'Decreasing' -and $successfulAggs.Count -ge 2) {
+            $newestCount = if ($null -ne $successfulAggs[0].totalAccounts) { [int]$successfulAggs[0].totalAccounts } else { 0 }
+            $prevCount   = if ($null -ne $successfulAggs[1].totalAccounts) { [int]$successfulAggs[1].totalAccounts } else { 0 }
+            if ($prevCount -gt 0) {
+                $dropPct = ($prevCount - $newestCount) / $prevCount * 100
+                $significantDrop = $dropPct -gt 10
+            }
+        }
+
+        if ($consecutiveFailures -ge 2) {
+            $healthStatus = 'Critical'
+        }
+        elseif ($lastStatus -ne 'SUCCESS' -and $null -eq $dataFreshnessHours) {
+            # No successful aggregation within the 5 most recent, no staleness data
+            $healthStatus = 'Critical'
+        }
+        elseif ($null -ne $dataFreshnessHours -and $dataFreshnessHours -gt (2 * $MaxAcceptableStalenessHours) -and $lastStatus -ne 'SUCCESS') {
+            $healthStatus = 'Critical'
+        }
+        elseif ($consecutiveFailures -eq 1 -or $isStale -or $significantDrop) {
+            $healthStatus = 'Warning'
+        }
+        else {
+            $healthStatus = 'Healthy'
+        }
+
+        # Update counters
+        switch ($healthStatus) {
+            'Healthy'  { $healthyCt++ }
+            'Warning'  { $warningCt++ }
+            'Critical' { $criticalCt++ }
+            'Unknown'  { $unknownCt++ }
+        }
+        if ($isStale) { $staleCt++ }
+        if ($consecutiveFailures -gt 0) { $withFailuresCt++ }
+        if ($null -ne $dataFreshnessHours) {
+            $totalFreshness += $dataFreshnessHours
+            $freshnessCount++
+        }
+
+        $lastAggInfo = @{
+            Started         = $lastStarted
+            Completed       = $lastCompleted
+            DurationMinutes = $durationMinutes
+            Status          = $lastStatus
+            TotalAccounts   = $totalAccounts
+            ErrorCount      = $errorCount
+        }
+
+        $sourceResults.Add(@{
+            SourceId              = $sourceId
+            SourceName            = $sourceName
+            SourceType            = $source['Type']
+            Enabled               = $source['Enabled']
+            HealthStatus          = $healthStatus
+            LastAggregation       = $lastAggInfo
+            DataFreshnessHours    = $dataFreshnessHours
+            IsStale               = $isStale
+            ConsecutiveFailures   = $consecutiveFailures
+            AvgDurationMinutes    = $avgDuration
+            AccountTrend          = $accountTrend
+            AccountTrendDetail    = $accountTrendDetail
+        })
+    }
+
+    $avgFreshness = if ($freshnessCount -gt 0) { [math]::Round($totalFreshness / $freshnessCount, 1) } else { 0 }
+
+    $result = @{
+        Sources = @($sourceResults)
+        Summary = @{
+            TotalSources        = $allSources.Count
+            Healthy             = $healthyCt
+            Warning             = $warningCt
+            Critical            = $criticalCt
+            Unknown             = $unknownCt
+            StaleSources        = $staleCt
+            AvgFreshnessHours   = $avgFreshness
+            SourcesWithFailures = $withFailuresCt
+        }
+    }
+
+    Write-SPLog -Message "Get-SPSourceAggregationHealth: $($allSources.Count) sources -- Healthy=$healthyCt, Warning=$warningCt, Critical=$criticalCt, Unknown=$unknownCt, Stale=$staleCt" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+#endregion
+
+#region P16-03: Identity Attribute Quality Score
+
+function Measure-SPIdentityDataQuality {
+    <#
+    .SYNOPSIS
+        Evaluates completeness and consistency of identity attributes.
+    .DESCRIPTION
+        Queries /v3/public-identities and checks each identity against a set of
+        required attributes. Detects missing attributes, manager self-references,
+        duplicate emails, and stale profiles. Produces per-identity quality scores
+        and an overall tenant quality grade.
+    .PARAMETER Limit
+        Maximum number of identities to evaluate. Default 500.
+    .PARAMETER RequiredAttributes
+        Array of attribute names to check. Default: manager, department, email, title, location.
+    .PARAMETER ActiveOnly
+        When set, only evaluates identities with active lifecycle state.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); AttributeCompleteness = @{...}; QualityIssues = @{...}; Summary = @{...} }
+    .EXAMPLE
+        $quality = Measure-SPIdentityDataQuality -Limit 500 -ActiveOnly
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$Limit = 500,
+
+        [Parameter()]
+        [string[]]$RequiredAttributes,
+
+        [Parameter()]
+        [switch]$ActiveOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Default required attributes
+    if ($null -eq $RequiredAttributes -or $RequiredAttributes.Count -eq 0) {
+        $RequiredAttributes = @('manager', 'department', 'email', 'title', 'location')
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityDataQuality: scanning up to $Limit identities, ActiveOnly=$ActiveOnly, RequiredAttributes=($($RequiredAttributes -join ', '))" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+        -CorrelationID $CorrelationID
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    $identities = [System.Collections.Generic.List[hashtable]]::new()
+    $pageSize = 250
+    $offset = 0
+    $pageNum = 0
+    $fetched = 0
+
+    do {
+        $pageNum++
+        if ($pageNum -gt $maxPages) {
+            Write-SPLog -Message "Measure-SPIdentityDataQuality: pagination ceiling reached at page $pageNum" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+                -CorrelationID $CorrelationID
+            break
+        }
+
+        $remaining = $Limit - $fetched
+        $thisPageSize = [math]::Min($pageSize, $remaining)
+
+        $queryParams = @{
+            'limit'  = $thisPageSize.ToString()
+            'offset' = $offset.ToString()
+        }
+
+        $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/public-identities' `
+            -QueryParams $queryParams -CorrelationID $CorrelationID
+
+        if (-not $result.Success) {
+            Write-SPLog -Message "Measure-SPIdentityDataQuality: API error at page ${pageNum} -- $($result.Error)" `
+                -Severity ERROR -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+                -CorrelationID $CorrelationID
+            break
+        }
+
+        $page = $result.Data
+        if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+            $page = $result.Data.items
+        }
+        $page = @($page)
+
+        foreach ($identity in $page) {
+            if ($fetched -ge $Limit) { break }
+
+            # Filter by lifecycle state if ActiveOnly
+            $lifecycleState = ''
+            if ($null -ne $identity.lifecycle_state) {
+                $lifecycleState = [string]$identity.lifecycle_state
+            }
+            elseif ($null -ne $identity.lifecycleState) {
+                $lifecycleState = [string]$identity.lifecycleState
+            }
+
+            if ($ActiveOnly -and -not [string]::IsNullOrWhiteSpace($lifecycleState)) {
+                $stateUpper = $lifecycleState.ToUpper()
+                if ($stateUpper -ne 'ACTIVE') { continue }
+            }
+
+            $identityId = [string]$identity.id
+            $identityName = if ($null -ne $identity.name) { [string]$identity.name } else { '' }
+            if ([string]::IsNullOrWhiteSpace($identityName) -and $null -ne $identity.displayName) {
+                $identityName = [string]$identity.displayName
+            }
+
+            # Attribute presence check
+            $missingAttrs = [System.Collections.Generic.List[string]]::new()
+            $issues = [System.Collections.Generic.List[string]]::new()
+            $attrPointValue = if ($RequiredAttributes.Count -gt 0) { 100.0 / $RequiredAttributes.Count } else { 100.0 }
+            $score = 0.0
+
+            foreach ($attr in $RequiredAttributes) {
+                $attrValue = $null
+                # Check direct property
+                if ($null -ne $identity.PSObject -and $identity.PSObject.Properties.Name -contains $attr) {
+                    $attrValue = $identity.$attr
+                }
+                # Check attributes collection (ISC sometimes nests in attributes map)
+                elseif ($null -ne $identity.attributes -and $identity.attributes.PSObject.Properties.Name -contains $attr) {
+                    $attrValue = $identity.attributes.$attr
+                }
+
+                # Manager attribute is special -- may be an object with id property
+                if ($attr -eq 'manager' -and $null -ne $attrValue) {
+                    if ($attrValue -is [System.Management.Automation.PSCustomObject] -or $attrValue -is [hashtable]) {
+                        $mgrId = $null
+                        if ($attrValue.PSObject.Properties.Name -contains 'id') { $mgrId = $attrValue.id }
+                        elseif ($attrValue -is [hashtable] -and $attrValue.ContainsKey('id')) { $mgrId = $attrValue['id'] }
+                        if ([string]::IsNullOrWhiteSpace($mgrId)) {
+                            $attrValue = $null
+                        }
+                        else {
+                            $attrValue = $mgrId
+                        }
+                    }
+                }
+
+                $isPresent = $false
+                if ($null -ne $attrValue) {
+                    if ($attrValue -is [string]) {
+                        $isPresent = -not [string]::IsNullOrWhiteSpace($attrValue)
+                    }
+                    else {
+                        $isPresent = $true
+                    }
+                }
+
+                if ($isPresent) {
+                    $score += $attrPointValue
+                }
+                else {
+                    $missingAttrs.Add($attr)
+                    $issues.Add("Missing: $attr")
+                }
+            }
+
+            # Manager self-reference check
+            $managerId = $null
+            if ($null -ne $identity.manager) {
+                if ($identity.manager -is [string]) {
+                    $managerId = $identity.manager
+                }
+                elseif ($null -ne $identity.manager.id) {
+                    $managerId = [string]$identity.manager.id
+                }
+            }
+            if ($null -ne $identity.attributes -and $null -ne $identity.attributes.manager) {
+                $mgrAttr = $identity.attributes.manager
+                if ($mgrAttr -is [string]) {
+                    $managerId = $mgrAttr
+                }
+                elseif ($null -ne $mgrAttr.id) {
+                    $managerId = [string]$mgrAttr.id
+                }
+            }
+
+            $isManagerSelfRef = $false
+            if (-not [string]::IsNullOrWhiteSpace($managerId) -and $managerId -eq $identityId) {
+                $isManagerSelfRef = $true
+                $score = [math]::Max(0, $score - 10)
+                $issues.Add('ManagerSelfReference')
+            }
+
+            # Stale profile check (modified > 365 days ago)
+            $isStaleProfile = $false
+            $modifiedStr = $null
+            if ($null -ne $identity.modified) { $modifiedStr = [string]$identity.modified }
+            elseif ($null -ne $identity.lastModified) { $modifiedStr = [string]$identity.lastModified }
+            if (-not [string]::IsNullOrWhiteSpace($modifiedStr)) {
+                try {
+                    $modifiedDt = [datetime]::Parse($modifiedStr)
+                    $daysSinceModified = ((Get-Date) - $modifiedDt).TotalDays
+                    if ($daysSinceModified -gt 365) {
+                        $isStaleProfile = $true
+                        $score = [math]::Max(0, $score - 5)
+                        $issues.Add('StaleProfile')
+                    }
+                }
+                catch { }
+            }
+
+            # Clamp score
+            $score = [math]::Max(0, [math]::Min(100, [math]::Round($score, 1)))
+
+            # Extract email for duplicate check
+            $email = $null
+            if ($null -ne $identity.email) { $email = [string]$identity.email }
+            elseif ($null -ne $identity.attributes -and $null -ne $identity.attributes.email) { $email = [string]$identity.attributes.email }
+
+            $identities.Add(@{
+                IdentityId        = $identityId
+                IdentityName      = $identityName
+                LifecycleState    = $lifecycleState
+                QualityScore      = $score
+                MissingAttributes = @($missingAttrs)
+                Issues            = @($issues)
+                Email             = $email
+                ManagerSelfRef    = $isManagerSelfRef
+                StaleProfile      = $isStaleProfile
+            })
+
+            $fetched++
+        }
+
+        Write-SPLog -Message "Measure-SPIdentityDataQuality: page $pageNum, $($page.Count) identities (total fetched: $fetched)" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+            -CorrelationID $CorrelationID
+
+        $offset += $thisPageSize
+
+    } while ($null -ne $page -and $page.Count -ge $thisPageSize -and $fetched -lt $Limit)
+
+    # Attribute completeness
+    $attrCompleteness = @{}
+    foreach ($attr in $RequiredAttributes) {
+        $presentCount = @($identities | Where-Object { $_['MissingAttributes'] -notcontains $attr }).Count
+        $missingCount = $identities.Count - $presentCount
+        $pct = if ($identities.Count -gt 0) { [math]::Round(($presentCount / $identities.Count) * 100, 1) } else { 0 }
+        $attrCompleteness[$attr] = @{
+            Present = $presentCount
+            Missing = $missingCount
+            Pct     = $pct
+        }
+    }
+
+    # Quality issues
+    $managerSelfRefs = @($identities | Where-Object { $_['ManagerSelfRef'] -eq $true } | ForEach-Object { $_['IdentityId'] })
+    $staleProfiles = @($identities | Where-Object { $_['StaleProfile'] -eq $true } | ForEach-Object { $_['IdentityId'] })
+
+    # Duplicate email detection
+    $emailMap = @{}
+    foreach ($ident in $identities) {
+        $e = $ident['Email']
+        if (-not [string]::IsNullOrWhiteSpace($e)) {
+            $eLower = $e.ToLower()
+            if (-not $emailMap.ContainsKey($eLower)) {
+                $emailMap[$eLower] = [System.Collections.Generic.List[string]]::new()
+            }
+            $emailMap[$eLower].Add($ident['IdentityId'])
+        }
+    }
+    $duplicateEmails = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($entry in $emailMap.GetEnumerator()) {
+        if ($entry.Value.Count -gt 1) {
+            $duplicateEmails.Add(@{
+                Email       = $entry.Key
+                IdentityIds = @($entry.Value)
+            })
+        }
+    }
+
+    $qualityIssues = @{
+        ManagerSelfReference = $managerSelfRefs
+        DuplicateEmails      = @($duplicateEmails)
+        StaleProfiles        = $staleProfiles
+    }
+
+    # Summary
+    $overallScore = 0
+    if ($identities.Count -gt 0) {
+        $totalScore = 0
+        foreach ($ident in $identities) { $totalScore += $ident['QualityScore'] }
+        $overallScore = [math]::Round($totalScore / $identities.Count, 1)
+    }
+
+    $overallGrade = switch ($true) {
+        ($overallScore -ge 90) { 'A' }
+        ($overallScore -ge 80) { 'B' }
+        ($overallScore -ge 70) { 'C' }
+        ($overallScore -ge 60) { 'D' }
+        default                { 'F' }
+    }
+
+    # Find worst attribute
+    $worstAttr = ''
+    $worstPct = 100.0
+    foreach ($attr in $RequiredAttributes) {
+        if ($attrCompleteness[$attr]['Pct'] -lt $worstPct) {
+            $worstPct = $attrCompleteness[$attr]['Pct']
+            $worstAttr = $attr
+        }
+    }
+
+    # Identities with at least one issue
+    $identitiesWithIssues = @($identities | Where-Object { $_['Issues'].Count -gt 0 }).Count
+
+    # Grade distribution
+    $gradeA = @($identities | Where-Object { $_['QualityScore'] -ge 90 }).Count
+    $gradeB = @($identities | Where-Object { $_['QualityScore'] -ge 80 -and $_['QualityScore'] -lt 90 }).Count
+    $gradeC = @($identities | Where-Object { $_['QualityScore'] -ge 70 -and $_['QualityScore'] -lt 80 }).Count
+    $gradeD = @($identities | Where-Object { $_['QualityScore'] -ge 60 -and $_['QualityScore'] -lt 70 }).Count
+    $gradeF = @($identities | Where-Object { $_['QualityScore'] -lt 60 }).Count
+
+    $summaryResult = @{
+        TotalIdentitiesScanned   = $identities.Count
+        OverallQualityScore      = $overallScore
+        OverallQualityGrade      = $overallGrade
+        WorstAttribute           = $worstAttr
+        WorstAttributePct        = $worstPct
+        IdentitiesWithIssues     = $identitiesWithIssues
+        QualityGradeDistribution = @{
+            A = $gradeA
+            B = $gradeB
+            C = $gradeC
+            D = $gradeD
+            F = $gradeF
+        }
+    }
+
+    # Remove internal-only fields from identity output
+    $outputIdentities = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($ident in $identities) {
+        $outputIdentities.Add(@{
+            IdentityId        = $ident['IdentityId']
+            IdentityName      = $ident['IdentityName']
+            LifecycleState    = $ident['LifecycleState']
+            QualityScore      = $ident['QualityScore']
+            MissingAttributes = $ident['MissingAttributes']
+            Issues            = $ident['Issues']
+        })
+    }
+
+    $finalResult = @{
+        Identities            = @($outputIdentities)
+        AttributeCompleteness = $attrCompleteness
+        QualityIssues         = $qualityIssues
+        Summary               = $summaryResult
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityDataQuality: $($identities.Count) identities scanned, Overall=$overallScore ($overallGrade), Worst=$worstAttr ($worstPct%), Issues=$identitiesWithIssues" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+        -CorrelationID $CorrelationID
+
+    return $finalResult
+}
+
+#endregion
+
+#region P16-07: Reviewer Delegation Audit Trail
+
+function Get-SPReviewerDelegations {
+    <#
+    .SYNOPSIS
+        Analyzes certification item reassignments to detect delegation patterns.
+    .DESCRIPTION
+        Examines campaign audit decision items for reassignment indicators --
+        items where the final reviewer differs from the original assigned reviewer.
+        Detects patterns such as high-frequency delegators, deadline-proximate
+        reassignments, circular delegation chains, and delegate-to-approver behavior.
+
+        Works with campaign audit data produced by the standard audit pipeline
+        (Get-SPAuditCampaigns / Get-SPAuditCampaignReport / Group-SPAuditDecisions).
+        Each decision item may contain OriginalReviewer, ReassignedFrom, or
+        ReviewerClassification fields indicating reassignment. When reassignment
+        data is not present in the audit data, returns a summary noting that
+        reassignment data is unavailable rather than erroring.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables. Each must contain CampaignId,
+        CampaignName, and Decisions (with Approved/Revoked/Pending arrays).
+    .PARAMETER DeadlineProximityHours
+        Hours before campaign deadline within which a reassignment is flagged
+        as a DeadlineDelegation. Default: 24.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Delegations; ReviewerMetrics; PatternSummary; Summary }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 90 | ForEach-Object {
+            Get-SPAuditCampaignReport -CampaignId $_.id
+        }
+        $delegations = Get-SPReviewerDelegations -CampaignAudits $audits
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$DeadlineProximityHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPReviewerDelegations: starting with $($CampaignAudits.Count) campaign(s), DeadlineProximityHours=$DeadlineProximityHours" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+        -CorrelationID $CorrelationID
+
+    # Empty input guard
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        Write-SPLog -Message "Get-SPReviewerDelegations: no campaign audits provided" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+            -CorrelationID $CorrelationID
+        return @{
+            Delegations    = @()
+            ReviewerMetrics = @()
+            PatternSummary = @{
+                HighDelegators      = 0
+                DeadlineDelegations = 0
+                CircularDelegations = 0
+                DelegateToApprover  = 0
+            }
+            Summary = @{
+                TotalItemsAnalyzed       = 0
+                TotalReassigned          = 0
+                OverallReassignmentRate  = 0.0
+                CampaignsWithDelegations = 0
+                ReviewersWhoDelegate     = 0
+            }
+        }
+    }
+
+    $delegations = [System.Collections.Generic.List[hashtable]]::new()
+    # Track per-reviewer stats: reviewer -> @{ Assigned; Reassigned; Timestamps }
+    $reviewerStats = @{}
+    # Track per-reviewer approval rates for delegate-to-approver detection
+    $reviewerApprovalCounts = @{}
+    $reviewerTotalDecisions = @{}
+
+    $totalItemsAnalyzed   = 0
+    $totalReassigned       = 0
+    $campaignsWithDelegations = [System.Collections.Generic.HashSet[string]]::new()
+    $reassignmentDataAvailable = $false
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $campaignId   = if ($audit.ContainsKey('CampaignId'))   { [string]$audit['CampaignId'] }   else { '' }
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { [string]$audit['CampaignName'] } else { '' }
+
+        # Parse campaign deadline
+        $deadlineDate = $null
+        $dlStr = ''
+        if ($audit.ContainsKey('Deadline')) { $dlStr = [string]$audit['Deadline'] }
+        if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+            try {
+                $deadlineDate = [datetime]::Parse($dlStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            } catch { $deadlineDate = $null }
+        }
+
+        # Parse campaign created date
+        $campaignCreated = $null
+        if ($audit.ContainsKey('Created')) {
+            $createdStr = [string]$audit['Created']
+            if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+                try {
+                    $campaignCreated = [datetime]::Parse($createdStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $campaignCreated = $null }
+            }
+        }
+
+        # Extract decisions
+        $decisions = $null
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+        }
+        if ($null -eq $decisions) { continue }
+
+        # Process all decision categories
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+                $totalItemsAnalyzed++
+
+                # Extract fields - support both hashtable and PSObject
+                $reviewerName     = ''
+                $originalReviewer = ''
+                $identityName     = ''
+                $entitlementName  = ''
+                $completedDateStr = ''
+                $decision         = $category
+                $reassignedFrom   = ''
+                $reassignmentChainRaw = $null
+                $reviewerClassification = ''
+
+                if ($item -is [hashtable]) {
+                    if ($item.ContainsKey('ReviewerName'))     { $reviewerName     = [string]$item['ReviewerName'] }
+                    if ($item.ContainsKey('OriginalReviewer')) { $originalReviewer = [string]$item['OriginalReviewer'] }
+                    if ($item.ContainsKey('ReassignedFrom'))   { $reassignedFrom   = [string]$item['ReassignedFrom'] }
+                    if ($item.ContainsKey('IdentityName'))     { $identityName     = [string]$item['IdentityName'] }
+                    if ($item.ContainsKey('AccessName'))       { $entitlementName  = [string]$item['AccessName'] }
+                    if ($item.ContainsKey('CompletedDate'))    { $completedDateStr = [string]$item['CompletedDate'] }
+                    elseif ($item.ContainsKey('DecisionDate')) { $completedDateStr = [string]$item['DecisionDate'] }
+                    elseif ($item.ContainsKey('Created'))      { $completedDateStr = [string]$item['Created'] }
+                    if ($item.ContainsKey('Decision'))         { $decision         = [string]$item['Decision'] }
+                    if ($item.ContainsKey('ReassignmentChain')) { $reassignmentChainRaw = $item['ReassignmentChain'] }
+                    if ($item.ContainsKey('ReviewerClassification')) { $reviewerClassification = [string]$item['ReviewerClassification'] }
+                } else {
+                    if ($null -ne $item.PSObject.Properties['ReviewerName']     -and $null -ne $item.ReviewerName)     { $reviewerName     = [string]$item.ReviewerName }
+                    if ($null -ne $item.PSObject.Properties['OriginalReviewer'] -and $null -ne $item.OriginalReviewer) { $originalReviewer = [string]$item.OriginalReviewer }
+                    if ($null -ne $item.PSObject.Properties['ReassignedFrom']   -and $null -ne $item.ReassignedFrom)   { $reassignedFrom   = [string]$item.ReassignedFrom }
+                    if ($null -ne $item.PSObject.Properties['IdentityName']     -and $null -ne $item.IdentityName)     { $identityName     = [string]$item.IdentityName }
+                    if ($null -ne $item.PSObject.Properties['AccessName']       -and $null -ne $item.AccessName)       { $entitlementName  = [string]$item.AccessName }
+                    if ($null -ne $item.PSObject.Properties['CompletedDate']    -and $null -ne $item.CompletedDate)    { $completedDateStr = [string]$item.CompletedDate }
+                    elseif ($null -ne $item.PSObject.Properties['DecisionDate'] -and $null -ne $item.DecisionDate)     { $completedDateStr = [string]$item.DecisionDate }
+                    elseif ($null -ne $item.PSObject.Properties['Created']      -and $null -ne $item.Created)          { $completedDateStr = [string]$item.Created }
+                    if ($null -ne $item.PSObject.Properties['Decision']         -and $null -ne $item.Decision)         { $decision         = [string]$item.Decision }
+                    if ($null -ne $item.PSObject.Properties['ReassignmentChain']) { $reassignmentChainRaw = $item.ReassignmentChain }
+                    if ($null -ne $item.PSObject.Properties['ReviewerClassification'] -and $null -ne $item.ReviewerClassification) { $reviewerClassification = [string]$item.ReviewerClassification }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($reviewerName)) { continue }
+
+                # Determine original reviewer for reassignment detection
+                $origReviewer = ''
+                if (-not [string]::IsNullOrWhiteSpace($originalReviewer)) {
+                    $origReviewer = $originalReviewer
+                    $reassignmentDataAvailable = $true
+                } elseif (-not [string]::IsNullOrWhiteSpace($reassignedFrom)) {
+                    $origReviewer = $reassignedFrom
+                    $reassignmentDataAvailable = $true
+                } elseif ($reviewerClassification -eq 'Reassigned') {
+                    # We know it was reassigned but don't know the original reviewer
+                    $origReviewer = '(Unknown original reviewer)'
+                    $reassignmentDataAvailable = $true
+                }
+
+                # Track reviewer assignment counts (original reviewer gets assignment credit)
+                $assignedReviewer = if (-not [string]::IsNullOrWhiteSpace($origReviewer) -and $origReviewer -ne '(Unknown original reviewer)') {
+                    $origReviewer
+                } else {
+                    $reviewerName
+                }
+
+                if (-not $reviewerStats.ContainsKey($assignedReviewer)) {
+                    $reviewerStats[$assignedReviewer] = @{
+                        Assigned    = 0
+                        Reassigned  = 0
+                        DelegationTimestamps = [System.Collections.Generic.List[datetime]]::new()
+                    }
+                }
+                $reviewerStats[$assignedReviewer]['Assigned']++
+
+                # Track final reviewer approval rates
+                if (-not $reviewerApprovalCounts.ContainsKey($reviewerName)) {
+                    $reviewerApprovalCounts[$reviewerName] = 0
+                    $reviewerTotalDecisions[$reviewerName] = 0
+                }
+                if ($category -ne 'Pending') {
+                    $reviewerTotalDecisions[$reviewerName]++
+                    if ($decision -eq 'Approved' -or $category -eq 'Approved') {
+                        $reviewerApprovalCounts[$reviewerName]++
+                    }
+                }
+
+                # Check if this item was reassigned
+                $isReassigned = (-not [string]::IsNullOrWhiteSpace($origReviewer)) -and ($origReviewer -ne $reviewerName)
+                if (-not $isReassigned) { continue }
+
+                $totalReassigned++
+                $campaignsWithDelegations.Add($campaignId) | Out-Null
+
+                # Credit reassignment to original reviewer
+                $reviewerStats[$assignedReviewer]['Reassigned']++
+
+                # Parse completed date for timing analysis
+                $completedDate = $null
+                if (-not [string]::IsNullOrWhiteSpace($completedDateStr)) {
+                    try {
+                        $completedDate = [datetime]::Parse($completedDateStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                    } catch { $completedDate = $null }
+                }
+
+                # Estimate delegation timestamp (use completedDate as proxy)
+                if ($null -ne $completedDate) {
+                    $reviewerStats[$assignedReviewer]['DelegationTimestamps'].Add($completedDate)
+                }
+
+                # Build reassignment chain
+                $reassignmentChain = @()
+                if ($null -ne $reassignmentChainRaw -and $reassignmentChainRaw.Count -gt 0) {
+                    $reassignmentChain = @($reassignmentChainRaw)
+                } else {
+                    $reassignmentChain = @($origReviewer, $reviewerName)
+                }
+
+                # Calculate time before deadline
+                $timeBeforeDeadline = $null
+                if ($null -ne $deadlineDate -and $null -ne $completedDate) {
+                    $timeBeforeDeadline = [math]::Round(($deadlineDate - $completedDate).TotalHours, 1)
+                }
+
+                # Detect patterns for this delegation
+                $patterns = [System.Collections.Generic.List[string]]::new()
+
+                # DeadlineDelegation: reassignment within DeadlineProximityHours of deadline
+                if ($null -ne $timeBeforeDeadline -and $timeBeforeDeadline -ge 0 -and $timeBeforeDeadline -le $DeadlineProximityHours) {
+                    $patterns.Add('DeadlineDelegation')
+                }
+
+                # CircularDelegation: item assigned back to a previous reviewer in the chain
+                if ($reassignmentChain.Count -gt 2) {
+                    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    $hasCircular = $false
+                    foreach ($r in $reassignmentChain) {
+                        if (-not $seen.Add($r)) {
+                            $hasCircular = $true
+                            break
+                        }
+                    }
+                    if ($hasCircular) { $patterns.Add('CircularDelegation') }
+                } elseif ($reassignmentChain.Count -eq 2) {
+                    # Check A->B->A pattern by looking at other delegations in same campaign
+                    # (handled in post-processing below)
+                }
+
+                # Extract item ID if available
+                $itemId = ''
+                if ($item -is [hashtable] -and $item.ContainsKey('ItemId')) {
+                    $itemId = [string]$item['ItemId']
+                } elseif ($item -is [hashtable] -and $item.ContainsKey('CertificationId')) {
+                    $itemId = [string]$item['CertificationId']
+                } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ItemId']) {
+                    $itemId = [string]$item.ItemId
+                }
+
+                $delegations.Add(@{
+                    CampaignId          = $campaignId
+                    CampaignName        = $campaignName
+                    ItemId              = $itemId
+                    IdentityName        = $identityName
+                    EntitlementName     = $entitlementName
+                    OriginalReviewer    = $origReviewer
+                    FinalReviewer       = $reviewerName
+                    ReassignmentChain   = $reassignmentChain
+                    ReassignmentCount   = [math]::Max(1, $reassignmentChain.Count - 1)
+                    TimeBeforeDeadline  = $timeBeforeDeadline
+                    FinalDecision       = $decision
+                    Patterns            = @($patterns)
+                })
+            }
+        }
+    }
+
+    # Post-processing: detect circular A->B->A across delegations within same campaign
+    $campaignDelegationPairs = @{}
+    foreach ($d in $delegations) {
+        $key = "$($d['CampaignId'])|$($d['OriginalReviewer'])|$($d['FinalReviewer'])"
+        $reverseKey = "$($d['CampaignId'])|$($d['FinalReviewer'])|$($d['OriginalReviewer'])"
+        if (-not $campaignDelegationPairs.ContainsKey($key)) {
+            $campaignDelegationPairs[$key] = $true
+        }
+        if ($campaignDelegationPairs.ContainsKey($reverseKey)) {
+            # A->B and B->A both exist -- mark as circular
+            if ($d['Patterns'] -notcontains 'CircularDelegation') {
+                $d['Patterns'] = @($d['Patterns']) + @('CircularDelegation')
+            }
+        }
+    }
+
+    # Build reviewer metrics
+    $reviewerMetrics = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($rName in ($reviewerStats.Keys | Sort-Object)) {
+        $rs = $reviewerStats[$rName]
+        $assigned   = $rs['Assigned']
+        $reassigned = $rs['Reassigned']
+        $rate = if ($assigned -gt 0) { [math]::Round(($reassigned / $assigned) * 100, 1) } else { 0.0 }
+
+        # Average hours before delegation
+        $avgHours = 0.0
+        $timestamps = $rs['DelegationTimestamps']
+        if ($timestamps.Count -gt 0 -and $null -ne $campaignCreated) {
+            # Rough estimate: average time from campaign start to delegation
+            $totalHours = 0.0
+            foreach ($ts in $timestamps) {
+                $totalHours += ($ts - $campaignCreated).TotalHours
+            }
+            $avgHours = [math]::Round($totalHours / $timestamps.Count, 1)
+            if ($avgHours -lt 0) { $avgHours = 0.0 }
+        }
+
+        $rPatterns = [System.Collections.Generic.List[string]]::new()
+
+        # HighDelegator: >30% reassignment rate
+        if ($rate -gt 30.0) {
+            $rPatterns.Add('HighDelegator')
+        }
+
+        # DelegateToApprover: reviewer consistently reassigns to someone who always approves
+        $delegateTargets = @($delegations | Where-Object { $_['OriginalReviewer'] -eq $rName } |
+            ForEach-Object { $_['FinalReviewer'] } | Sort-Object -Unique)
+        foreach ($target in $delegateTargets) {
+            if ($reviewerTotalDecisions.ContainsKey($target) -and $reviewerTotalDecisions[$target] -ge 5) {
+                $approvalRate = [math]::Round(($reviewerApprovalCounts[$target] / $reviewerTotalDecisions[$target]) * 100, 1)
+                if ($approvalRate -ge 95.0) {
+                    $rPatterns.Add('DelegateToApprover')
+                    break
+                }
+            }
+        }
+
+        $reviewerMetrics.Add(@{
+            ReviewerName             = $rName
+            ItemsAssigned            = $assigned
+            ItemsReassigned          = $reassigned
+            ReassignmentRate         = $rate
+            AvgHoursBeforeDelegation = $avgHours
+            Patterns                 = @($rPatterns)
+        })
+    }
+
+    # Pattern summary counts
+    $highDelegatorCount      = @($reviewerMetrics | Where-Object { $_['Patterns'] -contains 'HighDelegator' }).Count
+    $deadlineDelegationCount = @($delegations | Where-Object { $_['Patterns'] -contains 'DeadlineDelegation' }).Count
+    $circularDelegationCount = @($delegations | Where-Object { $_['Patterns'] -contains 'CircularDelegation' }).Count
+    $delegateToApproverCount = @($reviewerMetrics | Where-Object { $_['Patterns'] -contains 'DelegateToApprover' }).Count
+
+    $overallRate = if ($totalItemsAnalyzed -gt 0) { [math]::Round(($totalReassigned / $totalItemsAnalyzed) * 100, 1) } else { 0.0 }
+    $reviewersWhoDelegate = @($reviewerMetrics | Where-Object { $_['ItemsReassigned'] -gt 0 }).Count
+
+    $summaryResult = @{
+        TotalItemsAnalyzed       = $totalItemsAnalyzed
+        TotalReassigned          = $totalReassigned
+        OverallReassignmentRate  = $overallRate
+        CampaignsWithDelegations = $campaignsWithDelegations.Count
+        ReviewersWhoDelegate     = $reviewersWhoDelegate
+    }
+
+    if (-not $reassignmentDataAvailable -and $totalItemsAnalyzed -gt 0) {
+        $summaryResult['Note'] = 'Reassignment data unavailable in campaign audit data. Enrich audit items with OriginalReviewer or ReassignedFrom fields for delegation analysis.'
+    }
+
+    Write-SPLog -Message "Get-SPReviewerDelegations: $totalItemsAnalyzed items analyzed, $totalReassigned reassigned ($overallRate%), HighDelegators=$highDelegatorCount, DeadlineDelegations=$deadlineDelegationCount, CircularDelegations=$circularDelegationCount" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPReviewerDelegations' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Delegations     = @($delegations)
+        ReviewerMetrics = @($reviewerMetrics)
+        PatternSummary  = @{
+            HighDelegators      = $highDelegatorCount
+            DeadlineDelegations = $deadlineDelegationCount
+            CircularDelegations = $circularDelegationCount
+            DelegateToApprover  = $delegateToApproverCount
+        }
+        Summary         = $summaryResult
+    }
+}
+
+#endregion
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -4646,5 +6168,9 @@ Export-ModuleMember -Function @(
     'Get-SPStaleAccess',
     'Get-SPAccessProfileInventory',
     'Save-SPConfigurationSnapshot',
-    'Get-SPConfigurationSnapshot'
+    'Get-SPConfigurationSnapshot',
+    'Get-SPOrphanAccounts',
+    'Get-SPSourceAggregationHealth',
+    'Measure-SPIdentityDataQuality',
+    'Get-SPReviewerDelegations'
 )

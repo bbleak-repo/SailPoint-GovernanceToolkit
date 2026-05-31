@@ -139,6 +139,47 @@
 
         # SP.AuditAnalytics - Governance Policy Engine (P13-04)
         'Test-SPGovernancePolicy'
+
+        # SP.AuditQueries - Orphan Account Detector (P16-01)
+        'Get-SPOrphanAccounts'
+
+        # SP.AuditReportHtml - Orphan Account Report (P16-01)
+        'Export-SPOrphanAccountHtml'
+
+        # SP.AuditQueries - Source Aggregation Health Monitor (P16-02)
+        'Get-SPSourceAggregationHealth'
+
+        # SP.AuditReportHtml - Source Aggregation Health Report (P16-02)
+        'Export-SPSourceAggregationHealthHtml'
+
+        # SP.AuditQueries - Identity Data Quality (P16-03)
+        'Measure-SPIdentityDataQuality'
+
+        # SP.AuditReportHtml - Identity Data Quality Report (P16-03)
+        'Export-SPIdentityDataQualityHtml'
+
+        # SP.AuditAnalytics - Campaign Coverage Gap Analysis (P16-04)
+        'Get-SPCampaignCoverageGaps'
+
+        # SP.AuditReportHtml - Campaign Coverage Gap Report (P16-04)
+        'Export-SPCampaignCoverageGapHtml'
+
+        # SP.AuditAnalytics - Campaign Completion Forecast (P16-05)
+        'Get-SPCampaignCompletionForecast'
+
+        # SP.AuditReportHtml - Campaign Completion Forecast Report (P16-05)
+        'Export-SPCampaignCompletionForecastHtml'
+
+        # SP.AuditOperations - Governance Metrics Time Series (P16-06)
+        'Save-SPGovernanceMetrics'
+        'Get-SPGovernanceMetrics'
+        'Get-SPGovernanceMetricsTrend'
+
+        # SP.AuditQueries - Reviewer Delegation Audit Trail (P16-07)
+        'Get-SPReviewerDelegations'
+
+        # SP.AuditReportHtml - Reviewer Delegation Report (P16-07)
+        'Export-SPReviewerDelegationHtml'
     )
 
     # Do not export variables or aliases from nested modules

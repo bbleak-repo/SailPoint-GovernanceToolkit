@@ -8286,6 +8286,1844 @@ $($dimensionSections -join "`n")
 
 #endregion
 
+#region Orphan Account Report (P16-01)
+
+function Export-SPOrphanAccountHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPOrphanAccounts output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with orphan accounts grouped by
+        OrphanType and source. Includes summary card with orphan rates per source,
+        badges for orphan type classification, and recommendation sections.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER OrphanData
+        Hashtable output from Get-SPOrphanAccounts.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $orphans = Get-SPOrphanAccounts -SourceIds @('src-ad-001')
+        $path = Export-SPOrphanAccountHtml -OrphanData $orphans -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrphanData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "OrphanAccounts-${timestamp}.html"
+
+    $summary      = $OrphanData['Summary']
+    $orphanItems  = @($OrphanData['OrphanAccounts'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Scanned<br/><span style="font-size:22px;">$($summary['TotalAccountsScanned'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Orphans<br/><span style="font-size:22px;">$($summary['TotalOrphans'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Uncorrelated<br/><span style="font-size:22px;">$($summary['Uncorrelated'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Terminated Owner<br/><span style="font-size:22px;">$($summary['TerminatedOwner'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Dangling Ref<br/><span style="font-size:22px;">$($summary['DanglingReference'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+With Entitlements<br/><span style="font-size:22px;">$($summary['OrphansWithEntitlements'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source orphan rate table ---
+    $perSource = $summary['PerSource']
+    $sourceRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $perSource -and $perSource.Count -gt 0) {
+        $sIdx = 0
+        foreach ($sName in ($perSource.Keys | Sort-Object)) {
+            $sIdx++
+            $sData = $perSource[$sName]
+            $cells = @(
+                (ConvertTo-SafeHtml $sName),
+                [string]$sData['Total'],
+                [string]$sData['Orphans'],
+                "$($sData['OrphanPct'])%"
+            )
+            $sourceRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sIdx % 2) -eq 0)))
+        }
+    }
+
+    $sourceTableHtml = ''
+    if ($sourceRows.Count -gt 0) {
+        $sHeader = Build-HtmlTableHeader -Headers @('Source', 'Total Accounts', 'Orphans', 'Orphan Rate')
+        $sourceTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Orphan Rate by Source</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${sHeader}
+<tbody>
+$($sourceRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Main orphan account table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Account Name', 'Source', 'Native Identity', 'Orphan Type',
+        'Disabled', 'Entitlements', 'Service Acct', 'Created'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    # Sort: Uncorrelated first, then TerminatedOwner, then DanglingReference
+    $sortOrder = @{ 'Uncorrelated' = 1; 'TerminatedOwner' = 2; 'DanglingReference' = 3 }
+    $sortedOrphans = $orphanItems | Sort-Object { $sortOrder[$_['OrphanType']] }
+
+    foreach ($item in $sortedOrphans) {
+        $rowIdx++
+
+        # OrphanType badge
+        $typeColor = switch ($item['OrphanType']) {
+            'Uncorrelated'     { 'color:#fff; background:#c0392b;' }
+            'TerminatedOwner'  { 'color:#fff; background:#FF8800;' }
+            'DanglingReference' { 'color:#fff; background:#f39c12;' }
+            default             { 'color:#fff; background:#777777;' }
+        }
+        $typeBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $typeColor"">$($item['OrphanType'])</span>"
+
+        # Entitlement count with highlight if > 0
+        $entDisplay = if ($item['HasEntitlements']) {
+            "<span style=""color:#c0392b; font-weight:bold;"">$($item['EntitlementCount'])</span>"
+        } else { '0' }
+
+        $disabledDisplay = if ($item['Disabled']) { 'Yes' } else { 'No' }
+        $svcDisplay = if ($item['IsServiceAccount']) {
+            '<span style="color:#336699; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        $createdDisplay = if (-not [string]::IsNullOrWhiteSpace($item['Created'])) {
+            Format-HtmlDate -DateString $item['Created']
+        } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $item['AccountName']),
+            (ConvertTo-SafeHtml $item['SourceName']),
+            (ConvertTo-SafeHtml $item['NativeIdentity']),
+            $typeBadge,
+            $disabledDisplay,
+            $entDisplay,
+            $svcDisplay,
+            $createdDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail sections grouped by OrphanType ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    $sourceGroups = @{}
+    foreach ($item in $orphanItems) {
+        $sName = $item['SourceName']
+        if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $item['SourceId'] }
+        if (-not $sourceGroups.ContainsKey($sName)) {
+            $sourceGroups[$sName] = [System.Collections.Generic.List[hashtable]]::new()
+        }
+        $sourceGroups[$sName].Add($item)
+    }
+
+    foreach ($sName in ($sourceGroups.Keys | Sort-Object)) {
+        $groupItems = $sourceGroups[$sName]
+        $sectionHtml = "<h2 style=""font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;"">$(ConvertTo-SafeHtml $sName) ($($groupItems.Count) orphans)</h2>"
+
+        foreach ($item in $groupItems) {
+            $acctHtml = ConvertTo-SafeHtml $item['AccountName']
+            $typeLabel = $item['OrphanType']
+            $borderColor = switch ($typeLabel) {
+                'Uncorrelated'      { '#c0392b' }
+                'TerminatedOwner'   { '#FF8800' }
+                'DanglingReference' { '#f39c12' }
+                default             { '#777777' }
+            }
+
+            $entTag = if ($item['HasEntitlements']) {
+                " <span style=""color:#c0392b; font-weight:bold;"">[$($item['EntitlementCount']) entitlements]</span>"
+            } else { '' }
+
+            $svcTag = if ($item['IsServiceAccount']) { ' <span style="color:#336699;">[Service]</span>' } else { '' }
+
+            $sectionHtml += @"
+<div style="margin-bottom:8px; padding:6px 12px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>${acctHtml}</strong>${entTag}${svcTag} - <em>${typeLabel}</em><br/>
+<span style="font-size:12px; color:#666666;">
+Native: $(ConvertTo-SafeHtml $item['NativeIdentity']) | Disabled: $($item['Disabled']) | Created: $(if ($item['Created']) { Format-HtmlDate -DateString $item['Created'] } else { '-' })
+</span>
+</div>
+"@
+        }
+
+        $sourceSections.Add($sectionHtml)
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Uncorrelated Accounts</strong><br/>
+Review correlation rules for each source. These accounts exist outside identity governance scope.
+Consider creating manual correlations or disabling accounts that cannot be correlated.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Terminated Owner Accounts</strong><br/>
+These accounts belong to terminated employees and should have been deprovisioned. Review lifecycle
+rules and provisioning policies to ensure termination triggers account removal or disabling.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Dangling References</strong><br/>
+These accounts reference an identity that no longer exists. This may indicate data corruption or
+incomplete identity removal. Investigate the source system and consider manual cleanup.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Orphan Account Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Orphan Account Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${sourceTableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Orphan Accounts</h2>
+${tableHtml}
+
+$($sourceSections -join "`n")
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Orphan account HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrphanAccountHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P16-02: Source Aggregation Health Report
+
+function Export-SPSourceAggregationHealthHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPSourceAggregationHealth output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source health cards,
+        aggregation details, data freshness indicators, and account trend
+        arrows. Uses inline CSS only (no flexbox/grid) for Word paste
+        compatibility.
+    .PARAMETER HealthData
+        Hashtable output from Get-SPSourceAggregationHealth.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $health = Get-SPSourceAggregationHealth -MaxAcceptableStalenessHours 48
+        $path = Export-SPSourceAggregationHealthHtml -HealthData $health -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$HealthData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "SourceAggregationHealth-${timestamp}.html"
+
+    $summary = $HealthData['Summary']
+    $sources = @($HealthData['Sources'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Sources<br/><span style="font-size:22px;">$($summary['TotalSources'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Healthy<br/><span style="font-size:22px;">$($summary['Healthy'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Warning<br/><span style="font-size:22px;">$($summary['Warning'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Critical<br/><span style="font-size:22px;">$($summary['Critical'])</span>
+</td>
+<td style="padding:12px 16px; background:#95a5a6; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Unknown<br/><span style="font-size:22px;">$($summary['Unknown'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Avg Freshness<br/><span style="font-size:22px;">$($summary['AvgFreshnessHours'])h</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Main source health table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Source', 'Type', 'Health', 'Last Aggregation', 'Status',
+        'Freshness', 'Failures', 'Avg Duration', 'Accounts', 'Trend'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    # Sort: Critical first, then Warning, Healthy, Unknown
+    $statusOrder = @{ 'Critical' = 1; 'Warning' = 2; 'Healthy' = 3; 'Unknown' = 4 }
+    $sortedSources = $sources | Sort-Object { $statusOrder[$_['HealthStatus']] }
+
+    foreach ($src in $sortedSources) {
+        $rowIdx++
+
+        # Health status badge
+        $statusStyle = switch ($src['HealthStatus']) {
+            'Healthy'  { 'color:#fff; background:#27ae60;' }
+            'Warning'  { 'color:#fff; background:#f39c12;' }
+            'Critical' { 'color:#fff; background:#c0392b;' }
+            'Unknown'  { 'color:#fff; background:#95a5a6;' }
+            default    { 'color:#fff; background:#777777;' }
+        }
+        $statusBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $statusStyle"">$($src['HealthStatus'])</span>"
+
+        # Last aggregation info
+        $lastAggDisplay = '-'
+        $lastStatusDisplay = '-'
+        $accountDisplay = '-'
+
+        $lastAgg = $src['LastAggregation']
+        if ($null -ne $lastAgg) {
+            if (-not [string]::IsNullOrWhiteSpace($lastAgg['Completed'])) {
+                $lastAggDisplay = Format-HtmlDate -DateString $lastAgg['Completed']
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($lastAgg['Started'])) {
+                $lastAggDisplay = Format-HtmlDate -DateString $lastAgg['Started']
+            }
+            $lastStatusDisplay = $lastAgg['Status']
+            $accountDisplay = [string]$lastAgg['TotalAccounts']
+
+            # Color the aggregation status
+            $aggStatusStyle = switch ($lastAgg['Status']) {
+                'SUCCESS'    { 'color:#27ae60; font-weight:bold;' }
+                'ERROR'      { 'color:#c0392b; font-weight:bold;' }
+                'TERMINATED' { 'color:#e67e22; font-weight:bold;' }
+                default      { '' }
+            }
+            if ($aggStatusStyle) {
+                $lastStatusDisplay = "<span style=""$aggStatusStyle"">$($lastAgg['Status'])</span>"
+            }
+        }
+
+        # Freshness display
+        $freshnessDisplay = '-'
+        if ($null -ne $src['DataFreshnessHours']) {
+            $fh = $src['DataFreshnessHours']
+            $freshnessColor = if ($src['IsStale']) { 'color:#c0392b; font-weight:bold;' } else { 'color:#27ae60;' }
+            $freshnessDisplay = "<span style=""$freshnessColor"">${fh}h</span>"
+        }
+
+        # Failures
+        $failDisplay = [string]$src['ConsecutiveFailures']
+        if ($src['ConsecutiveFailures'] -gt 0) {
+            $failDisplay = "<span style=""color:#c0392b; font-weight:bold;"">$($src['ConsecutiveFailures'])</span>"
+        }
+
+        # Avg duration
+        $avgDurDisplay = if ($null -ne $src['AvgDurationMinutes']) { "$($src['AvgDurationMinutes']) min" } else { '-' }
+
+        # Account trend arrow
+        $trendArrow = switch ($src['AccountTrend']) {
+            'Increasing' { '<span style="color:#27ae60; font-weight:bold;">&#9650;</span>' }
+            'Decreasing' { '<span style="color:#c0392b; font-weight:bold;">&#9660;</span>' }
+            'Stable'     { '<span style="color:#888888;">&#9644;</span>' }
+            default      { '-' }
+        }
+        $trendDisplay = "$trendArrow $(ConvertTo-SafeHtml $src['AccountTrendDetail'])"
+
+        $cells = @(
+            (ConvertTo-SafeHtml $src['SourceName']),
+            (ConvertTo-SafeHtml $src['SourceType']),
+            $statusBadge,
+            $lastAggDisplay,
+            $lastStatusDisplay,
+            $freshnessDisplay,
+            $failDisplay,
+            $avgDurDisplay,
+            $accountDisplay,
+            $trendDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail cards ---
+    $detailCards = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($src in $sortedSources) {
+        $borderColor = switch ($src['HealthStatus']) {
+            'Healthy'  { '#27ae60' }
+            'Warning'  { '#f39c12' }
+            'Critical' { '#c0392b' }
+            'Unknown'  { '#95a5a6' }
+            default    { '#777777' }
+        }
+
+        $lastAgg = $src['LastAggregation']
+        $aggDetail = 'No aggregation history'
+        if ($null -ne $lastAgg) {
+            $aggDetail = "Status: $($lastAgg['Status']) | Accounts: $($lastAgg['TotalAccounts']) | Duration: $($lastAgg['DurationMinutes']) min | Errors: $($lastAgg['ErrorCount'])"
+        }
+
+        $freshnessDetail = if ($null -ne $src['DataFreshnessHours']) { "$($src['DataFreshnessHours']) hours since last successful sync" } else { 'No successful aggregation in recent history' }
+        $staleTag = if ($src['IsStale']) { ' <span style="color:#c0392b; font-weight:bold;">[STALE]</span>' } else { '' }
+
+        $cardHtml = @"
+<div style="margin-bottom:12px; padding:10px 14px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>$(ConvertTo-SafeHtml $src['SourceName'])</strong> ($(ConvertTo-SafeHtml $src['SourceType'])) - <em>$($src['HealthStatus'])</em>${staleTag}<br/>
+<span style="font-size:12px; color:#666666;">
+$aggDetail<br/>
+Freshness: $freshnessDetail | Consecutive Failures: $($src['ConsecutiveFailures']) | Trend: $($src['AccountTrend'])
+</span>
+</div>
+"@
+        $detailCards.Add($cardHtml)
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Critical Sources</strong><br/>
+Sources with 2+ consecutive aggregation failures require immediate attention. Check connector
+credentials, network connectivity, and source system availability. Review error logs in ISC
+for specific failure reasons.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Warning Sources</strong><br/>
+Sources with stale data or single failures should be monitored. If a source has a significant
+account count decrease (>10%), verify that accounts were intentionally removed and not lost
+due to a partial aggregation.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #95a5a6; background:#f5f5f5; vertical-align:top;">
+<strong>Unknown Sources</strong><br/>
+Sources with no aggregation history may be newly added or misconfigured. Trigger a manual
+test aggregation to verify connectivity and data flow.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Source Aggregation Health Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Source Aggregation Health Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Health Overview</h2>
+${tableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Source Details</h2>
+$($detailCards -join "`n")
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Source aggregation health HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceAggregationHealthHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P16-03: Identity Data Quality Report
+
+function Export-SPIdentityDataQualityHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Measure-SPIdentityDataQuality output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with attribute completeness bars,
+        quality grade distribution, per-identity issue table, and quality issues
+        callout section. Uses inline CSS only for Word paste compatibility.
+    .PARAMETER QualityData
+        Hashtable output from Measure-SPIdentityDataQuality.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $quality = Measure-SPIdentityDataQuality -Limit 500 -ActiveOnly
+        $path = Export-SPIdentityDataQualityHtml -QualityData $quality -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$QualityData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "IdentityDataQuality-${timestamp}.html"
+
+    $summary     = $QualityData['Summary']
+    $attrComp    = $QualityData['AttributeCompleteness']
+    $issues      = $QualityData['QualityIssues']
+    $identities  = @($QualityData['Identities'])
+
+    # Grade color
+    $gradeColor = switch ($summary['OverallQualityGrade']) {
+        'A' { '#339933' }
+        'B' { '#336699' }
+        'C' { '#FF8800' }
+        'D' { '#CC3333' }
+        'F' { '#c0392b' }
+        default { '#777777' }
+    }
+
+    # --- Summary card ---
+    $gradeDist = $summary['QualityGradeDistribution']
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:${gradeColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Overall Grade<br/><span style="font-size:28px;">$($summary['OverallQualityGrade'])</span><br/><span style="font-size:14px;">$($summary['OverallQualityScore'])</span>
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Identities Scanned<br/><span style="font-size:22px;">$($summary['TotalIdentitiesScanned'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+With Issues<br/><span style="font-size:22px;">$($summary['IdentitiesWithIssues'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Worst Attribute<br/><span style="font-size:14px;">$($summary['WorstAttribute'])<br/>$($summary['WorstAttributePct'])%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Grade distribution ---
+    $gradeDistHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Quality Grade Distribution</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+$(Build-HtmlTableHeader -Headers @('Grade', 'Range', 'Count'))
+<tbody>
+$(Build-HtmlTableRow -Cells @('<span style="color:#339933; font-weight:bold;">A</span>', '90-100 (Excellent)', [string]$gradeDist['A']) -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="color:#336699; font-weight:bold;">B</span>', '80-89 (Good)', [string]$gradeDist['B']) -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="color:#FF8800; font-weight:bold;">C</span>', '70-79 (Acceptable)', [string]$gradeDist['C']) -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="color:#CC3333; font-weight:bold;">D</span>', '60-69 (Poor)', [string]$gradeDist['D']) -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="color:#c0392b; font-weight:bold;">F</span>', 'Below 60 (Critical)', [string]$gradeDist['F']) -IsAlternate $false)
+</tbody>
+</table>
+"@
+
+    # --- Attribute completeness bars ---
+    $attrBarRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $attrComp -and $attrComp.Count -gt 0) {
+        $aIdx = 0
+        foreach ($attr in ($attrComp.Keys | Sort-Object)) {
+            $aIdx++
+            $aData = $attrComp[$attr]
+            $pct = $aData['Pct']
+            $barColor = if ($pct -ge 90) { '#339933' } elseif ($pct -ge 70) { '#FF8800' } else { '#CC3333' }
+            $barHtml = "<div style=""width:200px; background:#e0e0e0; border-radius:3px; display:inline-block; vertical-align:middle;""><div style=""width:$([math]::Min(100, $pct))%; background:${barColor}; height:16px; border-radius:3px;""></div></div> <span style=""font-weight:bold;"">$pct%</span>"
+            $cells = @(
+                (ConvertTo-SafeHtml $attr),
+                [string]$aData['Present'],
+                [string]$aData['Missing'],
+                $barHtml
+            )
+            $attrBarRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($aIdx % 2) -eq 0)))
+        }
+    }
+
+    $attrHeader = Build-HtmlTableHeader -Headers @('Attribute', 'Present', 'Missing', 'Completeness')
+    $attrTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Attribute Completeness</h2>
+<table style="width:80%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${attrHeader}
+<tbody>
+$($attrBarRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Quality issues callout ---
+    $issuesHtml = ''
+    $mgrSelfRefs = @($issues['ManagerSelfReference'])
+    $dupEmails = @($issues['DuplicateEmails'])
+    $staleProfs = @($issues['StaleProfiles'])
+
+    $issueItems = [System.Collections.Generic.List[string]]::new()
+
+    if ($mgrSelfRefs.Count -gt 0) {
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #CC3333; background:#fdf2f2; vertical-align:top;">
+<strong>Manager Self-Reference ($($mgrSelfRefs.Count) identities)</strong><br/>
+These identities list themselves as their own manager. This prevents proper certification routing.
+Identities: $(($mgrSelfRefs | Select-Object -First 10) -join ', ')$(if ($mgrSelfRefs.Count -gt 10) { " ... and $($mgrSelfRefs.Count - 10) more" })
+</td>
+</tr>
+"@)
+    }
+
+    if ($dupEmails.Count -gt 0) {
+        $totalDupIdentities = 0
+        foreach ($de in $dupEmails) { $totalDupIdentities += $de['IdentityIds'].Count }
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Duplicate Email Addresses ($($dupEmails.Count) shared emails, $totalDupIdentities identities)</strong><br/>
+Multiple identities share the same email address. This can cause notification delivery issues
+and may indicate duplicate identity records.
+$(($dupEmails | Select-Object -First 5 | ForEach-Object { "$($_['Email']) ($($($_['IdentityIds']).Count) identities)" }) -join '; ')$(if ($dupEmails.Count -gt 5) { " ... and $($dupEmails.Count - 5) more" })
+</td>
+</tr>
+"@)
+    }
+
+    if ($staleProfs.Count -gt 0) {
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Stale Profiles ($($staleProfs.Count) identities)</strong><br/>
+These identity profiles have not been modified in over 365 days. This may indicate the identity
+source is not aggregating attribute updates. Verify source aggregation and attribute mapping.
+</td>
+</tr>
+"@)
+    }
+
+    if ($issueItems.Count -gt 0) {
+        $issuesHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Quality Issues</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+$($issueItems -join "`n")
+</table>
+"@
+    }
+
+    # --- Per-identity issue table (only identities with issues) ---
+    $identWithIssues = @($identities | Where-Object { $_['Issues'].Count -gt 0 })
+    $identTableHtml = ''
+    if ($identWithIssues.Count -gt 0) {
+        $idHeader = Build-HtmlTableHeader -Headers @('Identity', 'Lifecycle', 'Score', 'Missing Attributes', 'Issues')
+        $idRows = [System.Collections.Generic.List[string]]::new()
+        $rIdx = 0
+
+        # Sort by score ascending (worst first)
+        $sortedIdent = $identWithIssues | Sort-Object { $_['QualityScore'] }
+
+        foreach ($ident in $sortedIdent) {
+            $rIdx++
+            $scoreColor = if ($ident['QualityScore'] -ge 90) { '#339933' }
+                          elseif ($ident['QualityScore'] -ge 80) { '#336699' }
+                          elseif ($ident['QualityScore'] -ge 70) { '#FF8800' }
+                          elseif ($ident['QualityScore'] -ge 60) { '#CC3333' }
+                          else { '#c0392b' }
+            $scoreBadge = "<span style=""color:${scoreColor}; font-weight:bold;"">$($ident['QualityScore'])</span>"
+            $missingDisp = if ($ident['MissingAttributes'].Count -gt 0) { ($ident['MissingAttributes'] -join ', ') } else { '-' }
+            $issueDisp = if ($ident['Issues'].Count -gt 0) { ($ident['Issues'] -join ', ') } else { '-' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $ident['IdentityName']),
+                (ConvertTo-SafeHtml $ident['LifecycleState']),
+                $scoreBadge,
+                (ConvertTo-SafeHtml $missingDisp),
+                (ConvertTo-SafeHtml $issueDisp)
+            )
+            $idRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rIdx % 2) -eq 0)))
+        }
+
+        $identTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Identities with Issues ($($identWithIssues.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${idHeader}
+<tbody>
+$($idRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #CC3333; background:#fdf2f2; vertical-align:top;">
+<strong>Missing Attributes</strong><br/>
+Review source attribute mappings and ensure all required fields are populated in source systems.
+Focus on the worst-performing attribute first to maximize governance impact.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Manager Self-References</strong><br/>
+Correct manager assignments in the authoritative source. Self-referencing managers cannot
+properly route certifications and create governance blind spots.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Stale Profiles</strong><br/>
+Investigate source aggregation schedules for identities not updated in over 365 days.
+Consider if these identities should be marked inactive or if the source is not syncing.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #336699; background:#f0f4f8; vertical-align:top;">
+<strong>Duplicate Emails</strong><br/>
+Investigate identities sharing email addresses. This may indicate duplicate identity records
+that should be merged or email attributes that need correction in the source system.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Data Quality Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Data Quality Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${gradeDistHtml}
+
+${attrTableHtml}
+
+${issuesHtml}
+
+${identTableHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Identity data quality HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityDataQualityHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P16-04: Campaign Coverage Gap Report
+
+function Export-SPCampaignCoverageGapHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPCampaignCoverageGaps output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source coverage bars,
+        gap detail tables sorted by severity, privileged NeverReviewed highlights,
+        uncovered access profiles section, and recommendation guidance.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER GapData
+        Hashtable output from Get-SPCampaignCoverageGaps.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $gaps = Get-SPCampaignCoverageGaps -CampaignAudits $audits -EntitlementInventory $inv.Data
+        $path = Export-SPCampaignCoverageGapHtml -GapData $gaps -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$GapData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignCoverageGaps-${timestamp}.html"
+
+    $summary   = $GapData['Summary']
+    $gapItems  = @($GapData['Gaps'])
+    $uncoveredAPs = @($GapData['UncoveredAccessProfiles'])
+
+    # --- Summary card ---
+    $covPct = if ($null -ne $summary['CoveragePct']) { $summary['CoveragePct'] } else { 0 }
+    $covColor = if ($covPct -ge 90) { '#27ae60' } elseif ($covPct -ge 70) { '#f39c12' } else { '#c0392b' }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Entitlements<br/><span style="font-size:22px;">$($summary['TotalEntitlementsInInventory'])</span>
+</td>
+<td style="padding:12px 16px; background:${covColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Coverage<br/><span style="font-size:22px;">${covPct}%</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Fully Covered<br/><span style="font-size:22px;">$($summary['FullyCovered'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Partially Reviewed<br/><span style="font-size:22px;">$($summary['PartiallyReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Never Reviewed<br/><span style="font-size:22px;">$($summary['NeverReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Privileged Gaps<br/><span style="font-size:22px;">$($summary['PrivilegedNeverReviewed'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source coverage bar table ---
+    $perSource = $summary['PerSource']
+    $sourceBarRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $perSource -and $perSource.Count -gt 0) {
+        $sIdx = 0
+        foreach ($sName in ($perSource.Keys | Sort-Object)) {
+            $sIdx++
+            $sData = $perSource[$sName]
+            $sPct = if ($null -ne $sData['CoveragePct']) { $sData['CoveragePct'] } else { 0 }
+            $sBarColor = if ($sPct -ge 90) { '#27ae60' } elseif ($sPct -ge 70) { '#f39c12' } else { '#c0392b' }
+
+            $coverageBar = @"
+<div style="background:#e0e0e0; width:100%; height:18px; border-radius:3px; overflow:hidden;">
+<div style="background:${sBarColor}; width:${sPct}%; height:18px; min-width:1px;"></div>
+</div>
+"@
+
+            $cells = @(
+                (ConvertTo-SafeHtml $sName),
+                [string]$sData['Total'],
+                [string]$sData['Covered'],
+                [string]$sData['Gaps'],
+                "${sPct}%",
+                $coverageBar
+            )
+            $sourceBarRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sIdx % 2) -eq 0)))
+        }
+    }
+
+    $sourceBarHtml = ''
+    if ($sourceBarRows.Count -gt 0) {
+        $sHeader = Build-HtmlTableHeader -Headers @('Source', 'Total', 'Covered', 'Gaps', 'Coverage %', 'Coverage Bar')
+        $sourceBarHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage by Source</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${sHeader}
+<tbody>
+$($sourceBarRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Privileged NeverReviewed highlight box ---
+    $privGapHtml = ''
+    $privGaps = @($gapItems | Where-Object { $_['Severity'] -eq 'Critical' })
+    if ($privGaps.Count -gt 0) {
+        $privRows = [System.Collections.Generic.List[string]]::new()
+        $pIdx = 0
+        foreach ($pg in $privGaps) {
+            $pIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $pg['EntitlementName']),
+                (ConvertTo-SafeHtml $pg['SourceName']),
+                (ConvertTo-SafeHtml $pg['Recommendation'])
+            )
+            $privRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($pIdx % 2) -eq 0)))
+        }
+        $privHeader = Build-HtmlTableHeader -Headers @('Entitlement', 'Source', 'Recommendation')
+        $privGapHtml = @"
+<div style="border:2px solid #c0392b; background:#fdf2f2; padding:12px; margin-bottom:20px;">
+<h2 style="font-size:16px; color:#c0392b; margin-top:0; margin-bottom:8px;">Privileged Entitlements Never Reviewed ($($privGaps.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px;">
+${privHeader}
+<tbody>
+$($privRows -join "`n")
+</tbody>
+</table>
+</div>
+"@
+    }
+
+    # --- Gap detail table ---
+    $gapDetailHtml = ''
+    if ($gapItems.Count -gt 0) {
+        $gapHeader = Build-HtmlTableHeader -Headers @('Entitlement', 'Source', 'Privileged', 'Coverage Status', 'Severity', 'Recommendation')
+        $gapRows = [System.Collections.Generic.List[string]]::new()
+        $gIdx = 0
+        foreach ($gap in $gapItems) {
+            $gIdx++
+
+            # Severity badge
+            $sevColor = switch ($gap['Severity']) {
+                'Critical' { 'color:#fff; background:#c0392b;' }
+                'High'     { 'color:#fff; background:#e67e22;' }
+                'Medium'   { 'color:#fff; background:#f39c12;' }
+                default    { 'color:#fff; background:#777777;' }
+            }
+            $sevBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $sevColor"">$($gap['Severity'])</span>"
+
+            # Coverage status badge
+            $csColor = switch ($gap['CoverageStatus']) {
+                'NeverReviewed'     { 'color:#fff; background:#c0392b;' }
+                'PartiallyReviewed' { 'color:#fff; background:#f39c12;' }
+                default             { 'color:#fff; background:#777777;' }
+            }
+            $csBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $csColor"">$($gap['CoverageStatus'])</span>"
+
+            $privDisplay = if ($gap['Privileged']) {
+                '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+            } else { 'No' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $gap['EntitlementName']),
+                (ConvertTo-SafeHtml $gap['SourceName']),
+                $privDisplay,
+                $csBadge,
+                $sevBadge,
+                (ConvertTo-SafeHtml $gap['Recommendation'])
+            )
+            $gapRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($gIdx % 2) -eq 0)))
+        }
+        $gapDetailHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage Gaps ($($gapItems.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${gapHeader}
+<tbody>
+$($gapRows -join "`n")
+</tbody>
+</table>
+"@
+    } else {
+        $gapDetailHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage Gaps</h2>
+<p style="font-size:13px; color:#27ae60; font-weight:bold;">No coverage gaps detected. All entitlements have been reviewed.</p>
+"@
+    }
+
+    # --- Uncovered access profiles ---
+    $apHtml = ''
+    if ($uncoveredAPs.Count -gt 0) {
+        $apHeader = Build-HtmlTableHeader -Headers @('Access Profile', 'Source', 'Entitlement Count', 'Status')
+        $apRows = [System.Collections.Generic.List[string]]::new()
+        $aIdx = 0
+        foreach ($ap in $uncoveredAPs) {
+            $aIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $ap['AccessProfileName']),
+                (ConvertTo-SafeHtml $ap['SourceName']),
+                [string]$ap['EntitlementCount'],
+                '<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#c0392b;">All Never Reviewed</span>'
+            )
+            $apRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($aIdx % 2) -eq 0)))
+        }
+        $apHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Uncovered Access Profiles ($($uncoveredAPs.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${apHeader}
+<tbody>
+$($apRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Never Reviewed Entitlements</strong><br/>
+These entitlements exist in the inventory but have never appeared in any certification campaign.
+Review campaign scope filters to ensure these entitlements are included. Create targeted campaigns
+for sources with low coverage.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #8e44ad; background:#f9f2fd; vertical-align:top;">
+<strong>Privileged Entitlements</strong><br/>
+Privileged entitlements without review history represent the highest governance risk. Prioritize
+inclusion in the next certification cycle. Consider creating a dedicated privileged access campaign.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Uncovered Access Profiles</strong><br/>
+Access profiles where all bundled entitlements are unreviewed indicate entire access bundles
+outside governance scope. Review access profile assignments and include in role-based campaigns.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Campaign Coverage Gap Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Campaign Coverage Gap Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${sourceBarHtml}
+
+${privGapHtml}
+
+${gapDetailHtml}
+
+${apHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign coverage gap HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCoverageGapHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P16-05: Campaign Completion Forecast HTML Report
+
+function Export-SPCampaignCompletionForecastHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPCampaignCompletionForecast output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-campaign forecast cards,
+        deadline countdown indicators, velocity comparison, bottleneck reviewer
+        tables, and summary distribution. Uses inline CSS only for Word compatibility.
+    .PARAMETER ForecastData
+        Hashtable output from Get-SPCampaignCompletionForecast.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $forecast = Get-SPCampaignCompletionForecast -CampaignAudits $audits
+        $path = Export-SPCampaignCompletionForecastHtml -ForecastData $forecast -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$ForecastData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignCompletionForecast-${timestamp}.html"
+
+    $summary   = $ForecastData['Summary']
+    $forecasts = @($ForecastData['Forecasts'])
+
+    # --- Summary card ---
+    $activeCount = if ($null -ne $summary['ActiveCampaigns']) { $summary['ActiveCampaigns'] } else { 0 }
+    $onTrack     = if ($null -ne $summary['OnTrack'])         { $summary['OnTrack'] }         else { 0 }
+    $atRisk      = if ($null -ne $summary['AtRisk'])          { $summary['AtRisk'] }          else { 0 }
+    $willMiss    = if ($null -ne $summary['WillMiss'])        { $summary['WillMiss'] }        else { 0 }
+    $avgPct      = if ($null -ne $summary['AvgCompletionPct']) { $summary['AvgCompletionPct'] } else { 0 }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Active Campaigns<br/><span style="font-size:22px;">${activeCount}</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+On Track<br/><span style="font-size:22px;">${onTrack}</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+At Risk<br/><span style="font-size:22px;">${atRisk}</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Will Miss<br/><span style="font-size:22px;">${willMiss}</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Avg Completion<br/><span style="font-size:22px;">${avgPct}%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-campaign forecast cards ---
+    $campaignSections = [System.Collections.Generic.List[string]]::new()
+
+    $fIdx = 0
+    foreach ($fc in $forecasts) {
+        $fIdx++
+        $fcName     = if ($null -ne $fc['CampaignName'])   { $fc['CampaignName'] }   else { 'Unknown' }
+        $fcStatus   = if ($null -ne $fc['ForecastStatus']) { $fc['ForecastStatus'] } else { 'Unknown' }
+        $fcTotal    = if ($null -ne $fc['TotalItems'])     { $fc['TotalItems'] }     else { 0 }
+        $fcDecided  = if ($null -ne $fc['DecidedItems'])   { $fc['DecidedItems'] }   else { 0 }
+        $fcRemain   = if ($null -ne $fc['RemainingItems']) { $fc['RemainingItems'] } else { 0 }
+        $fcPct      = if ($null -ne $fc['CompletionPct'])  { $fc['CompletionPct'] }  else { 0 }
+        $fcOverall  = if ($null -ne $fc['OverallVelocity']) { $fc['OverallVelocity'] } else { 0 }
+        $fcRecent   = if ($null -ne $fc['RecentVelocity']) { $fc['RecentVelocity'] } else { 0 }
+        $fcPeak     = if ($null -ne $fc['PeakVelocity'])   { $fc['PeakVelocity'] }   else { 0 }
+        $fcProjDate = if ($null -ne $fc['ProjectedCompletionDate']) { $fc['ProjectedCompletionDate'] } else { 'Unknown' }
+        $fcDeadline = if ($null -ne $fc['DeadlineDate'])   { $fc['DeadlineDate'] }   else { $null }
+        $fcSlack    = if ($null -ne $fc['SlackHours'])     { $fc['SlackHours'] }     else { 0 }
+        $fcConf     = if ($null -ne $fc['Confidence'])     { $fc['Confidence'] }     else { 'Low' }
+        $fcProjHrs  = if ($null -ne $fc['ProjectedHoursToComplete']) { $fc['ProjectedHoursToComplete'] } else { 0 }
+
+        # Status color
+        $statusColor = switch ($fcStatus) {
+            'OnTrack'  { '#27ae60' }
+            'AtRisk'   { '#f39c12' }
+            'WillMiss' { '#c0392b' }
+            default    { '#777777' }
+        }
+        $statusLabel = switch ($fcStatus) {
+            'OnTrack'  { 'ON TRACK' }
+            'AtRisk'   { 'AT RISK' }
+            'WillMiss' { 'WILL MISS' }
+            default    { 'UNKNOWN' }
+        }
+
+        # Progress bar
+        $barColor = if ($fcPct -ge 80) { '#27ae60' } elseif ($fcPct -ge 50) { '#f39c12' } else { '#c0392b' }
+        $progressBar = @"
+<div style="background:#e0e0e0; width:100%; height:20px; border-radius:3px; overflow:hidden; margin:4px 0;">
+<div style="background:${barColor}; width:${fcPct}%; height:20px; min-width:1px;"></div>
+</div>
+<span style="font-size:12px; color:#666666;">${fcDecided} / ${fcTotal} decisions (${fcPct}%)</span>
+"@
+
+        # Deadline display
+        $deadlineDisplay = if ($null -ne $fcDeadline -and $fcDeadline -ne '') {
+            $slackDisplay = if ($fcSlack -ge 0) { "+${fcSlack}h slack" } else { "${fcSlack}h behind" }
+            $slackColor = if ($fcSlack -ge 24) { '#27ae60' } elseif ($fcSlack -ge 0) { '#f39c12' } else { '#c0392b' }
+            "Deadline: $(ConvertTo-SafeHtml $fcDeadline)<br/><span style=""color:${slackColor}; font-weight:bold;"">${slackDisplay}</span>"
+        } else {
+            '<span style="color:#888888;">No deadline set</span>'
+        }
+
+        # Confidence badge
+        $confColor = switch ($fcConf) {
+            'High'   { 'color:#fff; background:#27ae60;' }
+            'Medium' { 'color:#fff; background:#f39c12;' }
+            'Low'    { 'color:#fff; background:#c0392b;' }
+            default  { 'color:#fff; background:#777777;' }
+        }
+
+        # Velocity comparison
+        $velocityHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin:8px 0;">
+<tr>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Overall</strong><br/>${fcOverall} dec/hr</td>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Recent</strong><br/>${fcRecent} dec/hr</td>
+<td style="padding:4px 8px; border:1px solid #dddddd; width:33%;"><strong>Peak</strong><br/>${fcPeak} dec/hr</td>
+</tr>
+</table>
+"@
+
+        # Bottleneck reviewers
+        $bottleneckHtml = ''
+        $bottlenecks = @($fc['BottleneckReviewers'])
+        if ($bottlenecks.Count -gt 0) {
+            $bnHeader = Build-HtmlTableHeader -Headers @('Reviewer', 'Remaining Items', 'Velocity (dec/hr)', 'Projected Hours')
+            $bnRows = [System.Collections.Generic.List[string]]::new()
+            $bIdx = 0
+            foreach ($bn in $bottlenecks) {
+                if ($null -eq $bn) { continue }
+                $bIdx++
+                $cells = @(
+                    (ConvertTo-SafeHtml $bn['ReviewerName']),
+                    [string]$bn['RemainingItems'],
+                    [string]$bn['PersonalVelocity'],
+                    [string]$bn['ProjectedHours']
+                )
+                $bnRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($bIdx % 2) -eq 0)))
+            }
+            if ($bnRows.Count -gt 0) {
+                $bottleneckHtml = @"
+<p style="font-size:13px; font-weight:bold; margin:8px 0 4px 0;">Bottleneck Reviewers</p>
+<table style="width:100%; border-collapse:collapse; font-size:12px;">
+${bnHeader}
+<tbody>
+$($bnRows -join "`n")
+</tbody>
+</table>
+"@
+            }
+        }
+
+        $campaignSections.Add(@"
+<div style="border:1px solid #dddddd; padding:16px; margin-bottom:16px; border-left:4px solid ${statusColor};">
+<table style="width:100%; border-collapse:collapse;">
+<tr>
+<td style="vertical-align:top; width:70%;">
+<h3 style="font-size:15px; color:#2c3e50; margin:0 0 4px 0;">$(ConvertTo-SafeHtml $fcName)</h3>
+</td>
+<td style="vertical-align:top; text-align:right; width:30%;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:${statusColor};">${statusLabel}</span>
+<span style="display:inline-block; padding:4px 8px; border-radius:3px; font-size:11px; font-weight:bold; ${confColor}; margin-left:4px;">${fcConf} confidence</span>
+</td>
+</tr>
+</table>
+
+${progressBar}
+
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin:8px 0;">
+<tr>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;"><strong>Projected Completion</strong><br/>$(ConvertTo-SafeHtml $fcProjDate)</td>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;"><strong>Projected Hours</strong><br/>${fcProjHrs}h</td>
+<td style="padding:6px 8px; border:1px solid #dddddd; width:33%;">${deadlineDisplay}</td>
+</tr>
+</table>
+
+${velocityHtml}
+
+${bottleneckHtml}
+</div>
+"@)
+    }
+
+    $campaignContent = if ($campaignSections.Count -gt 0) {
+        @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Campaign Forecasts ($($forecasts.Count))</h2>
+$($campaignSections -join "`n")
+"@
+    } else {
+        @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Campaign Forecasts</h2>
+<p style="font-size:13px; color:#888888;">No active campaigns to forecast.</p>
+"@
+    }
+
+    # --- Needs attention callout ---
+    $attentionHtml = ''
+    $attention = @($summary['CampaignsNeedingAttention'])
+    if ($attention.Count -gt 0) {
+        $attentionList = ($attention | ForEach-Object { "<li>$(ConvertTo-SafeHtml $_)</li>" }) -join "`n"
+        $attentionHtml = @"
+<div style="border:2px solid #c0392b; background:#fdf2f2; padding:12px; margin-bottom:20px;">
+<h2 style="font-size:16px; color:#c0392b; margin-top:0; margin-bottom:8px;">Campaigns Needing Attention ($($attention.Count))</h2>
+<ul style="font-size:13px; margin:0; padding-left:20px;">
+${attentionList}
+</ul>
+</div>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Campaign Completion Forecast Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Campaign Completion Forecast Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${attentionHtml}
+
+${campaignContent}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign completion forecast HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionForecastHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
+#region P16-07: Reviewer Delegation Audit Trail Report
+
+function Export-SPReviewerDelegationHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPReviewerDelegations output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report showing reviewer delegation metrics,
+        pattern badges (HighDelegator, DeadlineDelegation, CircularDelegation,
+        DelegateToApprover), delegation chain visualizations, and recommendation
+        sections. Uses inline CSS only for Word paste compatibility.
+    .PARAMETER DelegationData
+        Hashtable output from Get-SPReviewerDelegations.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $delegations = Get-SPReviewerDelegations -CampaignAudits $audits
+        $path = Export-SPReviewerDelegationHtml -DelegationData $delegations -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DelegationData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "ReviewerDelegations-${timestamp}.html"
+
+    $summary         = $DelegationData['Summary']
+    $patternSummary  = $DelegationData['PatternSummary']
+    $reviewerMetrics = @($DelegationData['ReviewerMetrics'])
+    $delegationItems = @($DelegationData['Delegations'])
+
+    # --- Summary card ---
+    $totalAnalyzed = if ($null -ne $summary['TotalItemsAnalyzed'])       { $summary['TotalItemsAnalyzed'] }       else { 0 }
+    $totalReassigned = if ($null -ne $summary['TotalReassigned'])        { $summary['TotalReassigned'] }          else { 0 }
+    $overallRate = if ($null -ne $summary['OverallReassignmentRate'])    { $summary['OverallReassignmentRate'] }  else { 0 }
+    $campaignsWithDel = if ($null -ne $summary['CampaignsWithDelegations']) { $summary['CampaignsWithDelegations'] } else { 0 }
+    $reviewersWho = if ($null -ne $summary['ReviewersWhoDelegate'])     { $summary['ReviewersWhoDelegate'] }     else { 0 }
+
+    $highDel    = if ($null -ne $patternSummary['HighDelegators'])      { $patternSummary['HighDelegators'] }      else { 0 }
+    $deadlineDel = if ($null -ne $patternSummary['DeadlineDelegations']) { $patternSummary['DeadlineDelegations'] } else { 0 }
+    $circularDel = if ($null -ne $patternSummary['CircularDelegations']) { $patternSummary['CircularDelegations'] } else { 0 }
+    $delToAppr  = if ($null -ne $patternSummary['DelegateToApprover'])  { $patternSummary['DelegateToApprover'] }  else { 0 }
+
+    # Note if reassignment data was unavailable
+    $noteHtml = ''
+    if ($null -ne $summary['Note'] -and -not [string]::IsNullOrWhiteSpace([string]$summary['Note'])) {
+        $noteHtml = @"
+<div style="border:2px solid #f39c12; background:#fef9e7; padding:12px; margin-bottom:20px;">
+<p style="font-size:13px; color:#856404; margin:0;"><strong>Note:</strong> $(ConvertTo-SafeHtml $summary['Note'])</p>
+</div>
+"@
+    }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Items Analyzed<br/><span style="font-size:22px;">${totalAnalyzed}</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Reassigned<br/><span style="font-size:22px;">${totalReassigned}</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Reassignment Rate<br/><span style="font-size:22px;">${overallRate}%</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Campaigns<br/><span style="font-size:22px;">${campaignsWithDel}</span>
+</td>
+<td style="padding:12px 16px; background:#2c3e50; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:20%; text-align:center;">
+Delegators<br/><span style="font-size:22px;">${reviewersWho}</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Pattern summary ---
+    $patternHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Pattern Detection Summary</h2>
+<table style="width:80%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#e67e22;">HighDelegator</span>
+<br/><span style="font-size:20px; font-weight:bold;">${highDel}</span>
+<br/><span style="font-size:11px; color:#888888;">Reassigned &gt;30% of items</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">DeadlineDelegation</span>
+<br/><span style="font-size:20px; font-weight:bold;">${deadlineDel}</span>
+<br/><span style="font-size:11px; color:#888888;">Reassigned near deadline</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">CircularDelegation</span>
+<br/><span style="font-size:20px; font-weight:bold;">${circularDel}</span>
+<br/><span style="font-size:11px; color:#888888;">A-&gt;B-&gt;A patterns</span>
+</td>
+<td style="padding:10px 16px; border:1px solid #dddddd; width:25%; text-align:center;">
+<span style="display:inline-block; padding:4px 12px; border-radius:3px; font-size:12px; font-weight:bold; color:#fff; background:#c0392b;">DelegateToApprover</span>
+<br/><span style="font-size:20px; font-weight:bold;">${delToAppr}</span>
+<br/><span style="font-size:11px; color:#888888;">Forwards to approve-all reviewer</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Reviewer metrics table ---
+    $reviewerTableHtml = ''
+    if ($reviewerMetrics.Count -gt 0) {
+        $rmHeader = Build-HtmlTableHeader -Headers @('Reviewer', 'Items Assigned', 'Items Reassigned', 'Reassignment Rate', 'Avg Hours Before Delegation', 'Patterns')
+        $rmRows = [System.Collections.Generic.List[string]]::new()
+        # Sort by reassignment rate descending
+        $sortedMetrics = @($reviewerMetrics | Sort-Object { $_['ReassignmentRate'] } -Descending)
+        $rmIdx = 0
+        foreach ($rm in $sortedMetrics) {
+            if ($null -eq $rm) { continue }
+            $rmIdx++
+
+            # Build rate bar
+            $rmRate = if ($null -ne $rm['ReassignmentRate']) { $rm['ReassignmentRate'] } else { 0 }
+            $barColor = if ($rmRate -gt 30) { '#c0392b' } elseif ($rmRate -gt 15) { '#f39c12' } else { '#27ae60' }
+            $barWidth = [math]::Min(100, $rmRate)
+            $rateCell = @"
+<div style="background:#e0e0e0; width:100%; height:14px; border-radius:2px; overflow:hidden; margin:2px 0;">
+<div style="background:${barColor}; width:${barWidth}%; height:14px; min-width:1px;"></div>
+</div>
+<span style="font-size:12px;">${rmRate}%</span>
+"@
+
+            # Build pattern badges
+            $patternBadges = ''
+            $rmPatterns = @($rm['Patterns'])
+            if ($rmPatterns.Count -gt 0) {
+                $badges = [System.Collections.Generic.List[string]]::new()
+                foreach ($p in $rmPatterns) {
+                    $pColor = switch ($p) {
+                        'HighDelegator'     { 'background:#e67e22; color:#fff;' }
+                        'DelegateToApprover' { 'background:#c0392b; color:#fff;' }
+                        default              { 'background:#777777; color:#fff;' }
+                    }
+                    $badges.Add("<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; ${pColor} margin-right:4px;"">$(ConvertTo-SafeHtml $p)</span>")
+                }
+                $patternBadges = $badges -join ''
+            }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $rm['ReviewerName']),
+                [string]$rm['ItemsAssigned'],
+                [string]$rm['ItemsReassigned'],
+                $rateCell,
+                [string]$rm['AvgHoursBeforeDelegation'],
+                $patternBadges
+            )
+            $rmRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rmIdx % 2) -eq 0)))
+        }
+
+        $reviewerTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Reviewer Delegation Metrics ($($reviewerMetrics.Count) reviewers)</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${rmHeader}
+<tbody>
+$($rmRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Delegation detail table ---
+    $delegationTableHtml = ''
+    if ($delegationItems.Count -gt 0) {
+        $dlHeader = Build-HtmlTableHeader -Headers @('Campaign', 'Identity', 'Entitlement', 'Original Reviewer', 'Final Reviewer', 'Chain', 'Time to Deadline', 'Decision', 'Patterns')
+        $dlRows = [System.Collections.Generic.List[string]]::new()
+        $dlIdx = 0
+        foreach ($dl in $delegationItems) {
+            if ($null -eq $dl) { continue }
+            $dlIdx++
+
+            # Build chain visualization: A -> B -> C
+            $chainStr = ''
+            $chain = @($dl['ReassignmentChain'])
+            if ($chain.Count -gt 0) {
+                $chainParts = @($chain | ForEach-Object { ConvertTo-SafeHtml $_ })
+                $chainStr = $chainParts -join ' -&gt; '
+            }
+
+            # Time to deadline display
+            $tbdDisplay = ''
+            $tbd = $dl['TimeBeforeDeadline']
+            if ($null -ne $tbd) {
+                $tbdColor = if ($tbd -le 24) { '#c0392b' } elseif ($tbd -le 72) { '#f39c12' } else { '#27ae60' }
+                $tbdDisplay = "<span style=""color:${tbdColor}; font-weight:bold;"">${tbd}h</span>"
+            } else {
+                $tbdDisplay = '<span style="color:#888888;">N/A</span>'
+            }
+
+            # Pattern badges
+            $dlPatternBadges = ''
+            $dlPatterns = @($dl['Patterns'])
+            if ($dlPatterns.Count -gt 0) {
+                $dlBadges = [System.Collections.Generic.List[string]]::new()
+                foreach ($p in $dlPatterns) {
+                    $pColor = switch ($p) {
+                        'DeadlineDelegation' { 'background:#c0392b; color:#fff;' }
+                        'CircularDelegation' { 'background:#c0392b; color:#fff;' }
+                        'DelegateToApprover' { 'background:#c0392b; color:#fff;' }
+                        'HighDelegator'      { 'background:#e67e22; color:#fff;' }
+                        default              { 'background:#777777; color:#fff;' }
+                    }
+                    $dlBadges.Add("<span style=""display:inline-block; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold; ${pColor};"">$(ConvertTo-SafeHtml $p)</span>")
+                }
+                $dlPatternBadges = $dlBadges -join ' '
+            }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $dl['CampaignName']),
+                (ConvertTo-SafeHtml $dl['IdentityName']),
+                (ConvertTo-SafeHtml $dl['EntitlementName']),
+                (ConvertTo-SafeHtml $dl['OriginalReviewer']),
+                (ConvertTo-SafeHtml $dl['FinalReviewer']),
+                $chainStr,
+                $tbdDisplay,
+                (ConvertTo-SafeHtml $dl['FinalDecision']),
+                $dlPatternBadges
+            )
+            $dlRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($dlIdx % 2) -eq 0)))
+        }
+
+        $delegationTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Delegation Details ($($delegationItems.Count) reassignments)</h2>
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:20px;">
+${dlHeader}
+<tbody>
+$($dlRows -join "`n")
+</tbody>
+</table>
+"@
+    } else {
+        $delegationTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Delegation Details</h2>
+<p style="font-size:13px; color:#888888;">No reassignment events detected.</p>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+"@
+
+    $recItems = [System.Collections.Generic.List[string]]::new()
+    if ($highDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#e67e22; color:#fff;">HighDelegator</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Review assignment policies for high-delegation reviewers. Consider reassigning their certification responsibilities to better-suited managers or reducing their campaign scope. Investigate whether delegation reflects a knowledge gap, workload issue, or governance avoidance.
+</td>
+</tr>
+"@)
+    }
+    if ($deadlineDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">DeadlineDelegation</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Deadline-proximate reassignments may indicate procrastination or an attempt to shift responsibility. Consider sending earlier reminders, shortening reassignment windows near deadlines, or requiring justification for late reassignments.
+</td>
+</tr>
+"@)
+    }
+    if ($circularDel -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">CircularDelegation</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Circular delegation (A reassigns to B, B reassigns back to A) prevents timely access decisions. Review items caught in delegation loops and escalate to a designated fallback reviewer or campaign administrator.
+</td>
+</tr>
+"@)
+    }
+    if ($delToAppr -gt 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; width:20%; vertical-align:top;">
+<span style="display:inline-block; padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold; background:#c0392b; color:#fff;">DelegateToApprover</span>
+</td>
+<td style="padding:10px 12px; border:1px solid #dddddd; vertical-align:top;">
+Some reviewers consistently reassign items to a reviewer who approves nearly all items. This may indicate rubber-stamp forwarding. Cross-reference with reviewer reputation data and consider restricting reassignment targets or requiring manager approval for delegation.
+</td>
+</tr>
+"@)
+    }
+    if ($recItems.Count -eq 0) {
+        $recItems.Add(@"
+<tr>
+<td style="padding:10px 12px; border:1px solid #dddddd; color:#27ae60;" colspan="2">
+No concerning delegation patterns detected. Reassignment behavior appears within normal operational bounds.
+</td>
+</tr>
+"@)
+    }
+
+    $recsHtml += ($recItems -join "`n")
+    $recsHtml += "`n</table>"
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Reviewer Delegation Audit Trail Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Reviewer Delegation Audit Trail Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${noteHtml}
+
+${summaryHtml}
+
+${patternHtml}
+
+${reviewerTableHtml}
+
+${delegationTableHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Reviewer delegation HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPReviewerDelegationHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8309,7 +10147,12 @@ Export-ModuleMember -Function @(
     'Export-SPGovernanceBIData',
     'Export-SPRemediationPriorityHtml',
     'Export-SPGovernanceMaturityHtml',
-    'Export-SPIdentityAccessSpreadHtml'
-,
-    'Export-SPAuditPeriodComparisonHtml'
+    'Export-SPIdentityAccessSpreadHtml',
+    'Export-SPAuditPeriodComparisonHtml',
+    'Export-SPOrphanAccountHtml',
+    'Export-SPSourceAggregationHealthHtml',
+    'Export-SPIdentityDataQualityHtml',
+    'Export-SPCampaignCoverageGapHtml',
+    'Export-SPCampaignCompletionForecastHtml',
+    'Export-SPReviewerDelegationHtml'
 )

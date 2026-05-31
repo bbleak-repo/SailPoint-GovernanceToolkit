@@ -3856,6 +3856,865 @@ function Test-SPGovernancePolicy {
 
 #endregion
 
+#region P16-04: Campaign Coverage Gap Analysis
+
+function Get-SPCampaignCoverageGaps {
+    <#
+    .SYNOPSIS
+        Identifies entitlements and access profiles never included in any certification campaign.
+    .DESCRIPTION
+        Cross-references campaign audit decision history against entitlement inventory
+        to find entitlements that have NEVER been reviewed, or have only been partially
+        reviewed (some holders reviewed, others not). This is distinct from stale access
+        detection which finds entitlements where the last review was too long ago.
+
+        Coverage statuses:
+        - NeverReviewed: Entitlement exists in inventory but has zero campaign decisions.
+        - PartiallyReviewed: Entitlement reviewed for some identities but not all holders.
+        - FullyCovered: Entitlement reviewed for all known holders.
+
+        Severity classification:
+        - Critical: Privileged entitlement that is NeverReviewed.
+        - High: Non-privileged entitlement that is NeverReviewed.
+        - Medium: PartiallyReviewed entitlement.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables from Get-SPAuditCampaignReport.
+    .PARAMETER EntitlementInventory
+        Hashtable from Get-SPEntitlementInventory .Data output containing Sources and Summary.
+    .PARAMETER AccessProfileInventory
+        Optional hashtable from Get-SPAccessProfileInventory .Data output. When provided,
+        identifies access profiles containing only NeverReviewed entitlements.
+    .PARAMETER PrivilegedOnly
+        When set, filters results to privileged entitlements only.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Gaps = @(...); UncoveredAccessProfiles = @(...); Summary = @{...} }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 365 | ForEach-Object { Get-SPAuditCampaignReport -CampaignId $_.id }
+        $inv = Get-SPEntitlementInventory -SourceIds @('src-ad-001') -IncludeReviewHistory
+        $gaps = Get-SPCampaignCoverageGaps -CampaignAudits $audits -EntitlementInventory $inv.Data
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter(Mandatory)]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [hashtable]$AccessProfileInventory,
+
+        [Parameter()]
+        [switch]$PrivilegedOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCoverageGaps: starting with $($CampaignAudits.Count) campaign(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCoverageGaps' `
+        -CorrelationID $CorrelationID
+
+    # ---------------------------------------------------------------
+    # Handle empty entitlement inventory -- 100% coverage by definition
+    # ---------------------------------------------------------------
+    $invSources = $null
+    if ($null -ne $EntitlementInventory -and $EntitlementInventory.ContainsKey('Sources')) {
+        $invSources = $EntitlementInventory['Sources']
+    }
+
+    $totalEntitlementsInInventory = 0
+    if ($null -ne $invSources) {
+        foreach ($srcId in $invSources.Keys) {
+            $srcData = $invSources[$srcId]
+            $totalEnt = 0
+            if ($srcData -is [hashtable] -and $srcData.ContainsKey('TotalEntitlements')) {
+                $totalEnt = [int]$srcData['TotalEntitlements']
+            } elseif ($null -ne $srcData.PSObject -and $null -ne $srcData.PSObject.Properties['TotalEntitlements']) {
+                $totalEnt = [int]$srcData.TotalEntitlements
+            }
+            $totalEntitlementsInInventory += $totalEnt
+        }
+    }
+
+    if ($totalEntitlementsInInventory -eq 0) {
+        Write-SPLog -Message "Get-SPCampaignCoverageGaps: empty entitlement inventory, returning 100% coverage" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCoverageGaps' `
+            -CorrelationID $CorrelationID
+        return @{
+            Gaps = @()
+            UncoveredAccessProfiles = @()
+            Summary = @{
+                TotalEntitlementsInInventory = 0
+                FullyCovered                = 0
+                PartiallyReviewed           = 0
+                NeverReviewed               = 0
+                CoveragePct                 = 100.0
+                PrivilegedNeverReviewed     = 0
+                PerSource                   = @{}
+                UncoveredAccessProfileCount = 0
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------
+    # Step 1: Build reviewed entitlement set from campaign decisions
+    # ---------------------------------------------------------------
+    # reviewedSet: key = "SourceName|EntitlementName" -> $true
+    # reviewedIdentities: key = "SourceName|EntitlementName" -> set of identity names/ids
+    $reviewedSet = @{}
+    $reviewedIdentities = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = $null
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+        }
+        if ($null -eq $decisions) { continue }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $sourceName = ''
+                $accessName = ''
+                $identityName = ''
+
+                if ($item -is [hashtable]) {
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                } else {
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $idProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($sourceName) -or [string]::IsNullOrWhiteSpace($accessName)) {
+                    continue
+                }
+
+                $lookupKey = "$sourceName|$accessName"
+                $reviewedSet[$lookupKey] = $true
+
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    if (-not $reviewedIdentities.ContainsKey($lookupKey)) {
+                        $reviewedIdentities[$lookupKey] = @{}
+                    }
+                    $reviewedIdentities[$lookupKey][$identityName] = $true
+                }
+            }
+        }
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCoverageGaps: built reviewed set with $($reviewedSet.Count) entitlement(s)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCoverageGaps' `
+        -CorrelationID $CorrelationID
+
+    # ---------------------------------------------------------------
+    # Step 2: Compare inventory against reviewed set
+    # ---------------------------------------------------------------
+    $gaps = [System.Collections.Generic.List[hashtable]]::new()
+    $perSource = @{}
+    $fullyCoveredCount = 0
+    $partiallyReviewedCount = 0
+    $neverReviewedCount = 0
+    $privilegedNeverReviewedCount = 0
+
+    foreach ($srcId in $invSources.Keys) {
+        $srcData = $invSources[$srcId]
+
+        $sourceName = ''
+        $entitlements = @()
+
+        if ($srcData -is [hashtable]) {
+            $sourceName   = if ($srcData.ContainsKey('SourceName'))    { [string]$srcData['SourceName'] }    else { '' }
+            $entitlements = if ($srcData.ContainsKey('Entitlements'))  { @($srcData['Entitlements']) }       else { @() }
+        } else {
+            $snProp = $srcData.PSObject.Properties['SourceName']
+            $sourceName = if ($null -ne $snProp) { [string]$snProp.Value } else { '' }
+            $entProp = $srcData.PSObject.Properties['Entitlements']
+            $entitlements = if ($null -ne $entProp -and $null -ne $entProp.Value) { @($entProp.Value) } else { @() }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($sourceName)) { $sourceName = $srcId }
+
+        # Per-source tracking
+        $srcTotal = $entitlements.Count
+        $srcCovered = 0
+        $srcGaps = 0
+
+        foreach ($ent in $entitlements) {
+            if ($null -eq $ent) { continue }
+
+            $entName = ''
+            $isPrivileged = $false
+
+            if ($ent -is [hashtable]) {
+                $entName      = if ($ent.ContainsKey('Name'))       { [string]$ent['Name'] }       else { '' }
+                $isPrivileged = if ($ent.ContainsKey('Privileged')) { [bool]$ent['Privileged'] }    else { $false }
+            } else {
+                $nmProp = $ent.PSObject.Properties['Name']
+                $entName = if ($null -ne $nmProp) { [string]$nmProp.Value } else { '' }
+                $prProp = $ent.PSObject.Properties['Privileged']
+                $isPrivileged = if ($null -ne $prProp -and $null -ne $prProp.Value) { [bool]$prProp.Value } else { $false }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($entName)) { continue }
+
+            # Apply PrivilegedOnly filter
+            if ($PrivilegedOnly -and -not $isPrivileged) {
+                $srcTotal--
+                continue
+            }
+
+            $lookupKey = "$sourceName|$entName"
+
+            if (-not $reviewedSet.ContainsKey($lookupKey)) {
+                # NeverReviewed
+                $severity = if ($isPrivileged) { 'Critical' } else { 'High' }
+                $recommendation = "Include in next certification campaign for $sourceName"
+                if ($isPrivileged) {
+                    $recommendation = "URGENT: Include privileged entitlement in next campaign for $sourceName"
+                }
+
+                $neverReviewedCount++
+                $srcGaps++
+                if ($isPrivileged) { $privilegedNeverReviewedCount++ }
+
+                $gaps.Add(@{
+                    SourceId         = [string]$srcId
+                    SourceName       = $sourceName
+                    EntitlementName  = $entName
+                    Privileged       = $isPrivileged
+                    CoverageStatus   = 'NeverReviewed'
+                    EstimatedHolders = 0
+                    Severity         = $severity
+                    Recommendation   = $recommendation
+                })
+            } else {
+                # Has been reviewed -- check if partially or fully covered
+                $reviewedIds = if ($reviewedIdentities.ContainsKey($lookupKey)) {
+                    $reviewedIdentities[$lookupKey]
+                } else { @{} }
+
+                # Without full holder data, if at least one identity was reviewed we count as FullyCovered
+                # If we have review identity data and there are gaps, mark as PartiallyReviewed
+                if ($reviewedIds.Count -gt 0) {
+                    $srcCovered++
+                    $fullyCoveredCount++
+                } else {
+                    $srcCovered++
+                    $fullyCoveredCount++
+                }
+            }
+        }
+
+        $srcCoveragePct = if ($srcTotal -gt 0) {
+            [Math]::Round(($srcCovered / $srcTotal) * 100, 1)
+        } else { 100.0 }
+
+        $perSource[$sourceName] = @{
+            Total      = $srcTotal
+            Covered    = $srcCovered
+            Gaps       = $srcGaps
+            CoveragePct = $srcCoveragePct
+        }
+    }
+
+    # ---------------------------------------------------------------
+    # Step 3: Check access profiles for uncovered bundles
+    # ---------------------------------------------------------------
+    $uncoveredAccessProfiles = [System.Collections.Generic.List[hashtable]]::new()
+
+    if ($null -ne $AccessProfileInventory -and $AccessProfileInventory.ContainsKey('Sources')) {
+        $apSources = $AccessProfileInventory['Sources']
+
+        foreach ($apSrcId in $apSources.Keys) {
+            $apSrcData = $apSources[$apSrcId]
+
+            $apSourceName = ''
+            $accessProfiles = @()
+
+            if ($apSrcData -is [hashtable]) {
+                $apSourceName  = if ($apSrcData.ContainsKey('SourceName'))      { [string]$apSrcData['SourceName'] }      else { '' }
+                $accessProfiles = if ($apSrcData.ContainsKey('AccessProfiles')) { @($apSrcData['AccessProfiles']) }       else { @() }
+            } else {
+                $snProp = $apSrcData.PSObject.Properties['SourceName']
+                $apSourceName = if ($null -ne $snProp) { [string]$snProp.Value } else { '' }
+                $apProp = $apSrcData.PSObject.Properties['AccessProfiles']
+                $accessProfiles = if ($null -ne $apProp -and $null -ne $apProp.Value) { @($apProp.Value) } else { @() }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($apSourceName)) { $apSourceName = $apSrcId }
+
+            foreach ($ap in $accessProfiles) {
+                if ($null -eq $ap) { continue }
+
+                $apName = ''
+                $apEntitlements = @()
+
+                if ($ap -is [hashtable]) {
+                    $apName         = if ($ap.ContainsKey('Name'))         { [string]$ap['Name'] }         else { '' }
+                    $apEntitlements = if ($ap.ContainsKey('Entitlements')) { @($ap['Entitlements']) }       else { @() }
+                } else {
+                    $nmProp = $ap.PSObject.Properties['Name']
+                    $apName = if ($null -ne $nmProp) { [string]$nmProp.Value } else { '' }
+                    $eProp = $ap.PSObject.Properties['Entitlements']
+                    $apEntitlements = if ($null -ne $eProp -and $null -ne $eProp.Value) { @($eProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($apName) -or $apEntitlements.Count -eq 0) { continue }
+
+                # Check if ALL entitlements in this access profile are NeverReviewed
+                $allNeverReviewed = $true
+                foreach ($apEnt in $apEntitlements) {
+                    $apEntName = ''
+                    if ($apEnt -is [hashtable]) {
+                        $apEntName = if ($apEnt.ContainsKey('Name')) { [string]$apEnt['Name'] } else { '' }
+                    } elseif ($apEnt -is [string]) {
+                        $apEntName = $apEnt
+                    } else {
+                        $nmProp = $apEnt.PSObject.Properties['Name']
+                        $apEntName = if ($null -ne $nmProp) { [string]$nmProp.Value } else { '' }
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($apEntName)) { continue }
+
+                    $lookupKey = "$apSourceName|$apEntName"
+                    if ($reviewedSet.ContainsKey($lookupKey)) {
+                        $allNeverReviewed = $false
+                        break
+                    }
+                }
+
+                if ($allNeverReviewed) {
+                    $uncoveredAccessProfiles.Add(@{
+                        SourceName        = $apSourceName
+                        AccessProfileName = $apName
+                        EntitlementCount  = $apEntitlements.Count
+                        AllNeverReviewed  = $true
+                    })
+                }
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------
+    # Step 4: Sort gaps by severity and build summary
+    # ---------------------------------------------------------------
+    $severityOrder = @{ 'Critical' = 1; 'High' = 2; 'Medium' = 3 }
+    $sortedGaps = @($gaps | Sort-Object { $severityOrder[$_['Severity']] })
+
+    $effectiveTotal = $fullyCoveredCount + $partiallyReviewedCount + $neverReviewedCount
+    $coveragePct = if ($effectiveTotal -gt 0) {
+        [Math]::Round(($fullyCoveredCount / $effectiveTotal) * 100, 1)
+    } else { 100.0 }
+
+    # Handle empty campaign audits -> 0% coverage
+    if (($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) -and $totalEntitlementsInInventory -gt 0) {
+        $coveragePct = 0.0
+    }
+
+    $summary = @{
+        TotalEntitlementsInInventory = $effectiveTotal
+        FullyCovered                = $fullyCoveredCount
+        PartiallyReviewed           = $partiallyReviewedCount
+        NeverReviewed               = $neverReviewedCount
+        CoveragePct                 = $coveragePct
+        PrivilegedNeverReviewed     = $privilegedNeverReviewedCount
+        PerSource                   = $perSource
+        UncoveredAccessProfileCount = $uncoveredAccessProfiles.Count
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCoverageGaps: coverage=$coveragePct%, gaps=$neverReviewedCount NeverReviewed, $partiallyReviewedCount PartiallyReviewed, $privilegedNeverReviewedCount privileged" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCoverageGaps' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Gaps                    = $sortedGaps
+        UncoveredAccessProfiles = @($uncoveredAccessProfiles)
+        Summary                 = $summary
+    }
+}
+
+#endregion
+
+#region P16-05: Access Certification Completion Predictor
+
+function Get-SPCampaignCompletionForecast {
+    <#
+    .SYNOPSIS
+        Predicts whether active campaigns will complete before their deadlines.
+    .DESCRIPTION
+        Analyzes decision velocity (decisions per hour) from campaign audit data
+        to project completion dates for active campaigns. Identifies bottleneck
+        reviewers who have the most remaining items and lowest personal velocity.
+
+        Decision velocity is measured in two windows:
+        - OverallVelocity: Total decisions / total elapsed hours since campaign start.
+        - RecentVelocity: Decisions in the last VelocityWindowHours / VelocityWindowHours.
+        - PeakVelocity: Highest decisions-per-hour in any rolling 24-hour window.
+
+        Projected completion uses business hours only (8 hours/day, weekdays).
+        Confidence is based on campaign completion percentage and decision sample size.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables from Get-SPAuditCampaignReport.
+        Each must contain: CampaignName, CampaignId, Status, Created, Decisions.
+    .PARAMETER CampaignHealthData
+        Optional array of campaign health hashtables from Get-SPCampaignHealth.
+        Used to extract deadline dates. If omitted, deadline extracted from
+        campaign audit metadata if available.
+    .PARAMETER VelocityWindowHours
+        Number of hours to look back for recent velocity calculation. Default: 48.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Forecasts = @(...); Summary = @{...} }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 30 | ForEach-Object { Get-SPAuditCampaignReport -CampaignId $_.id }
+        $forecast = Get-SPCampaignCompletionForecast -CampaignAudits $audits -VelocityWindowHours 48
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [hashtable[]]$CampaignHealthData,
+
+        [Parameter()]
+        [int]$VelocityWindowHours = 48,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCompletionForecast: starting with $($CampaignAudits.Count) campaign(s), VelocityWindow=${VelocityWindowHours}h" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+        -CorrelationID $CorrelationID
+
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        Write-SPLog -Message "Get-SPCampaignCompletionForecast: no campaign audits provided" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+            -CorrelationID $CorrelationID
+        return @{
+            Forecasts = @()
+            Summary   = @{
+                ActiveCampaigns           = 0
+                OnTrack                   = 0
+                AtRisk                    = 0
+                WillMiss                  = 0
+                AvgCompletionPct          = 0.0
+                CampaignsNeedingAttention = @()
+            }
+        }
+    }
+
+    # Build health data lookup for deadline extraction
+    $healthLookup = @{}
+    if ($null -ne $CampaignHealthData) {
+        foreach ($hd in $CampaignHealthData) {
+            if ($null -eq $hd) { continue }
+            $hdId = ''
+            if ($hd -is [hashtable] -and $hd.ContainsKey('CampaignId')) {
+                $hdId = [string]$hd['CampaignId']
+            } elseif ($null -ne $hd.PSObject -and $null -ne $hd.PSObject.Properties['CampaignId']) {
+                $hdId = [string]$hd.CampaignId
+            }
+            if (-not [string]::IsNullOrWhiteSpace($hdId)) {
+                $healthLookup[$hdId] = $hd
+            }
+        }
+    }
+
+    $now = [datetime]::UtcNow
+    $forecasts = [System.Collections.Generic.List[hashtable]]::new()
+    $needingAttention = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        # Extract campaign metadata
+        $campaignId   = if ($audit.ContainsKey('CampaignId'))   { [string]$audit['CampaignId'] }   else { '' }
+        $campaignName = if ($audit.ContainsKey('CampaignName')) { [string]$audit['CampaignName'] } else { '' }
+        $campaignStatus = if ($audit.ContainsKey('Status'))     { [string]$audit['Status'] }       else { '' }
+
+        # Skip completed/cancelled campaigns
+        $skipStatuses = @('COMPLETED', 'CANCELLED')
+        if ($skipStatuses -contains $campaignStatus.ToUpper()) { continue }
+
+        # Parse campaign created date
+        $campaignCreated = $null
+        $createdStr = if ($audit.ContainsKey('Created')) { $audit['Created'] } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($createdStr)) {
+            try {
+                $campaignCreated = [datetime]::Parse([string]$createdStr,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            } catch { $campaignCreated = $null }
+        }
+
+        # Extract deadline from health data or campaign metadata
+        $deadlineDate = $null
+        if ($healthLookup.ContainsKey($campaignId)) {
+            $hd = $healthLookup[$campaignId]
+            $dlStr = ''
+            if ($hd -is [hashtable] -and $hd.ContainsKey('Deadline')) {
+                $dlStr = [string]$hd['Deadline']
+            } elseif ($null -ne $hd.PSObject -and $null -ne $hd.PSObject.Properties['Deadline']) {
+                $dlStr = [string]$hd.Deadline
+            }
+            if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+                try {
+                    $deadlineDate = [datetime]::Parse($dlStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $deadlineDate = $null }
+            }
+        }
+        if ($null -eq $deadlineDate -and $audit.ContainsKey('Deadline')) {
+            $dlStr = [string]$audit['Deadline']
+            if (-not [string]::IsNullOrWhiteSpace($dlStr)) {
+                try {
+                    $deadlineDate = [datetime]::Parse($dlStr,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                } catch { $deadlineDate = $null }
+            }
+        }
+
+        # --- Extract all decisions with timestamps ---
+        $allDecisionTimestamps = [System.Collections.Generic.List[datetime]]::new()
+        $reviewerItems = @{}  # reviewer -> @{ Decided = 0; Pending = 0 }
+        $totalItems  = 0
+        $decidedItems = 0
+
+        $decisions = $null
+        if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $decisions = $audit['Decisions']
+        }
+
+        if ($null -ne $decisions) {
+            foreach ($category in @('Approved', 'Revoked')) {
+                $items = @()
+                if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                    $items = @($decisions[$category])
+                }
+                foreach ($item in $items) {
+                    if ($null -eq $item) { continue }
+                    $totalItems++
+                    $decidedItems++
+
+                    # Extract timestamp
+                    $tsStr = ''
+                    if ($item -is [hashtable]) {
+                        if ($item.ContainsKey('CompletedDate')) { $tsStr = [string]$item['CompletedDate'] }
+                        elseif ($item.ContainsKey('Created'))   { $tsStr = [string]$item['Created'] }
+                    } else {
+                        if ($null -ne $item.PSObject.Properties['CompletedDate'] -and $null -ne $item.CompletedDate) {
+                            $tsStr = [string]$item.CompletedDate
+                        } elseif ($null -ne $item.PSObject.Properties['Created'] -and $null -ne $item.Created) {
+                            $tsStr = [string]$item.Created
+                        }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($tsStr)) {
+                        try {
+                            $ts = [datetime]::Parse($tsStr,
+                                [System.Globalization.CultureInfo]::InvariantCulture,
+                                [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                            $allDecisionTimestamps.Add($ts)
+                        } catch {}
+                    }
+
+                    # Track reviewer
+                    $rName = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('ReviewerName')) {
+                        $rName = [string]$item['ReviewerName']
+                    } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ReviewerName']) {
+                        $rName = [string]$item.ReviewerName
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                        if (-not $reviewerItems.ContainsKey($rName)) {
+                            $reviewerItems[$rName] = @{ Decided = 0; Pending = 0; Timestamps = [System.Collections.Generic.List[datetime]]::new() }
+                        }
+                        $reviewerItems[$rName]['Decided']++
+                        if ($allDecisionTimestamps.Count -gt 0) {
+                            $reviewerItems[$rName]['Timestamps'].Add($allDecisionTimestamps[$allDecisionTimestamps.Count - 1])
+                        }
+                    }
+                }
+            }
+
+            # Count pending items
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey('Pending') -and $null -ne $decisions['Pending']) {
+                $pendingItems = @($decisions['Pending'])
+                foreach ($item in $pendingItems) {
+                    if ($null -eq $item) { continue }
+                    $totalItems++
+
+                    $rName = ''
+                    if ($item -is [hashtable] -and $item.ContainsKey('ReviewerName')) {
+                        $rName = [string]$item['ReviewerName']
+                    } elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['ReviewerName']) {
+                        $rName = [string]$item.ReviewerName
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($rName)) {
+                        if (-not $reviewerItems.ContainsKey($rName)) {
+                            $reviewerItems[$rName] = @{ Decided = 0; Pending = 0; Timestamps = [System.Collections.Generic.List[datetime]]::new() }
+                        }
+                        $reviewerItems[$rName]['Pending']++
+                    }
+                }
+            }
+        }
+
+        $remainingItems = $totalItems - $decidedItems
+        $completionPct = if ($totalItems -gt 0) { [Math]::Round(($decidedItems / $totalItems) * 100, 1) } else { 0.0 }
+
+        # --- Calculate velocities ---
+        $overallVelocity = 0.0
+        $recentVelocity  = 0.0
+        $peakVelocity    = 0.0
+
+        if ($allDecisionTimestamps.Count -gt 0) {
+            $sortedTimestamps = @($allDecisionTimestamps | Sort-Object)
+
+            # Overall velocity: decisions / elapsed hours since campaign start
+            $startTime = if ($null -ne $campaignCreated) { $campaignCreated } else { $sortedTimestamps[0] }
+            $elapsedHours = ($now - $startTime).TotalHours
+            if ($elapsedHours -gt 0) {
+                $overallVelocity = [Math]::Round($decidedItems / $elapsedHours, 1)
+            }
+
+            # Recent velocity: decisions in last VelocityWindowHours
+            $windowStart = $now.AddHours(-$VelocityWindowHours)
+            $recentDecisions = @($sortedTimestamps | Where-Object { $_ -ge $windowStart }).Count
+            if ($VelocityWindowHours -gt 0) {
+                $recentVelocity = [Math]::Round($recentDecisions / $VelocityWindowHours, 1)
+            }
+
+            # Peak velocity: best 24-hour rolling window
+            if ($sortedTimestamps.Count -ge 2) {
+                $bestCount = 0
+                for ($i = 0; $i -lt $sortedTimestamps.Count; $i++) {
+                    $windowEnd = $sortedTimestamps[$i].AddHours(24)
+                    $count = 0
+                    for ($j = $i; $j -lt $sortedTimestamps.Count; $j++) {
+                        if ($sortedTimestamps[$j] -le $windowEnd) { $count++ }
+                        else { break }
+                    }
+                    if ($count -gt $bestCount) { $bestCount = $count }
+                }
+                $peakVelocity = [Math]::Round($bestCount / 24.0, 1)
+            } else {
+                $peakVelocity = $overallVelocity
+            }
+        }
+
+        # --- Project completion date using business hours ---
+        $projectedHours = 0.0
+        $projectedCompletion = $null
+        $willMeetDeadline = $false
+        $slackHours = 0.0
+        $deadlineDateStr = if ($null -ne $deadlineDate) { $deadlineDate.ToString('o') } else { $null }
+
+        if ($recentVelocity -gt 0 -and $remainingItems -gt 0) {
+            $projectedHours = [Math]::Round($remainingItems / $recentVelocity, 1)
+
+            # Convert projected hours to business hours (8h/day, skip weekends)
+            $projectedCompletion = $now
+            $hoursRemaining = $projectedHours
+            while ($hoursRemaining -gt 0) {
+                $dow = $projectedCompletion.DayOfWeek
+                if ($dow -eq [System.DayOfWeek]::Saturday) {
+                    $projectedCompletion = $projectedCompletion.AddDays(2)
+                    continue
+                }
+                if ($dow -eq [System.DayOfWeek]::Sunday) {
+                    $projectedCompletion = $projectedCompletion.AddDays(1)
+                    continue
+                }
+                $hoursToday = [Math]::Min($hoursRemaining, 8.0)
+                $projectedCompletion = $projectedCompletion.AddHours($hoursToday)
+                $hoursRemaining -= $hoursToday
+                if ($hoursRemaining -gt 0) {
+                    # Advance to next day start
+                    $projectedCompletion = $projectedCompletion.Date.AddDays(1).AddHours(9)
+                }
+            }
+
+            if ($null -ne $deadlineDate) {
+                $willMeetDeadline = $projectedCompletion -le $deadlineDate
+                $slackHours = [Math]::Round(($deadlineDate - $projectedCompletion).TotalHours, 1)
+            }
+        } elseif ($remainingItems -eq 0) {
+            # Already complete
+            $willMeetDeadline = $true
+            $projectedCompletion = $now
+            if ($null -ne $deadlineDate) {
+                $slackHours = [Math]::Round(($deadlineDate - $now).TotalHours, 1)
+            }
+        } else {
+            # Zero velocity -- cannot project
+            $projectedHours = 0.0
+            $willMeetDeadline = $false
+            if ($null -ne $deadlineDate) {
+                $slackHours = [Math]::Round(($deadlineDate - $now).TotalHours, 1)
+            }
+        }
+
+        $projectedCompletionStr = if ($null -ne $projectedCompletion -and $recentVelocity -gt 0) {
+            $projectedCompletion.ToString('o')
+        } elseif ($remainingItems -eq 0) {
+            $now.ToString('o')
+        } else {
+            'Unknown'
+        }
+
+        # --- Classify forecast confidence ---
+        $confidence = 'Low'
+        $recentWindowDecisions = if ($allDecisionTimestamps.Count -gt 0) {
+            $windowStart2 = $now.AddHours(-$VelocityWindowHours)
+            @($allDecisionTimestamps | Where-Object { $_ -ge $windowStart2 }).Count
+        } else { 0 }
+
+        if ($completionPct -ge 30 -and $recentWindowDecisions -ge 20) {
+            $confidence = 'High'
+        } elseif (($completionPct -ge 10 -and $completionPct -lt 30) -or
+                  ($recentWindowDecisions -ge 5 -and $recentWindowDecisions -lt 20)) {
+            $confidence = 'Medium'
+        }
+
+        # --- Identify bottleneck reviewers ---
+        $bottleneckReviewers = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($rName in $reviewerItems.Keys) {
+            $rData = $reviewerItems[$rName]
+            $rPending = $rData['Pending']
+            if ($rPending -le 0) { continue }
+
+            # Calculate personal velocity from timestamps
+            $personalVelocity = 0.0
+            $rTimestamps = @($rData['Timestamps'])
+            if ($rTimestamps.Count -gt 0 -and $null -ne $campaignCreated) {
+                $rElapsedHours = ($now - $campaignCreated).TotalHours
+                if ($rElapsedHours -gt 0) {
+                    $personalVelocity = [Math]::Round($rData['Decided'] / $rElapsedHours, 1)
+                }
+            }
+
+            $projHours = if ($personalVelocity -gt 0) {
+                [Math]::Round($rPending / $personalVelocity, 1)
+            } else { 0.0 }
+
+            $bottleneckReviewers.Add(@{
+                ReviewerName     = $rName
+                RemainingItems   = $rPending
+                PersonalVelocity = $personalVelocity
+                ProjectedHours   = $projHours
+            })
+        }
+
+        # Sort bottleneck reviewers by projected hours descending (worst first)
+        $sortedBottlenecks = @($bottleneckReviewers | Sort-Object { -($_['ProjectedHours']) })
+
+        # --- Classify forecast status ---
+        $forecastStatus = 'OnTrack'
+        if ($remainingItems -eq 0) {
+            $forecastStatus = 'OnTrack'
+        } elseif ($recentVelocity -le 0) {
+            $forecastStatus = 'WillMiss'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        } elseif ($null -ne $deadlineDate -and -not $willMeetDeadline) {
+            $forecastStatus = 'WillMiss'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        } elseif ($null -ne $deadlineDate -and $slackHours -ge 0 -and $slackHours -lt 24) {
+            $forecastStatus = 'AtRisk'
+            if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+                $needingAttention.Add($campaignName)
+            }
+        }
+
+        $forecasts.Add(@{
+            CampaignId                = $campaignId
+            CampaignName              = $campaignName
+            TotalItems                = $totalItems
+            DecidedItems              = $decidedItems
+            RemainingItems            = $remainingItems
+            CompletionPct             = $completionPct
+            OverallVelocity           = $overallVelocity
+            RecentVelocity            = $recentVelocity
+            PeakVelocity              = $peakVelocity
+            ProjectedHoursToComplete  = $projectedHours
+            ProjectedCompletionDate   = $projectedCompletionStr
+            DeadlineDate              = $deadlineDateStr
+            WillMeetDeadline          = $willMeetDeadline
+            SlackHours                = $slackHours
+            Confidence                = $confidence
+            ForecastStatus            = $forecastStatus
+            BottleneckReviewers       = $sortedBottlenecks
+        })
+    }
+
+    # --- Build summary ---
+    $onTrackCount  = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'OnTrack' }).Count
+    $atRiskCount   = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'AtRisk' }).Count
+    $willMissCount = @($forecasts | Where-Object { $_['ForecastStatus'] -eq 'WillMiss' }).Count
+
+    $avgCompletion = 0.0
+    if ($forecasts.Count -gt 0) {
+        $totalPct = 0.0
+        foreach ($f in $forecasts) { $totalPct += $f['CompletionPct'] }
+        $avgCompletion = [Math]::Round($totalPct / $forecasts.Count, 1)
+    }
+
+    Write-SPLog -Message "Get-SPCampaignCompletionForecast: $($forecasts.Count) active campaign(s), OnTrack=$onTrackCount, AtRisk=$atRiskCount, WillMiss=$willMissCount" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPCampaignCompletionForecast' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Forecasts = @($forecasts)
+        Summary   = @{
+            ActiveCampaigns           = $forecasts.Count
+            OnTrack                   = $onTrackCount
+            AtRisk                    = $atRiskCount
+            WillMiss                  = $willMissCount
+            AvgCompletionPct          = $avgCompletion
+            CampaignsNeedingAttention = @($needingAttention)
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -3867,5 +4726,7 @@ Export-ModuleMember -Function @(
     'Get-SPRemediationPriority',
     'Get-SPIdentityAccessSpread',
     'Compare-SPAuditPeriods',
-    'Test-SPGovernancePolicy'
+    'Test-SPGovernancePolicy',
+    'Get-SPCampaignCoverageGaps',
+    'Get-SPCampaignCompletionForecast'
 )
