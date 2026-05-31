@@ -17,7 +17,7 @@
 | DF-01 | Policy Compliance Report | P13-05 | P13-04 (DONE) | DONE |
 | DF-02 | Governance Dashboard Data Export | P13-08 | none | DONE |
 | DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | DONE |
-| DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | PENDING |
+| DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | DONE |
 | DF-05 | Audit Evidence Integrity Chain | P14-03 | none | PENDING |
 | DF-06 | Source Onboarding Readiness | P14-04 | none | PENDING |
 | DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | PENDING |
@@ -86,14 +86,21 @@ dashboard export. The script an auditor asks for.
 
 ## DF-04: Phase 13 Pester Tests (P13-10)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** DF-03
 
-**Tests for P13 functions:** Test-SPGovernancePolicy, Export-SPPolicyComplianceHtml,
-Measure-SPAuditPeriodComparison, Get-SPAccessProfileInventory, Get-SPRoleInventory,
-Get-SPMultiSourceIdentityCorrelation, Export-SPGovernanceDashboardData.
+**Tests for P13 functions:** Get-SPAccessProfileInventory, Get-SPRoleInventory,
+Get-SPIdentityAccessSpread, Test-SPGovernancePolicy, Compare-SPAuditPeriods,
+Export-SPPolicyComplianceHtml, Export-SPGovernanceDashboardData.
 
-**Files:** Tests/SP.GovernanceDepth.Tests.ps1 (NEW)
+**Tests:** P13-T01 through P13-T07 (7 Describe blocks, ~50 assertions).
+
+**Also fixed:** Import-TestModules.ps1 `-Audit` switch updated from
+`SP.AuditReport.psm1` (no longer exists) to the five split sub-modules:
+SP.AuditQueries, SP.AuditReportCore, SP.AuditAnalytics, SP.AuditReportHtml,
+SP.AuditOperations.
+
+**Files:** Tests/SP.GovernanceDepth.Tests.ps1 (NEW), Tests/Import-TestModules.ps1
 
 ---
 
