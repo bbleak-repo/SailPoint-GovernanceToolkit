@@ -343,7 +343,7 @@ No NuGet packages, no third-party modules, no download-at-runtime dependencies.
 
 - Structured JSONL format (`SP.Logging`) with severity, component, action, correlationID
 - No credential values written to log events (ClientId, ClientSecret, passphrase, tokens excluded)
-- Log retention configurable via `Logging.RetentionDays`
+- Log retention configurable via `Retention.ArchiveDays` / `Retention.DeleteDays` (see `Retention` config section)
 
 ---
 

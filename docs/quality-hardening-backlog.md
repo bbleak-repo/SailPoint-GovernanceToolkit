@@ -17,24 +17,24 @@ Critical items first, then high, medium, low.
 
 | # | Priority | Feature | Size | Status |
 |---|----------|---------|------|--------|
-| QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | PENDING |
-| QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | PENDING |
-| QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | PENDING |
-| QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | PENDING |
-| QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | PENDING |
-| QH-06 | HIGH | Update valid-settings.json test fixture | S | PENDING |
-| QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | PENDING |
-| QH-08 | HIGH | Document settings.local.json override in README | S | PENDING |
-| QH-09 | HIGH | Document Audit-Mock directory | S | PENDING |
-| QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | PENDING |
-| QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | PENDING |
-| QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | PENDING |
-| QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | PENDING |
-| QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | PENDING |
-| QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | PENDING |
-| QH-16 | LOW | Add Power BI-optimized CSV export | M | PENDING |
-| QH-17 | LOW | Add credential rotation / vault re-key command | M | PENDING |
-| QH-18 | LOW | Update SP.Testing module for newer workflows | M | PENDING |
+| QH-01 | CRITICAL | Create SP.DisconnectedApps.psd1 manifest | S | DONE |
+| QH-02 | CRITICAL | Implement Send-SPReport SMTP (replace stub) | S | DONE |
+| QH-03 | CRITICAL | Add log retention step to Daily Orchestrator | S | DONE |
+| QH-04 | CRITICAL | Add DisconnectedApps.ISC to config defaults | S | DONE |
+| QH-05 | CRITICAL | Expand Test-SPConfiguration for 4 missing sections | M | DONE |
+| QH-06 | HIGH | Update valid-settings.json test fixture | S | DONE |
+| QH-07 | HIGH | Create Invoke-SPRetention.ps1 CLI script | S | DONE |
+| QH-08 | HIGH | Document settings.local.json override in README | S | DONE |
+| QH-09 | HIGH | Document Audit-Mock directory | S | DONE |
+| QH-10 | HIGH | Consolidate duplicate SMTP config sections | M | DONE |
+| QH-11 | MEDIUM | Fix SHA1 to SHA256 in logging mutex (FIPS compat) | S | DONE |
+| QH-12 | MEDIUM | Add Pester tests for CLI script entry points | M | DONE |
+| QH-13 | MEDIUM | Add config template v1->v2 migration guidance | S | DONE |
+| QH-14 | MEDIUM | Remove dead Logging.RetentionDays config key | S | DONE |
+| QH-15 | MEDIUM | Fix duplicate DeltaCert.CampaignNamePrefix | S | DONE |
+| QH-16 | LOW | Add Power BI-optimized CSV export | M | DONE |
+| QH-17 | LOW | Add credential rotation / vault re-key command | M | DONE |
+| QH-18 | LOW | Update SP.Testing module for newer workflows | M | DONE |
 | QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | PENDING |
 | QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | PENDING |
 
@@ -42,7 +42,7 @@ Critical items first, then high, medium, low.
 
 ## QH-01: Create SP.DisconnectedApps.psd1 Manifest
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** Three CLI scripts reference `SP.DisconnectedApps.psd1` with `Required = $true`
@@ -58,7 +58,7 @@ SP.DeltaCert.psd1 pattern. List all 4 psm1 files as NestedModules. Export all pu
 
 ## QH-02: Implement Send-SPReport SMTP (Replace Stub)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Send-SPReport` logs "SMTP stub -- would send" but never sends email.
@@ -75,7 +75,7 @@ Keep the `Smtp.Enabled = false` guard (only send when explicitly enabled).
 
 ## QH-03: Add Log Retention Step to Daily Orchestrator
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Invoke-SPLogRetention` exists but the Daily Orchestrator never calls it.
@@ -91,7 +91,7 @@ Output directories grow without bound on daily runs.
 
 ## QH-04: Add DisconnectedApps.ISC to Config Defaults
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `settings.json` has `DisconnectedApps.ISC` section but `Get-SPConfigDefaults()`
@@ -113,7 +113,7 @@ ISC = @{
 
 ## QH-05: Expand Test-SPConfiguration for Missing Sections
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-04
 
 **Problem:** `Test-SPConfiguration` validates only 7 of 11 config sections. Missing:
@@ -129,7 +129,7 @@ type validation, range constraints, path existence checks.
 
 ## QH-06: Update valid-settings.json Test Fixture
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-04
 
 **Problem:** Test fixture missing Notification, Retention, Leadership, DisconnectedApps.ISC
@@ -143,7 +143,7 @@ sections. Tests using this fixture don't exercise validation for these sections.
 
 ## QH-07: Create Invoke-SPRetention.ps1 CLI Script
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Invoke-SPLogRetention` function exists but no standalone CLI entry point.
@@ -158,7 +158,7 @@ Users can't run retention cleanup without writing their own wrapper.
 
 ## QH-08: Document settings.local.json Override
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Resolve-SPConfigPath` supports `.local.json` override (gitignored) but
@@ -173,7 +173,7 @@ file separate from the tracked template.
 
 ## QH-09: Document Audit-Mock Directory
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Audit-Mock/` contains pre-generated reports but is not documented.
@@ -187,7 +187,7 @@ Users don't know it can serve as an offline demo.
 
 ## QH-10: Consolidate Duplicate SMTP Config
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** QH-02
 
 **Problem:** Two SMTP configs: `Audit.Smtp` (for Send-SPReport) and `Notification.Smtp`
@@ -197,13 +197,20 @@ Users don't know it can serve as an offline demo.
 make `Send-SPReport` read from `Notification.Smtp` as fallback when `Audit.Smtp` is empty,
 and document that `Notification.Smtp` is the primary SMTP config.
 
-**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Config/settings.json`, docs
+**Resolution:** `Send-SPReport` now falls back to `Notification.Smtp` connection fields
+(Server, From, Port, UseSsl) when `Audit.Smtp` fields are empty. `Audit.Smtp.Enabled`
+and `Audit.Smtp.SubjectPrefix` remain exclusive to report delivery. Logs the source
+config used. `_note` fields added to both SMTP sections in settings.json. Script
+documentation updated to reflect the fallback behavior.
+
+**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Config/settings.json`,
+`Scripts/Invoke-SPReportDistribution.ps1`
 
 ---
 
 ## QH-11: Fix SHA1 to SHA256 in Logging Mutex
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `SP.Logging.psm1` uses SHA1 for mutex name generation. SHA1 is deprecated
@@ -211,20 +218,30 @@ and throws in FIPS mode. Not a security risk but causes scanner findings and FIP
 
 **Fix:** Replace `SHA1.Create()` with `SHA256.Create()` and truncate hash to same length.
 
+**Resolution:** Replaced `SHA1.Create()` with `SHA256.Create()` at line 283. SHA256 output
+(64 hex chars) is truncated to 40 chars to maintain identical mutex name length as before.
+FIPS-enforced environments will no longer throw on log file writes.
+
 **Files:** `Modules/SP.Core/SP.Logging.psm1`
 
 ---
 
 ## QH-12: Add Pester Tests for CLI Script Entry Points
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
-**Problem:** No Pester tests for the 14 entry-point scripts. Parameter validation,
+**Problem:** No Pester tests for the 16 entry-point scripts. Parameter validation,
 module loading, exit codes, and WhatIf behavior are untested.
 
-**Fix:** New test file with at least: syntax validation (AST parse) for all 14 scripts,
+**Fix:** New test file with at least: syntax validation (AST parse) for all 16 scripts,
 parameter validation tests for key scripts, WhatIf behavior test for mutating scripts.
+
+**Resolution:** Created `Tests/SP.CliScripts.Tests.ps1` with 5 test contexts (CLI-001
+through CLI-005): AST syntax validation for all 16 scripts, #Requires version check,
+-Help switch presence, SupportsShouldProcess on 12 mutating scripts, expected parameters
+on key scripts (CampaignAudit, Retention, DeltaCert, Vault, Orchestrator), ValidateSet
+for OutputMode, and read-only script negative check. Uses ForEach data-driven tests.
 
 **Files:** `Tests/SP.CliScripts.Tests.ps1` (new)
 
@@ -232,7 +249,7 @@ parameter validation tests for key scripts, WhatIf behavior test for mutating sc
 
 ## QH-13: Config Template Migration Guidance
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** v1 and v2 templates exist but no migration script or diff for upgrade.
@@ -240,13 +257,19 @@ parameter validation tests for key scripts, WhatIf behavior test for mutating sc
 **Fix:** Add migration notes to `Config/Templates/VERSION-HISTORY.md` with exact
 column additions and a one-liner diff command.
 
+**Resolution:** Added "Migrating v1 to v2" section to VERSION-HISTORY.md with: quick
+diff commands to compare headers, step-by-step column additions for both accounts (3
+new columns) and entitlements (3 new columns), PowerShell one-liners to bulk-append
+v2 columns to existing v1 files, and onboarding guide upgrade note. Confirms no code
+changes required -- v1 files continue to work.
+
 **Files:** `Config/Templates/VERSION-HISTORY.md`
 
 ---
 
 ## QH-14: Remove Dead Logging.RetentionDays Config Key
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `Logging.RetentionDays` is defined in defaults and config but never used
@@ -256,13 +279,22 @@ by `Invoke-SPLogRetention`. Dead config key creates confusion.
 **Fix:** Either wire `Logging.RetentionDays` into the logging module OR remove it
 from defaults and document that `Retention.*` is the authoritative config.
 
-**Files:** `Modules/SP.Core/SP.Config.psm1`, `Config/settings.json`
+**Resolution:** Removed `Logging.RetentionDays` from all locations: `Get-SPConfigDefaults`
+(two instances), `Test-SPConfiguration` positive-integer validation, `SP.Logging.psm1`
+fallback config, `Config/settings.json`, `Tests/TestData/valid-settings.json`, and
+`Tests/SP.Auth.Tests.ps1` fixture. Updated `docs/toolkit-status.md` to reference
+`Retention.ArchiveDays` / `Retention.DeleteDays` as the authoritative retention config.
+GUI file (`SP.MainWindow.psm1`) not modified per project conventions.
+
+**Files:** `Modules/SP.Core/SP.Config.psm1`, `Modules/SP.Core/SP.Logging.psm1`,
+`Config/settings.json`, `Tests/TestData/valid-settings.json`, `Tests/SP.Auth.Tests.ps1`,
+`docs/toolkit-status.md`
 
 ---
 
 ## QH-15: Fix Duplicate DeltaCert.CampaignNamePrefix
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** `DeltaCert.CampaignNamePrefix` and `DeltaCert.Escalation.CampaignNamePrefix`
@@ -271,13 +303,24 @@ are both "AD Delta Cert". Intent is unclear. Document or consolidate.
 **Fix:** Document that Escalation prefix defaults to the main prefix if not specified.
 Update escalation code to fall back to main prefix when its own is empty.
 
-**Files:** `Config/settings.json`, docs, `Modules/SP.DeltaCert/SP.DeltaCertRunner.psm1`
+**Resolution:** Set `DeltaCert.Escalation.CampaignNamePrefix` to empty string in config
+defaults (`Get-SPConfigDefaults` -- both copies), `Config/settings.json`, and
+`Tests/TestData/valid-settings.json`. Empty value signals "inherit from
+`DeltaCert.CampaignNamePrefix`". Added `_note` in settings.json explaining the fallback.
+Updated `Test-SPConfiguration` warning message to clarify the override semantics.
+Updated `.PARAMETER CampaignNamePrefix` documentation in `Invoke-SPDeltaCertRun` and
+`Invoke-SPDeltaCertCleanup` to document the inheritance chain. CLI scripts
+(`Invoke-SPDeltaCertEscalate.ps1`, `Invoke-SPDailyOrchestrator.ps1`) already had correct
+fallback logic: Escalation prefix -> main prefix -> hardcoded default.
+
+**Files:** `Config/settings.json`, `Modules/SP.Core/SP.Config.psm1`,
+`Modules/SP.DeltaCert/SP.DeltaCertRunner.psm1`, `Tests/TestData/valid-settings.json`
 
 ---
 
 ## QH-16: Power BI-Optimized CSV Export
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** No flat denormalized CSV optimized for Power BI / Tableau consumption.
@@ -287,13 +330,23 @@ Existing `Export-SPAuditCsv` exports raw audit data but not in a BI-ready format
 per decision: campaign, identity, access, reviewer, decision, date, remediation status,
 org level, app name. Ready for Power BI import.
 
-**Files:** `Modules/SP.Audit/SP.AuditReport.psm1` or new file
+**Resolution:** Created `Export-SPGovernanceBIData` function producing a single flat
+`bi-governance-{correlationId}.csv` with 41 columns per row. Each row is one access
+review decision enriched with: campaign metadata (id, name, type, status, dates,
+completion%), reviewer performance (avg response hours, items decided, approval rate,
+rubber stamp risk), campaign aggregates (approved/revoked/pending counts, reviewer
+count, avg/median response hours), leadership org level (director, executive -- when
+`LeadershipData` parameter is provided), and days-to-remediate for revoked items.
+Returns `@{Success; Data = @{File; RowCount; Columns}; Error}`. Added to
+`Export-ModuleMember` and `SP.Audit.psd1` FunctionsToExport.
+
+**Files:** `Modules/SP.Audit/SP.AuditReport.psm1`, `Modules/SP.Audit/SP.Audit.psd1`
 
 ---
 
 ## QH-17: Credential Rotation / Vault Re-Key
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** PAT rotation requires manual remove + add. No rotate or re-key workflow.
@@ -302,13 +355,24 @@ org level, app name. Ready for Power BI import.
 without requiring the old value. Add `Update-SPVaultPassphrase` that re-encrypts the
 vault with a new passphrase.
 
-**Files:** `Modules/SP.Core/SP.Vault.psm1`
+**Resolution:** Added two new public functions to `SP.Vault.psm1`:
+- `Update-SPVaultCredential`: Updates ClientId and/or ClientSecret for an existing vault
+  key. Accepts optional -ClientId and -ClientSecret (at least one required). Preserves
+  unchanged fields. Returns `@{Success; Data=@{UpdatedFields}; Error}`.
+- `Update-SPVaultPassphrase`: Decrypts vault with current passphrase, re-encrypts with
+  new passphrase (fresh salt + IV via Invoke-SPVaultEncrypt). Enforces 12-char minimum
+  on new passphrase. Verifies read-back after re-key. Returns
+  `@{Success; Data=@{KeyCount}; Error}`.
+Both functions added to `Export-ModuleMember` in SP.Vault.psm1 and `FunctionsToExport`
+in SP.Core.psd1.
+
+**Files:** `Modules/SP.Core/SP.Vault.psm1`, `Modules/SP.Core/SP.Core.psd1`
 
 ---
 
 ## QH-18: Update SP.Testing Module for Newer Workflows
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Problem:** SP.Testing module (5 files) hasn't been updated since Feb 2026. Does not
@@ -317,7 +381,23 @@ handle DeltaCert, DisconnectedApps, or newer report types.
 **Fix:** Review and update SP.BatchRunner.psm1 to orchestrate tests for newer workflows.
 Update SP.Assertions.psm1 with assertions relevant to delta cert and disconnected apps.
 
-**Files:** `Modules/SP.Testing/*.psm1`
+**Resolution:** Updated all 4 SP.Testing sub-modules to v2.0.0:
+- **SP.Assertions.psm1**: Added 6 new assertions -- `Assert-SPDeltaGrantEventCount` and
+  `Assert-SPDeltaManagerGrouping` for delta cert workflows; `Assert-SPDisconnectedAppFileValid`,
+  `Assert-SPDisconnectedAppDeltaDetected`, `Assert-SPDeletionThresholdSafe`, and
+  `Assert-SPAggregationComplete` for disconnected app workflows. All follow the existing
+  `@{Pass; Actual; Message}` return pattern.
+- **SP.BatchRunner.psm1**: Added `Invoke-SPDeltaCertTest` (5-step workflow: QueryGrantEvents,
+  FilterIdentities, GroupByManager, CreateCampaigns, AssertCampaignsCreated) and
+  `Invoke-SPDisconnectedAppTest` (7-step workflow: ValidateFiles, Snapshot, CompareDelta,
+  CheckThreshold, ResolveIdentities, CreateCampaigns, PushToISC). Both follow the same
+  abort-on-failure, evidence-recording, and WhatIf patterns as `Invoke-SPSingleTest`.
+- **SP.TestLoader.psm1**: Added `Import-SPDeltaCertTestCases` and
+  `Import-SPDisconnectedAppTestCases` CSV loaders with column validation and priority sorting.
+- **SP.Testing.psd1**: Updated FunctionsToExport from 12 to 22 functions. Version bumped to 2.0.0.
+
+**Files:** `Modules/SP.Testing/SP.Assertions.psm1`, `Modules/SP.Testing/SP.BatchRunner.psm1`,
+`Modules/SP.Testing/SP.TestLoader.psm1`, `Modules/SP.Testing/SP.Testing.psd1`
 
 ---
 

@@ -130,6 +130,9 @@
 
         # SP.AuditReport - Role Inventory HTML (P13-02)
         'Export-SPRoleInventoryHtml'
+
+        # SP.AuditReport - Power BI-Optimized CSV Export (QH-16)
+        'Export-SPGovernanceBIData'
     )
 
     # Do not export variables or aliases from nested modules

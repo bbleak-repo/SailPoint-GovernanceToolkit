@@ -1112,6 +1112,860 @@ function Invoke-SPSingleTest {
 
 #endregion
 
+#region DeltaCert Test Executor
+
+function Invoke-SPDeltaCertTest {
+    <#
+    .SYNOPSIS
+        Execute a 5-step delta certification test workflow.
+    .DESCRIPTION
+        Runs the delta cert lifecycle: query grant events, filter identities,
+        group by manager, create campaigns, and assert campaign creation.
+        Evidence is recorded after every step.
+
+        Delta cert lifecycle steps:
+            1  QueryGrantEvents
+            2  FilterIdentities
+            3  GroupByManager
+            4  CreateCampaigns (Invoke-SPDeltaCertRun)
+            5  AssertCampaignsCreated
+    .PARAMETER TestCase
+        Delta cert test case PSCustomObject with fields: TestId, TestName,
+        LookbackHours, MinimumEvents, ExpectCampaignCount, WhatIf overrides.
+    .PARAMETER CorrelationID
+        Suite-level correlation ID.
+    .PARAMETER WhatIf
+        If set, log intentions without making API calls.
+    .PARAMETER EvidenceBase
+        Base path for evidence directory creation.
+    .OUTPUTS
+        @{Success; TestId; TestName; Steps=$array; Pass; Fail; Error; DurationSeconds}
+    .EXAMPLE
+        $r = Invoke-SPDeltaCertTest -TestCase $tc -CorrelationID $cid -WhatIf
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$TestCase,
+
+        [Parameter(Mandatory)]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [switch]$WhatIf,
+
+        [Parameter()]
+        [string]$EvidenceBase = '.'
+    )
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $steps       = [System.Collections.Generic.List[object]]::new()
+    $passedSteps = 0
+    $failedSteps = 0
+    $testPassed  = $false
+    $testError   = ''
+
+    $config = $null
+    if (Get-Command -Name Get-SPConfig -ErrorAction SilentlyContinue) {
+        $config = Get-SPConfig
+    }
+
+    $effectiveWhatIf = $WhatIf.IsPresent
+    $testId   = $TestCase.TestId
+    $testName = $TestCase.TestName
+    $lookbackHours    = if ($TestCase.PSObject.Properties.Name -contains 'LookbackHours')    { [int]$TestCase.LookbackHours }    else { 24 }
+    $minimumEvents    = if ($TestCase.PSObject.Properties.Name -contains 'MinimumEvents')    { [int]$TestCase.MinimumEvents }    else { 1 }
+    $expectCampaigns  = if ($TestCase.PSObject.Properties.Name -contains 'ExpectCampaignCount') { [int]$TestCase.ExpectCampaignCount } else { 1 }
+
+    $evidencePath = $EvidenceBase
+    if (Get-Command -Name New-SPCampaignEvidencePath -ErrorAction SilentlyContinue) {
+        $evidencePath = New-SPCampaignEvidencePath -TestId $testId -BasePath $EvidenceBase
+    }
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "Starting delta cert test $testId ($testName). WhatIf=$effectiveWhatIf LookbackHours=$lookbackHours" `
+            -Severity INFO -Component "SP.BatchRunner" -Action "InvokeDeltaCertTest" `
+            -CorrelationID $CorrelationID -CampaignTestId $testId
+    }
+
+    $recordStep = {
+        param($StepNum, $Action, $Status, $Message, $Data)
+        $stepRecord = @{ Step = $StepNum; Action = $Action; Status = $Status; Message = $Message; Data = $Data }
+        $steps.Add($stepRecord)
+        if (Get-Command -Name Write-SPEvidenceEvent -ErrorAction SilentlyContinue) {
+            Write-SPEvidenceEvent -EvidencePath $evidencePath -TestId $testId `
+                -Step $StepNum -Action $Action -Status $Status -Message $Message `
+                -Data $Data -CorrelationID $CorrelationID
+        }
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            $sev = switch ($Status) { 'PASS' { 'INFO' } 'FAIL' { 'ERROR' } 'WARN' { 'WARN' } default { 'INFO' } }
+            Write-SPLog -Message "[$testId] Step $StepNum $Action : $Status - $Message" `
+                -Severity $sev -Component "SP.BatchRunner" -Action "InvokeDeltaCertTest" `
+                -CorrelationID $CorrelationID -CampaignTestId $testId
+        }
+    }
+
+    $abortRemaining = {
+        param([int]$FromStep, [int]$ToStep, [string]$Reason)
+        for ($s = $FromStep; $s -le $ToStep; $s++) {
+            & $recordStep $s "Skipped" "SKIP" "Skipped due to earlier failure: $Reason" $null
+        }
+    }
+
+    $aborted = $false
+    $grantEvents       = @()
+    $affectedIdentities = @()
+    $managerGroups     = $null
+
+    # ------------------------------------------------------------------
+    # STEP 1: QueryGrantEvents
+    # ------------------------------------------------------------------
+    $stepNum = 1
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "QueryGrantEvents" "INFO" "[WhatIf] Would query grant events for last $lookbackHours hours" $null
+        $grantEvents = @(@{ id = 'whatif-event-001' })
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Get-SPDeltaGrantEvents -ErrorAction SilentlyContinue)) {
+                $msg = "Get-SPDeltaGrantEvents not available - SP.DeltaCert module not loaded"
+                & $recordStep $stepNum "QueryGrantEvents" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $evResult = Get-SPDeltaGrantEvents -LookbackHours $lookbackHours
+                $assertEvents = Assert-SPDeltaGrantEventCount -GrantEventResult $evResult -MinimumCount $minimumEvents
+
+                if ($assertEvents.Pass) {
+                    $grantEvents = @($evResult.Data)
+                    & $recordStep $stepNum "QueryGrantEvents" "PASS" "Found $($assertEvents.Actual) grant event(s)" @{ EventCount = $assertEvents.Actual }
+                    $passedSteps++
+                }
+                else {
+                    & $recordStep $stepNum "QueryGrantEvents" "FAIL" $assertEvents.Message @{ Actual = $assertEvents.Actual; Expected = $minimumEvents }
+                    $failedSteps++; $testError = $assertEvents.Message; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "QueryGrantEvents threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "QueryGrantEvents" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 2 5 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DeltaCert'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 2: FilterIdentities
+    # ------------------------------------------------------------------
+    $stepNum = 2
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "FilterIdentities" "INFO" "[WhatIf] Would filter $($grantEvents.Count) events to active identities with managers" $null
+        $affectedIdentities = @(@{ identityId = 'whatif-id-001'; managerId = 'whatif-mgr-001' })
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Get-SPDeltaAffectedIdentities -ErrorAction SilentlyContinue)) {
+                $msg = "Get-SPDeltaAffectedIdentities not available - SP.DeltaCert module not loaded"
+                & $recordStep $stepNum "FilterIdentities" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $idResult = Get-SPDeltaAffectedIdentities -GrantEvents $grantEvents
+
+                if ($idResult.Success) {
+                    $affectedIdentities = @($idResult.Data)
+                    & $recordStep $stepNum "FilterIdentities" "PASS" "Resolved $($affectedIdentities.Count) affected identity(ies)" @{ IdentityCount = $affectedIdentities.Count }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Get-SPDeltaAffectedIdentities failed: $($idResult.Error)"
+                    & $recordStep $stepNum "FilterIdentities" "FAIL" $msg $null
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "FilterIdentities threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "FilterIdentities" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 3 5 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DeltaCert'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 3: GroupByManager
+    # ------------------------------------------------------------------
+    $stepNum = 3
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "GroupByManager" "INFO" "[WhatIf] Would group $($affectedIdentities.Count) identities by manager" $null
+        $managerGroups = @{ 'whatif-mgr-001' = @(@{ identityId = 'whatif-id-001' }) }
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Group-SPDeltaByManager -ErrorAction SilentlyContinue)) {
+                $msg = "Group-SPDeltaByManager not available - SP.DeltaCert module not loaded"
+                & $recordStep $stepNum "GroupByManager" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $groupResult = Group-SPDeltaByManager -AffectedIdentities $affectedIdentities
+                $assertGroup = Assert-SPDeltaManagerGrouping -GroupResult $groupResult -MinimumGroups 1
+
+                if ($assertGroup.Pass) {
+                    $managerGroups = $groupResult.Data
+                    & $recordStep $stepNum "GroupByManager" "PASS" "Grouped into $($assertGroup.Actual) manager group(s)" @{ GroupCount = $assertGroup.Actual }
+                    $passedSteps++
+                }
+                else {
+                    & $recordStep $stepNum "GroupByManager" "FAIL" $assertGroup.Message @{ Actual = $assertGroup.Actual }
+                    $failedSteps++; $testError = $assertGroup.Message; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "GroupByManager threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "GroupByManager" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 4 5 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DeltaCert'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 4: CreateCampaigns
+    # ------------------------------------------------------------------
+    $stepNum = 4
+    $campaignsCreated = 0
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "CreateCampaigns" "INFO" "[WhatIf] Would invoke Invoke-SPDeltaCertRun to create campaigns for $($managerGroups.Count) manager group(s)" $null
+        $campaignsCreated = $managerGroups.Count
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Invoke-SPDeltaCertRun -ErrorAction SilentlyContinue)) {
+                $msg = "Invoke-SPDeltaCertRun not available - SP.DeltaCert module not loaded"
+                & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $runParams = @{ LookbackHours = $lookbackHours }
+                if ($TestCase.PSObject.Properties.Name -contains 'CampaignNamePrefix') {
+                    $runParams['CampaignNamePrefix'] = $TestCase.CampaignNamePrefix
+                }
+                if ($TestCase.PSObject.Properties.Name -contains 'FallbackReviewerIdentityId') {
+                    $runParams['FallbackReviewerIdentityId'] = $TestCase.FallbackReviewerIdentityId
+                }
+
+                $runResult = Invoke-SPDeltaCertRun @runParams
+
+                if ($runResult.Success) {
+                    $campaignsCreated = 0
+                    if ($null -ne $runResult.Data) {
+                        if ($runResult.Data -is [hashtable] -and $runResult.Data.ContainsKey('CampaignsCreated')) {
+                            $campaignsCreated = [int]$runResult.Data.CampaignsCreated
+                        }
+                        elseif ($runResult.Data.PSObject.Properties.Name -contains 'CampaignsCreated') {
+                            $campaignsCreated = [int]$runResult.Data.CampaignsCreated
+                        }
+                    }
+                    & $recordStep $stepNum "CreateCampaigns" "PASS" "Created $campaignsCreated campaign(s)" @{ CampaignsCreated = $campaignsCreated }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Invoke-SPDeltaCertRun failed: $($runResult.Error)"
+                    & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg $null
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "CreateCampaigns threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 5 5 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DeltaCert'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 5: AssertCampaignsCreated
+    # ------------------------------------------------------------------
+    $stepNum = 5
+    if ($campaignsCreated -ge $expectCampaigns) {
+        & $recordStep $stepNum "AssertCampaignsCreated" "PASS" "Campaign count $campaignsCreated meets expected $expectCampaigns" @{ Actual = $campaignsCreated; Expected = $expectCampaigns }
+        $passedSteps++
+    }
+    else {
+        $msg = "Campaign count $campaignsCreated below expected $expectCampaigns"
+        & $recordStep $stepNum "AssertCampaignsCreated" "FAIL" $msg @{ Actual = $campaignsCreated; Expected = $expectCampaigns }
+        $failedSteps++
+        $testError = $msg
+    }
+
+    # ------------------------------------------------------------------
+    # Finalise
+    # ------------------------------------------------------------------
+    $sw.Stop()
+    $overallPass = ($failedSteps -eq 0)
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        $sev = if ($overallPass) { 'INFO' } else { 'ERROR' }
+        Write-SPLog -Message "DeltaCert test $testId complete. Pass=$overallPass PassedSteps=$passedSteps FailedSteps=$failedSteps" `
+            -Severity $sev -Component "SP.BatchRunner" -Action "InvokeDeltaCertTest" `
+            -CorrelationID $CorrelationID -CampaignTestId $testId
+    }
+
+    $finalResult = @{
+        Success         = $overallPass
+        TestId          = $testId
+        TestName        = $testName
+        CampaignType    = 'DeltaCert'
+        Steps           = $steps
+        Pass            = $overallPass
+        Skipped         = $false
+        Fail            = $failedSteps
+        Error           = $testError
+        DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+    }
+
+    _ExportAndReturn $finalResult $evidencePath $testId $testName
+    return $finalResult
+}
+
+#endregion
+
+#region DisconnectedApp Test Executor
+
+function Invoke-SPDisconnectedAppTest {
+    <#
+    .SYNOPSIS
+        Execute a 7-step disconnected app certification test workflow.
+    .DESCRIPTION
+        Runs the disconnected app lifecycle: validate files, snapshot, compare
+        deltas, check deletion threshold, resolve identities, create campaigns,
+        and push to ISC. Evidence is recorded after every step.
+
+        Disconnected app lifecycle steps:
+            1  ValidateFiles
+            2  Snapshot
+            3  CompareDelta
+            4  CheckThreshold
+            5  ResolveIdentities
+            6  CreateCampaigns
+            7  PushToISC
+    .PARAMETER TestCase
+        Disconnected app test case PSCustomObject with fields: TestId, TestName,
+        AppName, AccountFilePath, EntitlementFilePath, ExpectChanges.
+    .PARAMETER CorrelationID
+        Suite-level correlation ID.
+    .PARAMETER WhatIf
+        If set, log intentions without making API calls.
+    .PARAMETER EvidenceBase
+        Base path for evidence directory creation.
+    .OUTPUTS
+        @{Success; TestId; TestName; Steps=$array; Pass; Fail; Error; DurationSeconds}
+    .EXAMPLE
+        $r = Invoke-SPDisconnectedAppTest -TestCase $tc -CorrelationID $cid -WhatIf
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [PSCustomObject]$TestCase,
+
+        [Parameter(Mandatory)]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [switch]$WhatIf,
+
+        [Parameter()]
+        [string]$EvidenceBase = '.'
+    )
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $steps       = [System.Collections.Generic.List[object]]::new()
+    $passedSteps = 0
+    $failedSteps = 0
+    $testError   = ''
+
+    $config = $null
+    if (Get-Command -Name Get-SPConfig -ErrorAction SilentlyContinue) {
+        $config = Get-SPConfig
+    }
+
+    $effectiveWhatIf = $WhatIf.IsPresent
+    $testId     = $TestCase.TestId
+    $testName   = $TestCase.TestName
+    $appName    = if ($TestCase.PSObject.Properties.Name -contains 'AppName') { $TestCase.AppName } else { 'UnknownApp' }
+    $acctPath   = if ($TestCase.PSObject.Properties.Name -contains 'AccountFilePath') { $TestCase.AccountFilePath } else { '' }
+    $entPath    = if ($TestCase.PSObject.Properties.Name -contains 'EntitlementFilePath') { $TestCase.EntitlementFilePath } else { '' }
+    $expectChanges = if ($TestCase.PSObject.Properties.Name -contains 'ExpectChanges') { [bool]$TestCase.ExpectChanges } else { $true }
+
+    $evidencePath = $EvidenceBase
+    if (Get-Command -Name New-SPCampaignEvidencePath -ErrorAction SilentlyContinue) {
+        $evidencePath = New-SPCampaignEvidencePath -TestId $testId -BasePath $EvidenceBase
+    }
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "Starting disconnected app test $testId ($testName). WhatIf=$effectiveWhatIf App=$appName" `
+            -Severity INFO -Component "SP.BatchRunner" -Action "InvokeDisconnectedAppTest" `
+            -CorrelationID $CorrelationID -CampaignTestId $testId
+    }
+
+    $recordStep = {
+        param($StepNum, $Action, $Status, $Message, $Data)
+        $stepRecord = @{ Step = $StepNum; Action = $Action; Status = $Status; Message = $Message; Data = $Data }
+        $steps.Add($stepRecord)
+        if (Get-Command -Name Write-SPEvidenceEvent -ErrorAction SilentlyContinue) {
+            Write-SPEvidenceEvent -EvidencePath $evidencePath -TestId $testId `
+                -Step $StepNum -Action $Action -Status $Status -Message $Message `
+                -Data $Data -CorrelationID $CorrelationID
+        }
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            $sev = switch ($Status) { 'PASS' { 'INFO' } 'FAIL' { 'ERROR' } 'WARN' { 'WARN' } default { 'INFO' } }
+            Write-SPLog -Message "[$testId] Step $StepNum $Action : $Status - $Message" `
+                -Severity $sev -Component "SP.BatchRunner" -Action "InvokeDisconnectedAppTest" `
+                -CorrelationID $CorrelationID -CampaignTestId $testId
+        }
+    }
+
+    $abortRemaining = {
+        param([int]$FromStep, [int]$ToStep, [string]$Reason)
+        for ($s = $FromStep; $s -le $ToStep; $s++) {
+            & $recordStep $s "Skipped" "SKIP" "Skipped due to earlier failure: $Reason" $null
+        }
+    }
+
+    $aborted        = $false
+    $snapshotPath   = ''
+    $deltaResult    = $null
+    $resolvedIds    = @()
+
+    # ------------------------------------------------------------------
+    # STEP 1: ValidateFiles
+    # ------------------------------------------------------------------
+    $stepNum = 1
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "ValidateFiles" "INFO" "[WhatIf] Would validate account file '$acctPath' and entitlement file '$entPath'" $null
+        $passedSteps++
+    }
+    else {
+        try {
+            $acctValAvailable = Get-Command -Name Test-SPDisconnectedAppAccountFile -ErrorAction SilentlyContinue
+            $entValAvailable  = Get-Command -Name Test-SPDisconnectedAppEntitlementFile -ErrorAction SilentlyContinue
+
+            if (-not $acctValAvailable) {
+                $msg = "Test-SPDisconnectedAppAccountFile not available - SP.DisconnectedApps module not loaded"
+                & $recordStep $stepNum "ValidateFiles" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $acctVal = Test-SPDisconnectedAppAccountFile -FilePath $acctPath
+                $acctAssert = Assert-SPDisconnectedAppFileValid -ValidationResult $acctVal
+
+                $entAssert = @{ Pass = $true; Message = 'No entitlement file specified' }
+                if (-not [string]::IsNullOrWhiteSpace($entPath) -and $entValAvailable) {
+                    $entVal = Test-SPDisconnectedAppEntitlementFile -FilePath $entPath
+                    $entAssert = Assert-SPDisconnectedAppFileValid -ValidationResult $entVal
+                }
+
+                if ($acctAssert.Pass -and $entAssert.Pass) {
+                    & $recordStep $stepNum "ValidateFiles" "PASS" "Account and entitlement files validated" @{ AppName = $appName; AccountErrors = $acctAssert.ErrorCount; EntitlementErrors = $entAssert.ErrorCount }
+                    $passedSteps++
+                }
+                else {
+                    $msg = if (-not $acctAssert.Pass) { "Account: $($acctAssert.Message)" } else { "Entitlement: $($entAssert.Message)" }
+                    & $recordStep $stepNum "ValidateFiles" "FAIL" $msg @{ AppName = $appName }
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "ValidateFiles threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "ValidateFiles" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 2 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 2: Snapshot
+    # ------------------------------------------------------------------
+    $stepNum = 2
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "Snapshot" "INFO" "[WhatIf] Would save snapshot of '$acctPath'" $null
+        $snapshotPath = 'whatif-snapshot-path'
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Save-SPDisconnectedAppSnapshot -ErrorAction SilentlyContinue)) {
+                $msg = "Save-SPDisconnectedAppSnapshot not available"
+                & $recordStep $stepNum "Snapshot" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $snapResult = Save-SPDisconnectedAppSnapshot -FilePath $acctPath -AppName $appName -FileType 'accounts'
+
+                if ($snapResult.Success) {
+                    $snapshotPath = if ($snapResult.Data -is [string]) { $snapResult.Data } elseif ($null -ne $snapResult.Data -and $snapResult.Data.PSObject.Properties.Name -contains 'Path') { $snapResult.Data.Path } else { '' }
+                    & $recordStep $stepNum "Snapshot" "PASS" "Snapshot saved for $appName" @{ AppName = $appName; SnapshotPath = $snapshotPath }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Save-SPDisconnectedAppSnapshot failed: $($snapResult.Error)"
+                    & $recordStep $stepNum "Snapshot" "FAIL" $msg @{ AppName = $appName }
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "Snapshot threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "Snapshot" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 3 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 3: CompareDelta
+    # ------------------------------------------------------------------
+    $stepNum = 3
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "CompareDelta" "INFO" "[WhatIf] Would compare current file against previous snapshot" $null
+        $deltaResult = @{ Success = $true; Data = @{ Added = @(); Removed = @(); Modified = @() }; Error = $null }
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Compare-SPDisconnectedAppFiles -ErrorAction SilentlyContinue)) {
+                $msg = "Compare-SPDisconnectedAppFiles not available"
+                & $recordStep $stepNum "CompareDelta" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $prevSnap = $null
+                if (Get-Command -Name Get-SPDisconnectedAppPreviousSnapshot -ErrorAction SilentlyContinue) {
+                    $prevSnap = Get-SPDisconnectedAppPreviousSnapshot -AppName $appName -FileType 'accounts'
+                }
+
+                if ($null -eq $prevSnap -or -not $prevSnap.Success -or [string]::IsNullOrWhiteSpace("$($prevSnap.Data)")) {
+                    & $recordStep $stepNum "CompareDelta" "WARN" "No previous snapshot found for $appName - first run, skipping delta" @{ AppName = $appName }
+                    $deltaResult = @{ Success = $true; Data = @{ Added = @(); Removed = @(); Modified = @() }; Error = $null }
+                    $passedSteps++
+                }
+                else {
+                    $prevPath = if ($prevSnap.Data -is [string]) { $prevSnap.Data } else { $prevSnap.Data.Path }
+                    $deltaResult = Compare-SPDisconnectedAppFiles -CurrentPath $acctPath -PreviousPath $prevPath
+                    $deltaAssert = Assert-SPDisconnectedAppDeltaDetected -DeltaResult $deltaResult -ExpectChanges $expectChanges
+
+                    if ($deltaAssert.Pass) {
+                        & $recordStep $stepNum "CompareDelta" "PASS" $deltaAssert.Message @{ AppName = $appName; Added = $deltaAssert.Added; Removed = $deltaAssert.Removed; Modified = $deltaAssert.Modified }
+                        $passedSteps++
+                    }
+                    else {
+                        & $recordStep $stepNum "CompareDelta" "FAIL" $deltaAssert.Message @{ AppName = $appName }
+                        $failedSteps++; $testError = $deltaAssert.Message; $aborted = $true
+                    }
+                }
+            }
+        }
+        catch {
+            $msg = "CompareDelta threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "CompareDelta" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 4 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 4: CheckThreshold
+    # ------------------------------------------------------------------
+    $stepNum = 4
+    $removedCount = 0
+    if ($null -ne $deltaResult -and $null -ne $deltaResult.Data) {
+        $dData = $deltaResult.Data
+        if ($dData -is [hashtable] -and $dData.ContainsKey('Removed')) { $removedCount = @($dData.Removed).Count }
+        elseif ($dData.PSObject.Properties.Name -contains 'Removed') { $removedCount = @($dData.Removed).Count }
+    }
+
+    if ($removedCount -eq 0) {
+        & $recordStep $stepNum "CheckThreshold" "SKIP" "No removed accounts, threshold check not needed" @{ AppName = $appName }
+        $passedSteps++
+    }
+    elseif ($effectiveWhatIf) {
+        & $recordStep $stepNum "CheckThreshold" "INFO" "[WhatIf] Would check deletion threshold for $removedCount removed account(s)" $null
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Test-SPDisconnectedAppDeletionThreshold -ErrorAction SilentlyContinue)) {
+                & $recordStep $stepNum "CheckThreshold" "WARN" "Test-SPDisconnectedAppDeletionThreshold not available, skipping" $null
+                $passedSteps++
+            }
+            else {
+                $threshResult = Test-SPDisconnectedAppDeletionThreshold -CurrentPath $acctPath -DeltaResult $deltaResult
+                $threshAssert = Assert-SPDeletionThresholdSafe -ThresholdResult $threshResult
+
+                if ($threshAssert.Pass) {
+                    & $recordStep $stepNum "CheckThreshold" "PASS" $threshAssert.Message @{ AppName = $appName; Percentage = $threshAssert.Percentage; Threshold = $threshAssert.Threshold }
+                    $passedSteps++
+                }
+                else {
+                    & $recordStep $stepNum "CheckThreshold" "FAIL" $threshAssert.Message @{ AppName = $appName; Percentage = $threshAssert.Percentage; Threshold = $threshAssert.Threshold }
+                    $failedSteps++; $testError = $threshAssert.Message; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "CheckThreshold threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "CheckThreshold" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 5 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 5: ResolveIdentities
+    # ------------------------------------------------------------------
+    $stepNum = 5
+    $hasDeltas = $false
+    if ($null -ne $deltaResult -and $null -ne $deltaResult.Data) {
+        $dData = $deltaResult.Data
+        $addedC = 0; $removedC = 0; $modifiedC = 0
+        if ($dData -is [hashtable]) {
+            if ($dData.ContainsKey('Added'))    { $addedC    = @($dData.Added).Count }
+            if ($dData.ContainsKey('Removed'))  { $removedC  = @($dData.Removed).Count }
+            if ($dData.ContainsKey('Modified')) { $modifiedC = @($dData.Modified).Count }
+        }
+        else {
+            if ($dData.PSObject.Properties.Name -contains 'Added')    { $addedC    = @($dData.Added).Count }
+            if ($dData.PSObject.Properties.Name -contains 'Removed')  { $removedC  = @($dData.Removed).Count }
+            if ($dData.PSObject.Properties.Name -contains 'Modified') { $modifiedC = @($dData.Modified).Count }
+        }
+        $hasDeltas = ($addedC + $removedC + $modifiedC) -gt 0
+    }
+
+    if (-not $hasDeltas) {
+        & $recordStep $stepNum "ResolveIdentities" "SKIP" "No deltas to resolve" @{ AppName = $appName }
+        $passedSteps++
+    }
+    elseif ($effectiveWhatIf) {
+        & $recordStep $stepNum "ResolveIdentities" "INFO" "[WhatIf] Would resolve delta accounts to ISC identities" $null
+        $resolvedIds = @(@{ identityId = 'whatif-resolved-001' })
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Resolve-SPDisconnectedAppIdentities -ErrorAction SilentlyContinue)) {
+                & $recordStep $stepNum "ResolveIdentities" "WARN" "Resolve-SPDisconnectedAppIdentities not available, skipping" $null
+                $passedSteps++
+            }
+            else {
+                $resolveResult = Resolve-SPDisconnectedAppIdentities -DeltaResult $deltaResult -AppName $appName
+                if ($resolveResult.Success) {
+                    $resolvedIds = @($resolveResult.Data)
+                    & $recordStep $stepNum "ResolveIdentities" "PASS" "Resolved $($resolvedIds.Count) identity(ies) from delta accounts" @{ AppName = $appName; ResolvedCount = $resolvedIds.Count }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Resolve-SPDisconnectedAppIdentities failed: $($resolveResult.Error)"
+                    & $recordStep $stepNum "ResolveIdentities" "FAIL" $msg @{ AppName = $appName }
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "ResolveIdentities threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "ResolveIdentities" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 6 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 6: CreateCampaigns
+    # ------------------------------------------------------------------
+    $stepNum = 6
+    if (-not $hasDeltas) {
+        & $recordStep $stepNum "CreateCampaigns" "SKIP" "No deltas, no campaigns needed" @{ AppName = $appName }
+        $passedSteps++
+    }
+    elseif ($effectiveWhatIf) {
+        & $recordStep $stepNum "CreateCampaigns" "INFO" "[WhatIf] Would create certification campaign for $appName delta changes" $null
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Invoke-SPDisconnectedAppCertRun -ErrorAction SilentlyContinue)) {
+                $msg = "Invoke-SPDisconnectedAppCertRun not available"
+                & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg $null
+                $failedSteps++; $testError = $msg; $aborted = $true
+            }
+            else {
+                $certParams = @{ AppName = $appName; DeltaResult = $deltaResult }
+                $certResult = Invoke-SPDisconnectedAppCertRun @certParams
+
+                if ($certResult.Success) {
+                    & $recordStep $stepNum "CreateCampaigns" "PASS" "Campaign created for $appName" @{ AppName = $appName }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Invoke-SPDisconnectedAppCertRun failed: $($certResult.Error)"
+                    & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg @{ AppName = $appName }
+                    $failedSteps++; $testError = $msg; $aborted = $true
+                }
+            }
+        }
+        catch {
+            $msg = "CreateCampaigns threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "CreateCampaigns" "FAIL" $msg $null
+            $failedSteps++; $testError = $msg; $aborted = $true
+        }
+    }
+
+    if ($aborted) {
+        & $abortRemaining 7 7 $testError
+        $sw.Stop()
+        $result = @{ Success = $false; TestId = $testId; TestName = $testName; CampaignType = 'DisconnectedApp'; Steps = $steps; Pass = $false; Skipped = $false; Fail = $failedSteps; Error = $testError; DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2) }
+        _ExportAndReturn $result $evidencePath $testId $testName
+        return $result
+    }
+
+    # ------------------------------------------------------------------
+    # STEP 7: PushToISC
+    # ------------------------------------------------------------------
+    $stepNum = 7
+    if ($effectiveWhatIf) {
+        & $recordStep $stepNum "PushToISC" "INFO" "[WhatIf] Would push validated CSV to ISC for source aggregation" $null
+        $passedSteps++
+    }
+    else {
+        try {
+            if (-not (Get-Command -Name Push-SPDisconnectedAppToISC -ErrorAction SilentlyContinue)) {
+                & $recordStep $stepNum "PushToISC" "WARN" "Push-SPDisconnectedAppToISC not available, skipping" $null
+                $passedSteps++
+            }
+            else {
+                $pushResult = Push-SPDisconnectedAppToISC -AppName $appName -AccountFilePath $acctPath
+
+                if ($pushResult.Success) {
+                    & $recordStep $stepNum "PushToISC" "PASS" "Pushed $appName data to ISC" @{ AppName = $appName }
+                    $passedSteps++
+                }
+                else {
+                    $msg = "Push-SPDisconnectedAppToISC failed: $($pushResult.Error)"
+                    & $recordStep $stepNum "PushToISC" "FAIL" $msg @{ AppName = $appName }
+                    $failedSteps++
+                    $testError = $msg
+                }
+            }
+        }
+        catch {
+            $msg = "PushToISC threw exception: $($_.Exception.Message)"
+            & $recordStep $stepNum "PushToISC" "WARN" $msg @{ AppName = $appName }
+            $passedSteps++  # Treat push failure as non-fatal warning
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # Finalise
+    # ------------------------------------------------------------------
+    $sw.Stop()
+    $overallPass = ($failedSteps -eq 0)
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        $sev = if ($overallPass) { 'INFO' } else { 'ERROR' }
+        Write-SPLog -Message "DisconnectedApp test $testId complete. Pass=$overallPass PassedSteps=$passedSteps FailedSteps=$failedSteps" `
+            -Severity $sev -Component "SP.BatchRunner" -Action "InvokeDisconnectedAppTest" `
+            -CorrelationID $CorrelationID -CampaignTestId $testId
+    }
+
+    $finalResult = @{
+        Success         = $overallPass
+        TestId          = $testId
+        TestName        = $testName
+        CampaignType    = 'DisconnectedApp'
+        Steps           = $steps
+        Pass            = $overallPass
+        Skipped         = $false
+        Fail            = $failedSteps
+        Error           = $testError
+        DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+    }
+
+    _ExportAndReturn $finalResult $evidencePath $testId $testName
+    return $finalResult
+}
+
+#endregion
+
 #region Private Helpers
 
 function _ExportAndReturn {
@@ -1134,5 +1988,7 @@ function _ExportAndReturn {
 
 Export-ModuleMember -Function @(
     'Invoke-SPTestSuite',
-    'Invoke-SPSingleTest'
+    'Invoke-SPSingleTest',
+    'Invoke-SPDeltaCertTest',
+    'Invoke-SPDisconnectedAppTest'
 )

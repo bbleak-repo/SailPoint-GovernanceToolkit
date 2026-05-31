@@ -21,8 +21,7 @@
     "Logging": {
         "Path": ".\\Logs",
         "FilePrefix": "GovernanceToolkit",
-        "MinimumSeverity": "INFO",
-        "RetentionDays": 30
+        "MinimumSeverity": "INFO"
     },
     "Api": {
         "BaseUrl": "https://CHANGE_ME.api.identitynow.com/v3",
@@ -78,6 +77,7 @@
             ]
         },
         "Smtp": {
+            "_note": "Report-specific SMTP. When Server/From are empty, falls back to Notification.Smtp.",
             "Enabled": false,
             "Server": "",
             "Port": 587,
@@ -91,6 +91,7 @@
             "Log"
         ],
         "Smtp": {
+            "_note": "Primary SMTP config. Also serves as fallback for Audit.Smtp report delivery.",
             "Server": "",
             "Port": 587,
             "From": "",
@@ -201,7 +202,8 @@
         "Escalation": {
             "DefaultStaleHours": 24,
             "MaxEscalationLevels": 2,
-            "CampaignNamePrefix": "AD Delta Cert"
+            "CampaignNamePrefix": "",
+            "_note": "CampaignNamePrefix defaults to DeltaCert.CampaignNamePrefix when empty. Only set if escalation campaigns need a distinct prefix."
         }
     }
 }

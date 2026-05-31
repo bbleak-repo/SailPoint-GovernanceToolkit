@@ -32,7 +32,8 @@
     When omitted, all bands are included.
 .PARAMETER SendReports
     When specified, sends each generated report to the corresponding leader via
-    SMTP. Requires Audit.Smtp to be configured in settings.json.
+    SMTP. Requires Audit.Smtp.Enabled = true. Connection settings (Server, From,
+    Port, UseSsl) can be in Audit.Smtp or will fall back to Notification.Smtp.
 .PARAMETER PreviewOnly
     Show the distribution plan (who would receive what) without generating
     reports or sending email. Exits after displaying the preview.

@@ -46,7 +46,6 @@ function Get-SPLoggingConfig {
                 Path            = '.\Logs'
                 FilePrefix      = 'GovernanceToolkit'
                 MinimumSeverity = 'INFO'
-                RetentionDays   = 30
             }
         }
     }
@@ -279,9 +278,10 @@ function Write-SPLog {
 
     # Mutex name: stable hash of the absolute log file path. Local session
     # scope is sufficient (toolkit users run as themselves, not as services).
-    $mutexName = 'SP.Logging.' + ([System.BitConverter]::ToString(
-        [System.Security.Cryptography.SHA1]::Create().ComputeHash(
-            [System.Text.Encoding]::UTF8.GetBytes($logFile.ToLowerInvariant()))) -replace '-')
+    # SHA256 used for FIPS compliance (SHA1 throws in FIPS-enforced environments).
+    $hashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($logFile.ToLowerInvariant()))
+    $mutexName = 'SP.Logging.' + (([System.BitConverter]::ToString($hashBytes) -replace '-').Substring(0, 40))
 
     $mutex = $null
     $acquired = $false

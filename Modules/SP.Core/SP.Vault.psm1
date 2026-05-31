@@ -523,6 +523,172 @@ function Remove-SPVaultCredential {
     }
 }
 
+function Update-SPVaultCredential {
+    <#
+    .SYNOPSIS
+        Updates an existing credential in the vault without requiring the old values
+    .DESCRIPTION
+        Replaces ClientId and/or ClientSecret for an existing vault key. At least one
+        of -ClientId or -ClientSecret must be provided. Fields not supplied are preserved
+        from the existing credential. The old credential value is not required -- only
+        the vault passphrase is needed.
+    .PARAMETER VaultPath
+        File system path for the vault file
+    .PARAMETER Passphrase
+        Master passphrase as a SecureString
+    .PARAMETER Key
+        Logical credential key to update (e.g., 'sailpoint-isc')
+    .PARAMETER ClientId
+        New OAuth client ID. If omitted, the existing ClientId is preserved.
+    .PARAMETER ClientSecret
+        New OAuth client secret. If omitted, the existing ClientSecret is preserved.
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=@{UpdatedFields=[string[]]}; Error=[string]}
+    .EXAMPLE
+        $result = Update-SPVaultCredential -VaultPath '.\Data\sp-vault.enc' `
+            -Passphrase $pass -Key 'sailpoint-isc' -ClientSecret 'newRotatedSecret'
+    .EXAMPLE
+        $result = Update-SPVaultCredential -VaultPath '.\Data\sp-vault.enc' `
+            -Passphrase $pass -Key 'sailpoint-isc' `
+            -ClientId 'newId' -ClientSecret 'newSecret'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$VaultPath,
+
+        [Parameter(Mandatory)]
+        [System.Security.SecureString]$Passphrase,
+
+        [Parameter(Mandatory)]
+        [string]$Key,
+
+        [Parameter()]
+        [string]$ClientId,
+
+        [Parameter()]
+        [string]$ClientSecret
+    )
+
+    try {
+        if (-not $ClientId -and -not $ClientSecret) {
+            return @{ Success = $false; Data = $null; Error = 'At least one of -ClientId or -ClientSecret must be provided.' }
+        }
+
+        if (-not (Test-Path -Path $VaultPath -PathType Leaf)) {
+            return @{ Success = $false; Data = $null; Error = "Vault does not exist at: $VaultPath" }
+        }
+
+        $passPlain = ConvertFrom-SPSecureString -SecureString $Passphrase
+        try {
+            $data = Read-SPVaultData -VaultPath $VaultPath -Passphrase $passPlain
+
+            if (-not $data.ContainsKey($Key)) {
+                return @{ Success = $false; Data = $null; Error = "Credential key '$Key' not found in vault." }
+            }
+
+            $existing = $data[$Key]
+            $updatedFields = @()
+
+            if ($ClientId) {
+                $existing['ClientId'] = $ClientId
+                $updatedFields += 'ClientId'
+            }
+            if ($ClientSecret) {
+                $existing['ClientSecret'] = $ClientSecret
+                $updatedFields += 'ClientSecret'
+            }
+
+            $data[$Key] = $existing
+            Write-SPVaultData -VaultPath $VaultPath -Passphrase $passPlain -Data $data
+        }
+        finally {
+            $passPlain = $null
+            [System.GC]::Collect()
+        }
+
+        return @{ Success = $true; Data = @{ UpdatedFields = $updatedFields }; Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = $_.Exception.Message }
+    }
+}
+
+function Update-SPVaultPassphrase {
+    <#
+    .SYNOPSIS
+        Re-encrypts the vault with a new passphrase
+    .DESCRIPTION
+        Decrypts the vault using the current passphrase, then re-encrypts the entire
+        vault with a new passphrase. All credentials are preserved. A new salt and IV
+        are generated during re-encryption (handled by Invoke-SPVaultEncrypt).
+    .PARAMETER VaultPath
+        File system path for the vault file
+    .PARAMETER CurrentPassphrase
+        The current vault passphrase as a SecureString
+    .PARAMETER NewPassphrase
+        The new vault passphrase as a SecureString
+    .OUTPUTS
+        [hashtable] @{Success=[bool]; Data=@{KeyCount=[int]}; Error=[string]}
+    .EXAMPLE
+        $current = Read-Host 'Current passphrase' -AsSecureString
+        $new     = Read-Host 'New passphrase' -AsSecureString
+        $result  = Update-SPVaultPassphrase -VaultPath '.\Data\sp-vault.enc' `
+            -CurrentPassphrase $current -NewPassphrase $new
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$VaultPath,
+
+        [Parameter(Mandatory)]
+        [System.Security.SecureString]$CurrentPassphrase,
+
+        [Parameter(Mandatory)]
+        [System.Security.SecureString]$NewPassphrase
+    )
+
+    try {
+        if (-not (Test-Path -Path $VaultPath -PathType Leaf)) {
+            return @{ Success = $false; Data = $null; Error = "Vault does not exist at: $VaultPath" }
+        }
+
+        $currentPlain = ConvertFrom-SPSecureString -SecureString $CurrentPassphrase
+        $newPlain     = ConvertFrom-SPSecureString -SecureString $NewPassphrase
+        try {
+            if ($newPlain.Length -lt 12) {
+                return @{ Success = $false; Data = $null; Error = 'New passphrase must be at least 12 characters.' }
+            }
+
+            # Decrypt with current passphrase
+            $data = Read-SPVaultData -VaultPath $VaultPath -Passphrase $currentPlain
+
+            # Re-encrypt with new passphrase (generates fresh salt + IV)
+            Write-SPVaultData -VaultPath $VaultPath -Passphrase $newPlain -Data $data
+
+            # Verify the new passphrase works by reading back
+            $verify = Read-SPVaultData -VaultPath $VaultPath -Passphrase $newPlain
+            if ($null -eq $verify) {
+                return @{ Success = $false; Data = $null; Error = 'Re-key verification failed: could not read vault with new passphrase.' }
+            }
+
+            $keyCount = $verify.Count
+        }
+        finally {
+            $currentPlain = $null
+            $newPlain     = $null
+            [System.GC]::Collect()
+        }
+
+        return @{ Success = $true; Data = @{ KeyCount = $keyCount }; Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = $_.Exception.Message }
+    }
+}
+
 #endregion
 
 # Export public functions
@@ -531,5 +697,7 @@ Export-ModuleMember -Function @(
     'Set-SPVaultCredential',
     'Get-SPVaultCredential',
     'Test-SPVaultExists',
-    'Remove-SPVaultCredential'
+    'Remove-SPVaultCredential',
+    'Update-SPVaultCredential',
+    'Update-SPVaultPassphrase'
 )
