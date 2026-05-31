@@ -23,7 +23,7 @@
 | DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | DONE |
 | DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | DONE |
 | DF-09 | Bulk Remediation Ticket Export | P15-04 | none | DONE |
-| DF-10 | Phase 16 Pester Tests | P16-10 | none | PENDING |
+| DF-10 | Phase 16 Pester Tests | P16-10 | none | DONE |
 
 ---
 
@@ -194,11 +194,18 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-10: Phase 16 Pester Tests (P16-10)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Tests for P16 functions:** Get-SPOrphanAccounts, Get-SPSourceAggregationHealth,
-Measure-SPIdentityAttributeQuality, Get-SPCampaignCoverageGaps,
-Predict-SPCampaignCompletion, Save-SPGovernanceMetrics, Get-SPReviewerDelegationAudit.
+Measure-SPIdentityDataQuality, Get-SPCampaignCoverageGaps,
+Get-SPCampaignCompletionForecast, Save-SPGovernanceMetrics, Get-SPReviewerDelegations.
+
+**Tests:** P16-T01 through P16-T07 (7 Describe blocks, 18 Contexts, ~55 assertions).
+
+**Note:** Backlog used proposed names; actual implemented names differ for three functions:
+- `Measure-SPIdentityAttributeQuality` -> `Measure-SPIdentityDataQuality`
+- `Predict-SPCampaignCompletion` -> `Get-SPCampaignCompletionForecast`
+- `Get-SPReviewerDelegationAudit` -> `Get-SPReviewerDelegations`
 
 **Files:** Tests/SP.DataQuality.Tests.ps1 (NEW)
