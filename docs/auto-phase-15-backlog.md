@@ -48,7 +48,7 @@ Safe to modify:
 | ID | Feature | Depends On | Files | Status |
 |----|---------|------------|-------|--------|
 | P15-01 | SoD Violation Scanner | none | SP.AuditQueries, SP.AuditReport, SP.Audit.psd1 | DONE |
-| P15-02 | Entitlement Ownership Health | none | SP.AuditQueries, SP.AuditReport, SP.Audit.psd1 | PENDING |
+| P15-02 | Entitlement Ownership Health | none | SP.AuditQueries, SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-03 | Access Request Activity Monitor | none | SP.Campaigns, SP.Api.psd1 | PENDING |
 | P15-04 | Bulk Remediation Ticket Export | none | SP.AuditReport, SP.Audit.psd1 | PENDING |
 | P15-05 | SIEM Event Export (CEF/JSON) | none | SP.AuditReport, SP.Audit.psd1 | PENDING |
@@ -227,7 +227,7 @@ New function `Export-SPSodViolationHtml`:
 
 ## P15-02: Entitlement Ownership Health Report
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

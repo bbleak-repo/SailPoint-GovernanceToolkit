@@ -7466,6 +7466,343 @@ ${breakdownHtml}
 
 #endregion SoD Violation Report
 
+#region P15-02: Entitlement Ownership Health Report
+
+function Export-SPOwnershipHealthHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML entitlement ownership health report.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with:
+        - Per-source ownership health bar (green = healthy, red = orphaned, orange = inactive)
+        - Issue detail table grouped by source, severity-sorted
+        - Privileged orphaned entitlements called out in red highlight box
+        - Ownership concentration section showing shared owners across sources
+        - Summary card with coverage percentage and issue counts
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER OwnershipHealth
+        Hashtable output from Get-SPEntitlementOwnershipHealth.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $health = Get-SPEntitlementOwnershipHealth -EntitlementInventory $inv
+        $path = Export-SPOwnershipHealthHtml -OwnershipHealth $health -OutputPath '.\Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OwnershipHealth,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "OwnershipHealth-${timestamp}.html"
+
+    $summary = $OwnershipHealth['Summary']
+    $sources = $OwnershipHealth['Sources']
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Entitlements<br/><span style="font-size:22px;">$($summary['TotalEntitlements'])</span>
+</td>
+<td style="padding:12px 16px; background:#339933; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Healthy<br/><span style="font-size:22px;">$($summary['HealthyOwnership'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Orphaned<br/><span style="font-size:22px;">$($summary['Orphaned'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Inactive Owner<br/><span style="font-size:22px;">$($summary['InactiveOwner'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Shared Owner<br/><span style="font-size:22px;">$($summary['SharedOwner'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Coverage<br/><span style="font-size:22px;">$($summary['OverallCoveragePct'])%</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Privileged Issues<br/><span style="font-size:22px;">$($summary['PrivilegedWithIssues'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Privileged orphaned alert box ---
+    $privAlertHtml = ''
+    $privIssues = [System.Collections.Generic.List[hashtable]]::new()
+    if ($null -ne $sources) {
+        foreach ($srcKey in $sources.Keys) {
+            $srcData = $sources[$srcKey]
+            if ($null -ne $srcData['Issues']) {
+                foreach ($issue in $srcData['Issues']) {
+                    if ($issue['Privileged'] -eq $true -and
+                        ($issue['OwnerStatus'] -eq 'Orphaned' -or $issue['OwnerStatus'] -eq 'InactiveOwner')) {
+                        $privIssues.Add(@{
+                            Source          = $srcData['SourceName']
+                            EntitlementName = $issue['EntitlementName']
+                            OwnerStatus     = $issue['OwnerStatus']
+                            Severity        = $issue['Severity']
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    if ($privIssues.Count -gt 0) {
+        $privRows = [System.Collections.Generic.List[string]]::new()
+        $privRowIdx = 0
+        foreach ($pi in $privIssues) {
+            $privRowIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $pi['Source']),
+                (ConvertTo-SafeHtml $pi['EntitlementName']),
+                (ConvertTo-SafeHtml $pi['OwnerStatus']),
+                (ConvertTo-SafeHtml $pi['Severity'])
+            )
+            $privRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($privRowIdx % 2) -eq 0)))
+        }
+        $privHeader = Build-HtmlTableHeader -Headers @('Source', 'Entitlement', 'Owner Status', 'Severity')
+
+        $privAlertHtml = @"
+<div style="padding:16px; background:#fdedec; border:2px solid #CC3333; border-radius:4px; margin-bottom:20px;">
+<strong style="color:#CC3333;">ALERT: $($privIssues.Count) Privileged Entitlement(s) with Ownership Issues</strong>
+<p style="font-size:13px; color:#333333; margin-top:8px;">Privileged entitlements without an active owner represent critical governance gaps. These should be remediated immediately.</p>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:12px;">
+${privHeader}
+<tbody>
+$($privRows -join "`n")
+</tbody>
+</table>
+</div>
+"@
+    }
+
+    # --- Per-source health sections ---
+    $sourceSectionsHtml = ''
+    if ($null -ne $sources -and $sources.Count -gt 0) {
+        $sSections = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($srcKey in ($sources.Keys | Sort-Object)) {
+            $srcData = $sources[$srcKey]
+            $srcName = ConvertTo-SafeHtml $srcData['SourceName']
+            $srcTotal = [int]$srcData['TotalEntitlements']
+            $srcHealthy = [int]$srcData['HealthyOwnership']
+            $srcOrphaned = [int]$srcData['Orphaned']
+            $srcInactive = [int]$srcData['InactiveOwner']
+            $srcShared = [int]$srcData['SharedOwner']
+            $srcCoverage = $srcData['OwnershipCoveragePct']
+
+            # Health bar widths (percentage)
+            $healthyPct  = if ($srcTotal -gt 0) { [Math]::Round(($srcHealthy / $srcTotal) * 100, 0) } else { 100 }
+            $orphanedPct = if ($srcTotal -gt 0) { [Math]::Round(($srcOrphaned / $srcTotal) * 100, 0) } else { 0 }
+            $inactivePct = if ($srcTotal -gt 0) { [Math]::Round(($srcInactive / $srcTotal) * 100, 0) } else { 0 }
+            $sharedPct   = if ($srcTotal -gt 0) { [Math]::Round(($srcShared / $srcTotal) * 100, 0) } else { 0 }
+
+            $healthBarHtml = @"
+<div style="width:100%; background:#eeeeee; border-radius:4px; overflow:hidden; height:20px; margin-bottom:8px;">
+<div style="display:inline-block; width:${healthyPct}%; background:#339933; height:20px; float:left;" title="Healthy: ${srcHealthy}"></div>
+<div style="display:inline-block; width:${sharedPct}%; background:#e67e22; height:20px; float:left;" title="Shared Owner: ${srcShared}"></div>
+<div style="display:inline-block; width:${inactivePct}%; background:#FF8800; height:20px; float:left;" title="Inactive Owner: ${srcInactive}"></div>
+<div style="display:inline-block; width:${orphanedPct}%; background:#CC3333; height:20px; float:left;" title="Orphaned: ${srcOrphaned}"></div>
+</div>
+"@
+
+            # Issue table for this source
+            $issueTableHtml = ''
+            $srcIssues = @($srcData['Issues'])
+            if ($srcIssues.Count -gt 0) {
+                # Sort by severity: Critical, High, Medium
+                $severityOrder = @{ 'Critical' = 1; 'High' = 2; 'Medium' = 3; 'Low' = 4 }
+                $sortedIssues = @($srcIssues | Sort-Object {
+                    if ($severityOrder.ContainsKey($_['Severity'])) { $severityOrder[$_['Severity']] } else { 99 }
+                })
+
+                $iHeaderRow = Build-HtmlTableHeader -Headers @('Entitlement', 'Privileged', 'Owner Status', 'Owner', 'Severity', 'Recommendation')
+                $iBodyRows = [System.Collections.Generic.List[string]]::new()
+                $iRowIdx = 0
+
+                foreach ($issue in $sortedIssues) {
+                    $iRowIdx++
+                    $sevColor = switch ($issue['Severity']) {
+                        'Critical' { 'color:#fff; background:#CC3333;' }
+                        'High'     { 'color:#fff; background:#FF8800;' }
+                        'Medium'   { 'color:#fff; background:#e67e22;' }
+                        default    { 'color:#fff; background:#777777;' }
+                    }
+                    $sevBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $sevColor"">$(ConvertTo-SafeHtml $issue['Severity'])</span>"
+
+                    $privDisplay = if ($issue['Privileged'] -eq $true) { 'Yes' } else { 'No' }
+                    $ownerDisplay = if ([string]::IsNullOrWhiteSpace($issue['OwnerName'])) { '-' } else { ConvertTo-SafeHtml $issue['OwnerName'] }
+
+                    $statusColor = switch ($issue['OwnerStatus']) {
+                        'Orphaned'      { 'color:#fff; background:#CC3333;' }
+                        'InactiveOwner' { 'color:#fff; background:#FF8800;' }
+                        'SharedOwner'   { 'color:#fff; background:#e67e22;' }
+                        default         { 'color:#fff; background:#777777;' }
+                    }
+                    $statusBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $statusColor"">$(ConvertTo-SafeHtml $issue['OwnerStatus'])</span>"
+
+                    $cells = @(
+                        (ConvertTo-SafeHtml $issue['EntitlementName']),
+                        $privDisplay,
+                        $statusBadge,
+                        $ownerDisplay,
+                        $sevBadge,
+                        (ConvertTo-SafeHtml $issue['Recommendation'])
+                    )
+                    $iBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($iRowIdx % 2) -eq 0)))
+                }
+
+                $issueTableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${iHeaderRow}
+<tbody>
+$($iBodyRows -join "`n")
+</tbody>
+</table>
+"@
+            } else {
+                $issueTableHtml = '<p style="font-size:13px; color:#27ae60;">No ownership issues detected.</p>'
+            }
+
+            $sectionHtml = @"
+<h3 style="font-size:14px; color:#2c3e50; margin-top:20px; margin-bottom:6px;">$srcName ($srcTotal entitlements, ${srcCoverage}% healthy)</h3>
+${healthBarHtml}
+<p style="font-size:12px; color:#666666; margin-bottom:8px;">Healthy: $srcHealthy | Orphaned: $srcOrphaned | Inactive Owner: $srcInactive | Shared Owner: $srcShared</p>
+${issueTableHtml}
+"@
+            $sSections.Add($sectionHtml)
+        }
+
+        $sourceSectionsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Ownership Health by Source ($($sources.Count) sources)</h2>
+$($sSections -join "`n")
+"@
+    } else {
+        $sourceSectionsHtml = @"
+<div style="padding:16px; background:#eafaf1; border:1px solid #27ae60; border-radius:4px; margin-bottom:20px;">
+<strong style="color:#27ae60;">No entitlement sources to analyze.</strong>
+</div>
+"@
+    }
+
+    # --- Ownership concentration section ---
+    $concentrationHtml = ''
+    $ownerConcentration = [System.Collections.Generic.List[hashtable]]::new()
+    if ($null -ne $sources) {
+        $ownerEntCount = @{}  # ownerName -> total entitlement count across all sources
+        foreach ($srcKey in $sources.Keys) {
+            $srcData = $sources[$srcKey]
+            if ($null -ne $srcData['Issues']) {
+                foreach ($issue in $srcData['Issues']) {
+                    if ($issue['OwnerStatus'] -eq 'SharedOwner' -and
+                        -not [string]::IsNullOrWhiteSpace($issue['OwnerName'])) {
+                        $oName = $issue['OwnerName']
+                        if (-not $ownerEntCount.ContainsKey($oName)) {
+                            $ownerEntCount[$oName] = 0
+                        }
+                        $ownerEntCount[$oName]++
+                    }
+                }
+            }
+        }
+
+        foreach ($oName in ($ownerEntCount.Keys | Sort-Object { $ownerEntCount[$_] } -Descending)) {
+            if ($ownerEntCount[$oName] -ge 20) {
+                $ownerConcentration.Add(@{
+                    OwnerName      = $oName
+                    EntitlementCount = $ownerEntCount[$oName]
+                })
+            }
+        }
+    }
+
+    if ($ownerConcentration.Count -gt 0) {
+        $cHeaderRow = Build-HtmlTableHeader -Headers @('Owner', 'Entitlements Owned (Shared)')
+        $cBodyRows = [System.Collections.Generic.List[string]]::new()
+        $cRowIdx = 0
+        foreach ($oc in $ownerConcentration) {
+            $cRowIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $oc['OwnerName']),
+                [string]$oc['EntitlementCount']
+            )
+            $cBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($cRowIdx % 2) -eq 0)))
+        }
+
+        $concentrationHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Ownership Concentration (owners with 20+ entitlements across sources)</h2>
+<table style="width:50%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${cHeaderRow}
+<tbody>
+$($cBodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Entitlement Ownership Health Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Entitlement Ownership Health Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${privAlertHtml}
+
+${sourceSectionsHtml}
+
+${concentrationHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Ownership health HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOwnershipHealthHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion Entitlement Ownership Health Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7487,5 +7824,6 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignCompletionReport',
     'Export-SPOrchestratorHistoryHtml',
     'Export-SPGovernanceBIData',
-    'Export-SPSodViolationHtml'
+    'Export-SPSodViolationHtml',
+    'Export-SPOwnershipHealthHtml'
 )

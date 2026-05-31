@@ -115,6 +115,12 @@
 
         # SP.AuditReportHtml - SoD Violation Report (P15-01)
         'Export-SPSodViolationHtml'
+
+        # SP.AuditQueries - Entitlement Ownership Health (P15-02)
+        'Get-SPEntitlementOwnershipHealth'
+
+        # SP.AuditReportHtml - Entitlement Ownership Health Report (P15-02)
+        'Export-SPOwnershipHealthHtml'
     )
 
     # Do not export variables or aliases from nested modules

@@ -4589,6 +4589,384 @@ function Get-SPSodViolations {
 
 #endregion
 
+#region P15-02: Entitlement Ownership Health
+
+function Get-SPEntitlementOwnershipHealth {
+    <#
+    .SYNOPSIS
+        Analyzes entitlement and access profile ownership to identify governance gaps.
+    .DESCRIPTION
+        Cross-references entitlement and access profile inventory data to classify
+        each entitlement's ownership status: Healthy (owner assigned and active),
+        Orphaned (no owner), InactiveOwner (owner identity is not active),
+        or SharedOwner (single owner across many sources -- concentration risk).
+
+        Privileged entitlements with ownership issues are flagged at higher severity.
+
+        Can consume pre-collected inventory output or query the API directly.
+    .PARAMETER EntitlementInventory
+        Hashtable output from Get-SPEntitlementInventory. If omitted, the function
+        queries the API directly using SourceIds.
+    .PARAMETER AccessProfileInventory
+        Hashtable output from Get-SPAccessProfileInventory.
+    .PARAMETER SourceIds
+        Source IDs to query when EntitlementInventory is not provided.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Sources = @{ 'source-id' = @{ SourceName; TotalEntitlements; ... Issues = @(...) } }
+            Summary = @{ TotalEntitlements; HealthyOwnership; Orphaned; InactiveOwner; SharedOwner; ... }
+        }
+    .EXAMPLE
+        $inv = Get-SPEntitlementInventory -SourceIds 'src-ad-001'
+        $apInv = Get-SPAccessProfileInventory -SourceIds 'src-ad-001'
+        $health = Get-SPEntitlementOwnershipHealth -EntitlementInventory $inv -AccessProfileInventory $apInv
+        $health.Summary
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [hashtable]$AccessProfileInventory,
+
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Analyzing entitlement ownership health" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+        -CorrelationID $CorrelationID
+
+    $emptySummary = @{
+        TotalEntitlements = 0; HealthyOwnership = 0; Orphaned = 0
+        InactiveOwner = 0; SharedOwner = 0; OverallCoveragePct = 0
+        PrivilegedWithIssues = 0; TopOrphanedSources = @()
+    }
+
+    try {
+        # -----------------------------------------------------------
+        # Step 1: Obtain entitlement data (from inventory or API)
+        # -----------------------------------------------------------
+        $entInventoryData = $null
+
+        if ($null -ne $EntitlementInventory -and
+            $null -ne $EntitlementInventory.Data -and
+            $null -ne $EntitlementInventory.Data.Sources) {
+            $entInventoryData = $EntitlementInventory.Data.Sources
+            Write-SPLog -Message "Using provided EntitlementInventory ($($entInventoryData.Count) source(s))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+                -CorrelationID $CorrelationID
+        } elseif ($null -ne $SourceIds -and $SourceIds.Count -gt 0) {
+            Write-SPLog -Message "No EntitlementInventory provided; querying API for SourceIds: $($SourceIds -join ', ')" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+                -CorrelationID $CorrelationID
+
+            $invResult = Get-SPEntitlementInventory -SourceIds $SourceIds -CorrelationID $CorrelationID
+            if (-not $invResult.Success) {
+                $errMsg = "Failed to retrieve entitlement inventory: $($invResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPEntitlementOwnershipHealth' -CorrelationID $CorrelationID
+                return @{ Sources = @{}; Summary = $emptySummary }
+            }
+            $entInventoryData = $invResult.Data.Sources
+        } else {
+            $errMsg = "Either EntitlementInventory or SourceIds must be provided."
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                -Action 'Get-SPEntitlementOwnershipHealth' -CorrelationID $CorrelationID
+            return @{ Sources = @{}; Summary = $emptySummary }
+        }
+
+        # -----------------------------------------------------------
+        # Step 2: Collect access profile owner data (if provided)
+        # -----------------------------------------------------------
+        $apOwners = @{}  # accessProfileName -> @{ OwnerName; OwnerId }
+        if ($null -ne $AccessProfileInventory -and
+            $null -ne $AccessProfileInventory.Data -and
+            $null -ne $AccessProfileInventory.Data.Sources) {
+            foreach ($srcKey in $AccessProfileInventory.Data.Sources.Keys) {
+                $srcData = $AccessProfileInventory.Data.Sources[$srcKey]
+                if ($null -ne $srcData.AccessProfiles) {
+                    foreach ($ap in $srcData.AccessProfiles) {
+                        $apName = if ($null -ne $ap['Name']) { $ap['Name'] } else { '' }
+                        if (-not [string]::IsNullOrWhiteSpace($apName)) {
+                            $apOwners[$apName] = @{
+                                OwnerName = if ($null -ne $ap['OwnerName']) { $ap['OwnerName'] } else { '' }
+                                OwnerId   = if ($null -ne $ap['OwnerId'])  { $ap['OwnerId']  } else { '' }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 3: Collect unique owner names for lifecycle check
+        # -----------------------------------------------------------
+        $ownerNames = @{}  # ownerName -> $true (dedup)
+        foreach ($srcKey in $entInventoryData.Keys) {
+            $srcData = $entInventoryData[$srcKey]
+            if ($null -ne $srcData.Entitlements) {
+                foreach ($ent in $srcData.Entitlements) {
+                    $oName = if ($null -ne $ent['OwnerName']) { $ent['OwnerName'] } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($oName) -and -not $ownerNames.ContainsKey($oName)) {
+                        $ownerNames[$oName] = $true
+                    }
+                }
+            }
+        }
+
+        # Also include AP owners
+        foreach ($apName in $apOwners.Keys) {
+            $oName = $apOwners[$apName].OwnerName
+            if (-not [string]::IsNullOrWhiteSpace($oName) -and -not $ownerNames.ContainsKey($oName)) {
+                $ownerNames[$oName] = $true
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 4: Check owner lifecycle state via API
+        # -----------------------------------------------------------
+        $ownerLifecycleState = @{}  # ownerName -> lifecycle state string
+
+        if ($ownerNames.Count -gt 0) {
+            Write-SPLog -Message "Checking lifecycle state for $($ownerNames.Count) unique owner(s)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+                -CorrelationID $CorrelationID
+
+            foreach ($ownerName in $ownerNames.Keys) {
+                try {
+                    $searchResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/public-identities' `
+                        -QueryParams @{
+                            'limit'   = '1'
+                            'filters' = "name eq `"$ownerName`""
+                        } -CorrelationID $CorrelationID
+
+                    if ($searchResult.Success -and $null -ne $searchResult.Data) {
+                        $identities = $searchResult.Data
+                        if ($null -ne $searchResult.Data.PSObject -and
+                            $null -ne $searchResult.Data.PSObject.Properties['items']) {
+                            $identities = $searchResult.Data.items
+                        }
+                        $identities = @($identities)
+
+                        if ($identities.Count -gt 0 -and $null -ne $identities[0]) {
+                            $identity = $identities[0]
+                            $lcState = 'active'
+                            if ($null -ne $identity.PSObject -and
+                                $null -ne $identity.PSObject.Properties['lifecycleState'] -and
+                                -not [string]::IsNullOrWhiteSpace($identity.lifecycleState)) {
+                                $lcState = [string]$identity.lifecycleState
+                            } elseif ($null -ne $identity.PSObject -and
+                                      $null -ne $identity.PSObject.Properties['lifecycle_state'] -and
+                                      -not [string]::IsNullOrWhiteSpace($identity.lifecycle_state)) {
+                                $lcState = [string]$identity.lifecycle_state
+                            }
+                            $ownerLifecycleState[$ownerName] = $lcState
+                        } else {
+                            # Owner name not found in identities -- treat as inactive
+                            $ownerLifecycleState[$ownerName] = 'not_found'
+                        }
+                    }
+                } catch {
+                    Write-SPLog -Message "Failed to check lifecycle state for owner '$ownerName': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+                        -CorrelationID $CorrelationID
+                    # Leave unknown -- will be classified as Healthy (benefit of doubt)
+                }
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 5: Track owner-to-source mapping for SharedOwner detection
+        # -----------------------------------------------------------
+        $ownerSourceMap = @{}  # ownerName -> Set of sourceIds
+        foreach ($srcKey in $entInventoryData.Keys) {
+            $srcData = $entInventoryData[$srcKey]
+            if ($null -ne $srcData.Entitlements) {
+                foreach ($ent in $srcData.Entitlements) {
+                    $oName = if ($null -ne $ent['OwnerName']) { $ent['OwnerName'] } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($oName)) {
+                        if (-not $ownerSourceMap.ContainsKey($oName)) {
+                            $ownerSourceMap[$oName] = [System.Collections.Generic.HashSet[string]]::new()
+                        }
+                        [void]$ownerSourceMap[$oName].Add($srcKey)
+                    }
+                }
+            }
+        }
+
+        # SharedOwner: owner appears across >1 source
+        $sharedOwners = @{}
+        foreach ($oName in $ownerSourceMap.Keys) {
+            if ($ownerSourceMap[$oName].Count -gt 1) {
+                $sharedOwners[$oName] = $true
+            }
+        }
+
+        # -----------------------------------------------------------
+        # Step 6: Classify entitlements per source
+        # -----------------------------------------------------------
+        $sources = @{}
+        $totalEntitlements     = 0
+        $totalHealthy          = 0
+        $totalOrphaned         = 0
+        $totalInactiveOwner    = 0
+        $totalSharedOwner      = 0
+        $totalPrivilegedIssues = 0
+
+        foreach ($srcKey in $entInventoryData.Keys) {
+            $srcData = $entInventoryData[$srcKey]
+            $srcName = if ($null -ne $srcData.SourceName) { $srcData.SourceName } else { $srcKey }
+            $entitlements = if ($null -ne $srcData.Entitlements) { @($srcData.Entitlements) } else { @() }
+
+            $srcHealthy       = 0
+            $srcOrphaned      = 0
+            $srcInactiveOwner = 0
+            $srcSharedOwner   = 0
+            $srcPrivOrphaned  = 0
+            $issues = [System.Collections.Generic.List[hashtable]]::new()
+
+            foreach ($ent in $entitlements) {
+                $entName    = if ($null -ne $ent['Name'])       { $ent['Name']       } else { '' }
+                $ownerName  = if ($null -ne $ent['OwnerName'])  { $ent['OwnerName']  } else { '' }
+                $privileged = if ($null -ne $ent['Privileged']) { [bool]$ent['Privileged'] } else { $false }
+
+                # Classification
+                if ([string]::IsNullOrWhiteSpace($ownerName)) {
+                    # Orphaned
+                    $srcOrphaned++
+                    $severity = if ($privileged) { 'Critical' } else { 'High' }
+                    if ($privileged) { $srcPrivOrphaned++ }
+                    $recommendation = if ($privileged) {
+                        'Assign owner for privileged entitlement immediately'
+                    } else {
+                        'Assign owner for entitlement'
+                    }
+                    $issues.Add(@{
+                        EntitlementName = $entName
+                        Privileged      = $privileged
+                        OwnerStatus     = 'Orphaned'
+                        OwnerName       = $null
+                        Severity        = $severity
+                        Recommendation  = $recommendation
+                    })
+                } elseif ($ownerLifecycleState.ContainsKey($ownerName) -and
+                          $ownerLifecycleState[$ownerName] -ne 'active') {
+                    # InactiveOwner
+                    $srcInactiveOwner++
+                    $severity = if ($privileged) { 'Critical' } else { 'High' }
+                    if ($privileged) { $srcPrivOrphaned++ }
+                    $lcState = $ownerLifecycleState[$ownerName]
+                    $issues.Add(@{
+                        EntitlementName = $entName
+                        Privileged      = $privileged
+                        OwnerStatus     = 'InactiveOwner'
+                        OwnerName       = $ownerName
+                        OwnerLifecycle  = $lcState
+                        Severity        = $severity
+                        Recommendation  = "Re-assign entitlement from inactive owner '$ownerName' (state: $lcState)"
+                    })
+                } elseif ($sharedOwners.ContainsKey($ownerName)) {
+                    # SharedOwner -- governance concentration risk (lower severity)
+                    $srcSharedOwner++
+                    $issues.Add(@{
+                        EntitlementName = $entName
+                        Privileged      = $privileged
+                        OwnerStatus     = 'SharedOwner'
+                        OwnerName       = $ownerName
+                        SharedSources   = @($ownerSourceMap[$ownerName])
+                        Severity        = 'Medium'
+                        Recommendation  = "Review ownership concentration: '$ownerName' owns entitlements across $($ownerSourceMap[$ownerName].Count) sources"
+                    })
+                } else {
+                    # Healthy
+                    $srcHealthy++
+                }
+            }
+
+            $srcTotal = $entitlements.Count
+            $coveragePct = if ($srcTotal -gt 0) {
+                [Math]::Round(($srcHealthy / $srcTotal) * 100, 1)
+            } else { 100.0 }
+
+            $sources[$srcKey] = @{
+                SourceName           = $srcName
+                TotalEntitlements    = $srcTotal
+                HealthyOwnership     = $srcHealthy
+                Orphaned             = $srcOrphaned
+                InactiveOwner        = $srcInactiveOwner
+                SharedOwner          = $srcSharedOwner
+                OwnershipCoveragePct = $coveragePct
+                PrivilegedOrphaned   = $srcPrivOrphaned
+                Issues               = $issues.ToArray()
+            }
+
+            $totalEntitlements     += $srcTotal
+            $totalHealthy          += $srcHealthy
+            $totalOrphaned         += $srcOrphaned
+            $totalInactiveOwner    += $srcInactiveOwner
+            $totalSharedOwner      += $srcSharedOwner
+            $totalPrivilegedIssues += $srcPrivOrphaned
+        }
+
+        # Top orphaned sources (sorted by orphaned count desc)
+        $topOrphaned = @($sources.Keys |
+            Where-Object { $sources[$_].Orphaned -gt 0 } |
+            Sort-Object { $sources[$_].Orphaned } -Descending |
+            ForEach-Object { $sources[$_].SourceName })
+
+        $overallCoveragePct = if ($totalEntitlements -gt 0) {
+            [Math]::Round(($totalHealthy / $totalEntitlements) * 100, 1)
+        } else { 100.0 }
+
+        $summary = @{
+            TotalEntitlements    = $totalEntitlements
+            HealthyOwnership     = $totalHealthy
+            Orphaned             = $totalOrphaned
+            InactiveOwner        = $totalInactiveOwner
+            SharedOwner          = $totalSharedOwner
+            OverallCoveragePct   = $overallCoveragePct
+            PrivilegedWithIssues = $totalPrivilegedIssues
+            TopOrphanedSources   = $topOrphaned
+        }
+
+        Write-SPLog -Message "Ownership health: $totalEntitlements entitlements, $totalHealthy healthy ($overallCoveragePct%), $totalOrphaned orphaned, $totalInactiveOwner inactive owner, $totalSharedOwner shared owner" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPEntitlementOwnershipHealth' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Sources = $sources
+            Summary = $summary
+        }
+    }
+    catch {
+        $errMsg = "Get-SPEntitlementOwnershipHealth failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPEntitlementOwnershipHealth' -CorrelationID $CorrelationID
+        return @{
+            Sources = @{}
+            Summary = @{
+                TotalEntitlements = 0; HealthyOwnership = 0; Orphaned = 0
+                InactiveOwner = 0; SharedOwner = 0; OverallCoveragePct = 0
+                PrivilegedWithIssues = 0; TopOrphanedSources = @()
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -4605,5 +4983,6 @@ Export-ModuleMember -Function @(
     'Get-SPStaleAccess',
     'Get-SPAccessProfileInventory',
     'Get-SPSodPolicies',
-    'Get-SPSodViolations'
+    'Get-SPSodViolations',
+    'Get-SPEntitlementOwnershipHealth'
 )
