@@ -4630,6 +4630,310 @@ function Get-SPConfigurationSnapshot {
 
 #endregion
 
+#region Orphan Account Detection (P16-01)
+
+function Get-SPOrphanAccounts {
+    <#
+    .SYNOPSIS
+        Detects accounts not correlated to any active identity.
+    .DESCRIPTION
+        For each source, queries /v3/accounts and classifies orphan accounts:
+        - Uncorrelated: identityId is null (no identity link)
+        - TerminatedOwner: identity lifecycle state is TERMINATED or INACTIVE
+        - DanglingReference: identityId present but identity not found (404)
+        Service accounts (svc-, sa-, service., or AD machine accounts with $)
+        and disabled accounts can optionally be included.
+    .PARAMETER SourceIds
+        Array of SailPoint source IDs to scan for orphan accounts.
+    .PARAMETER IncludeDisabledAccounts
+        When set, includes disabled orphan accounts in results.
+    .PARAMETER IncludeServiceAccounts
+        When set, includes service accounts in results.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ OrphanAccounts = @(...); Summary = @{...} }
+    .EXAMPLE
+        $result = Get-SPOrphanAccounts -SourceIds @('src-ad-001') -IncludeServiceAccounts
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$IncludeDisabledAccounts,
+
+        [Parameter()]
+        [switch]$IncludeServiceAccounts,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: scanning $($SourceIds.Count) source(s), IncludeDisabled=$IncludeDisabledAccounts, IncludeService=$IncludeServiceAccounts" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    $orphanAccounts = [System.Collections.Generic.List[hashtable]]::new()
+    $totalScanned = 0
+    $perSource = @{}
+
+    # Collect identity IDs that need lifecycle state lookup
+    $identityIdsToCheck = [System.Collections.Generic.Dictionary[string,bool]]::new()
+    # Track account-to-identityId mapping for deferred classification
+    $accountsPendingIdentityCheck = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    foreach ($sourceId in $SourceIds) {
+        $sourceName = Get-SPAuditSourceName -SourceId $sourceId -CorrelationID $CorrelationID
+        $sourceAccountCount = 0
+        $sourceOrphanCount = 0
+
+        # Paginate through /v3/accounts for this source
+        $pageSize = 250
+        $offset = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                Write-SPLog -Message "Get-SPOrphanAccounts: pagination ceiling reached for source '$sourceName' at page $pageNum" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $queryParams = @{
+                'limit'   = $pageSize.ToString()
+                'offset'  = $offset.ToString()
+                'filters' = "sourceId eq `"$sourceId`""
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/accounts' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                Write-SPLog -Message "Get-SPOrphanAccounts: API error for source '$sourceName' at page $pageNum: $($result.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                    -CorrelationID $CorrelationID
+                break
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            foreach ($acct in $page) {
+                $sourceAccountCount++
+
+                $acctId = $acct.id
+                $acctName = $acct.name
+                $nativeIdentity = $acct.nativeIdentity
+                $identityId = $acct.identityId
+                $disabled = if ($null -ne $acct.disabled) { [bool]$acct.disabled } else { $false }
+                $entitlementCount = 0
+                if ($null -ne $acct.entitlementAttributes -and $acct.entitlementAttributes.Count -gt 0) {
+                    $entitlementCount = $acct.entitlementAttributes.Count
+                }
+                $hasEntitlements = $entitlementCount -gt 0
+                $created = if ($null -ne $acct.created) { [string]$acct.created } else { '' }
+
+                # Detect service account by name pattern
+                $isServiceAccount = $false
+                if (-not [string]::IsNullOrWhiteSpace($acctName)) {
+                    $lowerName = $acctName.ToLower()
+                    if ($lowerName.StartsWith('svc-') -or
+                        $lowerName.StartsWith('sa-') -or
+                        $lowerName.StartsWith('service.') -or
+                        $acctName.Contains('$')) {
+                        $isServiceAccount = $true
+                    }
+                }
+
+                if ($null -eq $identityId -or [string]::IsNullOrWhiteSpace($identityId)) {
+                    # Uncorrelated account
+                    # Skip disabled unless requested
+                    if ($disabled -and -not $IncludeDisabledAccounts) { continue }
+                    # Skip service accounts unless requested
+                    if ($isServiceAccount -and -not $IncludeServiceAccounts) { continue }
+
+                    $orphanAccounts.Add(@{
+                        AccountId        = $acctId
+                        AccountName      = $acctName
+                        SourceId         = $sourceId
+                        SourceName       = $sourceName
+                        NativeIdentity   = $nativeIdentity
+                        Disabled         = $disabled
+                        HasEntitlements  = $hasEntitlements
+                        EntitlementCount = $entitlementCount
+                        Created          = $created
+                        OrphanType       = 'Uncorrelated'
+                        IsServiceAccount = $isServiceAccount
+                    })
+                    $sourceOrphanCount++
+                }
+                else {
+                    # Correlated -- queue for identity lifecycle check
+                    if (-not $identityIdsToCheck.ContainsKey($identityId)) {
+                        $identityIdsToCheck[$identityId] = $true
+                    }
+                    $accountsPendingIdentityCheck.Add(@{
+                        AccountId        = $acctId
+                        AccountName      = $acctName
+                        SourceId         = $sourceId
+                        SourceName       = $sourceName
+                        NativeIdentity   = $nativeIdentity
+                        Disabled         = $disabled
+                        HasEntitlements  = $hasEntitlements
+                        EntitlementCount = $entitlementCount
+                        Created          = $created
+                        IdentityId       = $identityId
+                        IsServiceAccount = $isServiceAccount
+                    })
+                }
+            }
+
+            Write-SPLog -Message "Get-SPOrphanAccounts: source '$sourceName' page $pageNum, $($page.Count) accounts" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+
+        $totalScanned += $sourceAccountCount
+        $perSource[$sourceName] = @{
+            Total     = $sourceAccountCount
+            Orphans   = $sourceOrphanCount
+            OrphanPct = if ($sourceAccountCount -gt 0) { [math]::Round(($sourceOrphanCount / $sourceAccountCount) * 100, 1) } else { 0 }
+        }
+    }
+
+    # Batch identity lifecycle lookups (deduplicated)
+    $identityStates = @{}
+    $uniqueIds = @($identityIdsToCheck.Keys)
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: checking lifecycle state for $($uniqueIds.Count) correlated identities" `
+        -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    foreach ($iid in $uniqueIds) {
+        try {
+            $idResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/public-identities/$iid" `
+                -CorrelationID $CorrelationID
+
+            if ($idResult.Success -and $null -ne $idResult.Data) {
+                $lcState = ''
+                if ($null -ne $idResult.Data.lifecycle_state) {
+                    $lcState = [string]$idResult.Data.lifecycle_state
+                }
+                elseif ($null -ne $idResult.Data.lifecycleState) {
+                    $lcState = [string]$idResult.Data.lifecycleState
+                }
+                $identityStates[$iid] = $lcState.ToUpper()
+            }
+            else {
+                # Identity not found or API error -- treat as DanglingReference
+                $identityStates[$iid] = 'NOT_FOUND'
+            }
+        }
+        catch {
+            $identityStates[$iid] = 'NOT_FOUND'
+        }
+    }
+
+    # Classify pending accounts based on identity state
+    foreach ($pendingAcct in $accountsPendingIdentityCheck) {
+        $iid = $pendingAcct['IdentityId']
+        $state = if ($identityStates.ContainsKey($iid)) { $identityStates[$iid] } else { 'NOT_FOUND' }
+
+        $orphanType = $null
+        if ($state -eq 'NOT_FOUND') {
+            $orphanType = 'DanglingReference'
+        }
+        elseif ($state -eq 'TERMINATED' -or $state -eq 'INACTIVE') {
+            $orphanType = 'TerminatedOwner'
+        }
+        else {
+            # Active identity -- not an orphan
+            continue
+        }
+
+        $orphanAccounts.Add(@{
+            AccountId        = $pendingAcct['AccountId']
+            AccountName      = $pendingAcct['AccountName']
+            SourceId         = $pendingAcct['SourceId']
+            SourceName       = $pendingAcct['SourceName']
+            NativeIdentity   = $pendingAcct['NativeIdentity']
+            Disabled         = $pendingAcct['Disabled']
+            HasEntitlements  = $pendingAcct['HasEntitlements']
+            EntitlementCount = $pendingAcct['EntitlementCount']
+            Created          = $pendingAcct['Created']
+            OrphanType       = $orphanType
+            IsServiceAccount = $pendingAcct['IsServiceAccount']
+        })
+
+        # Update per-source counts
+        $sName = $pendingAcct['SourceName']
+        if ($perSource.ContainsKey($sName)) {
+            $perSource[$sName]['Orphans']++
+            $srcTotal = $perSource[$sName]['Total']
+            $perSource[$sName]['OrphanPct'] = if ($srcTotal -gt 0) {
+                [math]::Round(($perSource[$sName]['Orphans'] / $srcTotal) * 100, 1)
+            } else { 0 }
+        }
+    }
+
+    # Build summary counts
+    $uncorrelatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'Uncorrelated' }).Count
+    $terminatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'TerminatedOwner' }).Count
+    $danglingCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'DanglingReference' }).Count
+    $disabledCount = @($orphanAccounts | Where-Object { $_['Disabled'] -eq $true }).Count
+    $serviceCount = @($orphanAccounts | Where-Object { $_['IsServiceAccount'] -eq $true }).Count
+    $withEntitlements = @($orphanAccounts | Where-Object { $_['HasEntitlements'] -eq $true }).Count
+
+    $result = @{
+        OrphanAccounts = @($orphanAccounts)
+        Summary = @{
+            TotalAccountsScanned    = $totalScanned
+            TotalOrphans            = $orphanAccounts.Count
+            Uncorrelated            = $uncorrelatedCount
+            TerminatedOwner         = $terminatedCount
+            DanglingReference       = $danglingCount
+            DisabledOrphans         = $disabledCount
+            ServiceAccountOrphans   = $serviceCount
+            OrphansWithEntitlements = $withEntitlements
+            PerSource               = $perSource
+        }
+    }
+
+    Write-SPLog -Message "Get-SPOrphanAccounts: found $($orphanAccounts.Count) orphans across $totalScanned accounts ($uncorrelatedCount uncorrelated, $terminatedCount terminated, $danglingCount dangling)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
+        -CorrelationID $CorrelationID
+
+    return $result
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -4646,5 +4950,6 @@ Export-ModuleMember -Function @(
     'Get-SPStaleAccess',
     'Get-SPAccessProfileInventory',
     'Save-SPConfigurationSnapshot',
-    'Get-SPConfigurationSnapshot'
+    'Get-SPConfigurationSnapshot',
+    'Get-SPOrphanAccounts'
 )

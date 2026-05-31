@@ -8286,6 +8286,293 @@ $($dimensionSections -join "`n")
 
 #endregion
 
+#region Orphan Account Report (P16-01)
+
+function Export-SPOrphanAccountHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPOrphanAccounts output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with orphan accounts grouped by
+        OrphanType and source. Includes summary card with orphan rates per source,
+        badges for orphan type classification, and recommendation sections.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER OrphanData
+        Hashtable output from Get-SPOrphanAccounts.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $orphans = Get-SPOrphanAccounts -SourceIds @('src-ad-001')
+        $path = Export-SPOrphanAccountHtml -OrphanData $orphans -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$OrphanData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "OrphanAccounts-${timestamp}.html"
+
+    $summary      = $OrphanData['Summary']
+    $orphanItems  = @($OrphanData['OrphanAccounts'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Scanned<br/><span style="font-size:22px;">$($summary['TotalAccountsScanned'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Orphans<br/><span style="font-size:22px;">$($summary['TotalOrphans'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Uncorrelated<br/><span style="font-size:22px;">$($summary['Uncorrelated'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Terminated Owner<br/><span style="font-size:22px;">$($summary['TerminatedOwner'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Dangling Ref<br/><span style="font-size:22px;">$($summary['DanglingReference'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+With Entitlements<br/><span style="font-size:22px;">$($summary['OrphansWithEntitlements'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source orphan rate table ---
+    $perSource = $summary['PerSource']
+    $sourceRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $perSource -and $perSource.Count -gt 0) {
+        $sIdx = 0
+        foreach ($sName in ($perSource.Keys | Sort-Object)) {
+            $sIdx++
+            $sData = $perSource[$sName]
+            $cells = @(
+                (ConvertTo-SafeHtml $sName),
+                [string]$sData['Total'],
+                [string]$sData['Orphans'],
+                "$($sData['OrphanPct'])%"
+            )
+            $sourceRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sIdx % 2) -eq 0)))
+        }
+    }
+
+    $sourceTableHtml = ''
+    if ($sourceRows.Count -gt 0) {
+        $sHeader = Build-HtmlTableHeader -Headers @('Source', 'Total Accounts', 'Orphans', 'Orphan Rate')
+        $sourceTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Orphan Rate by Source</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${sHeader}
+<tbody>
+$($sourceRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Main orphan account table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Account Name', 'Source', 'Native Identity', 'Orphan Type',
+        'Disabled', 'Entitlements', 'Service Acct', 'Created'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    # Sort: Uncorrelated first, then TerminatedOwner, then DanglingReference
+    $sortOrder = @{ 'Uncorrelated' = 1; 'TerminatedOwner' = 2; 'DanglingReference' = 3 }
+    $sortedOrphans = $orphanItems | Sort-Object { $sortOrder[$_['OrphanType']] }
+
+    foreach ($item in $sortedOrphans) {
+        $rowIdx++
+
+        # OrphanType badge
+        $typeColor = switch ($item['OrphanType']) {
+            'Uncorrelated'     { 'color:#fff; background:#c0392b;' }
+            'TerminatedOwner'  { 'color:#fff; background:#FF8800;' }
+            'DanglingReference' { 'color:#fff; background:#f39c12;' }
+            default             { 'color:#fff; background:#777777;' }
+        }
+        $typeBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $typeColor"">$($item['OrphanType'])</span>"
+
+        # Entitlement count with highlight if > 0
+        $entDisplay = if ($item['HasEntitlements']) {
+            "<span style=""color:#c0392b; font-weight:bold;"">$($item['EntitlementCount'])</span>"
+        } else { '0' }
+
+        $disabledDisplay = if ($item['Disabled']) { 'Yes' } else { 'No' }
+        $svcDisplay = if ($item['IsServiceAccount']) {
+            '<span style="color:#336699; font-weight:bold;">Yes</span>'
+        } else { 'No' }
+
+        $createdDisplay = if (-not [string]::IsNullOrWhiteSpace($item['Created'])) {
+            Format-HtmlDate -DateString $item['Created']
+        } else { '-' }
+
+        $cells = @(
+            (ConvertTo-SafeHtml $item['AccountName']),
+            (ConvertTo-SafeHtml $item['SourceName']),
+            (ConvertTo-SafeHtml $item['NativeIdentity']),
+            $typeBadge,
+            $disabledDisplay,
+            $entDisplay,
+            $svcDisplay,
+            $createdDisplay
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Per-source detail sections grouped by OrphanType ---
+    $sourceSections = [System.Collections.Generic.List[string]]::new()
+
+    $sourceGroups = @{}
+    foreach ($item in $orphanItems) {
+        $sName = $item['SourceName']
+        if ([string]::IsNullOrWhiteSpace($sName)) { $sName = $item['SourceId'] }
+        if (-not $sourceGroups.ContainsKey($sName)) {
+            $sourceGroups[$sName] = [System.Collections.Generic.List[hashtable]]::new()
+        }
+        $sourceGroups[$sName].Add($item)
+    }
+
+    foreach ($sName in ($sourceGroups.Keys | Sort-Object)) {
+        $groupItems = $sourceGroups[$sName]
+        $sectionHtml = "<h2 style=""font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;"">$(ConvertTo-SafeHtml $sName) ($($groupItems.Count) orphans)</h2>"
+
+        foreach ($item in $groupItems) {
+            $acctHtml = ConvertTo-SafeHtml $item['AccountName']
+            $typeLabel = $item['OrphanType']
+            $borderColor = switch ($typeLabel) {
+                'Uncorrelated'      { '#c0392b' }
+                'TerminatedOwner'   { '#FF8800' }
+                'DanglingReference' { '#f39c12' }
+                default             { '#777777' }
+            }
+
+            $entTag = if ($item['HasEntitlements']) {
+                " <span style=""color:#c0392b; font-weight:bold;"">[$($item['EntitlementCount']) entitlements]</span>"
+            } else { '' }
+
+            $svcTag = if ($item['IsServiceAccount']) { ' <span style="color:#336699;">[Service]</span>' } else { '' }
+
+            $sectionHtml += @"
+<div style="margin-bottom:8px; padding:6px 12px; border-left:4px solid ${borderColor}; background:#fafafa;">
+<strong>${acctHtml}</strong>${entTag}${svcTag} - <em>${typeLabel}</em><br/>
+<span style="font-size:12px; color:#666666;">
+Native: $(ConvertTo-SafeHtml $item['NativeIdentity']) | Disabled: $($item['Disabled']) | Created: $(if ($item['Created']) { Format-HtmlDate -DateString $item['Created'] } else { '-' })
+</span>
+</div>
+"@
+        }
+
+        $sourceSections.Add($sectionHtml)
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Uncorrelated Accounts</strong><br/>
+Review correlation rules for each source. These accounts exist outside identity governance scope.
+Consider creating manual correlations or disabling accounts that cannot be correlated.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Terminated Owner Accounts</strong><br/>
+These accounts belong to terminated employees and should have been deprovisioned. Review lifecycle
+rules and provisioning policies to ensure termination triggers account removal or disabling.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Dangling References</strong><br/>
+These accounts reference an identity that no longer exists. This may indicate data corruption or
+incomplete identity removal. Investigate the source system and consider manual cleanup.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Orphan Account Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Orphan Account Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${sourceTableHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">All Orphan Accounts</h2>
+${tableHtml}
+
+$($sourceSections -join "`n")
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Orphan account HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrphanAccountHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8311,5 +8598,6 @@ Export-ModuleMember -Function @(
     'Export-SPGovernanceMaturityHtml',
     'Export-SPIdentityAccessSpreadHtml'
 ,
-    'Export-SPAuditPeriodComparisonHtml'
+    'Export-SPAuditPeriodComparisonHtml',
+    'Export-SPOrphanAccountHtml'
 )

@@ -139,6 +139,12 @@
 
         # SP.AuditAnalytics - Governance Policy Engine (P13-04)
         'Test-SPGovernancePolicy'
+
+        # SP.AuditQueries - Orphan Account Detector (P16-01)
+        'Get-SPOrphanAccounts'
+
+        # SP.AuditReportHtml - Orphan Account Report (P16-01)
+        'Export-SPOrphanAccountHtml'
     )
 
     # Do not export variables or aliases from nested modules
