@@ -1880,11 +1880,507 @@ function Measure-SPSourceGovernance {
 
 #endregion
 
+#region P15-07: Identity Lifecycle Correlation
+
+function Get-SPIdentityLifecycleCorrelation {
+    <#
+    .SYNOPSIS
+        Cross-references identity lifecycle events with access review decisions.
+    .DESCRIPTION
+        Correlates joiner/mover/leaver lifecycle events from ISC account activities
+        with campaign certification decisions to identify governance gaps:
+        - Joiner unreviewed past grace period
+        - Mover retaining old-department access after transfer
+        - Leaver with residual access after termination
+
+        Consumes campaign audit hashtables (same structure as Measure-SPIdentityRisk)
+        and queries Get-SPAuditIdentityEvents for lifecycle data per identity.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions containing IdentityId,
+        IdentityName, AccessName, DecisionDate, and decision category.
+    .PARAMETER LifecycleEventDaysBack
+        Number of days to look back for lifecycle events. Default 90.
+    .PARAMETER ReviewGraceDays
+        Days after a joiner event within which unreviewed access is not flagged.
+        Default 30. Set to 0 for immediate review requirement.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Correlations = @(...); Summary = @{...} }
+    .EXAMPLE
+        $audits = Get-SPAuditCampaigns -DaysBack 90 | ForEach-Object {
+            Get-SPAuditCampaignReport -CampaignId $_.id
+        }
+        $lifecycle = Get-SPIdentityLifecycleCorrelation -CampaignAudits $audits
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$LifecycleEventDaysBack = 90,
+
+        [Parameter()]
+        [int]$ReviewGraceDays = 30,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPIdentityLifecycleCorrelation: starting with $($CampaignAudits.Count) campaign(s), LifecycleEventDaysBack=$LifecycleEventDaysBack, ReviewGraceDays=$ReviewGraceDays" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityLifecycleCorrelation' `
+        -CorrelationID $CorrelationID
+
+    # Empty input returns empty summary
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Correlations = @()
+            Summary      = @{
+                TotalIdentitiesAnalyzed = 0
+                LifecycleEventsFound    = 0
+                Joiners = @{ Total = 0; Reviewed = 0; Unreviewed = 0 }
+                Movers  = @{ Total = 0; OldAccessRevoked = 0; OldAccessRetained = 0 }
+                Leavers = @{ Total = 0; AccessRemoved = 0; ResidualAccess = 0 }
+                TotalGaps      = 0
+                GapsBySeverity = @{ Critical = 0; High = 0; Medium = 0 }
+            }
+        }
+    }
+
+    # Step 1: Extract all identity decisions with timestamps from campaign audits
+    # identityMap: IdentityId -> @{ Name; Decisions = @( @{Category;AccessName;DecisionDate;CampaignName} ) }
+    $identityMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $campaignName = ''
+        if ($audit.ContainsKey('CampaignName')) { $campaignName = [string]$audit['CampaignName'] }
+        elseif ($audit.ContainsKey('CampaignId')) { $campaignName = [string]$audit['CampaignId'] }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $identityId   = ''
+                $identityName = ''
+                $accessName   = ''
+                $decisionDate = ''
+
+                if ($item -is [hashtable]) {
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                } else {
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $nmProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $nmProp -and $null -ne $nmProp.Value) { [string]$nmProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($identityId)) { continue }
+
+                if (-not $identityMap.ContainsKey($identityId)) {
+                    $identityMap[$identityId] = @{
+                        Name      = $identityName
+                        Decisions = [System.Collections.Generic.List[hashtable]]::new()
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    $identityMap[$identityId]['Name'] = $identityName
+                }
+
+                $identityMap[$identityId]['Decisions'].Add(@{
+                    Category     = $category
+                    AccessName   = $accessName
+                    DecisionDate = $decisionDate
+                    CampaignName = $campaignName
+                })
+            }
+        }
+    }
+
+    $totalIdentities = $identityMap.Count
+
+    Write-SPLog -Message "Extracted $totalIdentities unique identities from campaign decisions" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityLifecycleCorrelation' `
+        -CorrelationID $CorrelationID
+
+    # Step 2: Query lifecycle events for each identity
+    $correlations = [System.Collections.Generic.List[hashtable]]::new()
+    $joinerTotal = 0; $joinerReviewed = 0; $joinerUnreviewed = 0
+    $moverTotal = 0; $moverRevoked = 0; $moverRetained = 0
+    $leaverTotal = 0; $leaverRemoved = 0; $leaverResidual = 0
+    $lifecycleEventsFound = 0
+    $now = Get-Date
+
+    foreach ($idKey in $identityMap.Keys) {
+        $idData = $identityMap[$idKey]
+        $idName = $idData['Name']
+        $idDecisions = $idData['Decisions']
+
+        # Query lifecycle events via existing function
+        $eventsResult = $null
+        try {
+            $eventsResult = Get-SPAuditIdentityEvents -IdentityId $idKey `
+                -DaysBack $LifecycleEventDaysBack -CorrelationID $CorrelationID
+        } catch {
+            Write-SPLog -Message "Failed to get lifecycle events for identity '$idKey': $_" `
+                -Severity WARN -Component 'SP.AuditReport' -Action 'Get-SPIdentityLifecycleCorrelation' `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        if ($null -eq $eventsResult -or -not $eventsResult.Success -or $null -eq $eventsResult.Data) {
+            continue
+        }
+
+        $events = @($eventsResult.Data)
+        if ($events.Count -eq 0) { continue }
+
+        # Classify lifecycle events
+        foreach ($event in $events) {
+            if ($null -eq $event) { continue }
+
+            $action = ''
+            if ($event -is [hashtable]) {
+                $action = if ($event.ContainsKey('action')) { [string]$event['action'] } else { '' }
+            } else {
+                $actProp = $event.PSObject.Properties['action']
+                $action = if ($null -ne $actProp -and $null -ne $actProp.Value) { [string]$actProp.Value } else { '' }
+            }
+
+            $eventCreated = ''
+            if ($event -is [hashtable]) {
+                $eventCreated = if ($event.ContainsKey('created')) { [string]$event['created'] } else { '' }
+            } else {
+                $crProp = $event.PSObject.Properties['created']
+                $eventCreated = if ($null -ne $crProp -and $null -ne $crProp.Value) { [string]$crProp.Value } else { '' }
+            }
+
+            $eventDate = $null
+            if (-not [string]::IsNullOrWhiteSpace($eventCreated)) {
+                try {
+                    $eventDate = [datetime]::Parse($eventCreated,
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        [System.Globalization.DateTimeStyles]::RoundtripKind)
+                } catch { }
+            }
+
+            $actionLower = $action.ToLower()
+            $lifecycleType = $null
+            $eventDetail = ''
+
+            # Classify event type
+            if ($actionLower -match 'identity.?create|account.?enable|identity.?enable|joiner|hire') {
+                $lifecycleType = 'Joiner'
+                $eventDetail = "Identity created or account enabled"
+            }
+            elseif ($actionLower -match 'role.?change|department.?change|manager.?change|mover|transfer|reassign') {
+                $lifecycleType = 'Mover'
+                $eventDetail = "Role or department change detected"
+            }
+            elseif ($actionLower -match 'identity.?disable|terminat|leaver|account.?delete|identity.?delete|deactivat') {
+                $lifecycleType = 'Leaver'
+                $eventDetail = "Identity disabled or terminated"
+            }
+
+            if ($null -eq $lifecycleType) { continue }
+
+            $lifecycleEventsFound++
+
+            # Cross-reference with campaign decisions
+            switch ($lifecycleType) {
+                'Joiner' {
+                    $joinerTotal++
+
+                    # Check if identity was reviewed in any campaign after the joiner event
+                    $wasReviewed = $false
+                    $withinGrace = $false
+                    $lastReviewDate = ''
+                    $lastDecision = ''
+
+                    foreach ($dec in $idDecisions) {
+                        if (-not [string]::IsNullOrWhiteSpace($dec['DecisionDate'])) {
+                            try {
+                                $decDate = [datetime]::Parse($dec['DecisionDate'],
+                                    [System.Globalization.CultureInfo]::InvariantCulture,
+                                    [System.Globalization.DateTimeStyles]::RoundtripKind)
+                                if ($null -ne $eventDate -and $decDate -ge $eventDate) {
+                                    $wasReviewed = $true
+                                    $lastReviewDate = $dec['DecisionDate']
+                                    $lastDecision = $dec['Category']
+                                }
+                            } catch { }
+                        }
+                    }
+
+                    # Check grace period
+                    if (-not $wasReviewed -and $null -ne $eventDate) {
+                        $daysSinceEvent = ($now - $eventDate).TotalDays
+                        if ($daysSinceEvent -le $ReviewGraceDays) {
+                            $withinGrace = $true
+                        }
+                    }
+
+                    if ($wasReviewed) {
+                        $joinerReviewed++
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Joiner'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Covered'
+                            GapType           = $null
+                            RetainedAccess    = @()
+                            LastReviewDate    = $lastReviewDate
+                            ReviewDecision    = $lastDecision
+                            Severity          = $null
+                            Recommendation    = 'New access reviewed in campaign'
+                        })
+                    }
+                    elseif ($withinGrace) {
+                        $joinerReviewed++
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Joiner'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Covered'
+                            GapType           = $null
+                            RetainedAccess    = @()
+                            LastReviewDate    = ''
+                            ReviewDecision    = ''
+                            Severity          = $null
+                            Recommendation    = "Within $ReviewGraceDays-day grace period for review"
+                        })
+                    }
+                    else {
+                        $joinerUnreviewed++
+                        $approvedAccess = @($idDecisions | Where-Object { $_.Category -eq 'Approved' } |
+                            ForEach-Object { $_.AccessName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Joiner'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Gap'
+                            GapType           = 'NewAccessUnreviewed'
+                            RetainedAccess    = $approvedAccess
+                            LastReviewDate    = ''
+                            ReviewDecision    = ''
+                            Severity          = 'Medium'
+                            Recommendation    = 'Schedule access review for new joiner - access granted but not yet certified'
+                        })
+                    }
+                }
+                'Mover' {
+                    $moverTotal++
+
+                    # Check if any access was revoked after the mover event
+                    $revokedAccess = @()
+                    $approvedAccess = @()
+
+                    foreach ($dec in $idDecisions) {
+                        $decDate = $null
+                        if (-not [string]::IsNullOrWhiteSpace($dec['DecisionDate'])) {
+                            try {
+                                $decDate = [datetime]::Parse($dec['DecisionDate'],
+                                    [System.Globalization.CultureInfo]::InvariantCulture,
+                                    [System.Globalization.DateTimeStyles]::RoundtripKind)
+                            } catch { }
+                        }
+
+                        $accessName = $dec['AccessName']
+                        if ([string]::IsNullOrWhiteSpace($accessName)) { continue }
+
+                        if ($dec['Category'] -eq 'Revoked') {
+                            $revokedAccess += $accessName
+                        }
+                        elseif ($dec['Category'] -eq 'Approved' -and
+                                $null -ne $eventDate -and $null -ne $decDate -and
+                                $decDate -ge $eventDate) {
+                            $approvedAccess += $accessName
+                        }
+                    }
+
+                    if ($approvedAccess.Count -gt 0 -and $revokedAccess.Count -eq 0) {
+                        # Old access retained
+                        $moverRetained++
+                        $lastDecDate = ''
+                        $lastDec = ''
+                        foreach ($dec in $idDecisions) {
+                            if ($dec['Category'] -eq 'Approved' -and -not [string]::IsNullOrWhiteSpace($dec['DecisionDate'])) {
+                                $lastDecDate = $dec['DecisionDate']
+                                $lastDec = $dec['Category']
+                            }
+                        }
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Mover'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Gap'
+                            GapType           = 'OldAccessRetained'
+                            RetainedAccess    = $approvedAccess
+                            LastReviewDate    = $lastDecDate
+                            ReviewDecision    = $lastDec
+                            Severity          = 'High'
+                            Recommendation    = 'Review access for relevance after department/role transfer'
+                        })
+                    }
+                    else {
+                        # Old access revoked (or mixed)
+                        $moverRevoked++
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Mover'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Covered'
+                            GapType           = $null
+                            RetainedAccess    = @()
+                            LastReviewDate    = ''
+                            ReviewDecision    = 'Revoked'
+                            Severity          = $null
+                            Recommendation    = 'Old access revoked on transfer'
+                        })
+                    }
+                }
+                'Leaver' {
+                    $leaverTotal++
+
+                    # Check if leaver still has approved access in latest campaign
+                    $stillApproved = @($idDecisions | Where-Object { $_.Category -eq 'Approved' } |
+                        ForEach-Object { $_.AccessName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    $allRevoked = @($idDecisions | Where-Object { $_.Category -eq 'Revoked' })
+
+                    if ($stillApproved.Count -gt 0) {
+                        # Residual access
+                        $leaverResidual++
+                        $lastDecDate = ''
+                        foreach ($dec in $idDecisions) {
+                            if ($dec['Category'] -eq 'Approved' -and -not [string]::IsNullOrWhiteSpace($dec['DecisionDate'])) {
+                                $lastDecDate = $dec['DecisionDate']
+                            }
+                        }
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Leaver'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Gap'
+                            GapType           = 'ResidualAccess'
+                            RetainedAccess    = $stillApproved
+                            LastReviewDate    = $lastDecDate
+                            ReviewDecision    = 'Approved'
+                            Severity          = 'Critical'
+                            Recommendation    = 'Immediate action: revoke all access for terminated identity'
+                        })
+                    }
+                    else {
+                        # Access properly removed
+                        $leaverRemoved++
+                        $correlations.Add(@{
+                            IdentityId        = $idKey
+                            IdentityName      = $idName
+                            LifecycleEvent    = 'Leaver'
+                            EventDate         = if ($null -ne $eventDate) { $eventDate.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $eventCreated }
+                            EventDetail       = $eventDetail
+                            CorrelationStatus = 'Covered'
+                            GapType           = $null
+                            RetainedAccess    = @()
+                            LastReviewDate    = ''
+                            ReviewDecision    = 'Revoked'
+                            Severity          = $null
+                            Recommendation    = 'Access properly removed'
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    # Sort by severity: Critical > High > Medium > Covered
+    $severityOrder = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2 }
+    $sorted = @($correlations | Sort-Object {
+        $sev = $_['Severity']
+        if ($null -ne $sev -and $severityOrder.ContainsKey($sev)) { $severityOrder[$sev] }
+        else { 99 }
+    })
+
+    $totalGaps = $joinerUnreviewed + $moverRetained + $leaverResidual
+
+    Write-SPLog -Message "Get-SPIdentityLifecycleCorrelation: $totalIdentities identities, $lifecycleEventsFound events, $totalGaps gaps (Critical=$leaverResidual, High=$moverRetained, Medium=$joinerUnreviewed)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityLifecycleCorrelation' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Correlations = $sorted
+        Summary      = @{
+            TotalIdentitiesAnalyzed = $totalIdentities
+            LifecycleEventsFound    = $lifecycleEventsFound
+            Joiners = @{
+                Total      = $joinerTotal
+                Reviewed   = $joinerReviewed
+                Unreviewed = $joinerUnreviewed
+            }
+            Movers = @{
+                Total             = $moverTotal
+                OldAccessRevoked  = $moverRevoked
+                OldAccessRetained = $moverRetained
+            }
+            Leavers = @{
+                Total          = $leaverTotal
+                AccessRemoved  = $leaverRemoved
+                ResidualAccess = $leaverResidual
+            }
+            TotalGaps      = $totalGaps
+            GapsBySeverity = @{
+                Critical = $leaverResidual
+                High     = $moverRetained
+                Medium   = $joinerUnreviewed
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
     'Measure-SPCampaignTrends',
     'Measure-SPReviewerReputation',
     'Measure-SPIdentityRisk',
-    'Measure-SPSourceGovernance'
+    'Measure-SPSourceGovernance',
+    'Get-SPIdentityLifecycleCorrelation'
 )

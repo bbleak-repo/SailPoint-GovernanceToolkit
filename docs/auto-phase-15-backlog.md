@@ -53,7 +53,7 @@ Safe to modify:
 | P15-04 | Bulk Remediation Ticket Export | none | SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-05 | SIEM Event Export (CEF/JSON) | none | SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-06 | Governance Exception Register | none | SP.Config, SP.Core.psd1, settings.json | DONE |
-| P15-07 | Identity Lifecycle Correlation | none | SP.AuditReport, SP.Audit.psd1 | PENDING |
+| P15-07 | Identity Lifecycle Correlation | none | SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-08 | Invoke-SPScheduledCampaign.ps1 | P15-06 | Scripts/ (new) | PENDING |
 | P15-09 | Invoke-SPComplianceBundle.ps1 | P15-01, P15-02, P15-07 | Scripts/ (new) | PENDING |
 | P15-10 | Pester Tests | P15-09 | Tests/ (new) | PENDING |
@@ -849,7 +849,7 @@ function Test-SPGovernanceExceptionExpiry {
 
 ## P15-07: Identity Lifecycle Correlation Report
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

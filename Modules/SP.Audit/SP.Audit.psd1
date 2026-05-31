@@ -131,6 +131,12 @@
         # SP.AuditReportHtml - SIEM Event Export (P15-05)
         'Export-SPAuditCef'
         'Export-SPAuditSiemJson'
+
+        # SP.AuditAnalytics - Identity Lifecycle Correlation (P15-07)
+        'Get-SPIdentityLifecycleCorrelation'
+
+        # SP.AuditReportHtml - Identity Lifecycle Correlation Report (P15-07)
+        'Export-SPLifecycleCorrelationHtml'
     )
 
     # Do not export variables or aliases from nested modules

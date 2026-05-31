@@ -8895,6 +8895,287 @@ function Export-SPAuditSiemJson {
 
 #endregion SIEM Event Export
 
+#region P15-07: Identity Lifecycle Correlation Report
+
+function Export-SPLifecycleCorrelationHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML identity lifecycle correlation report.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with:
+        - Summary card with gap count, lifecycle event distribution
+        - Gap items highlighted with severity badges (Critical red, High orange, Medium yellow)
+        - Covered items shown in green
+        - Joiner/Mover/Leaver sections with detail tables
+        - Recommendations section for each gap type
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER Correlations
+        Hashtable output from Get-SPIdentityLifecycleCorrelation.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $lifecycle = Get-SPIdentityLifecycleCorrelation -CampaignAudits $audits
+        $path = Export-SPLifecycleCorrelationHtml -Correlations $lifecycle -OutputPath '.\Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Correlations,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "LifecycleCorrelation-${timestamp}.html"
+
+    $summary = $Correlations['Summary']
+    $items   = @($Correlations['Correlations'])
+
+    $joiners = $summary['Joiners']
+    $movers  = $summary['Movers']
+    $leavers = $summary['Leavers']
+    $gaps    = $summary['GapsBySeverity']
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Identities Analyzed<br/><span style="font-size:22px;">$($summary['TotalIdentitiesAnalyzed'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Lifecycle Events<br/><span style="font-size:22px;">$($summary['LifecycleEventsFound'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Total Gaps<br/><span style="font-size:22px;">$($summary['TotalGaps'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Critical<br/><span style="font-size:22px;">$($gaps['Critical'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+High<br/><span style="font-size:22px;">$($gaps['High'])</span>
+</td>
+<td style="padding:12px 16px; background:#e6b800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:14%; text-align:center;">
+Medium<br/><span style="font-size:22px;">$($gaps['Medium'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Lifecycle distribution card ---
+    $distHtml = @"
+<table style="width:80%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 16px; background:#2980b9; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">
+Joiners: $($joiners['Total'])<br/><span style="font-size:12px;">Reviewed: $($joiners['Reviewed']) | Unreviewed: $($joiners['Unreviewed'])</span>
+</td>
+<td style="padding:10px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">
+Movers: $($movers['Total'])<br/><span style="font-size:12px;">Revoked: $($movers['OldAccessRevoked']) | Retained: $($movers['OldAccessRetained'])</span>
+</td>
+<td style="padding:10px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">
+Leavers: $($leavers['Total'])<br/><span style="font-size:12px;">Removed: $($leavers['AccessRemoved']) | Residual: $($leavers['ResidualAccess'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Critical alerts box (Leaver residual access) ---
+    $criticalAlertHtml = ''
+    $criticalItems = @($items | Where-Object { $_['Severity'] -eq 'Critical' })
+    if ($criticalItems.Count -gt 0) {
+        $critRows = [System.Collections.Generic.List[string]]::new()
+        $critRowIdx = 0
+        foreach ($ci in $criticalItems) {
+            $critRowIdx++
+            $retained = if ($null -ne $ci['RetainedAccess'] -and $ci['RetainedAccess'].Count -gt 0) {
+                (($ci['RetainedAccess'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', ')
+            } else { 'N/A' }
+            $cells = @(
+                (ConvertTo-SafeHtml $ci['IdentityName']),
+                (ConvertTo-SafeHtml $ci['EventDate']),
+                $retained,
+                (ConvertTo-SafeHtml $ci['Recommendation'])
+            )
+            $critRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($critRowIdx % 2) -eq 0)))
+        }
+        $critHeader = Build-HtmlTableHeader -Headers @('Identity', 'Termination Date', 'Residual Access', 'Recommendation')
+
+        $criticalAlertHtml = @"
+<div style="padding:16px; background:#fdedec; border:2px solid #CC3333; border-radius:4px; margin-bottom:20px;">
+<strong style="color:#CC3333;">ALERT: $($criticalItems.Count) Terminated Identity(ies) with Residual Access</strong>
+<p style="font-size:13px; color:#333333; margin-top:8px;">These identities have been terminated but still have approved access in the latest campaign review. Immediate revocation is required.</p>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:12px;">
+${critHeader}
+<tbody>
+$($critRows -join "`n")
+</tbody>
+</table>
+</div>
+"@
+    }
+
+    # --- Build section tables for each lifecycle type ---
+    # Helper to build a section
+    function Build-LifecycleSectionHtml {
+        param(
+            [string]$SectionTitle,
+            [string]$EventType,
+            [hashtable[]]$SectionItems
+        )
+
+        if ($SectionItems.Count -eq 0) {
+            return @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">${SectionTitle} (0)</h2>
+<p style="font-size:13px; color:#888888;">No ${EventType} lifecycle events found in the analysis period.</p>
+"@
+        }
+
+        $headerRow = Build-HtmlTableHeader -Headers @('Identity', 'Event Date', 'Detail', 'Status', 'Severity', 'Access', 'Recommendation')
+        $bodyRows  = [System.Collections.Generic.List[string]]::new()
+        $rowIdx    = 0
+
+        foreach ($si in $SectionItems) {
+            $rowIdx++
+
+            $statusBadge = if ($si['CorrelationStatus'] -eq 'Gap') {
+                '<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#CC3333;">GAP</span>'
+            } else {
+                '<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#339933;">COVERED</span>'
+            }
+
+            $sevBadge = ''
+            $sev = $si['Severity']
+            if ($null -ne $sev) {
+                $sevColor = switch ($sev) {
+                    'Critical' { 'background:#CC3333; color:#fff;' }
+                    'High'     { 'background:#FF8800; color:#fff;' }
+                    'Medium'   { 'background:#e6b800; color:#fff;' }
+                    default    { 'background:#888888; color:#fff;' }
+                }
+                $sevBadge = "<span style=`"display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; ${sevColor}`">$(ConvertTo-SafeHtml $sev)</span>"
+            }
+
+            $accessList = ''
+            if ($null -ne $si['RetainedAccess'] -and $si['RetainedAccess'].Count -gt 0) {
+                $accessList = ($si['RetainedAccess'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join '<br/>'
+            }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $si['IdentityName']),
+                (ConvertTo-SafeHtml $si['EventDate']),
+                (ConvertTo-SafeHtml $si['EventDetail']),
+                $statusBadge,
+                $sevBadge,
+                $accessList,
+                (ConvertTo-SafeHtml $si['Recommendation'])
+            )
+            $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+        }
+
+        return @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">${SectionTitle} ($($SectionItems.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    $joinerItems = @($items | Where-Object { $_['LifecycleEvent'] -eq 'Joiner' })
+    $moverItems  = @($items | Where-Object { $_['LifecycleEvent'] -eq 'Mover' })
+    $leaverItems = @($items | Where-Object { $_['LifecycleEvent'] -eq 'Leaver' })
+
+    $joinerSectionHtml = Build-LifecycleSectionHtml -SectionTitle 'Joiners - New Access Review' -EventType 'joiner' -SectionItems $joinerItems
+    $moverSectionHtml  = Build-LifecycleSectionHtml -SectionTitle 'Movers - Transfer Access Review' -EventType 'mover' -SectionItems $moverItems
+    $leaverSectionHtml = Build-LifecycleSectionHtml -SectionTitle 'Leavers - Termination Access Cleanup' -EventType 'leaver' -SectionItems $leaverItems
+
+    # --- Recommendations summary ---
+    $recsHtml = ''
+    $totalGaps = $summary['TotalGaps']
+    if ($totalGaps -gt 0) {
+        $recItems = [System.Collections.Generic.List[string]]::new()
+        if ($gaps['Critical'] -gt 0) {
+            $recItems.Add("<li style=`"margin-bottom:8px;`"><strong style=`"color:#CC3333;`">Critical ($($gaps['Critical'])):</strong> Terminated identities with residual access require immediate revocation. This represents the highest governance risk.</li>")
+        }
+        if ($gaps['High'] -gt 0) {
+            $recItems.Add("<li style=`"margin-bottom:8px;`"><strong style=`"color:#FF8800;`">High ($($gaps['High'])):</strong> Transferred employees retaining old department access. Review entitlements for continued relevance after role/department change.</li>")
+        }
+        if ($gaps['Medium'] -gt 0) {
+            $recItems.Add("<li style=`"margin-bottom:8px;`"><strong style=`"color:#e6b800;`">Medium ($($gaps['Medium'])):</strong> New joiners with unreviewed access past the $ReviewGraceDays-day grace period. Schedule certification review.</li>")
+        }
+        $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<ul style="font-size:13px; color:#333333; line-height:1.6;">
+$($recItems -join "`n")
+</ul>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Lifecycle Correlation Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Lifecycle Correlation Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${distHtml}
+
+${criticalAlertHtml}
+
+${leaverSectionHtml}
+
+${moverSectionHtml}
+
+${joinerSectionHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Lifecycle correlation HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPLifecycleCorrelationHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion Identity Lifecycle Correlation Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8921,5 +9202,6 @@ Export-ModuleMember -Function @(
     'Export-SPAccessRequestHtml',
     'Export-SPRemediationTickets',
     'Export-SPAuditCef',
-    'Export-SPAuditSiemJson'
+    'Export-SPAuditSiemJson',
+    'Export-SPLifecycleCorrelationHtml'
 )
