@@ -1047,6 +1047,17 @@ function Load-SettingsForm {
         & $setField 'TxtDcCampaignPrefix'  $dc.CampaignNamePrefix
         & $setField 'TxtDcOutputPath'      $dc.OutputPath
     }
+
+    # Governance settings
+    if ($config.PSObject.Properties.Name -contains 'Governance') {
+        $gov = $config.Governance
+        if ($gov.PSObject.Properties.Name -contains 'MetricsOutputPath') {
+            & $setField 'TxtGovMetricsPath' $gov.MetricsOutputPath
+        }
+        if ($gov.PSObject.Properties.Name -contains 'HealthCheckOnStartup') {
+            & $setField 'ChkGovHealthCheckOnStartup' $gov.HealthCheckOnStartup
+        }
+    }
 }
 
 function Save-SettingsForm {
@@ -1206,6 +1217,25 @@ function Save-SettingsForm {
         }
     }
     $newConfig['DeltaCert'] = $dcConfig
+
+    # Governance: overlay GUI fields onto existing config to preserve non-GUI keys
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'Governance') {
+        $govExisting = $existingConfig.Governance
+        $govConfig = [ordered]@{}
+        foreach ($prop in $govExisting.PSObject.Properties) {
+            $govConfig[$prop.Name] = $prop.Value
+        }
+        $govConfig['MetricsOutputPath']      = & $getField 'TxtGovMetricsPath' '.\GovernanceMetrics'
+        $govConfig['HealthCheckOnStartup']   = (& $getField 'ChkGovHealthCheckOnStartup' $false)
+    }
+    else {
+        $govConfig = [ordered]@{
+            MetricsOutputPath    = & $getField 'TxtGovMetricsPath' '.\GovernanceMetrics'
+            HealthCheckOnStartup = (& $getField 'ChkGovHealthCheckOnStartup' $false)
+        }
+    }
+    $newConfig['Governance'] = $govConfig
 
     try {
         $json = $newConfig | ConvertTo-Json -Depth 10

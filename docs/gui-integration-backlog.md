@@ -22,7 +22,7 @@
 | GU-04 | GovernanceRunDialog.xaml | GU-01 | DONE |
 | GU-05 | Enhanced AuditQueryDialog (type + dates) | none | DONE |
 | GU-06 | Enhanced Delta Cert tab (batch status) | none | DONE |
-| GU-07 | Settings tab governance section | none | PENDING |
+| GU-07 | Settings tab governance section | none | DONE |
 | GU-08 | Syntax + XAML validation | GU-07 | PENDING |
 | GU-09 | Opus visual review + verification | GU-08 | PENDING |
 
@@ -236,7 +236,7 @@ if available, or calls Get-SPRegisteredApps + Get-SPDisconnectedAppDeliveryStatu
 
 ## GU-07: Settings Tab Governance Section
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Add a "Governance" section to Settings tab** (after Delta Cert section, before Quick Connect).
