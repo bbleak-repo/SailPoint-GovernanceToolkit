@@ -986,7 +986,7 @@ New function `Export-SPLifecycleCorrelationHtml`:
 
 ## P15-08: Invoke-SPScheduledCampaign.ps1
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P15-06
 
 **Description:**
