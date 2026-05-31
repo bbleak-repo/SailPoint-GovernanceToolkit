@@ -36,7 +36,7 @@ Critical items first, then high, medium, low.
 | QH-17 | LOW | Add credential rotation / vault re-key command | M | DONE |
 | QH-18 | LOW | Update SP.Testing module for newer workflows | M | DONE |
 | QH-19 | LOW | Split SP.AuditReport.psm1 monolith (12K lines) | L | DONE |
-| QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | PENDING |
+| QH-20 | LOW | Split SP.DisconnectedAppRunner.psm1 monolith (7.5K lines) | L | DONE |
 
 ---
 
@@ -445,15 +445,23 @@ exported by SP.AuditReportHtml.psm1. Original `SP.AuditReport.psm1` removed.
 
 ## QH-20: Split SP.DisconnectedAppRunner.psm1 (7.5K Lines)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
-**Problem:** Single file with 25+ functions. Same maintainability concern as QH-19.
+**Problem:** Single file with 33 functions across 7,496 lines. Same maintainability concern as QH-19.
 
-**Fix:** Split into:
-- `SP.DisconnectedAppRunner.psm1` (campaign creation, core pipeline)
-- `SP.DisconnectedAppAnalytics.psm1` (risk, catalog, SLA, trends)
-- `SP.DisconnectedAppReports.psm1` (HTML reports, dashboards)
-Update psd1 NestedModules.
+**Fix:** Split into 3 sub-modules following QH-19 pattern:
+- `SP.DisconnectedAppRunner.psm1` -- core pipeline (16 functions, ~3,109 lines): identity resolution,
+  campaign creation, app registry, remediation tracking, ISC integration, alerting, cleanup, escalation
+- `SP.DisconnectedAppAnalytics.psm1` -- analytics (7 functions, ~2,076 lines): delivery status,
+  identity risk, entitlement catalog, SLA status, campaign decisions, trends, compliance packages
+- `SP.DisconnectedAppReports.psm1` -- HTML reports (10 functions, ~2,439 lines): delta, risk, catalog,
+  batch, SLA, decision harvest reports plus team dashboard (3 internal HTML helpers)
+Updated `SP.DisconnectedApps.psd1` NestedModules (6 entries) and FunctionsToExport (40 public functions).
+Load order: Runner before Analytics/Reports (cross-module dependencies on Get-SPRegisteredApps, Get-SPRemediationReport).
 
-**Files:** `Modules/SP.DisconnectedApps/SP.DisconnectedAppRunner.psm1` -> 3 files
+**Files:**
+- `Modules/SP.DisconnectedApps/SP.DisconnectedAppRunner.psm1` (trimmed from 7,496 to 3,109 lines)
+- `Modules/SP.DisconnectedApps/SP.DisconnectedAppAnalytics.psm1` (new, 2,076 lines)
+- `Modules/SP.DisconnectedApps/SP.DisconnectedAppReports.psm1` (new, 2,439 lines)
+- `Modules/SP.DisconnectedApps/SP.DisconnectedApps.psd1` (updated NestedModules + FunctionsToExport)

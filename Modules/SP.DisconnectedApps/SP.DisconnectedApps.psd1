@@ -21,11 +21,16 @@
     RequiredModules   = @()
 
     # Sub-modules loaded as part of this module
+    # Load order: Validator/Snapshot/Delta are independent; Runner before Analytics
+    # and Reports (Analytics/Reports call Get-SPRegisteredApps and
+    # Get-SPRemediationReport from Runner).
     NestedModules     = @(
         'SP.DisconnectedAppValidator.psm1'
         'SP.DisconnectedAppSnapshot.psm1'
         'SP.DisconnectedAppDelta.psm1'
         'SP.DisconnectedAppRunner.psm1'
+        'SP.DisconnectedAppAnalytics.psm1'
+        'SP.DisconnectedAppReports.psm1'
     )
 
     # Public functions exported by this module
@@ -46,52 +51,41 @@
         'Compare-SPDisconnectedAppFiles'
         'Test-SPDisconnectedAppDeletionThreshold'
 
-        # SP.DisconnectedAppRunner - Identity resolution and campaign orchestration
+        # SP.DisconnectedAppRunner - Core pipeline (identity resolution, campaigns,
+        # registry, remediation, ISC integration, alerting, cleanup, escalation)
         'Search-SPIdentityByAttribute'
         'Write-SPDisconnectedAppAuditEvent'
         'Resolve-SPDisconnectedAppIdentities'
         'Invoke-SPDisconnectedAppCertRun'
-        'Export-SPDisconnectedAppDeltaHtml'
-
-        # SP.DisconnectedAppRunner - App registry and directory management
         'Get-SPRegisteredApps'
         'Initialize-SPDisconnectedAppDirectories'
-
-        # SP.DisconnectedAppRunner - Delivery and risk reporting
-        'Get-SPDisconnectedAppDeliveryStatus'
-        'Get-SPDisconnectedAppIdentityRisk'
-        'Export-SPDisconnectedAppIdentityRiskHtml'
-
-        # SP.DisconnectedAppRunner - Entitlement catalog
-        'Get-SPDisconnectedAppEntitlementCatalog'
-        'Export-SPDisconnectedAppEntitlementCatalogHtml'
-
-        # SP.DisconnectedAppRunner - Batch and SLA reporting
-        'Export-SPDisconnectedAppBatchHtml'
-        'Get-SPDisconnectedAppSlaStatus'
-        'Export-SPDisconnectedAppSlaHtml'
-
-        # SP.DisconnectedAppRunner - Decision harvesting and remediation
-        'Get-SPDisconnectedAppCampaignDecisions'
-        'Export-SPDisconnectedAppDecisionHarvestHtml'
         'New-SPRemediationRecord'
         'Update-SPRemediationStatus'
         'Get-SPRemediationReport'
-
-        # SP.DisconnectedAppRunner - ISC integration
         'Push-SPDisconnectedAppToISC'
         'Invoke-SPISCMultipartUpload'
         'Invoke-SPISCFileDrop'
         'Wait-SPISCAggregation'
-
-        # SP.DisconnectedAppRunner - Alerting and cleanup
         'Send-SPDisconnectedAppAlert'
         'Invoke-SPDisconnectedAppCleanup'
+        'Invoke-SPDisconnectedAppEscalation'
 
-        # SP.DisconnectedAppRunner - Trends, compliance, escalation, dashboards
+        # SP.DisconnectedAppAnalytics - Data gathering and analysis
+        'Get-SPDisconnectedAppDeliveryStatus'
+        'Get-SPDisconnectedAppIdentityRisk'
+        'Get-SPDisconnectedAppEntitlementCatalog'
+        'Get-SPDisconnectedAppSlaStatus'
+        'Get-SPDisconnectedAppCampaignDecisions'
         'Get-SPDisconnectedAppTrend'
         'Export-SPDisconnectedAppCompliancePackage'
-        'Invoke-SPDisconnectedAppEscalation'
+
+        # SP.DisconnectedAppReports - HTML reports and dashboards
+        'Export-SPDisconnectedAppDeltaHtml'
+        'Export-SPDisconnectedAppIdentityRiskHtml'
+        'Export-SPDisconnectedAppEntitlementCatalogHtml'
+        'Export-SPDisconnectedAppBatchHtml'
+        'Export-SPDisconnectedAppSlaHtml'
+        'Export-SPDisconnectedAppDecisionHarvestHtml'
         'Export-SPDisconnectedAppTeamDashboard'
     )
 
