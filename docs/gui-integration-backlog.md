@@ -21,7 +21,7 @@
 | GU-03 | Governance tab MainWindow wiring | GU-02 | DONE |
 | GU-04 | GovernanceRunDialog.xaml | GU-01 | DONE |
 | GU-05 | Enhanced AuditQueryDialog (type + dates) | none | DONE |
-| GU-06 | Enhanced Delta Cert tab (batch status) | none | PENDING |
+| GU-06 | Enhanced Delta Cert tab (batch status) | none | DONE |
 | GU-07 | Settings tab governance section | none | PENDING |
 | GU-08 | Syntax + XAML validation | GU-07 | PENDING |
 | GU-09 | Opus visual review + verification | GU-08 | PENDING |
@@ -216,7 +216,7 @@ Update Invoke-AuditCampaignQuery to include -CampaignType and -CreatedAfter/-Cre
 
 ## GU-06: Enhanced Delta Cert Tab (Batch Status)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Add a "Disconnected Apps" section to the Delta Cert tab** in Row 4 area

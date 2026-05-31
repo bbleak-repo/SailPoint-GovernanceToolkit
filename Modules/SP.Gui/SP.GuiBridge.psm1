@@ -2311,6 +2311,142 @@ function Get-SPGuiGovernanceReports {
     }
 }
 
+function Get-SPGuiDisconnectedAppStatus {
+    <#
+    .SYNOPSIS
+        Returns a delivery-status summary for all registered disconnected apps.
+    .DESCRIPTION
+        Wraps Get-SPDisconnectedAppDeliveryStatus from SP.DisconnectedAppAnalytics.
+        Returns a one-line summary string and individual counters suitable for
+        display in the Delta Cert tab Disconnected Apps status label.
+
+        If the DisconnectedApps config section is absent or has no Applications,
+        returns a "No apps registered" summary with zero counters.
+    .PARAMETER StaleHours
+        Number of hours after which a delivered file is considered stale. Default: 24.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{
+            Success = $bool
+            Data = @{
+                Registered  = [int]
+                Delivered   = [int]
+                Stale       = [int]
+                Missing     = [int]
+                Disabled    = [int]
+                SummaryText = [string]   # e.g. "3 registered, 2 delivered, 1 missing"
+            }
+            Error = $string
+        }
+    .EXAMPLE
+        $s = Get-SPGuiDisconnectedAppStatus
+        $DcAppStatusLabel.Text = $s.Data.SummaryText
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$StaleHours = 24,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $emptyData = @{
+        Registered  = 0
+        Delivered   = 0
+        Stale       = 0
+        Missing     = 0
+        Disabled    = 0
+        SummaryText = 'No apps registered'
+    }
+
+    try {
+        # Check whether DisconnectedApps module is available
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $daModule = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
+        if (-not (Test-Path -Path $daModule -PathType Leaf)) {
+            return @{ Success = $true; Data = $emptyData; Error = $null }
+        }
+
+        Import-Module $daModule -Force -ErrorAction SilentlyContinue
+
+        $statusResult = Get-SPDisconnectedAppDeliveryStatus -StaleHours $StaleHours -CorrelationID $CorrelationID
+
+        if (-not $statusResult.Success) {
+            # No config or no apps is not an error for the GUI -- just show empty
+            $msg = if ($statusResult.Error -match 'DisconnectedApps|Applications') {
+                'No apps registered'
+            } else {
+                "Status unavailable: $($statusResult.Error)"
+            }
+            return @{
+                Success = $true
+                Data    = @{
+                    Registered  = 0
+                    Delivered   = 0
+                    Stale       = 0
+                    Missing     = 0
+                    Disabled    = 0
+                    SummaryText = $msg
+                }
+                Error = $null
+            }
+        }
+
+        $summary = $statusResult.Data.Summary
+        $registered = [int]$summary.Total - [int]$summary.Disabled
+        $delivered  = [int]$summary.Delivered
+        $stale      = [int]$summary.Stale
+        $missing    = [int]$summary.Missing
+        $disabled   = [int]$summary.Disabled
+
+        $parts = [System.Collections.Generic.List[string]]::new()
+        $parts.Add("$registered registered")
+        if ($delivered -gt 0) { $parts.Add("$delivered delivered") }
+        if ($stale    -gt 0) { $parts.Add("$stale stale") }
+        if ($missing  -gt 0) { $parts.Add("$missing missing") }
+        if ($disabled -gt 0) { $parts.Add("$disabled disabled") }
+
+        $summaryText = if ($parts.Count -gt 0) { $parts -join ', ' } else { 'No apps registered' }
+
+        return @{
+            Success = $true
+            Data    = @{
+                Registered  = $registered
+                Delivered   = $delivered
+                Stale       = $stale
+                Missing     = $missing
+                Disabled    = $disabled
+                SummaryText = $summaryText
+            }
+            Error = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Get-SPGuiDisconnectedAppStatus failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Get-SPGuiDisconnectedAppStatus' `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = @{
+                Registered  = 0
+                Delivered   = 0
+                Stale       = 0
+                Missing     = 0
+                Disabled    = 0
+                SummaryText = "Error: $($_.Exception.Message)"
+            }
+            Error = "Get-SPGuiDisconnectedAppStatus failed: $($_.Exception.Message)"
+        }
+    }
+}
+
 #endregion
 
 #region Browser Token Functions

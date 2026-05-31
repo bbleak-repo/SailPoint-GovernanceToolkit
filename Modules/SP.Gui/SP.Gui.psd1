@@ -68,7 +68,8 @@
         'Invoke-SPGuiHealthCheck',
         'Invoke-SPGuiGovernanceReport',
         'Export-SPGuiDashboardData',
-        'Get-SPGuiGovernanceReports'
+        'Get-SPGuiGovernanceReports',
+        'Get-SPGuiDisconnectedAppStatus'
     )
 
     # Cmdlets to export from this module

@@ -655,6 +655,7 @@
                         <RowDefinition Height="Auto"/>  <!-- Row 2: Cleanup + Escalation + Open Folder -->
                         <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
                         <RowDefinition Height="Auto"/>  <!-- Row 4: Recent run history -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 5: Disconnected Apps status -->
                     </Grid.RowDefinitions>
 
                     <!-- Row 0: Summary + Configure + Run -->
@@ -827,6 +828,56 @@
                                      FontSize="12"/>
                         </Border>
                     </Grid>
+
+                    <!-- Row 5: Disconnected Apps status -->
+                    <Border Grid.Row="5" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,8,0,0">
+                        <Grid Margin="10,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="Disconnected Apps:"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       FontSize="12" VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+
+                            <TextBlock Grid.Column="1" x:Name="DcAppStatusLabel"
+                                       Foreground="#AAAACC" FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Text="Not checked"/>
+
+                            <Button Grid.Column="2" x:Name="BtnRunDisconnectedBatch"
+                                    Content="Run Batch"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Run disconnected app batch certification for all registered apps"/>
+
+                            <Button Grid.Column="3" x:Name="BtnCheckDelivery"
+                                    Content="Check Delivery"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Check file delivery status for all registered disconnected apps"/>
+
+                            <Button Grid.Column="4" x:Name="BtnViewSla"
+                                    Content="View SLA"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="View 30-day SLA compliance summary for disconnected apps"/>
+
+                            <Button Grid.Column="5" x:Name="BtnRefreshDcAppStatus"
+                                    Content="Refresh"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0" Padding="8,4" FontSize="11"
+                                    ToolTip="Refresh disconnected app delivery status"/>
+                        </Grid>
+                    </Border>
 
                 </Grid>
             </TabItem>

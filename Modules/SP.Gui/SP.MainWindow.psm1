@@ -1903,9 +1903,52 @@ function Initialize-DeltaCertTab {
         }.GetNewClosure())
     }
 
-    # Populate summary label and history on init
+    # Disconnected Apps controls
+    $btnRunBatch      = Find-Control -Parent $TabContent -Name 'BtnRunDisconnectedBatch'
+    $btnCheckDelivery = Find-Control -Parent $TabContent -Name 'BtnCheckDelivery'
+    $btnViewSla       = Find-Control -Parent $TabContent -Name 'BtnViewSla'
+    $btnRefreshDcApp  = Find-Control -Parent $TabContent -Name 'BtnRefreshDcAppStatus'
+
+    if ($btnRunBatch) {
+        $btnRunBatch.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiDisconnectedAppBatch -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnCheckDelivery) {
+        $btnCheckDelivery.Add_Click({
+            & $module {
+                param($tc)
+                Load-DisconnectedAppStatus -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnViewSla) {
+        $btnViewSla.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiViewDisconnectedAppSla -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnRefreshDcApp) {
+        $btnRefreshDcApp.Add_Click({
+            & $module {
+                param($tc)
+                Load-DisconnectedAppStatus -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Populate summary label, history, and disconnected app status on init
     Update-DeltaCertSummaryLabel -TabContent $TabContent
     Load-DeltaCertHistory -TabContent $TabContent
+    Load-DisconnectedAppStatus -TabContent $TabContent
 }
 
 function Get-DeltaCertDialogDefaults {
@@ -2760,6 +2803,102 @@ function Resolve-DeltaCertOutputPath {
     }
 
     return [System.IO.Path]::GetFullPath($rawPath)
+}
+
+function Load-DisconnectedAppStatus {
+    <#
+    .SYNOPSIS
+        Calls Get-SPGuiDisconnectedAppStatus and updates the DcAppStatusLabel.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'DcAppStatusLabel'
+    if ($null -eq $label) { return }
+
+    $label.Text = 'Checking...'
+
+    $result = Get-SPGuiDisconnectedAppStatus
+
+    if ($null -ne $result -and $null -ne $result.Data) {
+        $label.Text = $result.Data.SummaryText
+    }
+    else {
+        $label.Text = 'Status unavailable'
+    }
+}
+
+function Invoke-GuiDisconnectedAppBatch {
+    <#
+    .SYNOPSIS
+        Launches the disconnected app batch script in a new PowerShell window.
+    .DESCRIPTION
+        Runs Scripts\Invoke-SPDisconnectedAppBatch.ps1 via Start-Process so the
+        long-running batch pipeline does not block the GUI. The console window
+        stays open on completion so the user can review output.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $batchScript = Join-Path $script:ToolkitRoot 'Scripts\Invoke-SPDisconnectedAppBatch.ps1'
+
+    if (-not (Test-Path -Path $batchScript -PathType Leaf)) {
+        Set-StatusMessage -Message 'Batch script not found: Scripts\Invoke-SPDisconnectedAppBatch.ps1' -IsError
+        return
+    }
+
+    try {
+        Start-Process 'powershell.exe' `
+            -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$batchScript`"" `
+            -WorkingDirectory $script:ToolkitRoot
+        Set-StatusMessage -Message 'Disconnected app batch launched in a new window.'
+    }
+    catch {
+        Set-StatusMessage -Message "Failed to launch batch: $($_.Exception.Message)" -IsError
+    }
+}
+
+function Invoke-GuiViewDisconnectedAppSla {
+    <#
+    .SYNOPSIS
+        Shows a 30-day SLA compliance summary for disconnected apps in the status bar.
+    .DESCRIPTION
+        Calls Get-SPDisconnectedAppSlaStatus (if available) and formats a brief summary
+        into the main status label. Full details require the CLI report.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    Set-StatusMessage -Message 'Checking SLA status...'
+
+    try {
+        $toolkitRoot = $script:ToolkitRoot
+        $daModule = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
+        if (-not (Test-Path -Path $daModule -PathType Leaf)) {
+            Set-StatusMessage -Message 'DisconnectedApps module not found -- SLA check unavailable.'
+            return
+        }
+
+        Import-Module $daModule -Force -ErrorAction SilentlyContinue
+
+        $slaResult = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+
+        if (-not $slaResult.Success) {
+            Set-StatusMessage -Message "SLA check failed: $($slaResult.Error)" -IsError
+            return
+        }
+
+        $summary   = $slaResult.Data.Summary
+        $totalApps = [int]$summary.TotalApps
+        $compliant = [int]$summary.Compliant
+        $nonComp   = [int]$summary.NonCompliant
+        $avgRate   = [math]::Round([double]$summary.AvgDeliveryRate * 100, 1)
+
+        Set-StatusMessage -Message "SLA (30d): $totalApps apps -- $compliant compliant, $nonComp non-compliant, avg delivery $avgRate%"
+    }
+    catch {
+        Set-StatusMessage -Message "SLA check error: $($_.Exception.Message)" -IsError
+    }
 }
 
 #endregion
