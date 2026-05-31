@@ -19,7 +19,7 @@
 | DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | DONE |
 | DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | DONE |
 | DF-05 | Audit Evidence Integrity Chain | P14-03 | none | DONE |
-| DF-06 | Source Onboarding Readiness | P14-04 | none | PENDING |
+| DF-06 | Source Onboarding Readiness | P14-04 | none | DONE |
 | DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | PENDING |
 | DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | PENDING |
 | DF-09 | Bulk Remediation Ticket Export | P15-04 | none | PENDING |
@@ -125,7 +125,7 @@ after the fact?" This provides cryptographic proof.
 
 ## DF-06: Source Onboarding Readiness (P14-04)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `Test-SPSourceOnboardingReadiness` in SP.AuditQueries.psm1

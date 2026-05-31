@@ -189,6 +189,9 @@
 
         # SP.AuditOperations - Audit Evidence Integrity Chain (P14-03 / DF-05)
         'New-SPAuditEvidenceChain'
+
+        # SP.AuditQueries - Source Onboarding Readiness (P14-04 / DF-06)
+        'Test-SPSourceOnboardingReadiness'
     )
 
     # Do not export variables or aliases from nested modules

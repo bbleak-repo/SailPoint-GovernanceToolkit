@@ -6150,6 +6150,399 @@ function Get-SPReviewerDelegations {
 
 #endregion
 
+#region P14-04: Source Onboarding Readiness (DF-06)
+
+function Test-SPSourceOnboardingReadiness {
+    <#
+    .SYNOPSIS
+        Pre-flight checklist for adding a new source to ISC governance.
+    .DESCRIPTION
+        Validates that a source meets all prerequisites for governance onboarding:
+        source exists, owner assigned, schema configured, correlation rules set,
+        accounts aggregated, entitlements aggregated, and campaign readiness.
+        Returns structured pass/fail per check with remediation guidance.
+    .PARAMETER SourceId
+        The ISC source ID to evaluate.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = $bool; Data = @{ SourceId; SourceName; Checks; Summary }; Error = $string }
+    .EXAMPLE
+        $readiness = Test-SPSourceOnboardingReadiness -SourceId '2c91808a7e2b3c4d...'
+        $readiness.Data.Checks | Where-Object { $_.Status -eq 'Fail' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceId,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Test-SPSourceOnboardingReadiness: evaluating source '$SourceId'" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+        -CorrelationID $CorrelationID
+
+    $checks = [System.Collections.Generic.List[hashtable]]::new()
+    $sourceName = ''
+
+    # Helper to add a check result
+    $addCheck = {
+        param([string]$Name, [string]$Status, [string]$Detail, [string]$Remediation)
+        $checks.Add(@{
+            Check       = $Name
+            Status      = $Status
+            Detail      = $Detail
+            Remediation = $Remediation
+        })
+    }
+
+    try {
+        # ------------------------------------------------------------------
+        # Check 1: Source exists
+        # ------------------------------------------------------------------
+        $srcResult = $null
+        try {
+            $srcResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$SourceId" `
+                -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Test-SPSourceOnboardingReadiness: API error querying source: $_" `
+                -Severity ERROR -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+                -CorrelationID $CorrelationID
+        }
+
+        if ($null -eq $srcResult -or -not $srcResult.Success -or $null -eq $srcResult.Data) {
+            & $addCheck 'SourceExists' 'Fail' "Source '$SourceId' not found or API error" `
+                'Verify the source ID is correct and the PAT has idn:sources:read scope.'
+
+            Write-SPLog -Message "Test-SPSourceOnboardingReadiness: source not found, aborting remaining checks" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+                -CorrelationID $CorrelationID
+
+            return @{
+                Success = $true
+                Data    = @{
+                    SourceId   = $SourceId
+                    SourceName = ''
+                    Checks     = @($checks)
+                    Summary    = @{
+                        TotalChecks = 1
+                        Passed      = 0
+                        Failed      = 1
+                        Warnings    = 0
+                        ReadyForGovernance = $false
+                    }
+                }
+                Error   = $null
+            }
+        }
+
+        $src = $srcResult.Data
+        & $addCheck 'SourceExists' 'Pass' "Source found: $( if ($null -ne $src.name) { [string]$src.name } else { $SourceId } )" ''
+        if ($null -ne $src.name) { $sourceName = [string]$src.name }
+
+        # ------------------------------------------------------------------
+        # Check 2: Owner assigned
+        # ------------------------------------------------------------------
+        $ownerName = ''
+        $ownerId   = ''
+        if ($null -ne $src.owner) {
+            if ($null -ne $src.owner.name) { $ownerName = [string]$src.owner.name }
+            if ($null -ne $src.owner.id)   { $ownerId   = [string]$src.owner.id }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ownerId) -and -not [string]::IsNullOrWhiteSpace($ownerName)) {
+            & $addCheck 'OwnerAssigned' 'Pass' "Owner: $ownerName ($ownerId)" ''
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($ownerId)) {
+            & $addCheck 'OwnerAssigned' 'Warn' "Owner ID set ($ownerId) but name is empty" `
+                'Verify the source owner identity exists and has a display name.'
+        }
+        else {
+            & $addCheck 'OwnerAssigned' 'Fail' 'No owner assigned to this source' `
+                'In ISC Admin > Sources > [source] > Settings, assign a source owner. Required for governance workflows and escalation paths.'
+        }
+
+        # ------------------------------------------------------------------
+        # Check 3: Schema configured
+        # ------------------------------------------------------------------
+        $schemaResult = $null
+        try {
+            $schemaResult = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$SourceId/schemas" `
+                -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Test-SPSourceOnboardingReadiness: error querying schemas: $_" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+                -CorrelationID $CorrelationID
+        }
+
+        $schemas = @()
+        if ($null -ne $schemaResult -and $schemaResult.Success -and $null -ne $schemaResult.Data) {
+            $schemaData = $schemaResult.Data
+            if ($null -ne $schemaResult.Data.PSObject.Properties.Name -and
+                $schemaResult.Data.PSObject.Properties.Name -contains 'items') {
+                $schemaData = $schemaResult.Data.items
+            }
+            $schemas = @($schemaData)
+        }
+
+        $hasAccountSchema = $false
+        $hasEntitlementSchema = $false
+        $accountAttrCount = 0
+        foreach ($schema in $schemas) {
+            $schemaName = ''
+            if ($null -ne $schema.name) { $schemaName = [string]$schema.name }
+            elseif ($schema -is [hashtable] -and $schema.ContainsKey('name')) { $schemaName = [string]$schema['name'] }
+
+            if ($schemaName -eq 'account') {
+                $hasAccountSchema = $true
+                if ($null -ne $schema.attributes) {
+                    $accountAttrCount = @($schema.attributes).Count
+                }
+                elseif ($schema -is [hashtable] -and $schema.ContainsKey('attributes')) {
+                    $accountAttrCount = @($schema['attributes']).Count
+                }
+            }
+            elseif ($schemaName -eq 'group' -or $schemaName -eq 'entitlement') {
+                $hasEntitlementSchema = $true
+            }
+        }
+
+        if ($hasAccountSchema -and $accountAttrCount -gt 0) {
+            & $addCheck 'SchemaConfigured' 'Pass' "Account schema has $accountAttrCount attributes; Entitlement schema: $( if ($hasEntitlementSchema) { 'present' } else { 'not present' } )" ''
+        }
+        elseif ($hasAccountSchema) {
+            & $addCheck 'SchemaConfigured' 'Warn' 'Account schema exists but has no attributes defined' `
+                'Run a test aggregation or manually define account attributes in the source schema.'
+        }
+        else {
+            & $addCheck 'SchemaConfigured' 'Fail' "No account schema found ($($schemas.Count) schemas total)" `
+                'Discover the source schema: ISC Admin > Sources > [source] > Account Schema > Discover Schema, or run a test account aggregation.'
+        }
+
+        # ------------------------------------------------------------------
+        # Check 4: Correlation rules set
+        # ------------------------------------------------------------------
+        $hasCorrelation = $false
+        $correlationDetail = ''
+
+        # Check accountCorrelationConfig on the source object
+        if ($null -ne $src.accountCorrelationConfig) {
+            $hasCorrelation = $true
+            $correlationDetail = 'accountCorrelationConfig present on source'
+        }
+        # Also check connectorAttributes for correlation settings
+        elseif ($null -ne $src.connectorAttributes) {
+            $connAttrs = $src.connectorAttributes
+            $corrFields = @('accountCorrelationConfig', 'correlationConfig', 'accountCorrelationRule')
+            foreach ($field in $corrFields) {
+                $hasField = $false
+                if ($connAttrs -is [hashtable]) {
+                    $hasField = $connAttrs.ContainsKey($field) -and $null -ne $connAttrs[$field]
+                }
+                else {
+                    $hasField = $null -ne $connAttrs.PSObject.Properties.Name -and
+                                $connAttrs.PSObject.Properties.Name -contains $field -and
+                                $null -ne $connAttrs.$field
+                }
+                if ($hasField) {
+                    $hasCorrelation = $true
+                    $correlationDetail = "$field found in connectorAttributes"
+                    break
+                }
+            }
+        }
+
+        if ($hasCorrelation) {
+            & $addCheck 'CorrelationRules' 'Pass' $correlationDetail ''
+        }
+        else {
+            & $addCheck 'CorrelationRules' 'Fail' 'No correlation configuration found' `
+                'Configure account correlation in ISC Admin > Sources > [source] > Account Correlation. Map source attributes (e.g., sAMAccountName, email) to identity attributes for accurate identity matching.'
+        }
+
+        # ------------------------------------------------------------------
+        # Check 5: Accounts aggregated
+        # ------------------------------------------------------------------
+        $accountCount = 0
+        if ($null -ne $src.accountCount) { $accountCount = [int]$src.accountCount }
+
+        # Also check aggregation history
+        $aggQueryParams = @{
+            'filters' = "sourceId eq `"$SourceId`""
+            'sorters' = '-started'
+            'limit'   = '1'
+        }
+        $hasSuccessfulAgg = $false
+        $lastAggDate = ''
+        try {
+            $aggResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/account-aggregations' `
+                -QueryParams $aggQueryParams -CorrelationID $CorrelationID
+
+            if ($aggResult.Success -and $null -ne $aggResult.Data) {
+                $aggData = $aggResult.Data
+                if ($null -ne $aggResult.Data.PSObject.Properties.Name -and
+                    $aggResult.Data.PSObject.Properties.Name -contains 'items') {
+                    $aggData = $aggResult.Data.items
+                }
+                $aggs = @($aggData)
+                if ($aggs.Count -gt 0 -and $null -ne $aggs[0]) {
+                    $aggStatus = ''
+                    if ($null -ne $aggs[0].status) { $aggStatus = [string]$aggs[0].status }
+                    if ($aggStatus -eq 'SUCCESS') { $hasSuccessfulAgg = $true }
+                    if ($null -ne $aggs[0].completed) { $lastAggDate = [string]$aggs[0].completed }
+                    elseif ($null -ne $aggs[0].started) { $lastAggDate = [string]$aggs[0].started }
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Test-SPSourceOnboardingReadiness: error querying aggregations: $_" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+                -CorrelationID $CorrelationID
+        }
+
+        if ($accountCount -gt 0 -and $hasSuccessfulAgg) {
+            & $addCheck 'AccountsAggregated' 'Pass' "$accountCount accounts; last aggregation: $lastAggDate" ''
+        }
+        elseif ($accountCount -gt 0) {
+            & $addCheck 'AccountsAggregated' 'Warn' "$accountCount accounts found but no successful aggregation in recent history" `
+                'Run a test aggregation to confirm the connector is pulling accounts correctly.'
+        }
+        elseif ($hasSuccessfulAgg) {
+            & $addCheck 'AccountsAggregated' 'Warn' "Aggregation succeeded but account count is 0" `
+                'Check source filters and connector configuration -- aggregation completed but no accounts were imported.'
+        }
+        else {
+            & $addCheck 'AccountsAggregated' 'Fail' 'No accounts and no successful aggregation found' `
+                'Run an account aggregation: ISC Admin > Sources > [source] > Test Connection, then Aggregate Accounts. Verify connector credentials and network connectivity (VA reachability for on-prem sources).'
+        }
+
+        # ------------------------------------------------------------------
+        # Check 6: Entitlements aggregated
+        # ------------------------------------------------------------------
+        $entitlementCount = 0
+        $entQueryParams = @{
+            'filters' = "source.id eq `"$SourceId`""
+            'count'   = 'true'
+            'limit'   = '1'
+        }
+        try {
+            $entResult = Invoke-SPApiRequest -Method GET -Endpoint '/v3/entitlements' `
+                -QueryParams $entQueryParams -CorrelationID $CorrelationID
+
+            if ($entResult.Success) {
+                # Try to get count from X-Total-Count header or response structure
+                if ($null -ne $entResult.Data) {
+                    $entData = $entResult.Data
+                    if ($null -ne $entResult.Data.PSObject.Properties.Name -and
+                        $entResult.Data.PSObject.Properties.Name -contains 'count') {
+                        $entitlementCount = [int]$entResult.Data.count
+                    }
+                    elseif ($null -ne $entResult.Data.PSObject.Properties.Name -and
+                            $entResult.Data.PSObject.Properties.Name -contains 'items') {
+                        $entitlementCount = @($entResult.Data.items).Count
+                    }
+                    else {
+                        $entitlementCount = @($entData).Count
+                    }
+                }
+                # Check TotalCount in response metadata
+                if ($entitlementCount -le 1 -and $null -ne $entResult.TotalCount) {
+                    $entitlementCount = [int]$entResult.TotalCount
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Test-SPSourceOnboardingReadiness: error querying entitlements: $_" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+                -CorrelationID $CorrelationID
+        }
+
+        if ($entitlementCount -gt 0) {
+            & $addCheck 'EntitlementsAggregated' 'Pass' "$entitlementCount entitlements found" ''
+        }
+        elseif ($hasEntitlementSchema) {
+            & $addCheck 'EntitlementsAggregated' 'Fail' 'Entitlement schema exists but no entitlements aggregated' `
+                'Run an entitlement aggregation: ISC Admin > Sources > [source] > Aggregate Entitlements. Verify the entitlement schema maps to the correct object type (e.g., group, memberOf).'
+        }
+        else {
+            & $addCheck 'EntitlementsAggregated' 'Warn' 'No entitlements found and no entitlement schema configured' `
+                'If this source has group-based entitlements, configure an entitlement schema (group type) and run entitlement aggregation. Some sources (flat file, HR) may not have entitlements -- this is acceptable.'
+        }
+
+        # ------------------------------------------------------------------
+        # Check 7: Campaign readiness (composite)
+        # ------------------------------------------------------------------
+        $passCount = 0
+        $failCount = 0
+        $warnCount = 0
+        foreach ($chk in $checks) {
+            switch ($chk['Status']) {
+                'Pass' { $passCount++ }
+                'Fail' { $failCount++ }
+                'Warn' { $warnCount++ }
+            }
+        }
+
+        # Campaign requires: source exists, accounts present, correlation set
+        $campaignBlockers = [System.Collections.Generic.List[string]]::new()
+        foreach ($chk in $checks) {
+            if ($chk['Status'] -eq 'Fail' -and $chk['Check'] -in @('SourceExists', 'AccountsAggregated', 'CorrelationRules', 'OwnerAssigned')) {
+                $campaignBlockers.Add($chk['Check'])
+            }
+        }
+
+        if ($campaignBlockers.Count -eq 0) {
+            & $addCheck 'CampaignReadiness' 'Pass' 'Source meets minimum requirements for certification campaign creation' ''
+            $passCount++
+        }
+        else {
+            & $addCheck 'CampaignReadiness' 'Fail' "Blocked by: $($campaignBlockers -join ', ')" `
+                'Resolve the failed checks above before creating a certification campaign for this source.'
+            $failCount++
+        }
+
+        $readyForGovernance = ($failCount -eq 0)
+
+        Write-SPLog -Message "Test-SPSourceOnboardingReadiness: source='$sourceName' ($SourceId) -- Pass=$passCount, Fail=$failCount, Warn=$warnCount, Ready=$readyForGovernance" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Test-SPSourceOnboardingReadiness' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                SourceId   = $SourceId
+                SourceName = $sourceName
+                Checks     = @($checks)
+                Summary    = @{
+                    TotalChecks        = $checks.Count
+                    Passed             = $passCount
+                    Failed             = $failCount
+                    Warnings           = $warnCount
+                    ReadyForGovernance = $readyForGovernance
+                }
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Test-SPSourceOnboardingReadiness failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Test-SPSourceOnboardingReadiness' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -6172,5 +6565,6 @@ Export-ModuleMember -Function @(
     'Get-SPOrphanAccounts',
     'Get-SPSourceAggregationHealth',
     'Measure-SPIdentityDataQuality',
-    'Get-SPReviewerDelegations'
+    'Get-SPReviewerDelegations',
+    'Test-SPSourceOnboardingReadiness'
 )
