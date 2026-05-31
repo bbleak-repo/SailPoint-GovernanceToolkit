@@ -55,7 +55,7 @@ Safe to modify:
 | P16-05 | Access Certification Completion Predictor | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-06 | Governance Metrics Time Series Store | none | SP.AuditOperations, SP.Audit.psd1, settings.json | DONE |
 | P16-07 | Reviewer Delegation Audit Trail | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
-| P16-08 | Invoke-SPDataQualityReport.ps1 | P16-01, P16-03 | Scripts/ (new) | PENDING |
+| P16-08 | Invoke-SPDataQualityReport.ps1 | P16-01, P16-03 | Scripts/ (new) | DONE |
 | P16-09 | Invoke-SPGovernanceMetrics.ps1 | P16-05, P16-06 | Scripts/ (new) | PENDING |
 | P16-10 | Pester Tests | P16-09 | Tests/ (new) | PENDING |
 
@@ -1065,7 +1065,7 @@ New function `Export-SPReviewerDelegationHtml`:
 
 ## P16-08: Invoke-SPDataQualityReport.ps1
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** P16-01, P16-03
 
 **Description:**
