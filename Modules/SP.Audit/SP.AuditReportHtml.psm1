@@ -9165,6 +9165,314 @@ ${recsHtml}
 
 #endregion
 
+#region P16-04: Campaign Coverage Gap Report
+
+function Export-SPCampaignCoverageGapHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Get-SPCampaignCoverageGaps output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with per-source coverage bars,
+        gap detail tables sorted by severity, privileged NeverReviewed highlights,
+        uncovered access profiles section, and recommendation guidance.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER GapData
+        Hashtable output from Get-SPCampaignCoverageGaps.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $gaps = Get-SPCampaignCoverageGaps -CampaignAudits $audits -EntitlementInventory $inv.Data
+        $path = Export-SPCampaignCoverageGapHtml -GapData $gaps -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$GapData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "CampaignCoverageGaps-${timestamp}.html"
+
+    $summary   = $GapData['Summary']
+    $gapItems  = @($GapData['Gaps'])
+    $uncoveredAPs = @($GapData['UncoveredAccessProfiles'])
+
+    # --- Summary card ---
+    $covPct = if ($null -ne $summary['CoveragePct']) { $summary['CoveragePct'] } else { 0 }
+    $covColor = if ($covPct -ge 90) { '#27ae60' } elseif ($covPct -ge 70) { '#f39c12' } else { '#c0392b' }
+
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Entitlements<br/><span style="font-size:22px;">$($summary['TotalEntitlementsInInventory'])</span>
+</td>
+<td style="padding:12px 16px; background:${covColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Coverage<br/><span style="font-size:22px;">${covPct}%</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Fully Covered<br/><span style="font-size:22px;">$($summary['FullyCovered'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Partially Reviewed<br/><span style="font-size:22px;">$($summary['PartiallyReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Never Reviewed<br/><span style="font-size:22px;">$($summary['NeverReviewed'])</span>
+</td>
+<td style="padding:12px 16px; background:#8e44ad; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Privileged Gaps<br/><span style="font-size:22px;">$($summary['PrivilegedNeverReviewed'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Per-source coverage bar table ---
+    $perSource = $summary['PerSource']
+    $sourceBarRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $perSource -and $perSource.Count -gt 0) {
+        $sIdx = 0
+        foreach ($sName in ($perSource.Keys | Sort-Object)) {
+            $sIdx++
+            $sData = $perSource[$sName]
+            $sPct = if ($null -ne $sData['CoveragePct']) { $sData['CoveragePct'] } else { 0 }
+            $sBarColor = if ($sPct -ge 90) { '#27ae60' } elseif ($sPct -ge 70) { '#f39c12' } else { '#c0392b' }
+
+            $coverageBar = @"
+<div style="background:#e0e0e0; width:100%; height:18px; border-radius:3px; overflow:hidden;">
+<div style="background:${sBarColor}; width:${sPct}%; height:18px; min-width:1px;"></div>
+</div>
+"@
+
+            $cells = @(
+                (ConvertTo-SafeHtml $sName),
+                [string]$sData['Total'],
+                [string]$sData['Covered'],
+                [string]$sData['Gaps'],
+                "${sPct}%",
+                $coverageBar
+            )
+            $sourceBarRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($sIdx % 2) -eq 0)))
+        }
+    }
+
+    $sourceBarHtml = ''
+    if ($sourceBarRows.Count -gt 0) {
+        $sHeader = Build-HtmlTableHeader -Headers @('Source', 'Total', 'Covered', 'Gaps', 'Coverage %', 'Coverage Bar')
+        $sourceBarHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage by Source</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${sHeader}
+<tbody>
+$($sourceBarRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Privileged NeverReviewed highlight box ---
+    $privGapHtml = ''
+    $privGaps = @($gapItems | Where-Object { $_['Severity'] -eq 'Critical' })
+    if ($privGaps.Count -gt 0) {
+        $privRows = [System.Collections.Generic.List[string]]::new()
+        $pIdx = 0
+        foreach ($pg in $privGaps) {
+            $pIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $pg['EntitlementName']),
+                (ConvertTo-SafeHtml $pg['SourceName']),
+                (ConvertTo-SafeHtml $pg['Recommendation'])
+            )
+            $privRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($pIdx % 2) -eq 0)))
+        }
+        $privHeader = Build-HtmlTableHeader -Headers @('Entitlement', 'Source', 'Recommendation')
+        $privGapHtml = @"
+<div style="border:2px solid #c0392b; background:#fdf2f2; padding:12px; margin-bottom:20px;">
+<h2 style="font-size:16px; color:#c0392b; margin-top:0; margin-bottom:8px;">Privileged Entitlements Never Reviewed ($($privGaps.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px;">
+${privHeader}
+<tbody>
+$($privRows -join "`n")
+</tbody>
+</table>
+</div>
+"@
+    }
+
+    # --- Gap detail table ---
+    $gapDetailHtml = ''
+    if ($gapItems.Count -gt 0) {
+        $gapHeader = Build-HtmlTableHeader -Headers @('Entitlement', 'Source', 'Privileged', 'Coverage Status', 'Severity', 'Recommendation')
+        $gapRows = [System.Collections.Generic.List[string]]::new()
+        $gIdx = 0
+        foreach ($gap in $gapItems) {
+            $gIdx++
+
+            # Severity badge
+            $sevColor = switch ($gap['Severity']) {
+                'Critical' { 'color:#fff; background:#c0392b;' }
+                'High'     { 'color:#fff; background:#e67e22;' }
+                'Medium'   { 'color:#fff; background:#f39c12;' }
+                default    { 'color:#fff; background:#777777;' }
+            }
+            $sevBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $sevColor"">$($gap['Severity'])</span>"
+
+            # Coverage status badge
+            $csColor = switch ($gap['CoverageStatus']) {
+                'NeverReviewed'     { 'color:#fff; background:#c0392b;' }
+                'PartiallyReviewed' { 'color:#fff; background:#f39c12;' }
+                default             { 'color:#fff; background:#777777;' }
+            }
+            $csBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $csColor"">$($gap['CoverageStatus'])</span>"
+
+            $privDisplay = if ($gap['Privileged']) {
+                '<span style="color:#c0392b; font-weight:bold;">Yes</span>'
+            } else { 'No' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $gap['EntitlementName']),
+                (ConvertTo-SafeHtml $gap['SourceName']),
+                $privDisplay,
+                $csBadge,
+                $sevBadge,
+                (ConvertTo-SafeHtml $gap['Recommendation'])
+            )
+            $gapRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($gIdx % 2) -eq 0)))
+        }
+        $gapDetailHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage Gaps ($($gapItems.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${gapHeader}
+<tbody>
+$($gapRows -join "`n")
+</tbody>
+</table>
+"@
+    } else {
+        $gapDetailHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Coverage Gaps</h2>
+<p style="font-size:13px; color:#27ae60; font-weight:bold;">No coverage gaps detected. All entitlements have been reviewed.</p>
+"@
+    }
+
+    # --- Uncovered access profiles ---
+    $apHtml = ''
+    if ($uncoveredAPs.Count -gt 0) {
+        $apHeader = Build-HtmlTableHeader -Headers @('Access Profile', 'Source', 'Entitlement Count', 'Status')
+        $apRows = [System.Collections.Generic.List[string]]::new()
+        $aIdx = 0
+        foreach ($ap in $uncoveredAPs) {
+            $aIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $ap['AccessProfileName']),
+                (ConvertTo-SafeHtml $ap['SourceName']),
+                [string]$ap['EntitlementCount'],
+                '<span style="display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; color:#fff; background:#c0392b;">All Never Reviewed</span>'
+            )
+            $apRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($aIdx % 2) -eq 0)))
+        }
+        $apHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Uncovered Access Profiles ($($uncoveredAPs.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${apHeader}
+<tbody>
+$($apRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #c0392b; background:#fdf2f2; vertical-align:top;">
+<strong>Never Reviewed Entitlements</strong><br/>
+These entitlements exist in the inventory but have never appeared in any certification campaign.
+Review campaign scope filters to ensure these entitlements are included. Create targeted campaigns
+for sources with low coverage.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #8e44ad; background:#f9f2fd; vertical-align:top;">
+<strong>Privileged Entitlements</strong><br/>
+Privileged entitlements without review history represent the highest governance risk. Prioritize
+inclusion in the next certification cycle. Consider creating a dedicated privileged access campaign.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Uncovered Access Profiles</strong><br/>
+Access profiles where all bundled entitlements are unreviewed indicate entire access bundles
+outside governance scope. Review access profile assignments and include in role-based campaigns.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Campaign Coverage Gap Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Campaign Coverage Gap Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${sourceBarHtml}
+
+${privGapHtml}
+
+${gapDetailHtml}
+
+${apHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Campaign coverage gap HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCoverageGapHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -9193,5 +9501,6 @@ Export-ModuleMember -Function @(
     'Export-SPAuditPeriodComparisonHtml',
     'Export-SPOrphanAccountHtml',
     'Export-SPSourceAggregationHealthHtml',
-    'Export-SPIdentityDataQualityHtml'
+    'Export-SPIdentityDataQualityHtml',
+    'Export-SPCampaignCoverageGapHtml'
 )

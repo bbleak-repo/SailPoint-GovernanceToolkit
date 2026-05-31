@@ -157,6 +157,12 @@
 
         # SP.AuditReportHtml - Identity Data Quality Report (P16-03)
         'Export-SPIdentityDataQualityHtml'
+
+        # SP.AuditAnalytics - Campaign Coverage Gap Analysis (P16-04)
+        'Get-SPCampaignCoverageGaps'
+
+        # SP.AuditReportHtml - Campaign Coverage Gap Report (P16-04)
+        'Export-SPCampaignCoverageGapHtml'
     )
 
     # Do not export variables or aliases from nested modules
