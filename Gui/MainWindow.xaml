@@ -433,6 +433,676 @@
                 </Grid>
             </TabItem>
 
+            <!-- Audit Tab -->
+            <TabItem Header="Audit" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="AuditTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Query -->
+                        <RowDefinition Height="*"/>     <!-- Row 1: Campaign results DataGrid -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 2: Audit options + run buttons -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent audit reports -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Summary + Configure + Query -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="AuditSummaryLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Text="Status: (All) | Timespan: 30 days"/>
+
+                        <Button Grid.Column="1" x:Name="BtnConfigureAudit"
+                                Content="Configure..."
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="2" x:Name="BtnQueryCampaigns"
+                                Content="Query Campaigns"
+                                Style="{StaticResource ToolkitButton}"/>
+                    </Grid>
+
+                    <!-- Row 1: Campaign results DataGrid -->
+                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                        <DataGrid x:Name="AuditCampaignGrid"
+                                  AutoGenerateColumns="False"
+                                  Background="#2D2D44"
+                                  Foreground="#E0E0E0"
+                                  BorderThickness="0"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#3D3D5C"
+                                  RowBackground="#2D2D44"
+                                  AlternatingRowBackground="#252538"
+                                  SelectionMode="Extended"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  IsReadOnly="False"
+                                  HeadersVisibility="Column"
+                                  ColumnHeaderHeight="32"
+                                  RowHeight="28"
+                                  Margin="2">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="Background"      Value="#252538"/>
+                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
+                                    <Setter Property="FontWeight"      Value="SemiBold"/>
+                                    <Setter Property="Padding"         Value="8,4"/>
+                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header=""
+                                                        Binding="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                        Width="55"/>
+                                <DataGridTextColumn Header="Campaign Name"
+                                                    Binding="{Binding CampaignName}"
+                                                    Width="*"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Status"
+                                                    Binding="{Binding Status}"
+                                                    Width="100"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Created"
+                                                    Binding="{Binding Created}"
+                                                    Width="140"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Completed"
+                                                    Binding="{Binding Completed}"
+                                                    Width="140"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Certs"
+                                                    Binding="{Binding TotalCertifications}"
+                                                    Width="55"
+                                                    IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+
+                    <!-- Row 2: Audit options + run buttons -->
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <CheckBox Grid.Column="0" x:Name="ChkCampaignReports"
+                                  Content="Include Campaign Reports"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
+
+                        <CheckBox Grid.Column="1" x:Name="ChkIdentityEvents"
+                                  Content="Include Identity Events"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
+
+                        <CheckBox Grid.Column="2" x:Name="ChkLeadershipRollup"
+                                  Content="Include Leadership Rollup"
+                                  Foreground="#E0E0E0" VerticalAlignment="Center"
+                                  IsChecked="False" Margin="0,0,8,0" FontSize="12"
+                                  ToolTip="Generate leadership rollup reports (executive summary + per-director HTML)"/>
+
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    x:Name="PnlLeadershipStartLevel">
+                            <TextBlock Text="Start Level:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox x:Name="CboLeadershipStartLevel" Style="{StaticResource FieldCombo}"
+                                      Width="80" ToolTip="Org level to start report generation from (default: highest found)">
+                                <ComboBoxItem Content="Auto" IsSelected="True"/>
+                                <ComboBoxItem Content="2"/>
+                                <ComboBoxItem Content="3"/>
+                                <ComboBoxItem Content="4"/>
+                                <ComboBoxItem Content="5"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                                    x:Name="PnlDetailLevel">
+                            <TextBlock Text="Detail:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <ComboBox x:Name="CboDetailLevel" Style="{StaticResource FieldCombo}"
+                                      Width="90" ToolTip="Report detail level: Summary (counts only), Detailed (expandable sections), Verbose (all expanded)">
+                                <ComboBoxItem Content="Summary"/>
+                                <ComboBoxItem Content="Detailed"/>
+                                <ComboBoxItem Content="Verbose" IsSelected="True"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <Button Grid.Column="5" x:Name="BtnRunAudit"
+                                Content="Run Audit"
+                                Style="{StaticResource ToolkitButton}"
+                                IsEnabled="False"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="6" x:Name="BtnOpenAuditFolder"
+                                Content="Open Reports Folder"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 3: Progress bar + status label -->
+                    <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="AuditStatusLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="0,0,12,0"/>
+
+                        <ProgressBar Grid.Column="1" x:Name="AuditProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     Visibility="Collapsed"/>
+
+                        <TextBlock Grid.Column="2" x:Name="AuditProgressPercent"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="8,0,0,0"/>
+                    </Grid>
+
+                    <!-- Row 4: Recent audit reports -->
+                    <Grid Grid.Row="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Recent Audit Reports"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                            <Button Grid.Column="1" x:Name="BtnRefreshAuditReports"
+                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                    Padding="10,4" FontSize="11"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1">
+                            <ListBox x:Name="AuditReportList"
+                                     MaxHeight="120"
+                                     Background="#2D2D44"
+                                     Foreground="#E0E0E0"
+                                     BorderThickness="0"
+                                     Margin="4"
+                                     FontSize="12"/>
+                        </Border>
+                    </Grid>
+
+                </Grid>
+            </TabItem>
+
+            <!-- Delta Cert Tab -->
+            <TabItem Header="Delta Cert" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="DeltaCertTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Run -->
+                        <RowDefinition Height="*"/>     <!-- Row 1: Results DataGrid -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 2: Cleanup + Escalation + Open Folder -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent run history -->
+                        <RowDefinition Height="Auto"/>  <!-- Row 5: Disconnected Apps status -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Summary + Configure + Run -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="DeltaCertSummaryLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                   Text="Not configured. Click Configure to set parameters."/>
+
+                        <Button Grid.Column="1" x:Name="BtnConfigureDeltaCert"
+                                Content="Configure..."
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="2" x:Name="BtnRunDeltaCert"
+                                Content="Run Delta Cert"
+                                Style="{StaticResource ToolkitButton}"/>
+                    </Grid>
+
+                    <!-- Row 1: Results DataGrid -->
+                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                        <DataGrid x:Name="DeltaCertResultGrid"
+                                  AutoGenerateColumns="False"
+                                  Background="#2D2D44"
+                                  Foreground="#E0E0E0"
+                                  BorderThickness="0"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#3D3D5C"
+                                  RowBackground="#2D2D44"
+                                  AlternatingRowBackground="#252538"
+                                  SelectionMode="Single"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  IsReadOnly="True"
+                                  HeadersVisibility="Column"
+                                  ColumnHeaderHeight="32"
+                                  RowHeight="28"
+                                  Margin="2">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="Background"      Value="#252538"/>
+                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
+                                    <Setter Property="FontWeight"      Value="SemiBold"/>
+                                    <Setter Property="Padding"         Value="8,4"/>
+                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Timestamp"
+                                                    Binding="{Binding Timestamp}"
+                                                    Width="160"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Campaigns Created"
+                                                    Binding="{Binding CampaignsCreated}"
+                                                    Width="120"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Identities"
+                                                    Binding="{Binding Identities}"
+                                                    Width="80"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Manager Groups"
+                                                    Binding="{Binding ManagerGroups}"
+                                                    Width="110"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Reason"
+                                                    Binding="{Binding Reason}"
+                                                    Width="*"
+                                                    IsReadOnly="True"/>
+                                <DataGridTextColumn Header="Errors"
+                                                    Binding="{Binding Errors}"
+                                                    Width="80"
+                                                    IsReadOnly="True"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+
+                    <!-- Row 2: Action buttons -->
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" x:Name="BtnCleanupDeltaCert"
+                                Content="Run Cleanup"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="1" x:Name="BtnEscalateDeltaCert"
+                                Content="Run Escalation"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="2" x:Name="BtnGenerateDeltaReport"
+                                Content="Generate Delta Report"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"
+                                ToolTip="Generate a delta report showing changes in the last N hours"/>
+
+                        <!-- Spacer -->
+                        <StackPanel Grid.Column="3"/>
+
+                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
+                                Content="Open Output Folder"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 3: Progress bar + status label -->
+                    <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="DeltaCertStatusLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="0,0,12,0"/>
+
+                        <ProgressBar Grid.Column="1" x:Name="DeltaCertProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     Visibility="Collapsed"/>
+
+                        <TextBlock Grid.Column="2" x:Name="DeltaCertProgressPercent"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="8,0,0,0"/>
+                    </Grid>
+
+                    <!-- Row 4: Recent run history from JSONL audit trail -->
+                    <Grid Grid.Row="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Recent Delta Cert Runs"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                            <Button Grid.Column="1" x:Name="BtnRefreshDeltaCertHistory"
+                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                    Padding="10,4" FontSize="11"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1">
+                            <ListBox x:Name="DeltaCertHistoryList"
+                                     MaxHeight="150"
+                                     Background="#2D2D44"
+                                     Foreground="#E0E0E0"
+                                     BorderThickness="0"
+                                     Margin="4"
+                                     FontSize="12"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Row 5: Disconnected Apps status -->
+                    <Border Grid.Row="5" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,8,0,0">
+                        <Grid Margin="10,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="Disconnected Apps:"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       FontSize="12" VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+
+                            <TextBlock Grid.Column="1" x:Name="DcAppStatusLabel"
+                                       Foreground="#AAAACC" FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Text="Not checked"/>
+
+                            <Button Grid.Column="2" x:Name="BtnRunDisconnectedBatch"
+                                    Content="Run Batch"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Run disconnected app batch certification for all registered apps"/>
+
+                            <Button Grid.Column="3" x:Name="BtnCheckDelivery"
+                                    Content="Check Delivery"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="Check file delivery status for all registered disconnected apps"/>
+
+                            <Button Grid.Column="4" x:Name="BtnViewSla"
+                                    Content="View SLA"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0"
+                                    ToolTip="View 30-day SLA compliance summary for disconnected apps"/>
+
+                            <Button Grid.Column="5" x:Name="BtnRefreshDcAppStatus"
+                                    Content="Refresh"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="6,0,0,0" Padding="8,4" FontSize="11"
+                                    ToolTip="Refresh disconnected app delivery status"/>
+                        </Grid>
+                    </Border>
+
+                </Grid>
+            </TabItem>
+
+            <!-- Governance Tab -->
+            <TabItem Header="Governance" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="GovernanceTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Health Check Status Badges -->
+                    <Border Grid.Row="0" Background="#2D2D44" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1"
+                            Padding="12,10" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+
+                            <Border x:Name="GovBadgeSourceHealth" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" Margin="0,0,8,0" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Source Health" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="GovBadgeDataQuality" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" Margin="0,0,8,0" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Data Quality" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="GovBadgePolicy" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" Margin="0,0,8,0" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Policy" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="GovBadgeConfigDrift" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" Margin="0,0,8,0" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Config Drift" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="GovBadgeOrphans" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" Margin="0,0,8,0" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Orphans" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="GovBadgeCoverage" Background="#252538"
+                                    BorderBrush="#666677" BorderThickness="1" CornerRadius="4"
+                                    Padding="10,6" MinWidth="110">
+                                <StackPanel>
+                                    <TextBlock Text="Coverage" Foreground="#AAAACC" FontSize="10"
+                                               TextAlignment="Center" Margin="0,0,0,2"/>
+                                    <TextBlock Text="?" Foreground="#888899" FontSize="13" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Row 1: Metric Cards -->
+                    <Grid Grid.Row="1" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" x:Name="GovMetricMaturity"
+                                Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1"
+                                Padding="16,12">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="--/5" Foreground="#5B9BD5" FontSize="28" FontWeight="Bold"
+                                           TextAlignment="Center"/>
+                                <TextBlock Text="Maturity Score" Foreground="#AAAACC" FontSize="11"
+                                           TextAlignment="Center" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="2" x:Name="GovMetricPolicyPct"
+                                Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1"
+                                Padding="16,12">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="--%"  Foreground="#5B9BD5" FontSize="28" FontWeight="Bold"
+                                           TextAlignment="Center"/>
+                                <TextBlock Text="Policy Compliance" Foreground="#AAAACC" FontSize="11"
+                                           TextAlignment="Center" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="4" x:Name="GovMetricCoveragePct"
+                                Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1"
+                                Padding="16,12">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="--%"  Foreground="#5B9BD5" FontSize="28" FontWeight="Bold"
+                                           TextAlignment="Center"/>
+                                <TextBlock Text="Coverage Rate" Foreground="#AAAACC" FontSize="11"
+                                           TextAlignment="Center" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- Row 2: Action Buttons -->
+                    <Grid Grid.Row="2" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" x:Name="BtnRunHealthCheck"
+                                Content="Run Health Check"
+                                Style="{StaticResource ToolkitButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="1" x:Name="BtnGenerateGovReport"
+                                Content="Generate Governance Report"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="2" x:Name="BtnExportDashboardData"
+                                Content="Export Dashboard Data"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="3" x:Name="BtnOpenGovFolder"
+                                Content="Open Reports Folder"
+                                Style="{StaticResource SecondaryButton}"/>
+                    </Grid>
+
+                    <!-- Row 3: Progress bar + status label -->
+                    <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" x:Name="GovStatusLabel"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="0,0,12,0"/>
+
+                        <ProgressBar Grid.Column="1" x:Name="GovProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     Visibility="Collapsed"/>
+
+                        <TextBlock Grid.Column="2" x:Name="GovProgressPercent"
+                                   Foreground="#AAAACC" VerticalAlignment="Center"
+                                   FontSize="12" Margin="8,0,0,0"/>
+                    </Grid>
+
+                    <!-- Row 4: Recent Governance Reports -->
+                    <Grid Grid.Row="4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Recent Governance Reports"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                            <Button Grid.Column="1" x:Name="BtnRefreshGovReports"
+                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
+                                    Padding="10,4" FontSize="11"/>
+                        </Grid>
+
+                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                BorderBrush="#3D3D5C" BorderThickness="1">
+                            <ListBox x:Name="GovReportList"
+                                     MaxHeight="150"
+                                     Background="#2D2D44"
+                                     Foreground="#E0E0E0"
+                                     BorderThickness="0"
+                                     Margin="4"
+                                     FontSize="12"/>
+                        </Border>
+                    </Grid>
+
+                </Grid>
+            </TabItem>
+
             <!-- Settings Tab -->
             <TabItem Header="Settings" Style="{StaticResource ToolkitTabItem}">
                 <Grid x:Name="SettingsTabContent" Background="#1E1E2E" Margin="12,8">
@@ -707,6 +1377,32 @@
                                 </Grid>
                             </Border>
 
+                            <!-- Governance -->
+                            <TextBlock Text="Governance" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Metrics Output Path" Style="{StaticResource FieldLabel}"/>
+                                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtGovMetricsPath" Style="{StaticResource FieldBox}"
+                                               Text=".\GovernanceMetrics"
+                                               ToolTip="Directory where governance health check and metric files are written"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Health Check on Startup" Style="{StaticResource FieldLabel}"/>
+                                    <CheckBox  Grid.Row="2" Grid.Column="1" x:Name="ChkGovHealthCheckOnStartup"
+                                               IsChecked="False" Foreground="#E0E0E0" FontSize="12" VerticalAlignment="Center"
+                                               ToolTip="Automatically run a governance health check when the dashboard opens"/>
+                                </Grid>
+                            </Border>
+
                         </StackPanel>
                     </ScrollViewer>
 
@@ -781,404 +1477,6 @@
                                    Foreground="#AAAACC" VerticalAlignment="Center"
                                    MaxWidth="300" TextWrapping="Wrap"/>
                     </Grid>
-                </Grid>
-            </TabItem>
-
-            <!-- Audit Tab -->
-            <TabItem Header="Audit" Style="{StaticResource ToolkitTabItem}">
-                <Grid x:Name="AuditTabContent" Background="#1E1E2E" Margin="12,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Query -->
-                        <RowDefinition Height="*"/>     <!-- Row 1: Campaign results DataGrid -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 2: Audit options + run buttons -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent audit reports -->
-                    </Grid.RowDefinitions>
-
-                    <!-- Row 0: Summary + Configure + Query -->
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" x:Name="AuditSummaryLabel"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" TextTrimming="CharacterEllipsis"
-                                   Text="Status: (All) | Timespan: 30 days"/>
-
-                        <Button Grid.Column="1" x:Name="BtnConfigureAudit"
-                                Content="Configure..."
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="2" x:Name="BtnQueryCampaigns"
-                                Content="Query Campaigns"
-                                Style="{StaticResource ToolkitButton}"/>
-                    </Grid>
-
-                    <!-- Row 1: Campaign results DataGrid -->
-                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
-                        <DataGrid x:Name="AuditCampaignGrid"
-                                  AutoGenerateColumns="False"
-                                  Background="#2D2D44"
-                                  Foreground="#E0E0E0"
-                                  BorderThickness="0"
-                                  GridLinesVisibility="Horizontal"
-                                  HorizontalGridLinesBrush="#3D3D5C"
-                                  RowBackground="#2D2D44"
-                                  AlternatingRowBackground="#252538"
-                                  SelectionMode="Extended"
-                                  CanUserAddRows="False"
-                                  CanUserDeleteRows="False"
-                                  IsReadOnly="False"
-                                  HeadersVisibility="Column"
-                                  ColumnHeaderHeight="32"
-                                  RowHeight="28"
-                                  Margin="2">
-                            <DataGrid.ColumnHeaderStyle>
-                                <Style TargetType="DataGridColumnHeader">
-                                    <Setter Property="Background"      Value="#252538"/>
-                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
-                                    <Setter Property="FontWeight"      Value="SemiBold"/>
-                                    <Setter Property="Padding"         Value="8,4"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
-                                </Style>
-                            </DataGrid.ColumnHeaderStyle>
-                            <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Header=""
-                                                        Binding="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                        Width="55"/>
-                                <DataGridTextColumn Header="Campaign Name"
-                                                    Binding="{Binding CampaignName}"
-                                                    Width="*"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Status"
-                                                    Binding="{Binding Status}"
-                                                    Width="100"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Created"
-                                                    Binding="{Binding Created}"
-                                                    Width="140"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Completed"
-                                                    Binding="{Binding Completed}"
-                                                    Width="140"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Certs"
-                                                    Binding="{Binding TotalCertifications}"
-                                                    Width="55"
-                                                    IsReadOnly="True"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-
-                    <!-- Row 2: Audit options + run buttons -->
-                    <Grid Grid.Row="2" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <CheckBox Grid.Column="0" x:Name="ChkCampaignReports"
-                                  Content="Include Campaign Reports"
-                                  Foreground="#E0E0E0" VerticalAlignment="Center"
-                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
-
-                        <CheckBox Grid.Column="1" x:Name="ChkIdentityEvents"
-                                  Content="Include Identity Events"
-                                  Foreground="#E0E0E0" VerticalAlignment="Center"
-                                  IsChecked="True" Margin="0,0,16,0" FontSize="12"/>
-
-                        <CheckBox Grid.Column="2" x:Name="ChkLeadershipRollup"
-                                  Content="Include Leadership Rollup"
-                                  Foreground="#E0E0E0" VerticalAlignment="Center"
-                                  IsChecked="False" Margin="0,0,8,0" FontSize="12"
-                                  ToolTip="Generate leadership rollup reports (executive summary + per-director HTML)"/>
-
-                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
-                                    x:Name="PnlLeadershipStartLevel">
-                            <TextBlock Text="Start Level:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <ComboBox x:Name="CboLeadershipStartLevel" Style="{StaticResource FieldCombo}"
-                                      Width="80" ToolTip="Org level to start report generation from (default: highest found)">
-                                <ComboBoxItem Content="Auto" IsSelected="True"/>
-                                <ComboBoxItem Content="2"/>
-                                <ComboBoxItem Content="3"/>
-                                <ComboBoxItem Content="4"/>
-                                <ComboBoxItem Content="5"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
-                                    x:Name="PnlDetailLevel">
-                            <TextBlock Text="Detail:" Foreground="#A0A0A0" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <ComboBox x:Name="CboDetailLevel" Style="{StaticResource FieldCombo}"
-                                      Width="90" ToolTip="Report detail level: Summary (counts only), Detailed (expandable sections), Verbose (all expanded)">
-                                <ComboBoxItem Content="Summary"/>
-                                <ComboBoxItem Content="Detailed"/>
-                                <ComboBoxItem Content="Verbose" IsSelected="True"/>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <Button Grid.Column="5" x:Name="BtnRunAudit"
-                                Content="Run Audit"
-                                Style="{StaticResource ToolkitButton}"
-                                IsEnabled="False"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="6" x:Name="BtnOpenAuditFolder"
-                                Content="Open Reports Folder"
-                                Style="{StaticResource SecondaryButton}"/>
-                    </Grid>
-
-                    <!-- Row 3: Progress bar + status label -->
-                    <Grid Grid.Row="3" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" x:Name="AuditStatusLabel"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" Margin="0,0,12,0"/>
-
-                        <ProgressBar Grid.Column="1" x:Name="AuditProgressBar"
-                                     Height="10" Background="#252538"
-                                     Foreground="#5B9BD5"
-                                     BorderBrush="#3D3D5C" BorderThickness="1"
-                                     Visibility="Collapsed"/>
-
-                        <TextBlock Grid.Column="2" x:Name="AuditProgressPercent"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" Margin="8,0,0,0"/>
-                    </Grid>
-
-                    <!-- Row 4: Recent audit reports -->
-                    <Grid Grid.Row="4">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Recent Audit Reports"
-                                       Foreground="#5B9BD5" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" FontSize="12"/>
-                            <Button Grid.Column="1" x:Name="BtnRefreshAuditReports"
-                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
-                                    Padding="10,4" FontSize="11"/>
-                        </Grid>
-
-                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                                BorderBrush="#3D3D5C" BorderThickness="1">
-                            <ListBox x:Name="AuditReportList"
-                                     MaxHeight="120"
-                                     Background="#2D2D44"
-                                     Foreground="#E0E0E0"
-                                     BorderThickness="0"
-                                     Margin="4"
-                                     FontSize="12"/>
-                        </Border>
-                    </Grid>
-
-                </Grid>
-            </TabItem>
-
-            <!-- Delta Cert Tab -->
-            <TabItem Header="Delta Cert" Style="{StaticResource ToolkitTabItem}">
-                <Grid x:Name="DeltaCertTabContent" Background="#1E1E2E" Margin="12,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>  <!-- Row 0: Summary + Configure + Run -->
-                        <RowDefinition Height="*"/>     <!-- Row 1: Results DataGrid -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 2: Cleanup + Escalation + Open Folder -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 3: Progress bar + status label -->
-                        <RowDefinition Height="Auto"/>  <!-- Row 4: Recent run history -->
-                    </Grid.RowDefinitions>
-
-                    <!-- Row 0: Summary + Configure + Run -->
-                    <Grid Grid.Row="0" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" x:Name="DeltaCertSummaryLabel"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" TextTrimming="CharacterEllipsis"
-                                   Text="Not configured. Click Configure to set parameters."/>
-
-                        <Button Grid.Column="1" x:Name="BtnConfigureDeltaCert"
-                                Content="Configure..."
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="2" x:Name="BtnRunDeltaCert"
-                                Content="Run Delta Cert"
-                                Style="{StaticResource ToolkitButton}"/>
-                    </Grid>
-
-                    <!-- Row 1: Results DataGrid -->
-                    <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                            BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
-                        <DataGrid x:Name="DeltaCertResultGrid"
-                                  AutoGenerateColumns="False"
-                                  Background="#2D2D44"
-                                  Foreground="#E0E0E0"
-                                  BorderThickness="0"
-                                  GridLinesVisibility="Horizontal"
-                                  HorizontalGridLinesBrush="#3D3D5C"
-                                  RowBackground="#2D2D44"
-                                  AlternatingRowBackground="#252538"
-                                  SelectionMode="Single"
-                                  CanUserAddRows="False"
-                                  CanUserDeleteRows="False"
-                                  IsReadOnly="True"
-                                  HeadersVisibility="Column"
-                                  ColumnHeaderHeight="32"
-                                  RowHeight="28"
-                                  Margin="2">
-                            <DataGrid.ColumnHeaderStyle>
-                                <Style TargetType="DataGridColumnHeader">
-                                    <Setter Property="Background"      Value="#252538"/>
-                                    <Setter Property="Foreground"      Value="#5B9BD5"/>
-                                    <Setter Property="FontWeight"      Value="SemiBold"/>
-                                    <Setter Property="Padding"         Value="8,4"/>
-                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                    <Setter Property="BorderBrush"     Value="#3D3D5C"/>
-                                </Style>
-                            </DataGrid.ColumnHeaderStyle>
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="Timestamp"
-                                                    Binding="{Binding Timestamp}"
-                                                    Width="160"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Campaigns Created"
-                                                    Binding="{Binding CampaignsCreated}"
-                                                    Width="120"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Identities"
-                                                    Binding="{Binding Identities}"
-                                                    Width="80"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Manager Groups"
-                                                    Binding="{Binding ManagerGroups}"
-                                                    Width="110"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Reason"
-                                                    Binding="{Binding Reason}"
-                                                    Width="*"
-                                                    IsReadOnly="True"/>
-                                <DataGridTextColumn Header="Errors"
-                                                    Binding="{Binding Errors}"
-                                                    Width="80"
-                                                    IsReadOnly="True"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-
-                    <!-- Row 2: Action buttons -->
-                    <Grid Grid.Row="2" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Button Grid.Column="0" x:Name="BtnCleanupDeltaCert"
-                                Content="Run Cleanup"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="1" x:Name="BtnEscalateDeltaCert"
-                                Content="Run Escalation"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,6,0"/>
-
-                        <Button Grid.Column="2" x:Name="BtnGenerateDeltaReport"
-                                Content="Generate Delta Report"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="0,0,6,0"
-                                ToolTip="Generate a delta report showing changes in the last N hours"/>
-
-                        <!-- Spacer -->
-                        <StackPanel Grid.Column="3"/>
-
-                        <Button Grid.Column="4" x:Name="BtnOpenDeltaCertFolder"
-                                Content="Open Output Folder"
-                                Style="{StaticResource SecondaryButton}"/>
-                    </Grid>
-
-                    <!-- Row 3: Progress bar + status label -->
-                    <Grid Grid.Row="3" Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <TextBlock Grid.Column="0" x:Name="DeltaCertStatusLabel"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" Margin="0,0,12,0"/>
-
-                        <ProgressBar Grid.Column="1" x:Name="DeltaCertProgressBar"
-                                     Height="10" Background="#252538"
-                                     Foreground="#5B9BD5"
-                                     BorderBrush="#3D3D5C" BorderThickness="1"
-                                     Visibility="Collapsed"/>
-
-                        <TextBlock Grid.Column="2" x:Name="DeltaCertProgressPercent"
-                                   Foreground="#AAAACC" VerticalAlignment="Center"
-                                   FontSize="12" Margin="8,0,0,0"/>
-                    </Grid>
-
-                    <!-- Row 4: Recent run history from JSONL audit trail -->
-                    <Grid Grid.Row="4">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0" Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Recent Delta Cert Runs"
-                                       Foreground="#5B9BD5" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" FontSize="12"/>
-                            <Button Grid.Column="1" x:Name="BtnRefreshDeltaCertHistory"
-                                    Content="Refresh" Style="{StaticResource SecondaryButton}"
-                                    Padding="10,4" FontSize="11"/>
-                        </Grid>
-
-                        <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                                BorderBrush="#3D3D5C" BorderThickness="1">
-                            <ListBox x:Name="DeltaCertHistoryList"
-                                     MaxHeight="150"
-                                     Background="#2D2D44"
-                                     Foreground="#E0E0E0"
-                                     BorderThickness="0"
-                                     Margin="4"
-                                     FontSize="12"/>
-                        </Border>
-                    </Grid>
-
                 </Grid>
             </TabItem>
 

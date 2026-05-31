@@ -43,6 +43,7 @@ $script:AuditCampaignDataSource     = [System.Collections.ObjectModel.Observable
 $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
+$script:IsGovernanceRunning         = $false
 $script:LastDeltaCertParams         = $null
 $script:LastEscalationParams        = $null
 $script:LastAuditQueryParams        = $null
@@ -1046,6 +1047,17 @@ function Load-SettingsForm {
         & $setField 'TxtDcCampaignPrefix'  $dc.CampaignNamePrefix
         & $setField 'TxtDcOutputPath'      $dc.OutputPath
     }
+
+    # Governance settings
+    if ($config.PSObject.Properties.Name -contains 'Governance') {
+        $gov = $config.Governance
+        if ($gov.PSObject.Properties.Name -contains 'MetricsOutputPath') {
+            & $setField 'TxtGovMetricsPath' $gov.MetricsOutputPath
+        }
+        if ($gov.PSObject.Properties.Name -contains 'HealthCheckOnStartup') {
+            & $setField 'ChkGovHealthCheckOnStartup' $gov.HealthCheckOnStartup
+        }
+    }
 }
 
 function Save-SettingsForm {
@@ -1093,9 +1105,12 @@ function Save-SettingsForm {
         $clientSecretToWrite = 'CHANGE_ME_DO_NOT_USE_IN_PRODUCTION'
     }
 
-    $timeoutVal  = 60; [int]::TryParse((& $getField 'TxtApiTimeout'), [ref]$timeoutVal) | Out-Null
-    $retryVal    = 3;  [int]::TryParse((& $getField 'TxtRetryCount'), [ref]$retryVal) | Out-Null
-    $maxRunVal   = 10; [int]::TryParse((& $getField 'TxtMaxCampaignsPerRun'), [ref]$maxRunVal) | Out-Null
+    $timeoutVal     = 60; [int]::TryParse((& $getField 'TxtApiTimeout'),    [ref]$timeoutVal)     | Out-Null
+    $retryVal       = 3;  [int]::TryParse((& $getField 'TxtRetryCount'),    [ref]$retryVal)       | Out-Null
+    $maxRunVal      = 10; [int]::TryParse((& $getField 'TxtMaxCampaignsPerRun'), [ref]$maxRunVal) | Out-Null
+    $retryDelayVal  = 5;  [int]::TryParse((& $getField 'TxtRetryDelay'),    [ref]$retryDelayVal)  | Out-Null
+    $rateLimitVal   = 95; [int]::TryParse((& $getField 'TxtRateLimit'),     [ref]$rateLimitVal)   | Out-Null
+    $rateWindowVal  = 10; [int]::TryParse((& $getField 'TxtRateWindow'),    [ref]$rateWindowVal)  | Out-Null
 
     $newConfig = [ordered]@{
         Global = [ordered]@{
@@ -1127,9 +1142,9 @@ function Save-SettingsForm {
             BaseUrl                    = & $getField 'TxtApiBaseUrl'
             TimeoutSeconds             = $timeoutVal
             RetryCount                 = $retryVal
-            RetryDelaySeconds          = 5
-            RateLimitRequestsPerWindow = 95
-            RateLimitWindowSeconds     = 10
+            RetryDelaySeconds          = $retryDelayVal
+            RateLimitRequestsPerWindow = $rateLimitVal
+            RateLimitWindowSeconds     = $rateWindowVal
         }
         Testing = [ordered]@{
             IdentitiesCsvPath                = & $getField 'TxtIdentitiesCsvPath'
@@ -1206,6 +1221,25 @@ function Save-SettingsForm {
     }
     $newConfig['DeltaCert'] = $dcConfig
 
+    # Governance: overlay GUI fields onto existing config to preserve non-GUI keys
+    if ($null -ne $existingConfig -and
+        $existingConfig.PSObject.Properties.Name -contains 'Governance') {
+        $govExisting = $existingConfig.Governance
+        $govConfig = [ordered]@{}
+        foreach ($prop in $govExisting.PSObject.Properties) {
+            $govConfig[$prop.Name] = $prop.Value
+        }
+        $govConfig['MetricsOutputPath']      = & $getField 'TxtGovMetricsPath' '.\GovernanceMetrics'
+        $govConfig['HealthCheckOnStartup']   = (& $getField 'ChkGovHealthCheckOnStartup' $false)
+    }
+    else {
+        $govConfig = [ordered]@{
+            MetricsOutputPath    = & $getField 'TxtGovMetricsPath' '.\GovernanceMetrics'
+            HealthCheckOnStartup = (& $getField 'ChkGovHealthCheckOnStartup' $false)
+        }
+    }
+    $newConfig['Governance'] = $govConfig
+
     try {
         $json = $newConfig | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($configPath, $json, [System.Text.Encoding]::UTF8)
@@ -1261,7 +1295,7 @@ function Initialize-AuditTab {
                 $defaults   = Get-AuditQueryDialogDefaults
                 $dialogResult = Show-SPGuiDialog `
                     -XamlPath      $dialogXaml `
-                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+                    -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan', 'CboType', 'TxtCreatedAfter', 'TxtCreatedBefore') `
                     -Defaults      $defaults
 
                 if ($null -ne $dialogResult) {
@@ -1349,7 +1383,7 @@ function Invoke-AuditCampaignQuery {
     $defaults   = Get-AuditQueryDialogDefaults
     $dialogResult = Show-SPGuiDialog `
         -XamlPath      $dialogXaml `
-        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan') `
+        -ControlNames  @('TxtCampaignName', 'CboStatus', 'CboTimespan', 'CboType', 'TxtCreatedAfter', 'TxtCreatedBefore') `
         -Defaults      $defaults
 
     if ($null -eq $dialogResult) { return }
@@ -1385,10 +1419,28 @@ function Invoke-AuditCampaignQuery {
         $daysBack = $parsed
     }
 
+    $campaignType = $null
+    if ($dialogResult['CboType'] -and $dialogResult['CboType'] -ne '(All)') {
+        $campaignType = $dialogResult['CboType']
+    }
+
+    $createdAfter  = ''
+    if ($dialogResult['TxtCreatedAfter']) {
+        $createdAfter = $dialogResult['TxtCreatedAfter'].Trim()
+    }
+
+    $createdBefore = ''
+    if ($dialogResult['TxtCreatedBefore']) {
+        $createdBefore = $dialogResult['TxtCreatedBefore'].Trim()
+    }
+
     # Build parameters
     $queryParams = @{ DaysBack = $daysBack }
     if ($campaignName)  { $queryParams['CampaignNameContains'] = $campaignName }
-    if ($statusFilter)  { $queryParams['Status']       = $statusFilter }
+    if ($statusFilter)  { $queryParams['Status']               = $statusFilter }
+    if ($campaignType)  { $queryParams['CampaignType']         = $campaignType }
+    if ($createdAfter)  { $queryParams['CreatedAfter']         = $createdAfter }
+    if ($createdBefore) { $queryParams['CreatedBefore']        = $createdBefore }
 
     $result = Get-SPGuiAuditCampaigns @queryParams
 
@@ -1439,9 +1491,12 @@ function Get-AuditQueryDialogDefaults {
     }
 
     return @{
-        TxtCampaignName = ''
-        CboStatus       = '(All)'
-        CboTimespan     = '30 days'
+        TxtCampaignName  = ''
+        CboStatus        = '(All)'
+        CboTimespan      = '30 days'
+        CboType          = '(All)'
+        TxtCreatedAfter  = ''
+        TxtCreatedBefore = ''
     }
 }
 
@@ -1466,18 +1521,20 @@ function Update-AuditSummaryLabel {
 
     $status   = if ($params['CboStatus'])   { $params['CboStatus'] }   else { '(All)' }
     $timespan = if ($params['CboTimespan']) { $params['CboTimespan'] } else { '30 days' }
+    $type     = if ($params['CboType'] -and $params['CboType'] -ne '(All)') { $params['CboType'] } else { $null }
 
     $campaignName = ''
     if ($params['TxtCampaignName']) {
         $campaignName = $params['TxtCampaignName'].Trim()
     }
 
-    if ([string]::IsNullOrWhiteSpace($campaignName)) {
-        $label.Text = "Status: $status | Timespan: $timespan"
-    }
-    else {
-        $label.Text = "Campaign: $campaignName | Status: $status | Timespan: $timespan"
-    }
+    $parts = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($campaignName)) { $parts.Add("Campaign: $campaignName") }
+    $parts.Add("Status: $status")
+    if ($null -ne $type) { $parts.Add("Type: $type") }
+    $parts.Add("Timespan: $timespan")
+
+    $label.Text = ($parts -join ' | ')
 }
 
 function Invoke-GuiAuditRun {
@@ -1879,9 +1936,52 @@ function Initialize-DeltaCertTab {
         }.GetNewClosure())
     }
 
-    # Populate summary label and history on init
+    # Disconnected Apps controls
+    $btnRunBatch      = Find-Control -Parent $TabContent -Name 'BtnRunDisconnectedBatch'
+    $btnCheckDelivery = Find-Control -Parent $TabContent -Name 'BtnCheckDelivery'
+    $btnViewSla       = Find-Control -Parent $TabContent -Name 'BtnViewSla'
+    $btnRefreshDcApp  = Find-Control -Parent $TabContent -Name 'BtnRefreshDcAppStatus'
+
+    if ($btnRunBatch) {
+        $btnRunBatch.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiDisconnectedAppBatch -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnCheckDelivery) {
+        $btnCheckDelivery.Add_Click({
+            & $module {
+                param($tc)
+                Load-DisconnectedAppStatus -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnViewSla) {
+        $btnViewSla.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiViewDisconnectedAppSla -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnRefreshDcApp) {
+        $btnRefreshDcApp.Add_Click({
+            & $module {
+                param($tc)
+                Load-DisconnectedAppStatus -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Populate summary label, history, and disconnected app status on init
     Update-DeltaCertSummaryLabel -TabContent $TabContent
     Load-DeltaCertHistory -TabContent $TabContent
+    Load-DisconnectedAppStatus -TabContent $TabContent
 }
 
 function Get-DeltaCertDialogDefaults {
@@ -2738,6 +2838,702 @@ function Resolve-DeltaCertOutputPath {
     return [System.IO.Path]::GetFullPath($rawPath)
 }
 
+function Load-DisconnectedAppStatus {
+    <#
+    .SYNOPSIS
+        Calls Get-SPGuiDisconnectedAppStatus and updates the DcAppStatusLabel.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $label = Find-Control -Parent $TabContent -Name 'DcAppStatusLabel'
+    if ($null -eq $label) { return }
+
+    $label.Text = 'Checking...'
+
+    $result = Get-SPGuiDisconnectedAppStatus
+
+    if ($null -ne $result -and $null -ne $result.Data) {
+        $label.Text = $result.Data.SummaryText
+    }
+    else {
+        $label.Text = 'Status unavailable'
+    }
+}
+
+function Invoke-GuiDisconnectedAppBatch {
+    <#
+    .SYNOPSIS
+        Launches the disconnected app batch script in a new PowerShell window.
+    .DESCRIPTION
+        Runs Scripts\Invoke-SPDisconnectedAppBatch.ps1 via Start-Process so the
+        long-running batch pipeline does not block the GUI. The console window
+        stays open on completion so the user can review output.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $batchScript = Join-Path $script:ToolkitRoot 'Scripts\Invoke-SPDisconnectedAppBatch.ps1'
+
+    if (-not (Test-Path -Path $batchScript -PathType Leaf)) {
+        Set-StatusMessage -Message 'Batch script not found: Scripts\Invoke-SPDisconnectedAppBatch.ps1' -IsError
+        return
+    }
+
+    try {
+        Start-Process 'powershell.exe' `
+            -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$batchScript`"" `
+            -WorkingDirectory $script:ToolkitRoot
+        Set-StatusMessage -Message 'Disconnected app batch launched in a new window.'
+    }
+    catch {
+        Set-StatusMessage -Message "Failed to launch batch: $($_.Exception.Message)" -IsError
+    }
+}
+
+function Invoke-GuiViewDisconnectedAppSla {
+    <#
+    .SYNOPSIS
+        Shows a 30-day SLA compliance summary for disconnected apps in the status bar.
+    .DESCRIPTION
+        Calls Get-SPDisconnectedAppSlaStatus (if available) and formats a brief summary
+        into the main status label. Full details require the CLI report.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    Set-StatusMessage -Message 'Checking SLA status...'
+
+    try {
+        $toolkitRoot = $script:ToolkitRoot
+        $daModule = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
+        if (-not (Test-Path -Path $daModule -PathType Leaf)) {
+            Set-StatusMessage -Message 'DisconnectedApps module not found -- SLA check unavailable.'
+            return
+        }
+
+        Import-Module $daModule -Force -ErrorAction SilentlyContinue
+
+        $slaResult = Get-SPDisconnectedAppSlaStatus -DaysBack 30
+
+        if (-not $slaResult.Success) {
+            Set-StatusMessage -Message "SLA check failed: $($slaResult.Error)" -IsError
+            return
+        }
+
+        $summary   = $slaResult.Data.Summary
+        $totalApps = [int]$summary.TotalApps
+        $compliant = [int]$summary.Compliant
+        $nonComp   = [int]$summary.NonCompliant
+        $avgRate   = [math]::Round([double]$summary.AvgDeliveryRate * 100, 1)
+
+        Set-StatusMessage -Message "SLA (30d): $totalApps apps -- $compliant compliant, $nonComp non-compliant, avg delivery $avgRate%"
+    }
+    catch {
+        Set-StatusMessage -Message "SLA check error: $($_.Exception.Message)" -IsError
+    }
+}
+
+#endregion
+
+#region Governance Tab
+
+function Initialize-GovernanceTab {
+    <#
+    .SYNOPSIS
+        Wires up the Governance tab controls and event handlers.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $module = $script:ThisModule
+
+    $btnHealthCheck = Find-Control -Parent $TabContent -Name 'BtnRunHealthCheck'
+    $btnGovReport   = Find-Control -Parent $TabContent -Name 'BtnGenerateGovReport'
+    $btnExportData  = Find-Control -Parent $TabContent -Name 'BtnExportDashboardData'
+    $btnOpenFolder  = Find-Control -Parent $TabContent -Name 'BtnOpenGovFolder'
+    $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshGovReports'
+    $govReportList  = Find-Control -Parent $TabContent -Name 'GovReportList'
+
+    if ($btnHealthCheck) {
+        $btnHealthCheck.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiHealthCheck -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnGovReport) {
+        $btnGovReport.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiGovernanceReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnExportData) {
+        $btnExportData.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiExportDashboardData -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnOpenFolder) {
+        $btnOpenFolder.Add_Click({
+            $outputPath = & $module { Resolve-GovernanceOutputPath }
+            if (-not (Test-Path $outputPath)) {
+                [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            }
+            Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        }.GetNewClosure())
+    }
+
+    if ($btnRefresh) {
+        $btnRefresh.Add_Click({
+            & $module {
+                param($tc)
+                Load-GovernanceReports -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Double-click on a report list item opens the file
+    if ($govReportList) {
+        $govReportList.Add_MouseDoubleClick({
+            & $module {
+                param($lb)
+                $selected = $lb.SelectedItem
+                if ($null -ne $selected -and $null -ne $selected.Tag -and (Test-Path $selected.Tag)) {
+                    try {
+                        Write-SPLog -Message ("Opening governance report: {0}" -f $selected.Tag) `
+                            -Severity INFO -Component 'SP.Gui' -Action 'OpenGovReport'
+                    } catch { }
+                    Start-Process $selected.Tag
+                }
+            } $govReportList
+        }.GetNewClosure())
+    }
+
+    # Set initial status text
+    $statusLabel = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = 'Ready. Click Run Health Check to populate badges.'
+    }
+
+    Load-GovernanceReports -TabContent $TabContent
+}
+
+function Invoke-GuiHealthCheck {
+    <#
+    .SYNOPSIS
+        Runs governance health check in a background runspace and updates
+        the six health badges and three metric cards on completion.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $progressBar    = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct    = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $statusLabel    = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $btnHealthCheck = Find-Control -Parent $TabContent -Name 'BtnRunHealthCheck'
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Starting governance health check. CorrelationID: $correlationID"
+
+    if ($null -ne $statusLabel)    { $statusLabel.Text = 'Running health check...' }
+    if ($null -ne $progressBar)    {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct)    { $progressPct.Text = '0%' }
+    if ($null -ne $btnHealthCheck) { $btnHealthCheck.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('GovernanceTabContent', $TabContent)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        $coreModule  = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule   = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $auditModule = Join-Path $ToolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+        $guiModule   = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $auditModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $checkResult = Invoke-SPGuiHealthCheck -CorrelationID $CorrelationID
+
+        $dispatcher           = $MainWindow.Dispatcher
+        $capturedResult       = $checkResult
+        $capturedTab          = $GovernanceTabContent
+        $capturedProgressBar  = $ProgressBar
+        $capturedProgressPct  = $ProgressPercent
+        $capturedLabel        = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) { $capturedProgressBar.Value = 100 }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+
+            if ($null -eq $capturedResult -or -not $capturedResult.Success) {
+                $errMsg = if ($null -ne $capturedResult) { $capturedResult.Error } else { 'Unknown error' }
+                if ($null -ne $capturedLabel) { $capturedLabel.Text = "Health check failed: $errMsg" }
+                return
+            }
+
+            $data = $capturedResult.Data
+            $conv = [System.Windows.Media.BrushConverter]::new()
+
+            # Badge control name map keyed by check Key
+            $badgeMap = @{
+                'SourceHealth' = 'GovBadgeSourceHealth'
+                'DataQuality'  = 'GovBadgeDataQuality'
+                'Policy'       = 'GovBadgePolicy'
+                'ConfigDrift'  = 'GovBadgeConfigDrift'
+                'Orphans'      = 'GovBadgeOrphans'
+                'Coverage'     = 'GovBadgeCoverage'
+            }
+
+            foreach ($check in $data.Checks) {
+                $ctrlName = $badgeMap[$check.Key]
+                if ([string]::IsNullOrWhiteSpace($ctrlName)) { continue }
+                $badge = $capturedTab.FindName($ctrlName)
+                if ($null -eq $badge) { continue }
+
+                $colorHex = if (-not [string]::IsNullOrWhiteSpace($check.Color)) { $check.Color } else { '#999999' }
+                try {
+                    $brush = $conv.ConvertFromString($colorHex)
+                    $badge.BorderBrush = $brush
+
+                    # StackPanel is the direct child of the Border
+                    $sp = $badge.Child
+                    if ($null -ne $sp -and $sp.Children.Count -ge 2) {
+                        $valBlock = $sp.Children[1]
+                        $valBlock.Text       = $check.Grade
+                        $valBlock.Foreground = $brush
+                        $valBlock.ToolTip    = "$($check.Status): $($check.Detail)"
+                    }
+                } catch { }
+            }
+
+            # Metric card name map keyed by metric Key
+            $metricMap = @{
+                'Maturity'         = 'GovMetricMaturity'
+                'PolicyCompliance' = 'GovMetricPolicyPct'
+                'CoverageRate'     = 'GovMetricCoveragePct'
+            }
+
+            foreach ($metric in $data.MetricCards) {
+                $ctrlName = $metricMap[$metric.Key]
+                if ([string]::IsNullOrWhiteSpace($ctrlName)) { continue }
+                $card = $capturedTab.FindName($ctrlName)
+                if ($null -eq $card) { continue }
+
+                $colorHex = if (-not [string]::IsNullOrWhiteSpace($metric.Color)) { $metric.Color } else { '#5B9BD5' }
+                try {
+                    $brush = $conv.ConvertFromString($colorHex)
+                    $sp = $card.Child
+                    if ($null -ne $sp -and $sp.Children.Count -ge 1) {
+                        $valBlock = $sp.Children[0]
+                        $valBlock.Text       = $metric.Value
+                        $valBlock.Foreground = $brush
+                    }
+                } catch { }
+            }
+
+            if ($null -ne $capturedLabel) {
+                $capturedLabel.Text = "Health check complete. Overall grade: $($data.OverallGrade)"
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $checkResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnHealthCheck
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Health check failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Governance health check complete.'
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                Load-GovernanceReports -TabContent $tab
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiGovernanceReport {
+    <#
+    .SYNOPSIS
+        Shows the GovernanceRunDialog (when available) then runs report generation
+        in a background runspace.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    # Show GovernanceRunDialog.xaml (GU-04) when present; otherwise use safe defaults.
+    # If the file exists and the user cancels, $reportParams will be $null -> bail out.
+    $reportParams = $null
+    $dialogXaml = Get-XamlPath -FileName 'GovernanceRunDialog.xaml'
+    if (Test-Path $dialogXaml) {
+        $reportParams = Show-SPGuiDialog `
+            -XamlPath     $dialogXaml `
+            -ControlNames @(
+                'ChkIncludeCampaignAudit', 'ChkIncludeLeadershipRollup',
+                'ChkIncludePolicyCheck', 'ChkIncludeDataQuality',
+                'ChkIncludeDashboardExport', 'CboStatus', 'TxtDaysBack') `
+            -Defaults     @{ CboStatus = 'COMPLETED'; TxtDaysBack = '90' }
+        if ($null -eq $reportParams) { return }
+    }
+    else {
+        # GU-04 not yet implemented -- use defaults and run immediately
+        $reportParams = @{
+            ChkIncludeCampaignAudit    = $true
+            ChkIncludeLeadershipRollup = $true
+            ChkIncludePolicyCheck      = $false
+            ChkIncludeDataQuality      = $false
+            ChkIncludeDashboardExport  = $false
+            CboStatus                  = 'COMPLETED'
+            TxtDaysBack                = '90'
+        }
+    }
+
+    $statusLabel = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnGenerate = Find-Control -Parent $TabContent -Name 'BtnGenerateGovReport'
+
+    # Parse dialog values
+    $status = if ($reportParams['CboStatus']) { $reportParams['CboStatus'] } else { 'COMPLETED' }
+    $daysBack = 90
+    if ($reportParams['TxtDaysBack']) {
+        [int]::TryParse([string]$reportParams['TxtDaysBack'], [ref]$daysBack) | Out-Null
+    }
+    $includeLeadership  = [bool]$reportParams['ChkIncludeLeadershipRollup']
+    $includePolicyCheck = [bool]$reportParams['ChkIncludePolicyCheck']
+    $includeDataQuality = [bool]$reportParams['ChkIncludeDataQuality']
+    $includeDashExport  = [bool]$reportParams['ChkIncludeDashboardExport']
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Generating governance report. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Generating governance report...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '0%' }
+    if ($null -ne $btnGenerate) { $btnGenerate.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('ReportStatus',         $status)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',             $daysBack)
+    $runspace.SessionStateProxy.SetVariable('IncludeLeadership',    $includeLeadership)
+    $runspace.SessionStateProxy.SetVariable('IncludePolicyCheck',   $includePolicyCheck)
+    $runspace.SessionStateProxy.SetVariable('IncludeDataQuality',   $includeDataQuality)
+    $runspace.SessionStateProxy.SetVariable('IncludeDashExport',    $includeDashExport)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        $coreModule  = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule   = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $auditModule = Join-Path $ToolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+        $guiModule   = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $auditModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        $govReportParams = @{
+            Status                  = $ReportStatus
+            DaysBack                = $DaysBack
+            IncludeLeadershipRollup = $IncludeLeadership
+            IncludePolicyCheck      = $IncludePolicyCheck
+            IncludeDataQuality      = $IncludeDataQuality
+            IncludeDashboardExport  = $IncludeDashExport
+            CorrelationID           = $CorrelationID
+        }
+        $reportResult = Invoke-SPGuiGovernanceReport @govReportParams
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $reportResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPercent
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) { $capturedProgressBar.Value = 100 }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $capturedResult.Success) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "Report generated: $($d.FilesWritten) file(s) in $($d.DurationSeconds)s"
+                }
+                elseif ($null -ne $capturedResult) {
+                    $capturedLabel.Text = "Report generation failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $reportResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnGenerate
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Governance report failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Governance report generated.'
+                    Load-GovernanceReports -TabContent $tab
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiExportDashboardData {
+    <#
+    .SYNOPSIS
+        Exports governance dashboard data to CSV (synchronous -- fast operation).
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $btnExport   = Find-Control -Parent $TabContent -Name 'BtnExportDashboardData'
+
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Exporting dashboard data...' }
+    if ($null -ne $btnExport)   { $btnExport.IsEnabled = $false }
+
+    Set-StatusMessage -Message 'Exporting governance dashboard data...'
+
+    $correlationID = [guid]::NewGuid().ToString()
+
+    try {
+        $result = Export-SPGuiDashboardData -CorrelationID $correlationID
+        if ($result.Success) {
+            $msg = "Exported $($result.Data.RowCount) rows to: $($result.Data.CsvPath)"
+            if ($null -ne $statusLabel) { $statusLabel.Text = $msg }
+            Set-StatusMessage -Message $msg
+        }
+        else {
+            $msg = "Export failed: $($result.Error)"
+            if ($null -ne $statusLabel) { $statusLabel.Text = $msg }
+            Set-StatusMessage -Message $msg -IsError
+        }
+    }
+    catch {
+        $msg = "Export error: $($_.Exception.Message)"
+        if ($null -ne $statusLabel) { $statusLabel.Text = $msg }
+        Set-StatusMessage -Message $msg -IsError
+    }
+    finally {
+        if ($null -ne $btnExport) { $btnExport.IsEnabled = $true }
+    }
+}
+
+function Load-GovernanceReports {
+    <#
+    .SYNOPSIS
+        Populates the GovReportList ListBox with recent governance report files.
+        Green = HTML reports, Gray = other file types.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $listBox = Find-Control -Parent $TabContent -Name 'GovReportList'
+    if ($null -eq $listBox) { return }
+
+    $result = Get-SPGuiGovernanceReports
+
+    $listBox.Items.Clear()
+
+    if (-not $result.Success -or $result.Data.Count -eq 0) {
+        $item         = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = 'No governance reports found yet.'
+        $item.Foreground = [System.Windows.Media.Brushes]::Gray
+        $listBox.Items.Add($item) | Out-Null
+        return
+    }
+
+    $converter  = [System.Windows.Media.BrushConverter]::new()
+    $brushGreen = $converter.ConvertFromString('#339933')
+    $brushGray  = $converter.ConvertFromString('#888899')
+
+    foreach ($report in $result.Data) {
+        $item         = [System.Windows.Controls.ListBoxItem]::new()
+        $item.Content = $report.FileName
+        $item.Tag     = $report.FullPath
+        $item.ToolTip = "$($report.FullPath) ($($report.SizeKB) KB, $($report.LastModified))"
+
+        if ($report.FileName -match '\.html$') {
+            $item.Foreground = $brushGreen
+        }
+        else {
+            $item.Foreground = $brushGray
+        }
+
+        $listBox.Items.Add($item) | Out-Null
+    }
+}
+
+function Resolve-GovernanceOutputPath {
+    <#
+    .SYNOPSIS
+        Resolves the absolute path to the Governance output directory.
+        Reads from config (Audit.OutputPath) if available, falls back to .\Audit.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $configPath = $null
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Audit' -and
+            $null -ne $config.Audit -and
+            $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+            $configPath = $config.Audit.OutputPath
+        }
+    }
+    catch { }
+
+    $rawPath = if ($configPath) { $configPath } else { '.\Audit' }
+
+    if (-not [System.IO.Path]::IsPathRooted($rawPath)) {
+        $rawPath = Join-Path $script:ToolkitRoot $rawPath
+    }
+
+    return [System.IO.Path]::GetFullPath($rawPath)
+}
+
 #endregion
 
 #region Menu Handlers
@@ -2948,6 +3744,12 @@ function Show-SPDashboard {
         $deltaCertTab = Find-Control -Parent $window -Name 'DeltaCertTabContent'
         if ($null -ne $deltaCertTab) {
             Initialize-DeltaCertTab -TabContent $deltaCertTab
+        }
+
+        # Governance tab
+        $governanceTab = Find-Control -Parent $window -Name 'GovernanceTabContent'
+        if ($null -ne $governanceTab) {
+            Initialize-GovernanceTab -TabContent $governanceTab
         }
     }
 

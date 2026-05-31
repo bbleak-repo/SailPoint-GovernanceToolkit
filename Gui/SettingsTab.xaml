@@ -485,6 +485,35 @@
                     </Grid>
                 </Border>
 
+                <!-- Governance Section -->
+                <TextBlock Text="Governance" Style="{StaticResource SectionHeader}"/>
+                <Border Style="{StaticResource SectionBorder}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="200"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="8"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Metrics Output Path"
+                                   Style="{StaticResource FieldLabel}"/>
+                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtGovMetricsPath"
+                                 Style="{StaticResource FieldBox}" Text=".\GovernanceMetrics"
+                                 ToolTip="Directory where governance health check and metric files are written"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Health Check on Startup"
+                                   Style="{StaticResource FieldLabel}"/>
+                        <CheckBox Grid.Row="2" Grid.Column="1" x:Name="ChkGovHealthCheckOnStartup"
+                                  IsChecked="False" Foreground="#E0E0E0" FontSize="12"
+                                  VerticalAlignment="Center"
+                                  ToolTip="Automatically run a governance health check when the dashboard opens"/>
+                    </Grid>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
 
