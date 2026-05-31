@@ -2661,6 +2661,404 @@ function Export-SPGovernanceDashboardData {
 
 #endregion
 
+#region Audit Evidence Integrity
+
+function New-SPAuditEvidenceChain {
+    <#
+    .SYNOPSIS
+        Creates a cryptographic integrity chain over JSONL audit trail files.
+    .DESCRIPTION
+        Scans audit output directories for JSONL files within a date range,
+        computes a SHA-256 hash for each file, and links hashes into a chain
+        where each entry includes the previous entry's hash. The resulting
+        manifest provides tamper-evident proof: if any file is modified after
+        the chain is built, re-verification will detect the broken link.
+
+        Chain algorithm:
+          - File 0: ChainHash = SHA256( SHA256(file) + "GENESIS" )
+          - File N: ChainHash = SHA256( SHA256(file) + ChainHash[N-1] )
+
+        The manifest JSON contains file paths, individual hashes, chain
+        hashes, file sizes, and timestamps. A companion Verify flag can be
+        passed to validate an existing manifest rather than create a new one.
+
+        Designed for SOX 404 / SOC 2 evidence integrity requirements.
+    .PARAMETER AuditOutputPath
+        Directory containing JSONL audit trail files. Resolved from
+        config (Audit.OutputPath) if omitted.
+    .PARAMETER DeltaCertOutputPath
+        DeltaCert output directory. Resolved from config if omitted.
+    .PARAMETER After
+        Include files modified after this datetime.
+    .PARAMETER Before
+        Include files modified before this datetime.
+    .PARAMETER OutputPath
+        Directory in which to write the evidence-chain manifest JSON.
+        Created if absent. Defaults to AuditOutputPath.
+    .PARAMETER ManifestName
+        Custom manifest file name (without extension). Defaults to
+        "evidence-chain-{yyyyMMdd-HHmmss}".
+    .PARAMETER Verify
+        Path to an existing manifest JSON to verify. When provided, the
+        function re-hashes each referenced file and checks the chain.
+        No new manifest is written.
+    .PARAMETER Scope
+        Which directories to include: Full (both), AuditOnly, or
+        DeltaCertOnly. Default: Full.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ ManifestPath; FileCount; ChainValid;
+        Violations }; Error }
+    .EXAMPLE
+        New-SPAuditEvidenceChain -After (Get-Date).AddDays(-30)
+    .EXAMPLE
+        New-SPAuditEvidenceChain -Verify 'C:\Audit\evidence-chain-20260531.json'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$AuditOutputPath,
+
+        [Parameter()]
+        [string]$DeltaCertOutputPath,
+
+        [Parameter()]
+        [DateTime]$After,
+
+        [Parameter()]
+        [DateTime]$Before,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$ManifestName,
+
+        [Parameter()]
+        [string]$Verify,
+
+        [Parameter()]
+        [ValidateSet('Full', 'AuditOnly', 'DeltaCertOnly')]
+        [string]$Scope = 'Full',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $component = 'SP.AuditReport'
+    $action    = 'New-SPAuditEvidenceChain'
+
+    # --- Verify mode: validate an existing manifest ---
+    if (-not [string]::IsNullOrWhiteSpace($Verify)) {
+        Write-SPLog -Message "Verifying evidence chain from $Verify" `
+            -Severity INFO -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+
+        if (-not (Test-Path -Path $Verify -PathType Leaf)) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Manifest file not found: $Verify"
+            }
+        }
+
+        try {
+            $manifestJson = Get-Content -Path $Verify -Raw -ErrorAction Stop
+            $manifest = $manifestJson | ConvertFrom-Json
+        }
+        catch {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Failed to parse manifest: $($_.Exception.Message)"
+            }
+        }
+
+        $violations   = [System.Collections.Generic.List[hashtable]]::new()
+        $previousHash = 'GENESIS'
+        $fileCount    = 0
+
+        foreach ($entry in @($manifest.Files)) {
+            $fileCount++
+            $filePath = $entry.FilePath
+
+            # Check file exists
+            if (-not (Test-Path -Path $filePath -PathType Leaf)) {
+                $violations.Add(@{
+                    File   = $filePath
+                    Reason = 'File missing'
+                })
+                $previousHash = $entry.ChainHash
+                continue
+            }
+
+            # Recompute file hash
+            try {
+                $currentHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash
+            }
+            catch {
+                $violations.Add(@{
+                    File   = $filePath
+                    Reason = "Hash computation failed: $($_.Exception.Message)"
+                })
+                $previousHash = $entry.ChainHash
+                continue
+            }
+
+            # Check file hash
+            if ($currentHash -ne $entry.FileHash) {
+                $violations.Add(@{
+                    File     = $filePath
+                    Reason   = 'File content modified'
+                    Expected = $entry.FileHash
+                    Actual   = $currentHash
+                })
+            }
+
+            # Recompute chain hash
+            $chainInput    = $currentHash + $previousHash
+            $chainBytes    = [System.Text.Encoding]::UTF8.GetBytes($chainInput)
+            $sha           = [System.Security.Cryptography.SHA256]::Create()
+            $chainHashBytes = $sha.ComputeHash($chainBytes)
+            $computedChain = [BitConverter]::ToString($chainHashBytes) -replace '-', ''
+            $sha.Dispose()
+
+            if ($computedChain -ne $entry.ChainHash) {
+                $violations.Add(@{
+                    File     = $filePath
+                    Reason   = 'Chain link broken'
+                    Expected = $entry.ChainHash
+                    Actual   = $computedChain
+                })
+            }
+
+            $previousHash = $entry.ChainHash
+        }
+
+        $chainValid = ($violations.Count -eq 0)
+
+        Write-SPLog -Message "Evidence chain verification complete: $fileCount files, $($violations.Count) violation(s)" `
+            -Severity $(if ($chainValid) { 'INFO' } else { 'WARN' }) `
+            -Component $component -Action $action -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                ManifestPath = $Verify
+                FileCount    = $fileCount
+                ChainValid   = $chainValid
+                Violations   = @($violations)
+            }
+            Error   = $null
+        }
+    }
+
+    # --- Create mode: build a new evidence chain ---
+
+    Write-SPLog -Message "Building evidence chain (Scope=$Scope)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    # Resolve paths from config if not provided
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -or
+        [string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) {
+        try {
+            $config = Get-SPConfig
+            if ($null -ne $config) {
+                if ([string]::IsNullOrWhiteSpace($AuditOutputPath) -and
+                    $config.PSObject.Properties.Name -contains 'Audit' -and
+                    $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+                    -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+                    $AuditOutputPath = $config.Audit.OutputPath
+                }
+                if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath) -and
+                    $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+                    $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+                    -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+                    $DeltaCertOutputPath = $config.DeltaCert.OutputPath
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Could not load config for path resolution: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($AuditOutputPath))     { $AuditOutputPath     = '.\Audit' }
+    if ([string]::IsNullOrWhiteSpace($DeltaCertOutputPath)) { $DeltaCertOutputPath = '.\DeltaCert' }
+    if ([string]::IsNullOrWhiteSpace($OutputPath))          { $OutputPath          = $AuditOutputPath }
+
+    # Collect JSONL files
+    $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+
+    if ($Scope -ne 'DeltaCertOnly' -and (Test-Path -Path $AuditOutputPath -PathType Container)) {
+        $found = Get-ChildItem -Path $AuditOutputPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $found) { $jsonlFiles.Add($f) }
+    }
+
+    if ($Scope -ne 'AuditOnly' -and (Test-Path -Path $DeltaCertOutputPath -PathType Container)) {
+        $found = Get-ChildItem -Path $DeltaCertOutputPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
+        foreach ($f in $found) { $jsonlFiles.Add($f) }
+    }
+
+    # Apply date range filter
+    if ($PSBoundParameters.ContainsKey('After')) {
+        $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]@(
+            $jsonlFiles | Where-Object { $_.LastWriteTime -ge $After }
+        )
+    }
+    if ($PSBoundParameters.ContainsKey('Before')) {
+        $jsonlFiles = [System.Collections.Generic.List[System.IO.FileInfo]]@(
+            $jsonlFiles | Where-Object { $_.LastWriteTime -le $Before }
+        )
+    }
+
+    # Sort by last write time for deterministic chain order
+    $sortedFiles = @($jsonlFiles | Sort-Object -Property LastWriteTime, FullName)
+
+    if ($sortedFiles.Count -eq 0) {
+        Write-SPLog -Message "No JSONL files found in specified path(s) and date range" `
+            -Severity WARN -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $true
+            Data    = @{
+                ManifestPath = $null
+                FileCount    = 0
+                ChainValid   = $true
+                Violations   = @()
+            }
+            Error   = $null
+        }
+    }
+
+    # Build the chain
+    $chainEntries = [System.Collections.Generic.List[hashtable]]::new()
+    $previousHash = 'GENESIS'
+    $totalBytes   = 0
+
+    foreach ($file in $sortedFiles) {
+        # Compute file hash
+        try {
+            $fileHash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
+        }
+        catch {
+            Write-SPLog -Message "Failed to hash $($file.Name): $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action `
+                -CorrelationID $CorrelationID
+            continue
+        }
+
+        # Compute chain hash: SHA256( fileHash + previousChainHash )
+        $chainInput     = $fileHash + $previousHash
+        $chainBytes     = [System.Text.Encoding]::UTF8.GetBytes($chainInput)
+        $sha            = [System.Security.Cryptography.SHA256]::Create()
+        $chainHashBytes = $sha.ComputeHash($chainBytes)
+        $chainHash      = [BitConverter]::ToString($chainHashBytes) -replace '-', ''
+        $sha.Dispose()
+
+        $totalBytes += $file.Length
+
+        $chainEntries.Add(@{
+            FilePath     = $file.FullName
+            FileName     = $file.Name
+            FileHash     = $fileHash
+            ChainHash    = $chainHash
+            SizeBytes    = $file.Length
+            LastModified = $file.LastWriteTime.ToUniversalTime().ToString('o')
+        })
+
+        $previousHash = $chainHash
+    }
+
+    # Resolve toolkit version
+    $toolkitVersion = 'Unknown'
+    try {
+        $cfgCheck = Get-SPConfig
+        if ($null -ne $cfgCheck -and
+            $cfgCheck.PSObject.Properties.Name -contains 'Global' -and
+            $cfgCheck.Global.PSObject.Properties.Name -contains 'ToolkitVersion') {
+            $toolkitVersion = $cfgCheck.Global.ToolkitVersion
+        }
+    } catch { }
+
+    # Build manifest
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $manifest = @{
+        ManifestId      = [guid]::NewGuid().ToString()
+        GeneratedAt     = $generatedAt
+        CorrelationID   = $CorrelationID
+        ToolkitVersion  = $toolkitVersion
+        Algorithm       = 'SHA-256'
+        ChainAlgorithm  = 'SHA256(FileHash + PreviousChainHash)'
+        GenesisValue    = 'GENESIS'
+        Scope           = $Scope
+        DateRange       = @{
+            After  = if ($PSBoundParameters.ContainsKey('After'))  { $After.ToUniversalTime().ToString('o') }  else { $null }
+            Before = if ($PSBoundParameters.ContainsKey('Before')) { $Before.ToUniversalTime().ToString('o') } else { $null }
+        }
+        Files           = @($chainEntries)
+        Summary         = @{
+            FileCount   = $chainEntries.Count
+            TotalBytes  = $totalBytes
+            FinalChainHash = if ($chainEntries.Count -gt 0) { $chainEntries[$chainEntries.Count - 1].ChainHash } else { $null }
+        }
+    }
+
+    # Write manifest
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ManifestName)) {
+        $ts = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $ManifestName = "evidence-chain-${ts}"
+    }
+    $manifestPath = Join-Path -Path $OutputPath -ChildPath "${ManifestName}.json"
+
+    try {
+        $manifestJson = $manifest | ConvertTo-Json -Depth 10
+        $utf8NoBom    = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
+    }
+    catch {
+        Write-SPLog -Message "Failed to write manifest: $($_.Exception.Message)" `
+            -Severity ERROR -Component $component -Action $action `
+            -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Failed to write manifest: $($_.Exception.Message)"
+        }
+    }
+
+    $resolvedPath = (Resolve-Path -Path $manifestPath).Path
+
+    Write-SPLog -Message "Evidence chain created: $resolvedPath ($($chainEntries.Count) files, $totalBytes bytes)" `
+        -Severity INFO -Component $component -Action $action `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            ManifestPath = $resolvedPath
+            FileCount    = $chainEntries.Count
+            ChainValid   = $true
+            Violations   = @()
+        }
+        Error   = $null
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Send-SPReport',
     'Export-SPCompliancePackage',
@@ -2671,5 +3069,6 @@ Export-ModuleMember -Function @(
     'Save-SPGovernanceMetrics',
     'Get-SPGovernanceMetrics',
     'Get-SPGovernanceMetricsTrend',
-    'Export-SPGovernanceDashboardData'
+    'Export-SPGovernanceDashboardData',
+    'New-SPAuditEvidenceChain'
 )

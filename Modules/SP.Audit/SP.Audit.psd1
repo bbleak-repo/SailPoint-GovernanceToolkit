@@ -186,6 +186,9 @@
 
         # SP.AuditOperations - Governance Dashboard Data Export (P13-08 / DF-02)
         'Export-SPGovernanceDashboardData'
+
+        # SP.AuditOperations - Audit Evidence Integrity Chain (P14-03 / DF-05)
+        'New-SPAuditEvidenceChain'
     )
 
     # Do not export variables or aliases from nested modules

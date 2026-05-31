@@ -18,7 +18,7 @@
 | DF-02 | Governance Dashboard Data Export | P13-08 | none | DONE |
 | DF-03 | Invoke-SPGovernanceReport.ps1 | P13-09 | DF-02 | DONE |
 | DF-04 | Phase 13 Pester Tests | P13-10 | DF-03 | DONE |
-| DF-05 | Audit Evidence Integrity Chain | P14-03 | none | PENDING |
+| DF-05 | Audit Evidence Integrity Chain | P14-03 | none | DONE |
 | DF-06 | Source Onboarding Readiness | P14-04 | none | PENDING |
 | DF-07 | Configuration Drift Report | P14-07 | P14-06 (DONE) | PENDING |
 | DF-08 | Invoke-SPGovernanceHealthCheck.ps1 | P14-09 | DF-07 | PENDING |
@@ -106,7 +106,7 @@ SP.AuditOperations.
 
 ## DF-05: Audit Evidence Integrity Chain (P14-03)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Build:** `New-SPAuditEvidenceChain` in SP.AuditOperations.psm1
