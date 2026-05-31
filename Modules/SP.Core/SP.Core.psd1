@@ -59,6 +59,11 @@
         'Test-SPConfigFirstRun',
         'Test-SPConfiguration',
         'New-SPConfigFile',
+        'Save-SPGovernanceException',
+        'Get-SPGovernanceException',
+        'Get-SPGovernanceExceptionList',
+        'Remove-SPGovernanceException',
+        'Test-SPGovernanceExceptionExpiry',
 
         # SP.Logging exports
         'Write-SPLog',

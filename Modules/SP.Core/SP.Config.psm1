@@ -174,6 +174,11 @@ function Get-SPConfigDefaults {
             DefaultBandMapping      = @{}
             ISCBandAttribute        = 'jobLevel'
         }
+        Exceptions = @{
+            Path                  = '.\Config\exceptions'
+            AlertDaysBeforeExpiry = 14
+            RequireApprover       = $true
+        }
     }
 }
 
@@ -437,6 +442,11 @@ function Get-SPConfigTemplate {
             UseSupplementForReports = $false
             DefaultBandMapping      = @{}
             ISCBandAttribute        = 'jobLevel'
+        }
+        Exceptions = [ordered]@{
+            Path                  = '.\Config\exceptions'
+            AlertDaysBeforeExpiry = 14
+            RequireApprover       = $true
         }
     }
 
@@ -1398,6 +1408,483 @@ function New-SPConfigFile {
 
 #endregion
 
+#region Governance Exception Register
+
+function Resolve-SPExceptionsPath {
+    <#
+    .SYNOPSIS
+        Resolves the exceptions directory path from config
+    .PARAMETER Config
+        Optional config object. If omitted, loads via Get-SPConfig.
+    .OUTPUTS
+        [string] Absolute path to the exceptions directory
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][PSCustomObject]$Config
+    )
+
+    if (-not $Config) {
+        $Config = Get-SPConfig
+    }
+
+    $exceptionsPath = '.\Config\exceptions'
+    if ($Config.PSObject.Properties.Name -contains 'Exceptions' -and
+        $Config.Exceptions.PSObject.Properties.Name -contains 'Path' -and
+        -not [string]::IsNullOrWhiteSpace($Config.Exceptions.Path)) {
+        $exceptionsPath = $Config.Exceptions.Path
+    }
+
+    if (-not [System.IO.Path]::IsPathRooted($exceptionsPath)) {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $exceptionsPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $exceptionsPath))
+    }
+
+    return $exceptionsPath
+}
+
+function Save-SPGovernanceException {
+    <#
+    .SYNOPSIS
+        Saves a governance exception to the local exception register
+    .DESCRIPTION
+        Creates or updates a JSON file representing an approved deviation from
+        governance policy. Exceptions track compensating controls, approver,
+        and expiry date so that policy evaluations can exclude approved
+        exceptions and alert when exceptions expire.
+    .PARAMETER Id
+        Unique exception identifier (e.g., EXC-2026-001). Must contain only
+        alphanumeric characters, hyphens, and underscores.
+    .PARAMETER PolicyId
+        The governance policy ID this exception relates to.
+    .PARAMETER Description
+        Human-readable description of the exception and its justification.
+    .PARAMETER IdentityId
+        Optional ISC identity ID for the affected identity.
+    .PARAMETER IdentityName
+        Optional display name of the affected identity.
+    .PARAMETER EntitlementName
+        Optional entitlement name covered by this exception.
+    .PARAMETER SourceName
+        Optional source system name.
+    .PARAMETER ExpiryDate
+        Date when this exception expires and must be re-evaluated.
+    .PARAMETER ApprovedBy
+        Name or identifier of the person who approved this exception.
+        Required when Exceptions.RequireApprover is true in config.
+    .PARAMETER CompensatingControl
+        Description of compensating controls in place while exception is active.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ Id; Path; Action } }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][string]$PolicyId,
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter()][string]$IdentityId,
+        [Parameter()][string]$IdentityName,
+        [Parameter()][string]$EntitlementName,
+        [Parameter()][string]$SourceName,
+        [Parameter(Mandatory)][DateTime]$ExpiryDate,
+        [Parameter()][string]$ApprovedBy,
+        [Parameter()][string]$CompensatingControl,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $logComponent = 'SP.Config'
+    $logAction    = 'Save-SPGovernanceException'
+    $logPrefix    = if ($CorrelationID) { "[$CorrelationID] " } else { '' }
+
+    # Validate Id format -- alphanumeric, hyphens, underscores only
+    if ($Id -notmatch '^[A-Za-z0-9_-]+$') {
+        $msg = "${logPrefix}Exception ID '$Id' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed."
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $msg -Severity 'ERROR' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $false; Error = $msg }
+    }
+
+    # Load config for RequireApprover check
+    $config = Get-SPConfig
+    $requireApprover = $true
+    if ($config.PSObject.Properties.Name -contains 'Exceptions' -and
+        $config.Exceptions.PSObject.Properties.Name -contains 'RequireApprover') {
+        $requireApprover = $config.Exceptions.RequireApprover
+    }
+
+    if ($requireApprover -and [string]::IsNullOrWhiteSpace($ApprovedBy)) {
+        $msg = "${logPrefix}ApprovedBy is required when Exceptions.RequireApprover is true."
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $msg -Severity 'ERROR' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $false; Error = $msg }
+    }
+
+    # Resolve exceptions directory
+    $exceptionsDir = Resolve-SPExceptionsPath -Config $config
+
+    # Create directory on first save if it does not exist
+    if (-not (Test-Path -Path $exceptionsDir -PathType Container)) {
+        New-Item -Path $exceptionsDir -ItemType Directory -Force | Out-Null
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "${logPrefix}Created exceptions directory: $exceptionsDir" -Severity 'INFO' -Component $logComponent -Action $logAction
+        }
+    }
+
+    $filePath = Join-Path $exceptionsDir "$Id.json"
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+
+    # Determine if this is create or update
+    $action = 'Created'
+    $createdAt = $now
+    if (Test-Path -Path $filePath -PathType Leaf) {
+        $action = 'Updated'
+        try {
+            $existing = Get-Content -Path $filePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            if ($existing.createdAt) {
+                $createdAt = $existing.createdAt
+            }
+        }
+        catch {
+            # If existing file is corrupt, treat as new
+            $createdAt = $now
+        }
+    }
+
+    $exception = [ordered]@{
+        id                  = $Id
+        policyId            = $PolicyId
+        description         = $Description
+        identityId          = if ($IdentityId) { $IdentityId } else { $null }
+        identityName        = if ($IdentityName) { $IdentityName } else { $null }
+        entitlementName     = if ($EntitlementName) { $EntitlementName } else { $null }
+        sourceName          = if ($SourceName) { $SourceName } else { $null }
+        expiryDate          = $ExpiryDate.ToUniversalTime().ToString('o')
+        approvedBy          = if ($ApprovedBy) { $ApprovedBy } else { $null }
+        compensatingControl = if ($CompensatingControl) { $CompensatingControl } else { $null }
+        createdAt           = $createdAt
+        modifiedAt          = $now
+        status              = 'Active'
+    }
+
+    $jsonContent = $exception | ConvertTo-Json -Depth 5
+    Set-Content -Path $filePath -Value $jsonContent -Encoding UTF8
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "${logPrefix}$action governance exception '$Id' at $filePath" -Severity 'INFO' -Component $logComponent -Action $logAction
+    }
+
+    return @{
+        Success = $true
+        Data    = @{
+            Id     = $Id
+            Path   = $filePath
+            Action = $action
+        }
+    }
+}
+
+function Get-SPGovernanceException {
+    <#
+    .SYNOPSIS
+        Retrieves a single governance exception by ID
+    .PARAMETER Id
+        The exception identifier to retrieve.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = <exception hashtable> } or @{ Success = $false; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $logComponent = 'SP.Config'
+    $logAction    = 'Get-SPGovernanceException'
+    $logPrefix    = if ($CorrelationID) { "[$CorrelationID] " } else { '' }
+
+    $exceptionsDir = Resolve-SPExceptionsPath
+    $filePath = Join-Path $exceptionsDir "$Id.json"
+
+    if (-not (Test-Path -Path $filePath -PathType Leaf)) {
+        $msg = "${logPrefix}Exception '$Id' not found."
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $msg -Severity 'WARN' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $false; Error = $msg }
+    }
+
+    try {
+        $jsonContent = Get-Content -Path $filePath -Raw -ErrorAction Stop
+        $parsed = $jsonContent | ConvertFrom-Json -ErrorAction Stop
+
+        # Convert PSCustomObject to ordered hashtable
+        $data = [ordered]@{}
+        foreach ($prop in $parsed.PSObject.Properties) {
+            $data[$prop.Name] = $prop.Value
+        }
+
+        return @{ Success = $true; Data = $data }
+    }
+    catch {
+        $msg = "${logPrefix}Failed to read exception '$Id': $($_.Exception.Message)"
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $msg -Severity 'ERROR' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $false; Error = $msg }
+    }
+}
+
+function Get-SPGovernanceExceptionList {
+    <#
+    .SYNOPSIS
+        Lists all governance exceptions, optionally filtered by policy or status
+    .PARAMETER PolicyId
+        Optional policy ID filter. Only returns exceptions for this policy.
+    .PARAMETER IncludeExpired
+        When set, includes exceptions past their expiry date. Default excludes them.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @(<exception hashtables>) }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$PolicyId,
+        [Parameter()][switch]$IncludeExpired,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $logComponent = 'SP.Config'
+    $logAction    = 'Get-SPGovernanceExceptionList'
+    $logPrefix    = if ($CorrelationID) { "[$CorrelationID] " } else { '' }
+
+    $exceptionsDir = Resolve-SPExceptionsPath
+
+    if (-not (Test-Path -Path $exceptionsDir -PathType Container)) {
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message "${logPrefix}Exceptions directory does not exist: $exceptionsDir" -Severity 'INFO' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $true; Data = @() }
+    }
+
+    $files = Get-ChildItem -Path $exceptionsDir -Filter '*.json' -File -ErrorAction SilentlyContinue
+    if (-not $files -or $files.Count -eq 0) {
+        return @{ Success = $true; Data = @() }
+    }
+
+    $now = (Get-Date).ToUniversalTime()
+    $exceptions = [System.Collections.Generic.List[hashtable]]::new()
+
+    foreach ($file in $files) {
+        try {
+            $jsonContent = Get-Content -Path $file.FullName -Raw -ErrorAction Stop
+            $parsed = $jsonContent | ConvertFrom-Json -ErrorAction Stop
+
+            # Convert to hashtable
+            $data = [ordered]@{}
+            foreach ($prop in $parsed.PSObject.Properties) {
+                $data[$prop.Name] = $prop.Value
+            }
+
+            # Filter by policy
+            if ($PolicyId -and $data['policyId'] -ne $PolicyId) {
+                continue
+            }
+
+            # Filter expired unless IncludeExpired
+            if (-not $IncludeExpired) {
+                $expiry = $null
+                try { $expiry = [DateTime]::Parse($data['expiryDate']).ToUniversalTime() } catch { }
+                if ($null -ne $expiry -and $expiry -lt $now) {
+                    continue
+                }
+            }
+
+            $exceptions.Add($data)
+        }
+        catch {
+            if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                Write-SPLog -Message "${logPrefix}Failed to parse exception file '$($file.Name)': $($_.Exception.Message)" -Severity 'WARN' -Component $logComponent -Action $logAction
+            }
+        }
+    }
+
+    return @{ Success = $true; Data = @($exceptions) }
+}
+
+function Remove-SPGovernanceException {
+    <#
+    .SYNOPSIS
+        Removes a governance exception from the register
+    .PARAMETER Id
+        The exception identifier to remove.
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ Id; Action } } or @{ Success = $false; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $logComponent = 'SP.Config'
+    $logAction    = 'Remove-SPGovernanceException'
+    $logPrefix    = if ($CorrelationID) { "[$CorrelationID] " } else { '' }
+
+    $exceptionsDir = Resolve-SPExceptionsPath
+    $filePath = Join-Path $exceptionsDir "$Id.json"
+
+    if (-not (Test-Path -Path $filePath -PathType Leaf)) {
+        $msg = "${logPrefix}Exception '$Id' not found."
+        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+            Write-SPLog -Message $msg -Severity 'WARN' -Component $logComponent -Action $logAction
+        }
+        return @{ Success = $false; Error = $msg }
+    }
+
+    Remove-Item -Path $filePath -Force -ErrorAction Stop
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "${logPrefix}Removed governance exception '$Id'" -Severity 'INFO' -Component $logComponent -Action $logAction
+    }
+
+    return @{
+        Success = $true
+        Data    = @{
+            Id     = $Id
+            Action = 'Removed'
+        }
+    }
+}
+
+function Test-SPGovernanceExceptionExpiry {
+    <#
+    .SYNOPSIS
+        Checks all active exceptions for upcoming or past expiry
+    .DESCRIPTION
+        Lists all active exceptions and flags those expiring within the alert
+        window or already expired. Used for proactive governance monitoring.
+    .PARAMETER AlertDaysBeforeExpiry
+        Number of days before expiry to flag an exception as expiring soon.
+        Defaults to the value in Exceptions.AlertDaysBeforeExpiry config (14).
+    .PARAMETER CorrelationID
+        Optional correlation ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{ Exceptions; Summary }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$AlertDaysBeforeExpiry,
+        [Parameter()][string]$CorrelationID
+    )
+
+    $logComponent = 'SP.Config'
+    $logAction    = 'Test-SPGovernanceExceptionExpiry'
+    $logPrefix    = if ($CorrelationID) { "[$CorrelationID] " } else { '' }
+
+    # Load config for alert window default
+    $config = Get-SPConfig
+    if ($AlertDaysBeforeExpiry -le 0) {
+        $AlertDaysBeforeExpiry = 14
+        if ($config.PSObject.Properties.Name -contains 'Exceptions' -and
+            $config.Exceptions.PSObject.Properties.Name -contains 'AlertDaysBeforeExpiry') {
+            $val = $config.Exceptions.AlertDaysBeforeExpiry -as [int]
+            if ($null -ne $val -and $val -gt 0) {
+                $AlertDaysBeforeExpiry = $val
+            }
+        }
+    }
+
+    # Get all exceptions including expired
+    $listResult = Get-SPGovernanceExceptionList -IncludeExpired -CorrelationID $CorrelationID
+    if (-not $listResult.Success) {
+        return @{
+            Exceptions = @()
+            Summary    = @{ TotalActive = 0; Expiring = 0; Expired = 0; TotalExceptions = 0 }
+        }
+    }
+
+    $now = (Get-Date).ToUniversalTime()
+    $results = [System.Collections.Generic.List[hashtable]]::new()
+    $totalActive = 0
+    $expiring    = 0
+    $expired     = 0
+
+    foreach ($exc in $listResult.Data) {
+        $expiryDate = $null
+        try { $expiryDate = [DateTime]::Parse($exc['expiryDate']).ToUniversalTime() } catch { continue }
+
+        $daysRemaining = [math]::Floor(($expiryDate - $now).TotalDays)
+        $isExpired     = $daysRemaining -lt 0
+        $isExpiring    = (-not $isExpired) -and ($daysRemaining -le $AlertDaysBeforeExpiry)
+
+        $status = if ($isExpired) { 'Expired' } else { 'Active' }
+        $alert  = $isExpiring
+        $alertMessage = $null
+
+        if ($isExpired) {
+            $expired++
+            $alertMessage = "Exception expired $([math]::Abs($daysRemaining)) days ago"
+            $alert = $true
+        }
+        elseif ($isExpiring) {
+            $expiring++
+            $totalActive++
+            $alertMessage = "Exception expires in $daysRemaining days"
+        }
+        else {
+            $totalActive++
+        }
+
+        $entry = [ordered]@{
+            Id            = $exc['id']
+            PolicyId      = $exc['policyId']
+            IdentityName  = $exc['identityName']
+            ExpiryDate    = $expiryDate.ToString('yyyy-MM-dd')
+            DaysRemaining = $daysRemaining
+            Status        = $status
+            Alert         = $alert
+        }
+        if ($alertMessage) {
+            $entry['AlertMessage'] = $alertMessage
+        }
+
+        $results.Add($entry)
+    }
+
+    $totalExceptions = $listResult.Data.Count
+
+    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+        Write-SPLog -Message "${logPrefix}Exception expiry check: $totalActive active, $expiring expiring, $expired expired (of $totalExceptions total)" -Severity 'INFO' -Component $logComponent -Action $logAction
+    }
+
+    return @{
+        Exceptions = @($results)
+        Summary    = @{
+            TotalActive     = $totalActive
+            Expiring        = $expiring
+            Expired         = $expired
+            TotalExceptions = $totalExceptions
+        }
+    }
+}
+
+#endregion
+
 # Export public functions
 Export-ModuleMember -Function @(
     'Get-SPConfig',
@@ -1405,5 +1892,10 @@ Export-ModuleMember -Function @(
     'Test-SPConfig',
     'Test-SPConfigFirstRun',
     'Test-SPConfiguration',
-    'New-SPConfigFile'
+    'New-SPConfigFile',
+    'Save-SPGovernanceException',
+    'Get-SPGovernanceException',
+    'Get-SPGovernanceExceptionList',
+    'Remove-SPGovernanceException',
+    'Test-SPGovernanceExceptionExpiry'
 )

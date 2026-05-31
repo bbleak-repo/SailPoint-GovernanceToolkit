@@ -181,6 +181,11 @@
         },
         "ISCBandAttribute": "jobLevel"
     },
+    "Exceptions": {
+        "Path": ".\\Config\\exceptions",
+        "AlertDaysBeforeExpiry": 14,
+        "RequireApprover": true
+    },
     "DeltaCert": {
         "SourceIds": [],
         "DefaultHoursBack": 24,
