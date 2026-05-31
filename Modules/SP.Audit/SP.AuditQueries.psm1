@@ -4106,6 +4106,530 @@ function Get-SPStaleAccess {
 
 #endregion
 
+#region P14-06: Configuration Snapshot
+
+function Save-SPConfigurationSnapshot {
+    <#
+    .SYNOPSIS
+        Captures a point-in-time snapshot of the ISC tenant configuration.
+    .DESCRIPTION
+        Queries ISC sources (and optionally entitlements, access profiles, roles)
+        to build a JSON snapshot of the tenant configuration state. Designed for
+        configuration drift detection (Compare-SPConfigurationSnapshots) and
+        change management auditing.
+    .PARAMETER SourceIds
+        Optional array of source IDs to include. If omitted, queries all sources.
+    .PARAMETER IncludeEntitlements
+        When set, queries entitlements per source and includes counts and names.
+    .PARAMETER IncludeAccessProfiles
+        When set, queries access profiles per source and includes counts and names.
+    .PARAMETER IncludeRoles
+        When set, queries roles and includes counts, names, and access profile assignments.
+    .PARAMETER OutputPath
+        Directory to write the snapshot JSON file. Defaults to {Audit.OutputPath}/snapshots/.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success = $bool; Data = @{ SnapshotPath; SnapshotId; CapturedAt; SourceCount; Summary } }
+    .EXAMPLE
+        $result = Save-SPConfigurationSnapshot -IncludeEntitlements -IncludeAccessProfiles
+        $result.Data.SnapshotPath
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [switch]$IncludeEntitlements,
+
+        [Parameter()]
+        [switch]$IncludeAccessProfiles,
+
+        [Parameter()]
+        [switch]$IncludeRoles,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sourceLabel = if ($null -ne $SourceIds -and $SourceIds.Count -gt 0) { $SourceIds -join ',' } else { 'ALL' }
+    Write-SPLog -Message "Save-SPConfigurationSnapshot: Sources='$sourceLabel', IncludeEntitlements=$IncludeEntitlements, IncludeAccessProfiles=$IncludeAccessProfiles, IncludeRoles=$IncludeRoles" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # ------------------------------------------------------------------
+        # Resolve output path
+        # ------------------------------------------------------------------
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            try {
+                $cfg = Get-SPConfig
+                if ($null -ne $cfg.Audit -and -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                    $OutputPath = Join-Path $cfg.Audit.OutputPath 'snapshots'
+                } else {
+                    $OutputPath = Join-Path '.' (Join-Path 'Audit' 'snapshots')
+                }
+            } catch {
+                $OutputPath = Join-Path '.' (Join-Path 'Audit' 'snapshots')
+            }
+        }
+
+        if (-not (Test-Path -Path $OutputPath)) {
+            if ($PSCmdlet.ShouldProcess($OutputPath, 'Create snapshot directory')) {
+                New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+            }
+        }
+
+        # Pagination ceiling from config
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # ------------------------------------------------------------------
+        # Step 1: Query sources (paginated via GET /v3/sources)
+        # ------------------------------------------------------------------
+        $allSources = [System.Collections.Generic.List[object]]::new()
+        $pageSize = 250
+        $offset   = 0
+        $pageNum  = 0
+        $hasSourceFilter = ($null -ne $SourceIds -and $SourceIds.Count -gt 0)
+        $sourceFilterSet = @{}
+        if ($hasSourceFilter) {
+            foreach ($sid in $SourceIds) { $sourceFilterSet[$sid] = $true }
+        }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached fetching sources: $maxPages pages ($($allSources.Count) sources). Raise Api.MaxPaginationPages if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Save-SPConfigurationSnapshot' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams = @{
+                'limit'  = $pageSize.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/sources' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                $errMsg = "Failed to retrieve sources at page $pageNum (offset $offset): $($result.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Save-SPConfigurationSnapshot' -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($src in $page) { $allSources.Add($src) }
+            }
+
+            Write-SPLog -Message "Sources page ${pageNum}: $($page.Count) items (running total: $($allSources.Count))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($page.Count -ge $pageSize)
+
+        # Filter to requested source IDs if specified
+        if ($hasSourceFilter) {
+            $filtered = [System.Collections.Generic.List[object]]::new()
+            foreach ($src in $allSources) {
+                $srcId = $null
+                if ($null -ne $src.id) { $srcId = [string]$src.id }
+                elseif ($src -is [hashtable] -and $src.ContainsKey('id')) { $srcId = [string]$src['id'] }
+                if ($null -ne $srcId -and $sourceFilterSet.ContainsKey($srcId)) {
+                    $filtered.Add($src)
+                }
+            }
+            $allSources = $filtered
+        }
+
+        Write-SPLog -Message "Save-SPConfigurationSnapshot: retrieved $($allSources.Count) source(s)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+            -CorrelationID $CorrelationID
+
+        # ------------------------------------------------------------------
+        # Step 2: Build source records
+        # ------------------------------------------------------------------
+        $sourceRecords = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($src in $allSources) {
+            $srcId          = ''
+            $srcName        = ''
+            $srcType        = ''
+            $srcDescription = ''
+            $srcEnabled     = $false
+            $ownerName      = ''
+            $ownerId        = ''
+            $connectorType  = ''
+            $accountCount   = 0
+
+            if ($src -is [hashtable]) {
+                $srcId          = if ($src.ContainsKey('id'))            { [string]$src['id'] }            else { '' }
+                $srcName        = if ($src.ContainsKey('name'))          { [string]$src['name'] }          else { '' }
+                $srcType        = if ($src.ContainsKey('type'))          { [string]$src['type'] }          else { '' }
+                $srcDescription = if ($src.ContainsKey('description'))   { [string]$src['description'] }   else { '' }
+                $srcEnabled     = if ($src.ContainsKey('enabled'))       { [bool]$src['enabled'] }         else { $false }
+                $connectorType  = if ($src.ContainsKey('connectorName')) { [string]$src['connectorName'] } else { '' }
+                $accountCount   = if ($src.ContainsKey('accountCount'))  { [int]$src['accountCount'] }     else { 0 }
+                if ($src.ContainsKey('owner') -and $null -ne $src['owner']) {
+                    $ow = $src['owner']
+                    if ($ow -is [hashtable]) {
+                        $ownerName = if ($ow.ContainsKey('name')) { [string]$ow['name'] } else { '' }
+                        $ownerId   = if ($ow.ContainsKey('id'))   { [string]$ow['id'] }   else { '' }
+                    } else {
+                        if ($null -ne $ow.name) { $ownerName = [string]$ow.name }
+                        if ($null -ne $ow.id)   { $ownerId   = [string]$ow.id }
+                    }
+                }
+            } else {
+                if ($null -ne $src.id)            { $srcId          = [string]$src.id }
+                if ($null -ne $src.name)          { $srcName        = [string]$src.name }
+                if ($null -ne $src.type)          { $srcType        = [string]$src.type }
+                if ($null -ne $src.description)   { $srcDescription = [string]$src.description }
+                if ($null -ne $src.enabled)       { $srcEnabled     = [bool]$src.enabled }
+                if ($null -ne $src.connectorName) { $connectorType  = [string]$src.connectorName }
+                if ($null -ne $src.accountCount)  { $accountCount   = [int]$src.accountCount }
+                if ($null -ne $src.owner) {
+                    if ($null -ne $src.owner.name) { $ownerName = [string]$src.owner.name }
+                    if ($null -ne $src.owner.id)   { $ownerId   = [string]$src.owner.id }
+                }
+            }
+
+            $sourceRecords.Add(@{
+                Id            = $srcId
+                Name          = $srcName
+                Type          = $srcType
+                Description   = $srcDescription
+                Enabled       = $srcEnabled
+                OwnerName     = $ownerName
+                OwnerId       = $ownerId
+                ConnectorType = $connectorType
+                AccountCount  = $accountCount
+            })
+        }
+
+        # ------------------------------------------------------------------
+        # Step 3: Optional entitlement data
+        # ------------------------------------------------------------------
+        $totalEntitlements = 0
+        if ($IncludeEntitlements) {
+            $entSourceIds = if ($hasSourceFilter) { $SourceIds } else { $null }
+            $entResult = Get-SPEntitlementInventory -SourceIds $entSourceIds -CorrelationID $CorrelationID
+
+            if ($entResult.Success -and $null -ne $entResult.Data) {
+                foreach ($rec in $sourceRecords) {
+                    $sid = $rec['Id']
+                    if ($entResult.Data.Sources.ContainsKey($sid)) {
+                        $srcEnt = $entResult.Data.Sources[$sid]
+                        $entNames = [System.Collections.Generic.List[string]]::new()
+                        $privCount = 0
+                        if ($null -ne $srcEnt['Entitlements']) {
+                            foreach ($e in $srcEnt['Entitlements']) {
+                                $eName = ''
+                                if ($e -is [hashtable] -and $e.ContainsKey('Name')) { $eName = [string]$e['Name'] }
+                                elseif ($null -ne $e.Name) { $eName = [string]$e.Name }
+                                if (-not [string]::IsNullOrWhiteSpace($eName)) { $entNames.Add($eName) }
+                                $isPr = $false
+                                if ($e -is [hashtable] -and $e.ContainsKey('Privileged')) { $isPr = [bool]$e['Privileged'] }
+                                elseif ($null -ne $e.Privileged) { $isPr = [bool]$e.Privileged }
+                                if ($isPr) { $privCount++ }
+                            }
+                        }
+                        $rec['EntitlementCount']  = $srcEnt['TotalEntitlements']
+                        $rec['PrivilegedCount']   = $privCount
+                        $rec['EntitlementNames']  = $entNames.ToArray()
+                        $totalEntitlements += $srcEnt['TotalEntitlements']
+                    }
+                }
+            } else {
+                Write-SPLog -Message "Entitlement inventory query returned no data; entitlement counts will be 0" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # ------------------------------------------------------------------
+        # Step 4: Optional access profile data
+        # ------------------------------------------------------------------
+        $totalAccessProfiles = 0
+        if ($IncludeAccessProfiles) {
+            $apSourceIds = if ($hasSourceFilter) { $SourceIds } else { $null }
+            $apResult = Get-SPAccessProfileInventory -SourceIds $apSourceIds -CorrelationID $CorrelationID
+
+            if ($apResult.Success -and $null -ne $apResult.Data) {
+                foreach ($rec in $sourceRecords) {
+                    $sid = $rec['Id']
+                    if ($apResult.Data.Sources.ContainsKey($sid)) {
+                        $srcAp = $apResult.Data.Sources[$sid]
+                        $apNames = [System.Collections.Generic.List[string]]::new()
+                        $apEnabled = 0
+                        $apRequestable = 0
+                        if ($null -ne $srcAp['AccessProfiles']) {
+                            foreach ($ap in $srcAp['AccessProfiles']) {
+                                $apName = ''
+                                if ($ap -is [hashtable]) {
+                                    if ($ap.ContainsKey('Name')) { $apName = [string]$ap['Name'] }
+                                    if ($ap.ContainsKey('Enabled') -and [bool]$ap['Enabled']) { $apEnabled++ }
+                                    if ($ap.ContainsKey('Requestable') -and [bool]$ap['Requestable']) { $apRequestable++ }
+                                } else {
+                                    if ($null -ne $ap.Name) { $apName = [string]$ap.Name }
+                                    if ($null -ne $ap.Enabled -and [bool]$ap.Enabled) { $apEnabled++ }
+                                    if ($null -ne $ap.Requestable -and [bool]$ap.Requestable) { $apRequestable++ }
+                                }
+                                if (-not [string]::IsNullOrWhiteSpace($apName)) { $apNames.Add($apName) }
+                            }
+                        }
+                        $rec['AccessProfileCount']       = $srcAp['TotalAccessProfiles']
+                        $rec['AccessProfileNames']       = $apNames.ToArray()
+                        $rec['AccessProfileEnabled']     = $apEnabled
+                        $rec['AccessProfileRequestable'] = $apRequestable
+                        $totalAccessProfiles += $srcAp['TotalAccessProfiles']
+                    }
+                }
+            } else {
+                Write-SPLog -Message "Access profile inventory query returned no data; access profile counts will be 0" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # ------------------------------------------------------------------
+        # Step 5: Optional role data
+        # ------------------------------------------------------------------
+        $totalRoles = 0
+        $roleRecords = $null
+        if ($IncludeRoles) {
+            $roleResult = Get-SPRoleInventory -CorrelationID $CorrelationID
+
+            if ($roleResult.Success -and $null -ne $roleResult.Data) {
+                $totalRoles = $roleResult.Data.Summary.TotalRoles
+                $roleList = [System.Collections.Generic.List[hashtable]]::new()
+                if ($null -ne $roleResult.Data.Roles) {
+                    foreach ($role in $roleResult.Data.Roles) {
+                        $rName = ''
+                        $rId = ''
+                        $rMembership = ''
+                        $rEnabled = $false
+                        $rApCount = 0
+                        $rApNames = @()
+
+                        if ($role -is [hashtable]) {
+                            $rName       = if ($role.ContainsKey('Name'))               { [string]$role['Name'] }              else { '' }
+                            $rId         = if ($role.ContainsKey('Id'))                 { [string]$role['Id'] }                else { '' }
+                            $rMembership = if ($role.ContainsKey('MembershipType'))     { [string]$role['MembershipType'] }    else { '' }
+                            $rEnabled    = if ($role.ContainsKey('Enabled'))            { [bool]$role['Enabled'] }             else { $false }
+                            $rApCount    = if ($role.ContainsKey('AccessProfileCount')) { [int]$role['AccessProfileCount'] }   else { 0 }
+                            $rApNames    = if ($role.ContainsKey('AccessProfileNames')) { @($role['AccessProfileNames']) }     else { @() }
+                        } else {
+                            if ($null -ne $role.Name)               { $rName       = [string]$role.Name }
+                            if ($null -ne $role.Id)                 { $rId         = [string]$role.Id }
+                            if ($null -ne $role.MembershipType)     { $rMembership = [string]$role.MembershipType }
+                            if ($null -ne $role.Enabled)            { $rEnabled    = [bool]$role.Enabled }
+                            if ($null -ne $role.AccessProfileCount) { $rApCount    = [int]$role.AccessProfileCount }
+                            if ($null -ne $role.AccessProfileNames) { $rApNames    = @($role.AccessProfileNames) }
+                        }
+
+                        $roleList.Add(@{
+                            Id                 = $rId
+                            Name               = $rName
+                            MembershipType     = $rMembership
+                            Enabled            = $rEnabled
+                            AccessProfileCount = $rApCount
+                            AccessProfileNames = $rApNames
+                        })
+                    }
+                }
+                $roleRecords = $roleList.ToArray()
+            } else {
+                Write-SPLog -Message "Role inventory query returned no data; role counts will be 0" `
+                    -Severity WARN -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        # ------------------------------------------------------------------
+        # Step 6: Compute settings hash
+        # ------------------------------------------------------------------
+        $settingsHash = ''
+        try {
+            $settingsPath = Join-Path '.' (Join-Path 'Config' 'settings.json')
+            if (Test-Path -Path $settingsPath) {
+                $hashResult = Get-FileHash -Path $settingsPath -Algorithm SHA256
+                $settingsHash = $hashResult.Hash
+            }
+        } catch {
+            Write-SPLog -Message "Could not compute settings hash: $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+                -CorrelationID $CorrelationID
+        }
+
+        # ------------------------------------------------------------------
+        # Step 7: Build and write snapshot JSON
+        # ------------------------------------------------------------------
+        $snapshotId = [guid]::NewGuid().ToString()
+        $capturedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $toolkitVersion = '1.0.0'
+        try {
+            $cfgVer = Get-SPConfig
+            if ($null -ne $cfgVer.Global -and -not [string]::IsNullOrWhiteSpace($cfgVer.Global.ToolkitVersion)) {
+                $toolkitVersion = $cfgVer.Global.ToolkitVersion
+            }
+        } catch { }
+
+        $snapshot = @{
+            snapshotId      = $snapshotId
+            capturedAt      = $capturedAt
+            toolkitVersion  = $toolkitVersion
+            settingsHash    = $settingsHash
+            scope           = @{
+                includeEntitlements   = [bool]$IncludeEntitlements
+                includeAccessProfiles = [bool]$IncludeAccessProfiles
+                includeRoles          = [bool]$IncludeRoles
+            }
+            sources         = $sourceRecords.ToArray()
+            summary         = @{
+                sourceCount         = $sourceRecords.Count
+                totalEntitlements   = $totalEntitlements
+                totalAccessProfiles = $totalAccessProfiles
+                totalRoles          = $totalRoles
+            }
+        }
+
+        if ($null -ne $roleRecords) {
+            $snapshot['roles'] = $roleRecords
+        }
+
+        $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd-HHmmss')
+        $fileName  = "snapshot-$timestamp.json"
+        $filePath  = Join-Path $OutputPath $fileName
+
+        if ($PSCmdlet.ShouldProcess($filePath, 'Write configuration snapshot')) {
+            $jsonContent = $snapshot | ConvertTo-Json -Depth 10
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText($filePath, $jsonContent, $utf8NoBom)
+        }
+
+        Write-SPLog -Message "Save-SPConfigurationSnapshot: wrote snapshot to $filePath ($($sourceRecords.Count) sources)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Save-SPConfigurationSnapshot' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                SnapshotPath = $filePath
+                SnapshotId   = $snapshotId
+                CapturedAt   = $capturedAt
+                SourceCount  = $sourceRecords.Count
+                Summary      = @{
+                    Sources        = $sourceRecords.Count
+                    Entitlements   = $totalEntitlements
+                    AccessProfiles = $totalAccessProfiles
+                    Roles          = $totalRoles
+                }
+            }
+        }
+    }
+    catch {
+        $errMsg = "Save-SPConfigurationSnapshot failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Save-SPConfigurationSnapshot' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+function Get-SPConfigurationSnapshot {
+    <#
+    .SYNOPSIS
+        Reads and parses a previously saved configuration snapshot JSON file.
+    .DESCRIPTION
+        Loads the JSON snapshot file at the specified path and returns the parsed
+        snapshot object. Used as input to Compare-SPConfigurationSnapshots for
+        drift detection.
+    .PARAMETER Path
+        Path to the snapshot JSON file.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] The parsed snapshot hashtable.
+    .EXAMPLE
+        $snapshot = Get-SPConfigurationSnapshot -Path '.\Audit\snapshots\snapshot-2026-05-23-120000.json'
+        $snapshot.sources.Count
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPConfigurationSnapshot: reading $Path" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPConfigurationSnapshot' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $Path)) {
+        $errMsg = "Snapshot file not found: $Path"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPConfigurationSnapshot' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+
+    try {
+        $jsonContent = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        $snapshot = $jsonContent | ConvertFrom-Json
+
+        # Convert PSCustomObject to hashtable for consistent access
+        $result = @{}
+        foreach ($prop in $snapshot.PSObject.Properties) {
+            $result[$prop.Name] = $prop.Value
+        }
+
+        Write-SPLog -Message "Get-SPConfigurationSnapshot: loaded snapshot $($result['snapshotId']), captured at $($result['capturedAt'])" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPConfigurationSnapshot' `
+            -CorrelationID $CorrelationID
+
+        return $result
+    }
+    catch {
+        $errMsg = "Get-SPConfigurationSnapshot failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPConfigurationSnapshot' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -4120,5 +4644,7 @@ Export-ModuleMember -Function @(
     'Get-SPRemediationStatus',
     'Get-SPEntitlementInventory',
     'Get-SPStaleAccess',
-    'Get-SPAccessProfileInventory'
+    'Get-SPAccessProfileInventory',
+    'Save-SPConfigurationSnapshot',
+    'Get-SPConfigurationSnapshot'
 )
