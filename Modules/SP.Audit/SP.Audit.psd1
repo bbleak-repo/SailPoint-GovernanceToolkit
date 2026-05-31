@@ -136,6 +136,9 @@
 
         # SP.AuditReportHtml - Audit Period Comparison Report (P13-06)
         'Export-SPAuditPeriodComparisonHtml'
+
+        # SP.AuditAnalytics - Governance Policy Engine (P13-04)
+        'Test-SPGovernancePolicy'
     )
 
     # Do not export variables or aliases from nested modules

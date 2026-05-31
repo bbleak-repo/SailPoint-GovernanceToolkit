@@ -3648,6 +3648,214 @@ function Get-SPRemediationPriority {
 
 #endregion
 
+#region Governance Policy Engine (P13-04)
+
+function Test-SPGovernancePolicy {
+    <#
+    .SYNOPSIS
+        Evaluates the current governance state against configurable policies.
+    .DESCRIPTION
+        Checks governance data against policies defined in GovernancePolicy config.
+        Produces a pass/fail result per policy. Policy types: ReviewFrequency,
+        SourceCoverage, IdentityRisk, StaleAccess, ReviewerPerformance.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables.
+    .PARAMETER IdentityRisk
+        Hashtable from Measure-SPIdentityRisk output.
+    .PARAMETER SourceGovernance
+        Hashtable from Measure-SPSourceGovernance output.
+    .PARAMETER StaleAccess
+        Hashtable from Get-SPStaleAccess output.
+    .PARAMETER ReviewerReputation
+        Hashtable from Measure-SPReviewerReputation output.
+    .PARAMETER EntitlementInventory
+        Hashtable from Get-SPEntitlementInventory .Data output.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ OverallCompliant; EvaluatedAt; Policies; Summary }
+    .EXAMPLE
+        $result = Test-SPGovernancePolicy -IdentityRisk $risk -SourceGovernance $gov
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][hashtable[]]$CampaignAudits,
+        [Parameter()][hashtable]$IdentityRisk,
+        [Parameter()][hashtable]$SourceGovernance,
+        [Parameter()][hashtable]$StaleAccess,
+        [Parameter()][hashtable]$ReviewerReputation,
+        [Parameter()][hashtable]$EntitlementInventory,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+
+    Write-SPLog -Message "Test-SPGovernancePolicy: starting policy evaluation" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+
+    $evaluatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    # Load governance policy config
+    $config = $null
+    try { $config = Get-SPConfig } catch { }
+
+    $policyConfig = $null
+    if ($null -ne $config) {
+        if ($config -is [hashtable] -and $config.ContainsKey('GovernancePolicy')) { $policyConfig = $config['GovernancePolicy'] }
+        elseif ($null -ne $config.PSObject -and $null -ne $config.PSObject.Properties['GovernancePolicy']) { $policyConfig = $config.GovernancePolicy }
+    }
+    if ($null -eq $policyConfig) {
+        $defaults = Get-SPConfigDefaults
+        if ($defaults.ContainsKey('GovernancePolicy')) { $policyConfig = $defaults['GovernancePolicy'] }
+    }
+
+    $gpEnabled = $true
+    if ($null -ne $policyConfig) {
+        if ($policyConfig -is [hashtable] -and $policyConfig.ContainsKey('Enabled')) { $gpEnabled = [bool]$policyConfig['Enabled'] }
+        elseif ($null -ne $policyConfig.PSObject -and $null -ne $policyConfig.PSObject.Properties['Enabled']) { $gpEnabled = [bool]$policyConfig.Enabled }
+    }
+
+    $gpPolicies = @()
+    if ($null -ne $policyConfig) {
+        if ($policyConfig -is [hashtable] -and $policyConfig.ContainsKey('Policies')) { $gpPolicies = @($policyConfig['Policies']) }
+        elseif ($null -ne $policyConfig.PSObject -and $null -ne $policyConfig.PSObject.Properties['Policies']) { $gpPolicies = @($policyConfig.Policies) }
+    }
+
+    if ($null -eq $gpPolicies -or $gpPolicies.Count -eq 0) {
+        Write-SPLog -Message "Test-SPGovernancePolicy: no policies configured" -Severity WARN -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+        return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = @(); Summary = @{ TotalPolicies = 0; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = 0 } }
+    }
+
+    if (-not $gpEnabled) {
+        Write-SPLog -Message "Test-SPGovernancePolicy: GovernancePolicy.Enabled is false, skipping all" -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+        $skippedPols = @()
+        foreach ($pol in $gpPolicies) {
+            $pId = if ($pol -is [hashtable]) { $pol['Id'] } else { $pol.Id }; $pNm = if ($pol -is [hashtable]) { $pol['Name'] } else { $pol.Name }; $pSv = if ($pol -is [hashtable]) { $pol['Severity'] } else { $pol.Severity }
+            $skippedPols += @{ Id = $pId; Name = $pNm; Severity = $pSv; Result = 'SKIPPED'; Details = 'GovernancePolicy.Enabled is false'; Violations = @() }
+        }
+        return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = $skippedPols; Summary = @{ TotalPolicies = $gpPolicies.Count; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = $gpPolicies.Count } }
+    }
+
+    # Helper to read a property from hashtable or PSCustomObject
+    function Get-PolProp { param($Obj, [string]$Key, $Default = $null); if ($null -eq $Obj) { return $Default }; if ($Obj -is [hashtable]) { if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }; return $Default }; $p = $Obj.PSObject.Properties[$Key]; if ($null -ne $p) { return $p.Value }; return $Default }
+
+    $policyResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    foreach ($pol in $gpPolicies) {
+        if ($null -eq $pol) { continue }
+        $polId = Get-PolProp $pol 'Id'; $polName = Get-PolProp $pol 'Name'; $polType = Get-PolProp $pol 'Type'
+        $polSeverity = Get-PolProp $pol 'Severity' 'Warning'; $polScope = Get-PolProp $pol 'Scope'
+        $polResult = 'PASS'; $polDetails = ''; $polViolations = @()
+
+        switch ($polType) {
+            'ReviewFrequency' {
+                $maxDays = [int](Get-PolProp $pol 'MaxDaysSinceReview' 90)
+                if ($null -eq $StaleAccess -and $null -eq $EntitlementInventory) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (StaleAccess and EntitlementInventory are null)'; break }
+                $overdueItems = @()
+                if ($null -ne $StaleAccess) {
+                    $staleItemsList = @(); if ($StaleAccess -is [hashtable] -and $StaleAccess.ContainsKey('StaleItems')) { $staleItemsList = @($StaleAccess['StaleItems']) }
+                    foreach ($item in $staleItemsList) {
+                        if ($null -eq $item) { continue }
+                        $itemPriv = Get-PolProp $item 'Privileged' $false; $dSince = Get-PolProp $item 'DaysSinceReview'; $classif = Get-PolProp $item 'Classification'
+                        if ($polScope -eq 'Privileged' -and -not $itemPriv) { continue }
+                        if ($classif -eq 'NeverReviewed') { $overdueItems += @{ Item = (Get-PolProp $item 'EntitlementName'); Source = (Get-PolProp $item 'SourceName'); DaysSinceReview = $null }; continue }
+                        if ($null -ne $dSince -and [int]$dSince -gt $maxDays) { $overdueItems += @{ Item = (Get-PolProp $item 'EntitlementName'); Source = (Get-PolProp $item 'SourceName'); DaysSinceReview = [int]$dSince } }
+                    }
+                }
+                $scopeLabel = if ($polScope -eq 'Privileged') { 'privileged ' } else { '' }
+                if ($overdueItems.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($overdueItems.Count) ${scopeLabel}entitlement(s) not reviewed within $maxDays days"; $polViolations = $overdueItems }
+                else { $polDetails = "All ${scopeLabel}entitlements reviewed within $maxDays days" }
+            }
+            'SourceCoverage' {
+                $minCov = [double](Get-PolProp $pol 'MinCoveragePercent' 75)
+                if ($null -eq $SourceGovernance) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (SourceGovernance is null)'; break }
+                $govSources = @(); if ($SourceGovernance -is [hashtable] -and $SourceGovernance.ContainsKey('Sources')) { $govSources = @($SourceGovernance['Sources']) }
+                $belowThresh = @()
+                foreach ($src in $govSources) {
+                    if ($null -eq $src) { continue }
+                    $cov = 0
+                    if ($src -is [hashtable]) { $cov = if ($src.ContainsKey('EntitlementCoveragePct')) { [double]$src['EntitlementCoveragePct'] } else { 0 } }
+                    else { $cp = $src.PSObject.Properties['EntitlementCoveragePct']; $cov = if ($null -ne $cp -and $null -ne $cp.Value) { [double]$cp.Value } else { 0 } }
+                    if ($cov -lt $minCov) {
+                        $sn = if ($src -is [hashtable]) { if ($src.ContainsKey('SourceName')) { $src['SourceName'] } else { 'Unknown' } } else { $sp = $src.PSObject.Properties['SourceName']; if ($null -ne $sp -and $null -ne $sp.Value) { $sp.Value } else { 'Unknown' } }
+                        $belowThresh += @{ Item = $sn; Source = $sn; CoveragePct = $cov }
+                    }
+                }
+                if ($belowThresh.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($belowThresh.Count) source(s) below $minCov% coverage"; $polViolations = $belowThresh }
+                else { $polDetails = "All $($govSources.Count) source(s) above $minCov% coverage" }
+            }
+            'IdentityRisk' {
+                $maxRisk = [int](Get-PolProp $pol 'MaxRiskScore' 70)
+                if ($null -eq $IdentityRisk) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (IdentityRisk is null)'; break }
+                $riskIds = @(); if ($IdentityRisk -is [hashtable] -and $IdentityRisk.ContainsKey('Identities')) { $riskIds = @($IdentityRisk['Identities']) }
+                $highRiskIds = @()
+                foreach ($id in $riskIds) {
+                    if ($null -eq $id) { continue }; $idScore = 0; $idName = ''
+                    if ($id -is [hashtable]) { $idScore = if ($id.ContainsKey('RiskScore')) { [int]$id['RiskScore'] } else { 0 }; $idName = if ($id.ContainsKey('IdentityName')) { $id['IdentityName'] } else { 'Unknown' } }
+                    else { $rp = $id.PSObject.Properties['RiskScore']; $idScore = if ($null -ne $rp -and $null -ne $rp.Value) { [int]$rp.Value } else { 0 }; $np = $id.PSObject.Properties['IdentityName']; $idName = if ($null -ne $np -and $null -ne $np.Value) { $np.Value } else { 'Unknown' } }
+                    if ($idScore -gt $maxRisk) { $highRiskIds += @{ Item = $idName; Source = ''; RiskScore = $idScore } }
+                }
+                if ($highRiskIds.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($highRiskIds.Count) identity(ies) exceed risk score $maxRisk"; $polViolations = $highRiskIds }
+                else { $polDetails = "No identities exceed risk score $maxRisk" }
+            }
+            'StaleAccess' {
+                $maxStalePct = [double](Get-PolProp $pol 'MaxStalePercent' 10)
+                if ($null -eq $StaleAccess) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (StaleAccess is null)'; break }
+                $totalStale = 0
+                if ($StaleAccess -is [hashtable] -and $StaleAccess.ContainsKey('Summary')) { $staleSumm = $StaleAccess['Summary']; if ($staleSumm -is [hashtable] -and $staleSumm.ContainsKey('TotalStaleItems')) { $totalStale = [int]$staleSumm['TotalStaleItems'] } }
+                $totalEnt = 0
+                if ($null -ne $EntitlementInventory -and $EntitlementInventory -is [hashtable] -and $EntitlementInventory.ContainsKey('Summary')) {
+                    $invSumm = $EntitlementInventory['Summary']
+                    if ($invSumm -is [hashtable] -and $invSumm.ContainsKey('TotalEntitlements')) { $totalEnt = [int]$invSumm['TotalEntitlements'] }
+                    elseif ($null -ne $invSumm.PSObject -and $null -ne $invSumm.PSObject.Properties['TotalEntitlements']) { $totalEnt = [int]$invSumm.TotalEntitlements }
+                }
+                if ($totalEnt -le 0) { $totalEnt = $totalStale; if ($totalEnt -le 0) { $polDetails = "No stale items and no entitlement inventory to compute percentage"; break } }
+                $stalePct = [Math]::Round(($totalStale / $totalEnt) * 100, 1)
+                if ($stalePct -gt $maxStalePct) { $polResult = 'FAIL'; $polDetails = "Stale access is $stalePct% ($totalStale of $totalEnt), exceeds $maxStalePct% threshold"; $polViolations = @(@{ Item = 'Stale Access'; Source = ''; StalePct = $stalePct; StaleCount = $totalStale; TotalCount = $totalEnt }) }
+                else { $polDetails = "Stale access is $stalePct% ($totalStale of $totalEnt), within $maxStalePct% threshold" }
+            }
+            'ReviewerPerformance' {
+                $minRepScore = [int](Get-PolProp $pol 'MinReputationScore' 40)
+                if ($null -eq $ReviewerReputation) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (ReviewerReputation is null)'; break }
+                $repRevs = @(); if ($ReviewerReputation -is [hashtable] -and $ReviewerReputation.ContainsKey('Reviewers')) { $repRevs = @($ReviewerReputation['Reviewers']) }
+                $underperf = @()
+                foreach ($rev in $repRevs) {
+                    if ($null -eq $rev) { continue }; $revScore = 0; $revName = ''
+                    if ($rev -is [hashtable]) { $revScore = if ($rev.ContainsKey('ReputationScore')) { [int]$rev['ReputationScore'] } else { 0 }; $revName = if ($rev.ContainsKey('ReviewerName')) { $rev['ReviewerName'] } else { 'Unknown' } }
+                    else { $rp = $rev.PSObject.Properties['ReputationScore']; $revScore = if ($null -ne $rp -and $null -ne $rp.Value) { [int]$rp.Value } else { 0 }; $np = $rev.PSObject.Properties['ReviewerName']; $revName = if ($null -ne $np -and $null -ne $np.Value) { $np.Value } else { 'Unknown' } }
+                    if ($revScore -lt $minRepScore) { $underperf += @{ Item = $revName; Source = ''; ReputationScore = $revScore } }
+                }
+                if ($underperf.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($underperf.Count) reviewer(s) below reputation score $minRepScore"; $polViolations = $underperf }
+                else { $polDetails = "All $($repRevs.Count) reviewer(s) meet minimum reputation score $minRepScore" }
+            }
+            default { $polResult = 'SKIPPED'; $polDetails = "Unknown policy type: $polType" }
+        }
+        $policyResults.Add(@{ Id = $polId; Name = $polName; Severity = $polSeverity; Result = $polResult; Details = $polDetails; Violations = $polViolations })
+    }
+
+    $gpResOrd = @{ 'FAIL' = 0; 'PASS' = 1; 'SKIPPED' = 2 }; $gpSevOrd = @{ 'Critical' = 0; 'Warning' = 1 }
+    $sortedPols = @($policyResults | Sort-Object { $ro = if ($gpResOrd.ContainsKey($_['Result'])) { $gpResOrd[$_['Result']] } else { 99 }; $ro }, { $so = if ($gpSevOrd.ContainsKey($_['Severity'])) { $gpSevOrd[$_['Severity']] } else { 99 }; $so })
+
+    $gpPassed = @($sortedPols | Where-Object { $_['Result'] -eq 'PASS' }).Count
+    $gpFailed = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' }).Count
+    $gpSkipped = @($sortedPols | Where-Object { $_['Result'] -eq 'SKIPPED' }).Count
+    $gpCritFail = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' -and $_['Severity'] -eq 'Critical' }).Count
+    $gpWarnFail = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' -and $_['Severity'] -eq 'Warning' }).Count
+
+    Write-SPLog -Message "Test-SPGovernancePolicy: evaluated $($sortedPols.Count) policies -- Passed=$gpPassed, Failed=$gpFailed (Critical=$gpCritFail, Warning=$gpWarnFail), Skipped=$gpSkipped" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+
+    return @{
+        OverallCompliant = ($gpFailed -eq 0)
+        EvaluatedAt      = $evaluatedAt
+        Policies         = $sortedPols
+        Summary          = @{ TotalPolicies = $sortedPols.Count; Passed = $gpPassed; Failed = $gpFailed; CriticalFailures = $gpCritFail; WarningFailures = $gpWarnFail; Skipped = $gpSkipped }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
@@ -3658,5 +3866,6 @@ Export-ModuleMember -Function @(
     'Measure-SPGovernanceMaturity',
     'Get-SPRemediationPriority',
     'Get-SPIdentityAccessSpread',
-    'Compare-SPAuditPeriods'
+    'Compare-SPAuditPeriods',
+    'Test-SPGovernancePolicy'
 )

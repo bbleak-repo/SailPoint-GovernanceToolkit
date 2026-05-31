@@ -47,7 +47,7 @@ Safe to modify:
 | P13-01 | Access Profile Inventory | none | DONE |
 | P13-02 | Role Inventory & Assignment Analysis | P13-01 | DONE |
 | P13-03 | Multi-Source Identity Correlation | none | DONE |
-| P13-04 | Governance Policy Engine | none | PENDING |
+| P13-04 | Governance Policy Engine | none | DONE |
 | P13-05 | Policy Compliance Report | P13-04 | PENDING |
 | P13-06 | Audit Period Comparison | none | DONE |
 | P13-07 | Campaign Planning Calculator | none | PENDING |
@@ -420,7 +420,7 @@ New function `Export-SPIdentityAccessSpreadHtml`:
 
 ## P13-04: Governance Policy Engine
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

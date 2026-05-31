@@ -174,6 +174,52 @@ function Get-SPConfigDefaults {
             DefaultBandMapping      = @{}
             ISCBandAttribute        = 'jobLevel'
         }
+        GovernancePolicy = @{
+            Enabled  = $true
+            Policies = @(
+                @{
+                    Id                 = 'POL-001'
+                    Name               = 'Privileged Access Review Frequency'
+                    Description        = 'All privileged entitlements must be reviewed within 90 days'
+                    Type               = 'ReviewFrequency'
+                    Scope              = 'Privileged'
+                    MaxDaysSinceReview = 90
+                    Severity           = 'Critical'
+                }
+                @{
+                    Id                 = 'POL-002'
+                    Name               = 'Source Coverage Minimum'
+                    Description        = 'All sources must have at least 75% entitlement review coverage'
+                    Type               = 'SourceCoverage'
+                    MinCoveragePercent = 75
+                    Severity           = 'Warning'
+                }
+                @{
+                    Id           = 'POL-003'
+                    Name         = 'Identity Risk Ceiling'
+                    Description  = 'No identity should remain at High risk for more than 30 days'
+                    Type         = 'IdentityRisk'
+                    MaxRiskScore = 70
+                    Severity     = 'Critical'
+                }
+                @{
+                    Id              = 'POL-004'
+                    Name            = 'Stale Access Limit'
+                    Description     = 'No more than 10% of entitlements should be classified as stale'
+                    Type            = 'StaleAccess'
+                    MaxStalePercent = 10
+                    Severity        = 'Warning'
+                }
+                @{
+                    Id                 = 'POL-005'
+                    Name               = 'Reviewer Performance Floor'
+                    Description        = 'No reviewer should have a reputation score below 40'
+                    Type               = 'ReviewerPerformance'
+                    MinReputationScore = 40
+                    Severity           = 'Warning'
+                }
+            )
+        }
     }
 }
 
