@@ -108,6 +108,13 @@
 
         # SP.AuditQueries - Role Inventory (P13-02)
         'Get-SPRoleInventory'
+
+        # SP.AuditQueries - SoD Violation Scanner (P15-01)
+        'Get-SPSodPolicies'
+        'Get-SPSodViolations'
+
+        # SP.AuditReportHtml - SoD Violation Report (P15-01)
+        'Export-SPSodViolationHtml'
     )
 
     # Do not export variables or aliases from nested modules

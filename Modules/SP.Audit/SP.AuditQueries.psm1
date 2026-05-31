@@ -4106,6 +4106,489 @@ function Get-SPStaleAccess {
 
 #endregion
 
+#region SoD Violation Scanner (P15-01)
+
+function Get-SPSodPolicies {
+    <#
+    .SYNOPSIS
+        Retrieves SoD (Separation of Duties) policy definitions from ISC.
+    .DESCRIPTION
+        Paginates GET /v3/sod-policies to retrieve all SoD policy definitions.
+        Returns policy metadata including conflicting access criteria (left/right
+        entitlement or access profile pairs that constitute a conflict).
+
+        By default only ENFORCED policies are returned. Use -IncludeDisabled to
+        include NOT_ENFORCED policies as well.
+    .PARAMETER IncludeDisabled
+        When set, includes policies with State = NOT_ENFORCED.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Policies=@(...); Summary=@{...}}
+    .EXAMPLE
+        $result = Get-SPSodPolicies
+        $result.Summary.TotalPolicies
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [switch]$IncludeDisabled,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting SoD policies (IncludeDisabled=$IncludeDisabled)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSodPolicies' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $queryParams = @{
+            'limit'  = '250'
+            'offset' = '0'
+        }
+
+        $allPolicies = [System.Collections.Generic.List[object]]::new()
+        $pageSize    = 250
+        $offset      = 0
+        $pageNum     = 0
+
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages fetched ($($allPolicies.Count) policies). Raise Api.MaxPaginationPages if needed."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPSodPolicies' -CorrelationID $CorrelationID
+                return @{ Policies = @(); Summary = @{ TotalPolicies = 0; Enforced = 0; NotEnforced = 0 } }
+            }
+
+            $queryParams['offset'] = $offset.ToString()
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/sod-policies' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                Write-SPLog -Message "Get-SPSodPolicies failed at page $pageNum: $($result.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPSodPolicies' `
+                    -CorrelationID $CorrelationID
+                return @{ Policies = @(); Summary = @{ TotalPolicies = 0; Enforced = 0; NotEnforced = 0 } }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($item in $page) {
+                    $allPolicies.Add($item)
+                }
+            }
+
+            Write-SPLog -Message "SoD policies page ${pageNum}: $($page.Count) items (total: $($allPolicies.Count))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSodPolicies' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+
+        # Parse policies
+        $policies = [System.Collections.Generic.List[hashtable]]::new()
+        $enforcedCount    = 0
+        $notEnforcedCount = 0
+
+        foreach ($raw in $allPolicies) {
+            if ($null -eq $raw) { continue }
+
+            $state = ''
+            if ($null -ne $raw.PSObject.Properties['state'] -and
+                -not [string]::IsNullOrWhiteSpace($raw.state)) {
+                $state = [string]$raw.state
+            }
+
+            if (-not $IncludeDisabled -and $state -ne 'ENFORCED') {
+                $notEnforcedCount++
+                continue
+            }
+
+            if ($state -eq 'ENFORCED') { $enforcedCount++ }
+            else { $notEnforcedCount++ }
+
+            # Extract conflicting access criteria
+            $leftCriteria  = [System.Collections.Generic.List[string]]::new()
+            $rightCriteria = [System.Collections.Generic.List[string]]::new()
+
+            if ($null -ne $raw.PSObject.Properties['conflictingAccessCriteria'] -and
+                $null -ne $raw.conflictingAccessCriteria) {
+                $cac = $raw.conflictingAccessCriteria
+
+                # Left side
+                if ($null -ne $cac.PSObject.Properties['leftCriteria'] -and $null -ne $cac.leftCriteria) {
+                    $lc = $cac.leftCriteria
+                    if ($null -ne $lc.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace($lc.name)) {
+                        $leftCriteria.Add([string]$lc.name)
+                    }
+                    if ($null -ne $lc.PSObject.Properties['criteriaList'] -and $null -ne $lc.criteriaList) {
+                        foreach ($c in @($lc.criteriaList)) {
+                            if ($null -ne $c -and $null -ne $c.PSObject.Properties['name'] -and
+                                -not [string]::IsNullOrWhiteSpace($c.name)) {
+                                $leftCriteria.Add([string]$c.name)
+                            }
+                        }
+                    }
+                }
+                # Right side
+                if ($null -ne $cac.PSObject.Properties['rightCriteria'] -and $null -ne $cac.rightCriteria) {
+                    $rc = $cac.rightCriteria
+                    if ($null -ne $rc.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace($rc.name)) {
+                        $rightCriteria.Add([string]$rc.name)
+                    }
+                    if ($null -ne $rc.PSObject.Properties['criteriaList'] -and $null -ne $rc.criteriaList) {
+                        foreach ($c in @($rc.criteriaList)) {
+                            if ($null -ne $c -and $null -ne $c.PSObject.Properties['name'] -and
+                                -not [string]::IsNullOrWhiteSpace($c.name)) {
+                                $rightCriteria.Add([string]$c.name)
+                            }
+                        }
+                    }
+                }
+            }
+
+            # Owner
+            $ownerName = ''
+            $ownerId   = ''
+            if ($null -ne $raw.PSObject.Properties['owner'] -and $null -ne $raw.owner) {
+                if ($null -ne $raw.owner.PSObject.Properties['name']) {
+                    $ownerName = [string]$raw.owner.name
+                }
+                if ($null -ne $raw.owner.PSObject.Properties['id']) {
+                    $ownerId = [string]$raw.owner.id
+                }
+            }
+
+            $created  = if ($null -ne $raw.PSObject.Properties['created'])  { [string]$raw.created  } else { '' }
+            $modified = if ($null -ne $raw.PSObject.Properties['modified']) { [string]$raw.modified } else { '' }
+
+            $policies.Add(@{
+                Id            = if ($null -ne $raw.PSObject.Properties['id'])          { [string]$raw.id          } else { '' }
+                Name          = if ($null -ne $raw.PSObject.Properties['name'])        { [string]$raw.name        } else { '' }
+                Description   = if ($null -ne $raw.PSObject.Properties['description']) { [string]$raw.description } else { '' }
+                State         = $state
+                OwnerName     = $ownerName
+                OwnerId       = $ownerId
+                LeftCriteria  = $leftCriteria.ToArray()
+                RightCriteria = $rightCriteria.ToArray()
+                Created       = $created
+                Modified      = $modified
+            })
+        }
+
+        # If IncludeDisabled, recount enforced vs not from parsed set
+        if ($IncludeDisabled) {
+            $enforcedCount    = @($policies | Where-Object { $_['State'] -eq 'ENFORCED' }).Count
+            $notEnforcedCount = @($policies | Where-Object { $_['State'] -ne 'ENFORCED' }).Count
+        }
+
+        Write-SPLog -Message "Get-SPSodPolicies: $($policies.Count) policies returned (Enforced=$enforcedCount, NotEnforced=$notEnforcedCount)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSodPolicies' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Policies = $policies.ToArray()
+            Summary  = @{
+                TotalPolicies = $policies.Count
+                Enforced      = $enforcedCount
+                NotEnforced   = $notEnforcedCount
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPSodPolicies failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPSodPolicies' -CorrelationID $CorrelationID
+        return @{ Policies = @(); Summary = @{ TotalPolicies = 0; Enforced = 0; NotEnforced = 0 } }
+    }
+}
+
+
+function Get-SPSodViolations {
+    <#
+    .SYNOPSIS
+        Retrieves active SoD violation records from ISC.
+    .DESCRIPTION
+        Paginates GET /v3/sod-violations to retrieve SoD violations. Supports
+        filtering by policy IDs, status (pending only), and date window.
+    .PARAMETER PolicyIds
+        Optional array of SoD policy IDs to filter violations by.
+    .PARAMETER PendingOnly
+        When set, returns only violations with Status = PENDING.
+    .PARAMETER DaysBack
+        Number of days to look back for violations by Created date. Default: 90.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{Violations=@(...); Summary=@{...}}
+    .EXAMPLE
+        $result = Get-SPSodViolations -PendingOnly -DaysBack 30
+        $result.Summary.Pending
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string[]]$PolicyIds,
+
+        [Parameter()]
+        [switch]$PendingOnly,
+
+        [Parameter()]
+        [int]$DaysBack = 90,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Getting SoD violations (PolicyIds=$($PolicyIds -join ','), PendingOnly=$PendingOnly, DaysBack=$DaysBack)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSodViolations' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $queryParams = @{
+            'limit'  = '250'
+            'offset' = '0'
+        }
+
+        $allViolations = [System.Collections.Generic.List[object]]::new()
+        $pageSize      = 250
+        $offset        = 0
+        $pageNum       = 0
+
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached: $maxPages pages fetched ($($allViolations.Count) violations)."
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+                    -Action 'Get-SPSodViolations' -CorrelationID $CorrelationID
+                break
+            }
+
+            $queryParams['offset'] = $offset.ToString()
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/sod-violations' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                Write-SPLog -Message "Get-SPSodViolations failed at page $pageNum: $($result.Error)" `
+                    -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPSodViolations' `
+                    -CorrelationID $CorrelationID
+                return @{
+                    Violations = @()
+                    Summary    = @{
+                        TotalViolations    = 0; Pending = 0; Remediated = 0
+                        ExceptionGranted   = 0; PolicyBreakdown = @{}; IdentitiesAffected = 0
+                    }
+                }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($item in $page) {
+                    $allViolations.Add($item)
+                }
+            }
+
+            Write-SPLog -Message "SoD violations page ${pageNum}: $($page.Count) items (total: $($allViolations.Count))" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Get-SPSodViolations' `
+                -CorrelationID $CorrelationID
+
+            $offset += $pageSize
+        } while ($null -ne $page -and $page.Count -ge $pageSize)
+
+        # Date cutoff
+        $dateCutoff = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+
+        # Parse and filter violations
+        $violations      = [System.Collections.Generic.List[hashtable]]::new()
+        $pendingCount    = 0
+        $remediatedCount = 0
+        $exceptionCount  = 0
+        $policyBreakdown = @{}
+        $identitySet     = @{}
+
+        foreach ($raw in $allViolations) {
+            if ($null -eq $raw) { continue }
+
+            # Parse created date for DaysBack filter
+            $createdStr = if ($null -ne $raw.PSObject.Properties['created']) { [string]$raw.created } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($createdStr) -and $DaysBack -gt 0) {
+                $parsedCreated = [datetime]::MinValue
+                if ([datetime]::TryParse($createdStr, [ref]$parsedCreated)) {
+                    if ($parsedCreated.ToUniversalTime() -lt $dateCutoff) { continue }
+                }
+            }
+
+            # Status filter
+            $status = ''
+            if ($null -ne $raw.PSObject.Properties['status'] -and
+                -not [string]::IsNullOrWhiteSpace($raw.status)) {
+                $status = [string]$raw.status
+            }
+
+            if ($PendingOnly -and $status -ne 'PENDING') { continue }
+
+            # Policy filter
+            $policyId   = if ($null -ne $raw.PSObject.Properties['policyId'])   { [string]$raw.policyId   } else { '' }
+            $policyName = if ($null -ne $raw.PSObject.Properties['policyName']) { [string]$raw.policyName } else { '' }
+
+            if ($null -ne $PolicyIds -and $PolicyIds.Count -gt 0) {
+                if ($policyId -notin $PolicyIds) { continue }
+            }
+
+            # Identity info
+            $violatingId   = ''
+            $violatingName = ''
+            if ($null -ne $raw.PSObject.Properties['violatingIdentity'] -and $null -ne $raw.violatingIdentity) {
+                if ($null -ne $raw.violatingIdentity.PSObject.Properties['id']) {
+                    $violatingId = [string]$raw.violatingIdentity.id
+                }
+                if ($null -ne $raw.violatingIdentity.PSObject.Properties['name']) {
+                    $violatingName = [string]$raw.violatingIdentity.name
+                }
+            }
+            # Fallback to top-level fields
+            if ([string]::IsNullOrWhiteSpace($violatingId) -and
+                $null -ne $raw.PSObject.Properties['violatingIdentityId']) {
+                $violatingId = [string]$raw.violatingIdentityId
+            }
+            if ([string]::IsNullOrWhiteSpace($violatingName) -and
+                $null -ne $raw.PSObject.Properties['violatingIdentityName']) {
+                $violatingName = [string]$raw.violatingIdentityName
+            }
+
+            # Conflicting entitlements
+            $leftEnts  = [System.Collections.Generic.List[string]]::new()
+            $rightEnts = [System.Collections.Generic.List[string]]::new()
+            if ($null -ne $raw.PSObject.Properties['conflictingEntitlements'] -and
+                $null -ne $raw.conflictingEntitlements) {
+                $ce = $raw.conflictingEntitlements
+                if ($null -ne $ce.PSObject.Properties['leftEntitlements'] -and $null -ne $ce.leftEntitlements) {
+                    foreach ($e in @($ce.leftEntitlements)) {
+                        if ($null -ne $e -and $null -ne $e.PSObject.Properties['name']) {
+                            $leftEnts.Add([string]$e.name)
+                        }
+                    }
+                }
+                if ($null -ne $ce.PSObject.Properties['rightEntitlements'] -and $null -ne $ce.rightEntitlements) {
+                    foreach ($e in @($ce.rightEntitlements)) {
+                        if ($null -ne $e -and $null -ne $e.PSObject.Properties['name']) {
+                            $rightEnts.Add([string]$e.name)
+                        }
+                    }
+                }
+            }
+
+            # Status counters
+            switch ($status) {
+                'PENDING'           { $pendingCount++ }
+                'REMEDIATED'        { $remediatedCount++ }
+                'EXCEPTION_GRANTED' { $exceptionCount++ }
+            }
+
+            # Policy breakdown
+            $policyLabel = if (-not [string]::IsNullOrWhiteSpace($policyName)) { $policyName } else { $policyId }
+            if (-not [string]::IsNullOrWhiteSpace($policyLabel)) {
+                if ($policyBreakdown.ContainsKey($policyLabel)) {
+                    $policyBreakdown[$policyLabel]++
+                } else {
+                    $policyBreakdown[$policyLabel] = 1
+                }
+            }
+
+            # Track unique identities
+            if (-not [string]::IsNullOrWhiteSpace($violatingId)) {
+                $identitySet[$violatingId] = $true
+            }
+
+            $violations.Add(@{
+                Id                    = if ($null -ne $raw.PSObject.Properties['id']) { [string]$raw.id } else { '' }
+                ViolatingIdentityId   = $violatingId
+                ViolatingIdentityName = $violatingName
+                PolicyId              = $policyId
+                PolicyName            = $policyName
+                LeftEntitlements      = $leftEnts.ToArray()
+                RightEntitlements     = $rightEnts.ToArray()
+                Status                = $status
+                Created               = $createdStr
+            })
+        }
+
+        Write-SPLog -Message "Get-SPSodViolations: $($violations.Count) violations (Pending=$pendingCount, Remediated=$remediatedCount, Exception=$exceptionCount)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPSodViolations' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Violations = $violations.ToArray()
+            Summary    = @{
+                TotalViolations    = $violations.Count
+                Pending            = $pendingCount
+                Remediated         = $remediatedCount
+                ExceptionGranted   = $exceptionCount
+                PolicyBreakdown    = $policyBreakdown
+                IdentitiesAffected = $identitySet.Count
+            }
+        }
+    }
+    catch {
+        $errMsg = "Get-SPSodViolations failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditQueries' `
+            -Action 'Get-SPSodViolations' -CorrelationID $CorrelationID
+        return @{
+            Violations = @()
+            Summary    = @{
+                TotalViolations    = 0; Pending = 0; Remediated = 0
+                ExceptionGranted   = 0; PolicyBreakdown = @{}; IdentitiesAffected = 0
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -4120,5 +4603,7 @@ Export-ModuleMember -Function @(
     'Get-SPRemediationStatus',
     'Get-SPEntitlementInventory',
     'Get-SPStaleAccess',
-    'Get-SPAccessProfileInventory'
+    'Get-SPAccessProfileInventory',
+    'Get-SPSodPolicies',
+    'Get-SPSodViolations'
 )

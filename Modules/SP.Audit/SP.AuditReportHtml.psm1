@@ -7190,6 +7190,282 @@ function Export-SPGovernanceBIData {
 
 #endregion Orchestrator and BI Export
 
+#region SoD Violation Report (P15-01)
+
+function Export-SPSodViolationHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML SoD violation report from Get-SPSodPolicies and
+        Get-SPSodViolations output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with:
+        - SoD policy summary table with enforcement status badges
+        - Per-violation table grouped by policy, sorted by created date descending
+        - Conflicting entitlement pairs displayed side-by-side
+        - Status badges: PENDING (red), REMEDIATED (green), EXCEPTION_GRANTED (yellow)
+        - Summary card with violation count, pending count, affected identity count
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER Violations
+        Hashtable output from Get-SPSodViolations.
+    .PARAMETER Policies
+        Hashtable output from Get-SPSodPolicies.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $policies = Get-SPSodPolicies
+        $violations = Get-SPSodViolations -PendingOnly
+        $path = Export-SPSodViolationHtml -Violations $violations -Policies $policies -OutputPath '.\Audit'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Violations,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Policies,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "SodViolations-${timestamp}.html"
+
+    $vSummary    = $Violations['Summary']
+    $vList       = @($Violations['Violations'])
+    $pSummary    = $Policies['Summary']
+    $pList       = @($Policies['Policies'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Violations<br/><span style="font-size:22px;">$($vSummary['TotalViolations'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Pending<br/><span style="font-size:22px;">$($vSummary['Pending'])</span>
+</td>
+<td style="padding:12px 16px; background:#339933; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Remediated<br/><span style="font-size:22px;">$($vSummary['Remediated'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Exception Granted<br/><span style="font-size:22px;">$($vSummary['ExceptionGranted'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Identities Affected<br/><span style="font-size:22px;">$($vSummary['IdentitiesAffected'])</span>
+</td>
+<td style="padding:12px 16px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Policies<br/><span style="font-size:22px;">$($pSummary['TotalPolicies'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- SoD Policy table ---
+    $policyTableHtml = ''
+    if ($pList.Count -gt 0) {
+        $pHeaderRow = Build-HtmlTableHeader -Headers @('Policy Name', 'State', 'Owner', 'Left Criteria', 'Right Criteria', 'Created')
+        $pBodyRows  = [System.Collections.Generic.List[string]]::new()
+        $pRowIdx    = 0
+
+        foreach ($pol in $pList) {
+            $pRowIdx++
+            $stateColor = if ($pol['State'] -eq 'ENFORCED') {
+                'color:#fff; background:#339933;'
+            } else {
+                'color:#fff; background:#777777;'
+            }
+            $stateBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $stateColor"">$(ConvertTo-SafeHtml $pol['State'])</span>"
+
+            $leftDisplay  = if ($pol['LeftCriteria'].Count -gt 0) {
+                ($pol['LeftCriteria'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+            } else { '-' }
+            $rightDisplay = if ($pol['RightCriteria'].Count -gt 0) {
+                ($pol['RightCriteria'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+            } else { '-' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $pol['Name']),
+                $stateBadge,
+                (ConvertTo-SafeHtml $pol['OwnerName']),
+                $leftDisplay,
+                $rightDisplay,
+                (Format-HtmlDate $pol['Created'])
+            )
+            $pBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($pRowIdx % 2) -eq 0)))
+        }
+
+        $policyTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">SoD Policy Definitions ($($pList.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${pHeaderRow}
+<tbody>
+$($pBodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Violation table grouped by policy ---
+    $violationSectionsHtml = ''
+    if ($vList.Count -eq 0) {
+        $violationSectionsHtml = @"
+<div style="padding:16px; background:#eafaf1; border:1px solid #27ae60; border-radius:4px; margin-bottom:20px;">
+<strong style="color:#27ae60;">No active SoD violations found.</strong>
+</div>
+"@
+    } else {
+        # Group by PolicyName
+        $byPolicy = @{}
+        foreach ($v in $vList) {
+            $key = if (-not [string]::IsNullOrWhiteSpace($v['PolicyName'])) { $v['PolicyName'] } else { $v['PolicyId'] }
+            if ([string]::IsNullOrWhiteSpace($key)) { $key = '(Unknown Policy)' }
+            if (-not $byPolicy.ContainsKey($key)) {
+                $byPolicy[$key] = [System.Collections.Generic.List[hashtable]]::new()
+            }
+            $byPolicy[$key].Add($v)
+        }
+
+        $vSections = [System.Collections.Generic.List[string]]::new()
+        foreach ($policyKey in ($byPolicy.Keys | Sort-Object)) {
+            $policyViolations = $byPolicy[$policyKey]
+            # Sort by created descending
+            $sorted = @($policyViolations | Sort-Object { $_['Created'] } -Descending)
+
+            $vHeaderRow = Build-HtmlTableHeader -Headers @('Identity', 'Left Entitlements', 'Right Entitlements', 'Status', 'Created')
+            $vBodyRows  = [System.Collections.Generic.List[string]]::new()
+            $vRowIdx    = 0
+
+            foreach ($v in $sorted) {
+                $vRowIdx++
+
+                $statusColor = switch ($v['Status']) {
+                    'PENDING'           { 'color:#fff; background:#CC3333;' }
+                    'REMEDIATED'        { 'color:#fff; background:#339933;' }
+                    'EXCEPTION_GRANTED' { 'color:#fff; background:#FF8800;' }
+                    default             { 'color:#fff; background:#777777;' }
+                }
+                $statusBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $statusColor"">$(ConvertTo-SafeHtml $v['Status'])</span>"
+
+                $leftDisplay  = if ($v['LeftEntitlements'].Count -gt 0) {
+                    ($v['LeftEntitlements'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+                } else { '-' }
+                $rightDisplay = if ($v['RightEntitlements'].Count -gt 0) {
+                    ($v['RightEntitlements'] | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', '
+                } else { '-' }
+
+                $cells = @(
+                    (ConvertTo-SafeHtml $v['ViolatingIdentityName']),
+                    $leftDisplay,
+                    $rightDisplay,
+                    $statusBadge,
+                    (Format-HtmlDate $v['Created'])
+                )
+                $vBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($vRowIdx % 2) -eq 0)))
+            }
+
+            $policyKeyHtml = ConvertTo-SafeHtml $policyKey
+            $sectionHtml = @"
+<h3 style="font-size:14px; color:#c0392b; margin-top:20px; margin-bottom:6px;">$policyKeyHtml ($($sorted.Count) violations)</h3>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px;">
+${vHeaderRow}
+<tbody>
+$($vBodyRows -join "`n")
+</tbody>
+</table>
+"@
+            $vSections.Add($sectionHtml)
+        }
+
+        $violationSectionsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">SoD Violations by Policy ($($vList.Count) total)</h2>
+$($vSections -join "`n")
+"@
+    }
+
+    # --- Policy breakdown table ---
+    $breakdownHtml = ''
+    $policyBreakdown = $vSummary['PolicyBreakdown']
+    if ($null -ne $policyBreakdown -and $policyBreakdown.Count -gt 0) {
+        $bHeaderRow = Build-HtmlTableHeader -Headers @('Policy', 'Violation Count')
+        $bBodyRows  = [System.Collections.Generic.List[string]]::new()
+        $bRowIdx    = 0
+        foreach ($key in ($policyBreakdown.Keys | Sort-Object)) {
+            $bRowIdx++
+            $cells = @(
+                (ConvertTo-SafeHtml $key),
+                [string]$policyBreakdown[$key]
+            )
+            $bBodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($bRowIdx % 2) -eq 0)))
+        }
+        $breakdownHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Violations by Policy</h2>
+<table style="width:50%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${bHeaderRow}
+<tbody>
+$($bBodyRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SoD Violation Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1100px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Separation of Duties (SoD) Violation Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${policyTableHtml}
+
+${violationSectionsHtml}
+
+${breakdownHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "SoD violation HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSodViolationHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion SoD Violation Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7210,5 +7486,6 @@ Export-ModuleMember -Function @(
     'Export-SPStaleAccessHtml',
     'Export-SPCampaignCompletionReport',
     'Export-SPOrchestratorHistoryHtml',
-    'Export-SPGovernanceBIData'
+    'Export-SPGovernanceBIData',
+    'Export-SPSodViolationHtml'
 )
