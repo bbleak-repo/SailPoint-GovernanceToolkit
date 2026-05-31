@@ -51,7 +51,7 @@ Safe to modify:
 | P15-02 | Entitlement Ownership Health | none | SP.AuditQueries, SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-03 | Access Request Activity Monitor | none | SP.Campaigns, SP.Api.psd1 | DONE |
 | P15-04 | Bulk Remediation Ticket Export | none | SP.AuditReport, SP.Audit.psd1 | DONE |
-| P15-05 | SIEM Event Export (CEF/JSON) | none | SP.AuditReport, SP.Audit.psd1 | PENDING |
+| P15-05 | SIEM Event Export (CEF/JSON) | none | SP.AuditReport, SP.Audit.psd1 | DONE |
 | P15-06 | Governance Exception Register | none | SP.Config, SP.Core.psd1, settings.json | PENDING |
 | P15-07 | Identity Lifecycle Correlation | none | SP.AuditReport, SP.Audit.psd1 | PENDING |
 | P15-08 | Invoke-SPScheduledCampaign.ps1 | P15-06 | Scripts/ (new) | PENDING |
@@ -550,7 +550,7 @@ normalizes accordingly.
 
 ## P15-05: SIEM Event Export (CEF/JSON)
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

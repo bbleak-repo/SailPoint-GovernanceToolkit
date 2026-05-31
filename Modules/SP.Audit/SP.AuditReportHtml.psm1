@@ -8367,6 +8367,534 @@ function Export-SPRemediationTickets {
 
 #endregion Bulk Remediation Ticket Export
 
+#region SIEM Event Export (P15-05)
+
+function Export-SPAuditCef {
+    <#
+    .SYNOPSIS
+        Exports audit events in CEF (Common Event Format) for SIEM ingestion.
+    .DESCRIPTION
+        Converts toolkit audit events to ArcSight CEF format, suitable for syslog
+        forwarding to legacy SIEM platforms (QRadar, ArcSight, Splunk via syslog).
+
+        CEF format: CEF:0|Vendor|Product|Version|SignatureID|Name|Severity|Extensions
+
+        Special characters (pipe, backslash, equals) are escaped per the CEF spec.
+    .PARAMETER AuditEvents
+        Array of audit event hashtables. Each should contain at minimum an Action key.
+    .PARAMETER OutputPath
+        Directory in which to write the CEF file. Created if absent.
+    .PARAMETER DeviceVendor
+        CEF DeviceVendor field. Default: SailPoint.
+    .PARAMETER DeviceProduct
+        CEF DeviceProduct field. Default: GovernanceToolkit.
+    .PARAMETER DeviceVersion
+        CEF DeviceVersion field. Default: 1.0.
+    .PARAMETER CorrelationID
+        Unique ID for tracing. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ OutputPath; Format; EventCount; FilePath; EventBreakdown } }
+    .EXAMPLE
+        $events = Get-SPAuditTrail -After (Get-Date).AddDays(-7)
+        Export-SPAuditCef -AuditEvents $events -OutputPath '.\Audit\siem'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$AuditEvents,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$DeviceVendor = 'SailPoint',
+
+        [Parameter()]
+        [string]$DeviceProduct = 'GovernanceToolkit',
+
+        [Parameter()]
+        [string]$DeviceVersion = '1.0',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting audit events to CEF format" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCef' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- CEF severity mapping ---
+    $severityMap = @{
+        'AccessApproved'       = @{ Name = 'Access Approved';            Severity = 3 }
+        'AccessRevoked'        = @{ Name = 'Access Revoked';             Severity = 7 }
+        'CampaignCreated'      = @{ Name = 'Campaign Created';           Severity = 1 }
+        'CampaignCompleted'    = @{ Name = 'Campaign Completed';         Severity = 1 }
+        'EscalationTriggered'  = @{ Name = 'Certification Escalated';    Severity = 5 }
+        'RemediationOverdue'   = @{ Name = 'Remediation Overdue';        Severity = 8 }
+        'PolicyViolation'      = @{ Name = 'Policy Violation';           Severity = 9 }
+        'SodViolation'         = @{ Name = 'SoD Violation Detected';     Severity = 9 }
+        'IdentityHighRisk'     = @{ Name = 'High Risk Identity';         Severity = 6 }
+    }
+    $defaultMapping = @{ Name = 'Governance Event'; Severity = 3 }
+
+    # --- CEF escape helpers ---
+    # CEF header fields: escape backslash and pipe
+    function _EscapeCefHeader ([string]$value) {
+        if ([string]::IsNullOrEmpty($value)) { return '' }
+        return ($value -replace '\\', '\\' -replace '\|', '\|')
+    }
+    # CEF extension values: escape backslash, equals, newlines
+    function _EscapeCefValue ([string]$value) {
+        if ([string]::IsNullOrEmpty($value)) { return '' }
+        return ($value -replace '\\', '\\' -replace '=', '\=' -replace "`r`n", '\n' -replace "`n", '\n' -replace "`r", '\n')
+    }
+
+    # --- Helper: extract field from event hashtable ---
+    function _GetField ([hashtable]$evt, [string]$key) {
+        if ($null -ne $evt -and $evt.ContainsKey($key)) {
+            $val = $evt[$key]
+            if ($null -ne $val) { return [string]$val }
+        }
+        # Check nested Data hashtable
+        if ($null -ne $evt -and $evt.ContainsKey('Data') -and $evt['Data'] -is [hashtable]) {
+            $data = $evt['Data']
+            if ($data.ContainsKey($key)) {
+                $val = $data[$key]
+                if ($null -ne $val) { return [string]$val }
+            }
+        }
+        return ''
+    }
+
+    # --- Build CEF lines ---
+    $dateStamp = (Get-Date).ToString('yyyy-MM-dd')
+    $fileName  = "governance-events-$dateStamp.cef"
+    $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    $lines          = [System.Collections.Generic.List[string]]::new()
+    $eventBreakdown = @{}
+    $eventCount     = 0
+
+    if ($null -eq $AuditEvents -or $AuditEvents.Count -eq 0) {
+        # Write empty file
+        [System.IO.File]::WriteAllText($filePath, '', $utf8NoBom)
+
+        Write-SPLog -Message "CEF export complete: 0 events, path=$filePath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCef' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                OutputPath     = $OutputPath
+                Format         = 'CEF'
+                EventCount     = 0
+                FilePath       = $filePath
+                EventBreakdown = @{}
+            }
+        }
+    }
+
+    foreach ($evt in $AuditEvents) {
+        if ($null -eq $evt) { continue }
+
+        $action = _GetField $evt 'Action'
+        if ([string]::IsNullOrWhiteSpace($action)) { $action = 'AuditEvent' }
+
+        # Map action to CEF event name and severity
+        $mapping = $defaultMapping
+        if ($severityMap.ContainsKey($action)) {
+            $mapping = $severityMap[$action]
+        }
+
+        $eventName = $mapping.Name
+        $severity  = $mapping.Severity
+
+        # Track breakdown
+        if (-not $eventBreakdown.ContainsKey($action)) { $eventBreakdown[$action] = 0 }
+        $eventBreakdown[$action]++
+
+        # Extract event fields
+        $identityName    = _GetField $evt 'IdentityName'
+        if ([string]::IsNullOrWhiteSpace($identityName)) {
+            $identityName = _GetField $evt 'ViolatingIdentityName'
+        }
+        $identityId      = _GetField $evt 'IdentityId'
+        if ([string]::IsNullOrWhiteSpace($identityId)) {
+            $identityId = _GetField $evt 'ViolatingIdentityId'
+        }
+        $sourceName      = _GetField $evt 'SourceName'
+        $entitlementName = _GetField $evt 'EntitlementName'
+        $campaignName    = _GetField $evt 'CampaignName'
+        $reviewerName    = _GetField $evt 'ReviewerName'
+        $timestamp       = _GetField $evt 'Timestamp'
+        $evtCorrelation  = _GetField $evt 'CorrelationID'
+
+        # Format timestamp for CEF rt field (MMM dd yyyy HH:mm:ss)
+        $rtFormatted = ''
+        if (-not [string]::IsNullOrWhiteSpace($timestamp)) {
+            try {
+                $dt = [DateTime]::Parse($timestamp)
+                $rtFormatted = $dt.ToUniversalTime().ToString('MMM dd yyyy HH:mm:ss')
+            } catch {
+                $rtFormatted = $timestamp
+            }
+        } else {
+            $rtFormatted = (Get-Date).ToUniversalTime().ToString('MMM dd yyyy HH:mm:ss')
+        }
+
+        # Build identity-enriched event name
+        if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+            $eventName = "$eventName for $identityName"
+        }
+
+        # Build CEF header
+        $cefHeader = "CEF:0|$(_EscapeCefHeader $DeviceVendor)|$(_EscapeCefHeader $DeviceProduct)|$(_EscapeCefHeader $DeviceVersion)|$(_EscapeCefHeader $action)|$(_EscapeCefHeader $eventName)|$severity|"
+
+        # Build CEF extension key=value pairs
+        $extensions = [System.Collections.Generic.List[string]]::new()
+
+        if (-not [string]::IsNullOrWhiteSpace($sourceName)) {
+            $extensions.Add("src=$(_EscapeCefValue $sourceName)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+            $extensions.Add("suser=$(_EscapeCefValue $identityName)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($identityId)) {
+            $extensions.Add("suid=$(_EscapeCefValue $identityId)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($entitlementName)) {
+            $extensions.Add("cs1Label=Entitlement cs1=$(_EscapeCefValue $entitlementName)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($campaignName)) {
+            $extensions.Add("cs2Label=CampaignName cs2=$(_EscapeCefValue $campaignName)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($reviewerName)) {
+            $extensions.Add("cs3Label=ReviewerName cs3=$(_EscapeCefValue $reviewerName)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($evtCorrelation)) {
+            $extensions.Add("cs4Label=CorrelationID cs4=$(_EscapeCefValue $evtCorrelation)")
+        }
+        $extensions.Add("rt=$(_EscapeCefValue $rtFormatted)")
+        $extensions.Add("cat=AccessGovernance")
+
+        $cefLine = $cefHeader + ($extensions -join ' ')
+        $lines.Add($cefLine)
+        $eventCount++
+    }
+
+    [System.IO.File]::WriteAllText($filePath, ($lines -join "`n") + "`n", $utf8NoBom)
+
+    Write-SPLog -Message "CEF export complete: $eventCount events, path=$filePath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditCef' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            OutputPath     = $OutputPath
+            Format         = 'CEF'
+            EventCount     = $eventCount
+            FilePath       = $filePath
+            EventBreakdown = $eventBreakdown
+        }
+    }
+}
+
+
+function Export-SPAuditSiemJson {
+    <#
+    .SYNOPSIS
+        Exports audit events in SIEM-specific JSON formats for Splunk, Sentinel, Elastic, or Generic.
+    .DESCRIPTION
+        Converts toolkit audit events to structured JSON matching SIEM-specific schemas:
+        - Splunk: Splunk HEC (HTTP Event Collector) compatible with epoch timestamps
+        - Sentinel: Azure Sentinel custom log format with required fields
+        - Elastic: Elastic Common Schema (ECS) compatible
+        - Generic: Toolkit JSONL structure with ISO 8601 timestamps
+
+        Each event is written as a single JSON line (NDJSON/JSONL) for streaming ingestion.
+    .PARAMETER AuditEvents
+        Array of audit event hashtables. Each should contain at minimum an Action key.
+    .PARAMETER OutputPath
+        Directory in which to write the JSON file. Created if absent.
+    .PARAMETER Format
+        SIEM format: Splunk, Sentinel, Elastic, or Generic. Default: Generic.
+    .PARAMETER CorrelationID
+        Unique ID for tracing. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ OutputPath; Format; EventCount; FilePath; EventBreakdown } }
+    .EXAMPLE
+        $events = Get-SPAuditTrail -After (Get-Date).AddDays(-7)
+        Export-SPAuditSiemJson -AuditEvents $events -OutputPath '.\Audit\siem' -Format Splunk
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$AuditEvents,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [ValidateSet('Splunk', 'Sentinel', 'Elastic', 'Generic')]
+        [string]$Format = 'Generic',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Exporting audit events to SIEM JSON, format=$Format" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditSiemJson' `
+        -CorrelationID $CorrelationID
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    # --- CEF severity mapping (reused for Sentinel/Elastic severity) ---
+    $severityMap = @{
+        'AccessApproved'       = 3
+        'AccessRevoked'        = 7
+        'CampaignCreated'      = 1
+        'CampaignCompleted'    = 1
+        'EscalationTriggered'  = 5
+        'RemediationOverdue'   = 8
+        'PolicyViolation'      = 9
+        'SodViolation'         = 9
+        'IdentityHighRisk'     = 6
+    }
+
+    # --- Helper: extract field from event hashtable ---
+    function _GetField ([hashtable]$evt, [string]$key) {
+        if ($null -ne $evt -and $evt.ContainsKey($key)) {
+            $val = $evt[$key]
+            if ($null -ne $val) { return [string]$val }
+        }
+        if ($null -ne $evt -and $evt.ContainsKey('Data') -and $evt['Data'] -is [hashtable]) {
+            $data = $evt['Data']
+            if ($data.ContainsKey($key)) {
+                $val = $data[$key]
+                if ($null -ne $val) { return [string]$val }
+            }
+        }
+        return ''
+    }
+
+    # --- Helper: parse timestamp to DateTime ---
+    function _ParseTimestamp ([string]$ts) {
+        if ([string]::IsNullOrWhiteSpace($ts)) {
+            return (Get-Date).ToUniversalTime()
+        }
+        try {
+            return ([DateTime]::Parse($ts)).ToUniversalTime()
+        } catch {
+            return (Get-Date).ToUniversalTime()
+        }
+    }
+
+    # --- Helper: DateTime to Unix epoch seconds ---
+    function _ToEpoch ([DateTime]$dt) {
+        return [int][double]::Parse(
+            (New-TimeSpan -Start ([DateTime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)) -End $dt.ToUniversalTime()).TotalSeconds.ToString('F0')
+        )
+    }
+
+    # --- File naming by format ---
+    $dateStamp = (Get-Date).ToString('yyyy-MM-dd')
+    $formatSuffix = switch ($Format) {
+        'Splunk'   { 'splunk' }
+        'Sentinel' { 'sentinel' }
+        'Elastic'  { 'elastic' }
+        default    { 'generic' }
+    }
+    $fileName  = "governance-events-$dateStamp.$formatSuffix.json"
+    $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    $lines          = [System.Collections.Generic.List[string]]::new()
+    $eventBreakdown = @{}
+    $eventCount     = 0
+
+    if ($null -eq $AuditEvents -or $AuditEvents.Count -eq 0) {
+        # Write empty file
+        [System.IO.File]::WriteAllText($filePath, '', $utf8NoBom)
+
+        Write-SPLog -Message "SIEM JSON export complete: 0 events, format=$Format, path=$filePath" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditSiemJson' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                OutputPath     = $OutputPath
+                Format         = $Format
+                EventCount     = 0
+                FilePath       = $filePath
+                EventBreakdown = @{}
+            }
+        }
+    }
+
+    foreach ($evt in $AuditEvents) {
+        if ($null -eq $evt) { continue }
+
+        $action = _GetField $evt 'Action'
+        if ([string]::IsNullOrWhiteSpace($action)) { $action = 'AuditEvent' }
+
+        # Track breakdown
+        if (-not $eventBreakdown.ContainsKey($action)) { $eventBreakdown[$action] = 0 }
+        $eventBreakdown[$action]++
+
+        # Extract common fields
+        $identityName    = _GetField $evt 'IdentityName'
+        if ([string]::IsNullOrWhiteSpace($identityName)) {
+            $identityName = _GetField $evt 'ViolatingIdentityName'
+        }
+        $identityId      = _GetField $evt 'IdentityId'
+        if ([string]::IsNullOrWhiteSpace($identityId)) {
+            $identityId = _GetField $evt 'ViolatingIdentityId'
+        }
+        $sourceName      = _GetField $evt 'SourceName'
+        $entitlementName = _GetField $evt 'EntitlementName'
+        $campaignName    = _GetField $evt 'CampaignName'
+        $reviewerName    = _GetField $evt 'ReviewerName'
+        $timestamp       = _GetField $evt 'Timestamp'
+        $evtCorrelation  = _GetField $evt 'CorrelationID'
+
+        $dt       = _ParseTimestamp $timestamp
+        $severity = if ($severityMap.ContainsKey($action)) { $severityMap[$action] } else { 3 }
+
+        $jsonObj = $null
+
+        switch ($Format) {
+            'Splunk' {
+                # Splunk HEC format: epoch time, source, sourcetype, event object
+                $jsonObj = [ordered]@{
+                    time       = _ToEpoch $dt
+                    source     = 'sailpoint:governance'
+                    sourcetype = 'sailpoint:governance:audit'
+                    event      = [ordered]@{
+                        action          = $action
+                        identityName    = $identityName
+                        identityId      = $identityId
+                        sourceName      = $sourceName
+                        entitlementName = $entitlementName
+                        campaignName    = $campaignName
+                        reviewerName    = $reviewerName
+                        severity        = $severity
+                        correlationId   = $evtCorrelation
+                    }
+                }
+            }
+            'Sentinel' {
+                # Azure Sentinel custom log format
+                $jsonObj = [ordered]@{
+                    TimeGenerated   = $dt.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                    SourceSystem    = 'SailPoint GovernanceToolkit'
+                    Category        = 'AccessGovernance'
+                    OperationName   = $action
+                    Severity        = $severity
+                    Identity        = $identityName
+                    IdentityId      = $identityId
+                    SourceName      = $sourceName
+                    EntitlementName = $entitlementName
+                    CampaignName    = $campaignName
+                    ReviewerName    = $reviewerName
+                    CorrelationId   = $evtCorrelation
+                    TenantId        = ''
+                    Type            = 'SailPointGovernance_CL'
+                }
+            }
+            'Elastic' {
+                # Elastic Common Schema (ECS) format
+                $jsonObj = [ordered]@{
+                    '@timestamp' = $dt.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                    event        = [ordered]@{
+                        kind     = 'event'
+                        category = @('iam')
+                        type     = @('info')
+                        action   = $action
+                        severity = $severity
+                        provider = 'sailpoint-governance-toolkit'
+                    }
+                    user         = [ordered]@{
+                        name = $identityName
+                        id   = $identityId
+                    }
+                    source       = [ordered]@{
+                        address = $sourceName
+                    }
+                    sailpoint    = [ordered]@{
+                        entitlementName = $entitlementName
+                        campaignName    = $campaignName
+                        reviewerName    = $reviewerName
+                        correlationId   = $evtCorrelation
+                    }
+                }
+            }
+            default {
+                # Generic: toolkit JSONL structure with ISO 8601
+                $jsonObj = [ordered]@{
+                    timestamp       = $dt.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+                    action          = $action
+                    severity        = $severity
+                    identityName    = $identityName
+                    identityId      = $identityId
+                    sourceName      = $sourceName
+                    entitlementName = $entitlementName
+                    campaignName    = $campaignName
+                    reviewerName    = $reviewerName
+                    correlationId   = $evtCorrelation
+                    category        = 'AccessGovernance'
+                    vendor          = 'SailPoint'
+                    product         = 'GovernanceToolkit'
+                }
+            }
+        }
+
+        $jsonLine = $jsonObj | ConvertTo-Json -Depth 5 -Compress
+        $lines.Add($jsonLine)
+        $eventCount++
+    }
+
+    [System.IO.File]::WriteAllText($filePath, ($lines -join "`n") + "`n", $utf8NoBom)
+
+    Write-SPLog -Message "SIEM JSON export complete: $eventCount events, format=$Format, path=$filePath" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditSiemJson' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            OutputPath     = $OutputPath
+            Format         = $Format
+            EventCount     = $eventCount
+            FilePath       = $filePath
+            EventBreakdown = $eventBreakdown
+        }
+    }
+}
+
+#endregion SIEM Event Export
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8391,5 +8919,7 @@ Export-ModuleMember -Function @(
     'Export-SPSodViolationHtml',
     'Export-SPOwnershipHealthHtml',
     'Export-SPAccessRequestHtml',
-    'Export-SPRemediationTickets'
+    'Export-SPRemediationTickets',
+    'Export-SPAuditCef',
+    'Export-SPAuditSiemJson'
 )

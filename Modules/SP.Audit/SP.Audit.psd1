@@ -127,6 +127,10 @@
 
         # SP.AuditReportHtml - Bulk Remediation Ticket Export (P15-04)
         'Export-SPRemediationTickets'
+
+        # SP.AuditReportHtml - SIEM Event Export (P15-05)
+        'Export-SPAuditCef'
+        'Export-SPAuditSiemJson'
     )
 
     # Do not export variables or aliases from nested modules
