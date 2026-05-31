@@ -50,7 +50,7 @@ Safe to modify:
 |----|---------|------------|-------|--------|
 | P16-01 | Orphan Account Detector | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-02 | Source Aggregation Health Monitor | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
-| P16-03 | Identity Attribute Quality Score | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | PENDING |
+| P16-03 | Identity Attribute Quality Score | none | SP.AuditQueries, SP.AuditReportHtml, SP.Audit.psd1 | DONE |
 | P16-04 | Campaign Coverage Gap Analysis | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | PENDING |
 | P16-05 | Access Certification Completion Predictor | none | SP.AuditAnalytics, SP.AuditReportHtml, SP.Audit.psd1 | PENDING |
 | P16-06 | Governance Metrics Time Series Store | none | SP.AuditOperations, SP.Audit.psd1, settings.json | PENDING |
@@ -346,7 +346,7 @@ New function `Export-SPSourceAggregationHealthHtml`:
 
 ## P16-03: Identity Attribute Quality Score
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**

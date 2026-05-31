@@ -8859,6 +8859,312 @@ ${recsHtml}
 
 #endregion
 
+#region P16-03: Identity Data Quality Report
+
+function Export-SPIdentityDataQualityHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML report from Measure-SPIdentityDataQuality output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with attribute completeness bars,
+        quality grade distribution, per-identity issue table, and quality issues
+        callout section. Uses inline CSS only for Word paste compatibility.
+    .PARAMETER QualityData
+        Hashtable output from Measure-SPIdentityDataQuality.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [string] Path to the written HTML file.
+    .EXAMPLE
+        $quality = Measure-SPIdentityDataQuality -Limit 500 -ActiveOnly
+        $path = Export-SPIdentityDataQualityHtml -QualityData $quality -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$QualityData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $htmlFile    = Join-Path $OutputPath "IdentityDataQuality-${timestamp}.html"
+
+    $summary     = $QualityData['Summary']
+    $attrComp    = $QualityData['AttributeCompleteness']
+    $issues      = $QualityData['QualityIssues']
+    $identities  = @($QualityData['Identities'])
+
+    # Grade color
+    $gradeColor = switch ($summary['OverallQualityGrade']) {
+        'A' { '#339933' }
+        'B' { '#336699' }
+        'C' { '#FF8800' }
+        'D' { '#CC3333' }
+        'F' { '#c0392b' }
+        default { '#777777' }
+    }
+
+    # --- Summary card ---
+    $gradeDist = $summary['QualityGradeDistribution']
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:${gradeColor}; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Overall Grade<br/><span style="font-size:28px;">$($summary['OverallQualityGrade'])</span><br/><span style="font-size:14px;">$($summary['OverallQualityScore'])</span>
+</td>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Identities Scanned<br/><span style="font-size:22px;">$($summary['TotalIdentitiesScanned'])</span>
+</td>
+<td style="padding:12px 16px; background:#FF8800; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+With Issues<br/><span style="font-size:22px;">$($summary['IdentitiesWithIssues'])</span>
+</td>
+<td style="padding:12px 16px; background:#CC3333; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Worst Attribute<br/><span style="font-size:14px;">$($summary['WorstAttribute'])<br/>$($summary['WorstAttributePct'])%</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Grade distribution ---
+    $gradeDistHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Quality Grade Distribution</h2>
+<table style="width:60%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+$(Build-HtmlTableHeader -Headers @('Grade', 'Range', 'Count'))
+<tbody>
+$(Build-HtmlTableRow -Cells @('<span style="color:#339933; font-weight:bold;">A</span>', '90-100 (Excellent)', [string]$gradeDist['A']) -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="color:#336699; font-weight:bold;">B</span>', '80-89 (Good)', [string]$gradeDist['B']) -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="color:#FF8800; font-weight:bold;">C</span>', '70-79 (Acceptable)', [string]$gradeDist['C']) -IsAlternate $false)
+$(Build-HtmlTableRow -Cells @('<span style="color:#CC3333; font-weight:bold;">D</span>', '60-69 (Poor)', [string]$gradeDist['D']) -IsAlternate $true)
+$(Build-HtmlTableRow -Cells @('<span style="color:#c0392b; font-weight:bold;">F</span>', 'Below 60 (Critical)', [string]$gradeDist['F']) -IsAlternate $false)
+</tbody>
+</table>
+"@
+
+    # --- Attribute completeness bars ---
+    $attrBarRows = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $attrComp -and $attrComp.Count -gt 0) {
+        $aIdx = 0
+        foreach ($attr in ($attrComp.Keys | Sort-Object)) {
+            $aIdx++
+            $aData = $attrComp[$attr]
+            $pct = $aData['Pct']
+            $barColor = if ($pct -ge 90) { '#339933' } elseif ($pct -ge 70) { '#FF8800' } else { '#CC3333' }
+            $barHtml = "<div style=""width:200px; background:#e0e0e0; border-radius:3px; display:inline-block; vertical-align:middle;""><div style=""width:$([math]::Min(100, $pct))%; background:${barColor}; height:16px; border-radius:3px;""></div></div> <span style=""font-weight:bold;"">$pct%</span>"
+            $cells = @(
+                (ConvertTo-SafeHtml $attr),
+                [string]$aData['Present'],
+                [string]$aData['Missing'],
+                $barHtml
+            )
+            $attrBarRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($aIdx % 2) -eq 0)))
+        }
+    }
+
+    $attrHeader = Build-HtmlTableHeader -Headers @('Attribute', 'Present', 'Missing', 'Completeness')
+    $attrTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Attribute Completeness</h2>
+<table style="width:80%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${attrHeader}
+<tbody>
+$($attrBarRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Quality issues callout ---
+    $issuesHtml = ''
+    $mgrSelfRefs = @($issues['ManagerSelfReference'])
+    $dupEmails = @($issues['DuplicateEmails'])
+    $staleProfs = @($issues['StaleProfiles'])
+
+    $issueItems = [System.Collections.Generic.List[string]]::new()
+
+    if ($mgrSelfRefs.Count -gt 0) {
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #CC3333; background:#fdf2f2; vertical-align:top;">
+<strong>Manager Self-Reference ($($mgrSelfRefs.Count) identities)</strong><br/>
+These identities list themselves as their own manager. This prevents proper certification routing.
+Identities: $(($mgrSelfRefs | Select-Object -First 10) -join ', ')$(if ($mgrSelfRefs.Count -gt 10) { " ... and $($mgrSelfRefs.Count - 10) more" })
+</td>
+</tr>
+"@)
+    }
+
+    if ($dupEmails.Count -gt 0) {
+        $totalDupIdentities = 0
+        foreach ($de in $dupEmails) { $totalDupIdentities += $de['IdentityIds'].Count }
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Duplicate Email Addresses ($($dupEmails.Count) shared emails, $totalDupIdentities identities)</strong><br/>
+Multiple identities share the same email address. This can cause notification delivery issues
+and may indicate duplicate identity records.
+$(($dupEmails | Select-Object -First 5 | ForEach-Object { "$($_['Email']) ($($($_['IdentityIds']).Count) identities)" }) -join '; ')$(if ($dupEmails.Count -gt 5) { " ... and $($dupEmails.Count - 5) more" })
+</td>
+</tr>
+"@)
+    }
+
+    if ($staleProfs.Count -gt 0) {
+        $issueItems.Add(@"
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Stale Profiles ($($staleProfs.Count) identities)</strong><br/>
+These identity profiles have not been modified in over 365 days. This may indicate the identity
+source is not aggregating attribute updates. Verify source aggregation and attribute mapping.
+</td>
+</tr>
+"@)
+    }
+
+    if ($issueItems.Count -gt 0) {
+        $issuesHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Quality Issues</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+$($issueItems -join "`n")
+</table>
+"@
+    }
+
+    # --- Per-identity issue table (only identities with issues) ---
+    $identWithIssues = @($identities | Where-Object { $_['Issues'].Count -gt 0 })
+    $identTableHtml = ''
+    if ($identWithIssues.Count -gt 0) {
+        $idHeader = Build-HtmlTableHeader -Headers @('Identity', 'Lifecycle', 'Score', 'Missing Attributes', 'Issues')
+        $idRows = [System.Collections.Generic.List[string]]::new()
+        $rIdx = 0
+
+        # Sort by score ascending (worst first)
+        $sortedIdent = $identWithIssues | Sort-Object { $_['QualityScore'] }
+
+        foreach ($ident in $sortedIdent) {
+            $rIdx++
+            $scoreColor = if ($ident['QualityScore'] -ge 90) { '#339933' }
+                          elseif ($ident['QualityScore'] -ge 80) { '#336699' }
+                          elseif ($ident['QualityScore'] -ge 70) { '#FF8800' }
+                          elseif ($ident['QualityScore'] -ge 60) { '#CC3333' }
+                          else { '#c0392b' }
+            $scoreBadge = "<span style=""color:${scoreColor}; font-weight:bold;"">$($ident['QualityScore'])</span>"
+            $missingDisp = if ($ident['MissingAttributes'].Count -gt 0) { ($ident['MissingAttributes'] -join ', ') } else { '-' }
+            $issueDisp = if ($ident['Issues'].Count -gt 0) { ($ident['Issues'] -join ', ') } else { '-' }
+
+            $cells = @(
+                (ConvertTo-SafeHtml $ident['IdentityName']),
+                (ConvertTo-SafeHtml $ident['LifecycleState']),
+                $scoreBadge,
+                (ConvertTo-SafeHtml $missingDisp),
+                (ConvertTo-SafeHtml $issueDisp)
+            )
+            $idRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rIdx % 2) -eq 0)))
+        }
+
+        $identTableHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Identities with Issues ($($identWithIssues.Count))</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${idHeader}
+<tbody>
+$($idRows -join "`n")
+</tbody>
+</table>
+"@
+    }
+
+    # --- Recommendations ---
+    $recsHtml = @"
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Recommendations</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #CC3333; background:#fdf2f2; vertical-align:top;">
+<strong>Missing Attributes</strong><br/>
+Review source attribute mappings and ensure all required fields are populated in source systems.
+Focus on the worst-performing attribute first to maximize governance impact.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #FF8800; background:#fef9f0; vertical-align:top;">
+<strong>Manager Self-References</strong><br/>
+Correct manager assignments in the authoritative source. Self-referencing managers cannot
+properly route certifications and create governance blind spots.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #f39c12; background:#fffcf0; vertical-align:top;">
+<strong>Stale Profiles</strong><br/>
+Investigate source aggregation schedules for identities not updated in over 365 days.
+Consider if these identities should be marked inactive or if the source is not syncing.
+</td>
+</tr>
+<tr>
+<td style="padding:10px 14px; border-left:4px solid #336699; background:#f0f4f8; vertical-align:top;">
+<strong>Duplicate Emails</strong><br/>
+Investigate identities sharing email addresses. This may indicate duplicate identity records
+that should be merged or email attributes that need correction in the source system.
+</td>
+</tr>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Identity Data Quality Report</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Identity Data Quality Report</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+${summaryHtml}
+
+${gradeDistHtml}
+
+${attrTableHtml}
+
+${issuesHtml}
+
+${identTableHtml}
+
+${recsHtml}
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    Write-SPLog -Message "Identity data quality HTML written: $htmlFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityDataQualityHtml' `
+        -CorrelationID $CorrelationID
+
+    return $htmlFile
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -8886,5 +9192,6 @@ Export-ModuleMember -Function @(
 ,
     'Export-SPAuditPeriodComparisonHtml',
     'Export-SPOrphanAccountHtml',
-    'Export-SPSourceAggregationHealthHtml'
+    'Export-SPSourceAggregationHealthHtml',
+    'Export-SPIdentityDataQualityHtml'
 )

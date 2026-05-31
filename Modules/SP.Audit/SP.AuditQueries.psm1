@@ -5351,6 +5351,385 @@ function Get-SPSourceAggregationHealth {
 
 #endregion
 
+#region P16-03: Identity Attribute Quality Score
+
+function Measure-SPIdentityDataQuality {
+    <#
+    .SYNOPSIS
+        Evaluates completeness and consistency of identity attributes.
+    .DESCRIPTION
+        Queries /v3/public-identities and checks each identity against a set of
+        required attributes. Detects missing attributes, manager self-references,
+        duplicate emails, and stale profiles. Produces per-identity quality scores
+        and an overall tenant quality grade.
+    .PARAMETER Limit
+        Maximum number of identities to evaluate. Default 500.
+    .PARAMETER RequiredAttributes
+        Array of attribute names to check. Default: manager, department, email, title, location.
+    .PARAMETER ActiveOnly
+        When set, only evaluates identities with active lifecycle state.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); AttributeCompleteness = @{...}; QualityIssues = @{...}; Summary = @{...} }
+    .EXAMPLE
+        $quality = Measure-SPIdentityDataQuality -Limit 500 -ActiveOnly
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$Limit = 500,
+
+        [Parameter()]
+        [string[]]$RequiredAttributes,
+
+        [Parameter()]
+        [switch]$ActiveOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    # Default required attributes
+    if ($null -eq $RequiredAttributes -or $RequiredAttributes.Count -eq 0) {
+        $RequiredAttributes = @('manager', 'department', 'email', 'title', 'location')
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityDataQuality: scanning up to $Limit identities, ActiveOnly=$ActiveOnly, RequiredAttributes=($($RequiredAttributes -join ', '))" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+        -CorrelationID $CorrelationID
+
+    # Pagination ceiling
+    $maxPages = 200
+    try {
+        $cfgForCeiling = Get-SPConfig
+        if ($null -ne $cfgForCeiling.Api -and
+            $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+            [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+            $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+        }
+    } catch { }
+
+    $identities = [System.Collections.Generic.List[hashtable]]::new()
+    $pageSize = 250
+    $offset = 0
+    $pageNum = 0
+    $fetched = 0
+
+    do {
+        $pageNum++
+        if ($pageNum -gt $maxPages) {
+            Write-SPLog -Message "Measure-SPIdentityDataQuality: pagination ceiling reached at page $pageNum" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+                -CorrelationID $CorrelationID
+            break
+        }
+
+        $remaining = $Limit - $fetched
+        $thisPageSize = [math]::Min($pageSize, $remaining)
+
+        $queryParams = @{
+            'limit'  = $thisPageSize.ToString()
+            'offset' = $offset.ToString()
+        }
+
+        $result = Invoke-SPApiRequest -Method GET -Endpoint '/v3/public-identities' `
+            -QueryParams $queryParams -CorrelationID $CorrelationID
+
+        if (-not $result.Success) {
+            Write-SPLog -Message "Measure-SPIdentityDataQuality: API error at page ${pageNum} -- $($result.Error)" `
+                -Severity ERROR -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+                -CorrelationID $CorrelationID
+            break
+        }
+
+        $page = $result.Data
+        if ($null -ne $result.Data -and $result.Data.PSObject.Properties.Name -contains 'items') {
+            $page = $result.Data.items
+        }
+        $page = @($page)
+
+        foreach ($identity in $page) {
+            if ($fetched -ge $Limit) { break }
+
+            # Filter by lifecycle state if ActiveOnly
+            $lifecycleState = ''
+            if ($null -ne $identity.lifecycle_state) {
+                $lifecycleState = [string]$identity.lifecycle_state
+            }
+            elseif ($null -ne $identity.lifecycleState) {
+                $lifecycleState = [string]$identity.lifecycleState
+            }
+
+            if ($ActiveOnly -and -not [string]::IsNullOrWhiteSpace($lifecycleState)) {
+                $stateUpper = $lifecycleState.ToUpper()
+                if ($stateUpper -ne 'ACTIVE') { continue }
+            }
+
+            $identityId = [string]$identity.id
+            $identityName = if ($null -ne $identity.name) { [string]$identity.name } else { '' }
+            if ([string]::IsNullOrWhiteSpace($identityName) -and $null -ne $identity.displayName) {
+                $identityName = [string]$identity.displayName
+            }
+
+            # Attribute presence check
+            $missingAttrs = [System.Collections.Generic.List[string]]::new()
+            $issues = [System.Collections.Generic.List[string]]::new()
+            $attrPointValue = if ($RequiredAttributes.Count -gt 0) { 100.0 / $RequiredAttributes.Count } else { 100.0 }
+            $score = 0.0
+
+            foreach ($attr in $RequiredAttributes) {
+                $attrValue = $null
+                # Check direct property
+                if ($null -ne $identity.PSObject -and $identity.PSObject.Properties.Name -contains $attr) {
+                    $attrValue = $identity.$attr
+                }
+                # Check attributes collection (ISC sometimes nests in attributes map)
+                elseif ($null -ne $identity.attributes -and $identity.attributes.PSObject.Properties.Name -contains $attr) {
+                    $attrValue = $identity.attributes.$attr
+                }
+
+                # Manager attribute is special -- may be an object with id property
+                if ($attr -eq 'manager' -and $null -ne $attrValue) {
+                    if ($attrValue -is [System.Management.Automation.PSCustomObject] -or $attrValue -is [hashtable]) {
+                        $mgrId = $null
+                        if ($attrValue.PSObject.Properties.Name -contains 'id') { $mgrId = $attrValue.id }
+                        elseif ($attrValue -is [hashtable] -and $attrValue.ContainsKey('id')) { $mgrId = $attrValue['id'] }
+                        if ([string]::IsNullOrWhiteSpace($mgrId)) {
+                            $attrValue = $null
+                        }
+                        else {
+                            $attrValue = $mgrId
+                        }
+                    }
+                }
+
+                $isPresent = $false
+                if ($null -ne $attrValue) {
+                    if ($attrValue -is [string]) {
+                        $isPresent = -not [string]::IsNullOrWhiteSpace($attrValue)
+                    }
+                    else {
+                        $isPresent = $true
+                    }
+                }
+
+                if ($isPresent) {
+                    $score += $attrPointValue
+                }
+                else {
+                    $missingAttrs.Add($attr)
+                    $issues.Add("Missing: $attr")
+                }
+            }
+
+            # Manager self-reference check
+            $managerId = $null
+            if ($null -ne $identity.manager) {
+                if ($identity.manager -is [string]) {
+                    $managerId = $identity.manager
+                }
+                elseif ($null -ne $identity.manager.id) {
+                    $managerId = [string]$identity.manager.id
+                }
+            }
+            if ($null -ne $identity.attributes -and $null -ne $identity.attributes.manager) {
+                $mgrAttr = $identity.attributes.manager
+                if ($mgrAttr -is [string]) {
+                    $managerId = $mgrAttr
+                }
+                elseif ($null -ne $mgrAttr.id) {
+                    $managerId = [string]$mgrAttr.id
+                }
+            }
+
+            $isManagerSelfRef = $false
+            if (-not [string]::IsNullOrWhiteSpace($managerId) -and $managerId -eq $identityId) {
+                $isManagerSelfRef = $true
+                $score = [math]::Max(0, $score - 10)
+                $issues.Add('ManagerSelfReference')
+            }
+
+            # Stale profile check (modified > 365 days ago)
+            $isStaleProfile = $false
+            $modifiedStr = $null
+            if ($null -ne $identity.modified) { $modifiedStr = [string]$identity.modified }
+            elseif ($null -ne $identity.lastModified) { $modifiedStr = [string]$identity.lastModified }
+            if (-not [string]::IsNullOrWhiteSpace($modifiedStr)) {
+                try {
+                    $modifiedDt = [datetime]::Parse($modifiedStr)
+                    $daysSinceModified = ((Get-Date) - $modifiedDt).TotalDays
+                    if ($daysSinceModified -gt 365) {
+                        $isStaleProfile = $true
+                        $score = [math]::Max(0, $score - 5)
+                        $issues.Add('StaleProfile')
+                    }
+                }
+                catch { }
+            }
+
+            # Clamp score
+            $score = [math]::Max(0, [math]::Min(100, [math]::Round($score, 1)))
+
+            # Extract email for duplicate check
+            $email = $null
+            if ($null -ne $identity.email) { $email = [string]$identity.email }
+            elseif ($null -ne $identity.attributes -and $null -ne $identity.attributes.email) { $email = [string]$identity.attributes.email }
+
+            $identities.Add(@{
+                IdentityId        = $identityId
+                IdentityName      = $identityName
+                LifecycleState    = $lifecycleState
+                QualityScore      = $score
+                MissingAttributes = @($missingAttrs)
+                Issues            = @($issues)
+                Email             = $email
+                ManagerSelfRef    = $isManagerSelfRef
+                StaleProfile      = $isStaleProfile
+            })
+
+            $fetched++
+        }
+
+        Write-SPLog -Message "Measure-SPIdentityDataQuality: page $pageNum, $($page.Count) identities (total fetched: $fetched)" `
+            -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+            -CorrelationID $CorrelationID
+
+        $offset += $thisPageSize
+
+    } while ($null -ne $page -and $page.Count -ge $thisPageSize -and $fetched -lt $Limit)
+
+    # Attribute completeness
+    $attrCompleteness = @{}
+    foreach ($attr in $RequiredAttributes) {
+        $presentCount = @($identities | Where-Object { $_['MissingAttributes'] -notcontains $attr }).Count
+        $missingCount = $identities.Count - $presentCount
+        $pct = if ($identities.Count -gt 0) { [math]::Round(($presentCount / $identities.Count) * 100, 1) } else { 0 }
+        $attrCompleteness[$attr] = @{
+            Present = $presentCount
+            Missing = $missingCount
+            Pct     = $pct
+        }
+    }
+
+    # Quality issues
+    $managerSelfRefs = @($identities | Where-Object { $_['ManagerSelfRef'] -eq $true } | ForEach-Object { $_['IdentityId'] })
+    $staleProfiles = @($identities | Where-Object { $_['StaleProfile'] -eq $true } | ForEach-Object { $_['IdentityId'] })
+
+    # Duplicate email detection
+    $emailMap = @{}
+    foreach ($ident in $identities) {
+        $e = $ident['Email']
+        if (-not [string]::IsNullOrWhiteSpace($e)) {
+            $eLower = $e.ToLower()
+            if (-not $emailMap.ContainsKey($eLower)) {
+                $emailMap[$eLower] = [System.Collections.Generic.List[string]]::new()
+            }
+            $emailMap[$eLower].Add($ident['IdentityId'])
+        }
+    }
+    $duplicateEmails = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($entry in $emailMap.GetEnumerator()) {
+        if ($entry.Value.Count -gt 1) {
+            $duplicateEmails.Add(@{
+                Email       = $entry.Key
+                IdentityIds = @($entry.Value)
+            })
+        }
+    }
+
+    $qualityIssues = @{
+        ManagerSelfReference = $managerSelfRefs
+        DuplicateEmails      = @($duplicateEmails)
+        StaleProfiles        = $staleProfiles
+    }
+
+    # Summary
+    $overallScore = 0
+    if ($identities.Count -gt 0) {
+        $totalScore = 0
+        foreach ($ident in $identities) { $totalScore += $ident['QualityScore'] }
+        $overallScore = [math]::Round($totalScore / $identities.Count, 1)
+    }
+
+    $overallGrade = switch ($true) {
+        ($overallScore -ge 90) { 'A' }
+        ($overallScore -ge 80) { 'B' }
+        ($overallScore -ge 70) { 'C' }
+        ($overallScore -ge 60) { 'D' }
+        default                { 'F' }
+    }
+
+    # Find worst attribute
+    $worstAttr = ''
+    $worstPct = 100.0
+    foreach ($attr in $RequiredAttributes) {
+        if ($attrCompleteness[$attr]['Pct'] -lt $worstPct) {
+            $worstPct = $attrCompleteness[$attr]['Pct']
+            $worstAttr = $attr
+        }
+    }
+
+    # Identities with at least one issue
+    $identitiesWithIssues = @($identities | Where-Object { $_['Issues'].Count -gt 0 }).Count
+
+    # Grade distribution
+    $gradeA = @($identities | Where-Object { $_['QualityScore'] -ge 90 }).Count
+    $gradeB = @($identities | Where-Object { $_['QualityScore'] -ge 80 -and $_['QualityScore'] -lt 90 }).Count
+    $gradeC = @($identities | Where-Object { $_['QualityScore'] -ge 70 -and $_['QualityScore'] -lt 80 }).Count
+    $gradeD = @($identities | Where-Object { $_['QualityScore'] -ge 60 -and $_['QualityScore'] -lt 70 }).Count
+    $gradeF = @($identities | Where-Object { $_['QualityScore'] -lt 60 }).Count
+
+    $summaryResult = @{
+        TotalIdentitiesScanned   = $identities.Count
+        OverallQualityScore      = $overallScore
+        OverallQualityGrade      = $overallGrade
+        WorstAttribute           = $worstAttr
+        WorstAttributePct        = $worstPct
+        IdentitiesWithIssues     = $identitiesWithIssues
+        QualityGradeDistribution = @{
+            A = $gradeA
+            B = $gradeB
+            C = $gradeC
+            D = $gradeD
+            F = $gradeF
+        }
+    }
+
+    # Remove internal-only fields from identity output
+    $outputIdentities = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($ident in $identities) {
+        $outputIdentities.Add(@{
+            IdentityId        = $ident['IdentityId']
+            IdentityName      = $ident['IdentityName']
+            LifecycleState    = $ident['LifecycleState']
+            QualityScore      = $ident['QualityScore']
+            MissingAttributes = $ident['MissingAttributes']
+            Issues            = $ident['Issues']
+        })
+    }
+
+    $finalResult = @{
+        Identities            = @($outputIdentities)
+        AttributeCompleteness = $attrCompleteness
+        QualityIssues         = $qualityIssues
+        Summary               = $summaryResult
+    }
+
+    Write-SPLog -Message "Measure-SPIdentityDataQuality: $($identities.Count) identities scanned, Overall=$overallScore ($overallGrade), Worst=$worstAttr ($worstPct%), Issues=$identitiesWithIssues" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
+        -CorrelationID $CorrelationID
+
+    return $finalResult
+}
+
+#endregion
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -5371,5 +5750,6 @@ Export-ModuleMember -Function @(
     'Save-SPConfigurationSnapshot',
     'Get-SPConfigurationSnapshot',
     'Get-SPOrphanAccounts',
-    'Get-SPSourceAggregationHealth'
+    'Get-SPSourceAggregationHealth',
+    'Measure-SPIdentityDataQuality'
 )

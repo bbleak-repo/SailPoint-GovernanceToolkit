@@ -151,6 +151,12 @@
 
         # SP.AuditReportHtml - Source Aggregation Health Report (P16-02)
         'Export-SPSourceAggregationHealthHtml'
+
+        # SP.AuditQueries - Identity Data Quality (P16-03)
+        'Measure-SPIdentityDataQuality'
+
+        # SP.AuditReportHtml - Identity Data Quality Report (P16-03)
+        'Export-SPIdentityDataQualityHtml'
     )
 
     # Do not export variables or aliases from nested modules
