@@ -1880,11 +1880,640 @@ function Measure-SPSourceGovernance {
 
 #endregion
 
+#region P14-01: Governance Maturity Scorecard
+
+function Measure-SPGovernanceMaturity {
+    <#
+    .SYNOPSIS
+        Produces a composite governance maturity assessment across six dimensions.
+    .DESCRIPTION
+        Scores the organization across six governance dimensions (Coverage, Timeliness,
+        Enforcement, Accountability, Documentation, Automation) from 0 to 100, then maps
+        to a five-level maturity model aligned with CMMI / ISO 27001 Annex A.9.
+
+        Consumes pre-computed analytics outputs from existing toolkit functions. Dimensions
+        with null input data score 0 with note "Insufficient data". All null inputs returns
+        Level 1 with all dimensions at 0.
+    .PARAMETER SourceGovernance
+        Hashtable output from Measure-SPSourceGovernance.
+    .PARAMETER IdentityRisk
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER ReviewerReputation
+        Hashtable output from Measure-SPReviewerReputation.
+    .PARAMETER CampaignMetrics
+        Hashtable output from Measure-SPCampaignMetrics.
+    .PARAMETER StaleAccess
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER PolicyCompliance
+        Hashtable output from Test-SPGovernancePolicy.
+    .PARAMETER RemediationStatus
+        Hashtable output from Get-SPRemediationStatus.
+    .PARAMETER OrchestratorHistory
+        Hashtable output from Get-SPOrchestratorHistory.
+    .PARAMETER EntitlementInventory
+        Hashtable output from Get-SPEntitlementInventory.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] Maturity scorecard with OverallScore, OverallLevel, Dimensions, TopImprovements.
+    .EXAMPLE
+        $maturity = Measure-SPGovernanceMaturity -SourceGovernance $gov -ReviewerReputation $rep
+        $maturity.OverallLevelName   # 'Managed'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [hashtable]$SourceGovernance,
+
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [hashtable]$CampaignMetrics,
+
+        [Parameter()]
+        [hashtable]$StaleAccess,
+
+        [Parameter()]
+        [hashtable]$PolicyCompliance,
+
+        [Parameter()]
+        [hashtable]$RemediationStatus,
+
+        [Parameter()]
+        [hashtable]$OrchestratorHistory,
+
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPGovernanceMaturity: starting maturity assessment" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPGovernanceMaturity' `
+        -CorrelationID $CorrelationID
+
+    # Helper: get maturity level from score
+    $getLevel = {
+        param([double]$score)
+        if ($score -le 20) { return @{ Level = 1; Name = 'Initial' } }
+        if ($score -le 40) { return @{ Level = 2; Name = 'Developing' } }
+        if ($score -le 60) { return @{ Level = 3; Name = 'Defined' } }
+        if ($score -le 80) { return @{ Level = 4; Name = 'Managed' } }
+        return @{ Level = 5; Name = 'Optimizing' }
+    }
+
+    # Helper: safely read hashtable key
+    $safeGet = {
+        param([hashtable]$ht, [string]$key)
+        if ($null -eq $ht) { return $null }
+        if ($ht.ContainsKey($key)) { return $ht[$key] }
+        return $null
+    }
+
+    # ===================================================================
+    # Dimension 1: Coverage (weight 20%)
+    # ===================================================================
+    $coverageScore = 0.0
+    $coverageFactors = [System.Collections.Generic.List[string]]::new()
+    $coverageImprovement = 'Provide source governance data to assess coverage'
+
+    if ($null -ne $SourceGovernance) {
+        $summary = & $safeGet $SourceGovernance 'Summary'
+        $sources = $SourceGovernance['Sources']
+
+        $overallCoverage = 0.0
+        if ($null -ne $summary -and $summary -is [hashtable] -and $summary.ContainsKey('OverallCoveragePct')) {
+            $overallCoverage = [double]$summary['OverallCoveragePct']
+        }
+
+        $coverageScore = $overallCoverage
+        $coverageFactors.Add("Overall coverage $($overallCoverage)%")
+
+        # Penalty: -15 per Grade F source
+        $gradeFCount = 0
+        if ($null -ne $sources) {
+            foreach ($src in @($sources)) {
+                if ($null -eq $src) { continue }
+                $grade = ''
+                if ($src -is [hashtable] -and $src.ContainsKey('GovernanceGrade')) {
+                    $grade = [string]$src['GovernanceGrade']
+                } elseif ($null -ne $src.PSObject -and $null -ne $src.PSObject.Properties['GovernanceGrade']) {
+                    $grade = [string]$src.GovernanceGrade
+                }
+                if ($grade -eq 'F') { $gradeFCount++ }
+            }
+        }
+
+        if ($gradeFCount -gt 0) {
+            $penalty = $gradeFCount * 15
+            $coverageScore = $coverageScore - $penalty
+            $coverageFactors.Add("$gradeFCount source(s) at Grade F (-$penalty)")
+            $fSourceNames = @(@($sources) | Where-Object {
+                $g = ''
+                if ($_ -is [hashtable] -and $_.ContainsKey('GovernanceGrade')) { $g = $_['GovernanceGrade'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['GovernanceGrade']) { $g = $_.GovernanceGrade }
+                $g -eq 'F'
+            } | ForEach-Object {
+                if ($_ -is [hashtable] -and $_.ContainsKey('SourceName')) { $_['SourceName'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['SourceName']) { $_.SourceName }
+                else { 'Unknown' }
+            })
+            $coverageImprovement = "Bring $($fSourceNames -join ', ') source(s) to Grade C or above"
+        } else {
+            if ($overallCoverage -lt 90) {
+                $coverageImprovement = "Increase overall coverage from $($overallCoverage)% toward 90%+"
+            } else {
+                $coverageImprovement = 'Maintain current coverage level'
+            }
+        }
+    } else {
+        $coverageFactors.Add('Insufficient data')
+    }
+
+    $coverageScore = [Math]::Min(100, [Math]::Max(0, $coverageScore))
+
+    # ===================================================================
+    # Dimension 2: Timeliness (weight 20%)
+    # ===================================================================
+    $timelinessScore = 0.0
+    $timelinessFactors = [System.Collections.Generic.List[string]]::new()
+    $timelinessImprovement = 'Provide campaign metrics data to assess timeliness'
+
+    if ($null -ne $CampaignMetrics) {
+        # CampaignMetrics from Measure-SPCampaignMetrics: @{Success; Data=@(PSCustomObject...)}
+        $metricsData = @()
+        if ($CampaignMetrics.ContainsKey('Data') -and $null -ne $CampaignMetrics['Data']) {
+            $metricsData = @($CampaignMetrics['Data'])
+        }
+
+        if ($metricsData.Count -gt 0) {
+            # Avg response hours across all campaigns
+            $responseHours = @($metricsData | ForEach-Object {
+                $h = $null
+                if ($_ -is [hashtable] -and $_.ContainsKey('AvgResponseTimeHours')) { $h = $_['AvgResponseTimeHours'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['AvgResponseTimeHours']) { $h = $_.AvgResponseTimeHours }
+                if ($null -ne $h) { [double]$h }
+            } | Where-Object { $_ -ge 0 })
+
+            $avgResponse = 36.0
+            if ($responseHours.Count -gt 0) {
+                $avgResponse = ($responseHours | Measure-Object -Average).Average
+            }
+
+            # Linear scale: <12h = 100, >72h = 0
+            $clamped = [Math]::Min(72, [Math]::Max(12, $avgResponse))
+            $timelinessScore = [Math]::Round((1 - (($clamped - 12) / 60)) * 100, 1)
+            $timelinessFactors.Add("Avg response $([Math]::Round($avgResponse, 1)) hours")
+
+            # Bonus/Penalty: deadline status
+            $overdueCount = 0
+            $totalCampaigns = $metricsData.Count
+            foreach ($m in $metricsData) {
+                $status = ''
+                if ($m -is [hashtable] -and $m.ContainsKey('DeadlineStatus')) { $status = [string]$m['DeadlineStatus'] }
+                elseif ($null -ne $m.PSObject -and $null -ne $m.PSObject.Properties['DeadlineStatus']) { $status = [string]$m.DeadlineStatus }
+                if ($status -eq 'Overdue') { $overdueCount++ }
+            }
+
+            if ($overdueCount -eq 0 -and $totalCampaigns -gt 0) {
+                $timelinessScore += 10
+                $timelinessFactors.Add('100% on-time completion (+10)')
+            }
+
+            if ($overdueCount -gt 0) {
+                $penalty = $overdueCount * 10
+                $timelinessScore -= $penalty
+                $timelinessFactors.Add("$overdueCount overdue campaign(s) (-$penalty)")
+            }
+
+            if ($avgResponse -gt 12) {
+                $timelinessImprovement = "Reduce avg response time below 12 hours (currently $([Math]::Round($avgResponse, 1))h)"
+            } else {
+                $timelinessImprovement = 'Maintain current response time performance'
+            }
+        } else {
+            $timelinessFactors.Add('No campaign metrics data available')
+        }
+    } else {
+        $timelinessFactors.Add('Insufficient data')
+    }
+
+    $timelinessScore = [Math]::Min(100, [Math]::Max(0, $timelinessScore))
+
+    # ===================================================================
+    # Dimension 3: Enforcement (weight 20%)
+    # ===================================================================
+    $enforcementScore = 0.0
+    $enforcementFactors = [System.Collections.Generic.List[string]]::new()
+    $enforcementImprovement = 'Provide remediation status data to assess enforcement'
+
+    if ($null -ne $RemediationStatus) {
+        $remData = $null
+        if ($RemediationStatus.ContainsKey('Data') -and $null -ne $RemediationStatus['Data']) {
+            $remData = $RemediationStatus['Data']
+        }
+
+        $remSummary = $null
+        if ($null -ne $remData -and $remData -is [hashtable] -and $remData.ContainsKey('Summary')) {
+            $remSummary = $remData['Summary']
+        }
+
+        if ($null -ne $remSummary -and $remSummary -is [hashtable]) {
+            $total = if ($remSummary.ContainsKey('Total')) { [int]$remSummary['Total'] } else { 0 }
+            $overdue = if ($remSummary.ContainsKey('Overdue')) { [int]$remSummary['Overdue'] } else { 0 }
+            $failed = if ($remSummary.ContainsKey('Failed')) { [int]$remSummary['Failed'] } else { 0 }
+
+            if ($total -gt 0) {
+                $slaCompliance = [Math]::Round((($total - $overdue - $failed) / $total) * 100, 1)
+                $enforcementScore = $slaCompliance
+                $enforcementFactors.Add("SLA compliance $($slaCompliance)%")
+
+                # Penalty: -5 per overdue item (max -20)
+                if ($overdue -gt 0) {
+                    $penalty = [Math]::Min(20, $overdue * 5)
+                    $enforcementScore -= $penalty
+                    $enforcementFactors.Add("$overdue overdue remediation(s) (-$penalty)")
+                    $enforcementImprovement = "Clear $overdue overdue remediation(s)"
+                } else {
+                    $enforcementImprovement = 'Maintain current SLA compliance'
+                }
+            } else {
+                $enforcementScore = 100
+                $enforcementFactors.Add('No remediations required (full compliance)')
+                $enforcementImprovement = 'No action needed'
+            }
+        } else {
+            $enforcementFactors.Add('Remediation summary not available')
+        }
+    } else {
+        $enforcementFactors.Add('Insufficient data')
+    }
+
+    # Bonus: Stale access < 5% of total entitlements
+    if ($null -ne $StaleAccess -and $null -ne $EntitlementInventory) {
+        $staleCount = 0
+        $staleSummary = & $safeGet $StaleAccess 'Summary'
+        if ($null -ne $staleSummary -and $staleSummary -is [hashtable] -and $staleSummary.ContainsKey('TotalStaleItems')) {
+            $staleCount = [int]$staleSummary['TotalStaleItems']
+        }
+
+        $totalEnts = 0
+        if ($EntitlementInventory -is [hashtable] -and $EntitlementInventory.ContainsKey('Data')) {
+            $invData = $EntitlementInventory['Data']
+            if ($null -ne $invData -and $invData -is [hashtable] -and $invData.ContainsKey('TotalEntitlements')) {
+                $totalEnts = [int]$invData['TotalEntitlements']
+            }
+        }
+
+        if ($totalEnts -gt 0) {
+            $stalePct = [Math]::Round(($staleCount / $totalEnts) * 100, 1)
+            if ($stalePct -lt 5) {
+                $enforcementScore += 10
+                $enforcementFactors.Add("Stale access $($stalePct)% (< 5%, +10)")
+            }
+        }
+    }
+
+    $enforcementScore = [Math]::Min(100, [Math]::Max(0, $enforcementScore))
+
+    # ===================================================================
+    # Dimension 4: Accountability (weight 15%)
+    # ===================================================================
+    $accountabilityScore = 0.0
+    $accountabilityFactors = [System.Collections.Generic.List[string]]::new()
+    $accountabilityImprovement = 'Provide reviewer reputation data to assess accountability'
+
+    if ($null -ne $ReviewerReputation) {
+        $reviewers = @()
+        if ($ReviewerReputation.ContainsKey('Reviewers') -and $null -ne $ReviewerReputation['Reviewers']) {
+            $reviewers = @($ReviewerReputation['Reviewers'])
+        }
+
+        if ($reviewers.Count -gt 0) {
+            # Avg reputation score maps directly
+            $repScores = @($reviewers | ForEach-Object {
+                if ($_ -is [hashtable] -and $_.ContainsKey('ReputationScore')) { [double]$_['ReputationScore'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReputationScore']) { [double]$_.ReputationScore }
+            } | Where-Object { $_ -ge 0 })
+
+            $avgReputation = 50.0
+            if ($repScores.Count -gt 0) {
+                $avgReputation = [Math]::Round(($repScores | Measure-Object -Average).Average, 1)
+            }
+
+            $accountabilityScore = $avgReputation
+            $accountabilityFactors.Add("Avg reputation $avgReputation")
+
+            # Penalty: -10 per At Risk reviewer (max -20)
+            $atRiskReviewers = @($reviewers | Where-Object {
+                $tier = ''
+                if ($_ -is [hashtable] -and $_.ContainsKey('ReputationTier')) { $tier = $_['ReputationTier'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReputationTier']) { $tier = $_.ReputationTier }
+                $tier -eq 'At Risk'
+            })
+
+            if ($atRiskReviewers.Count -gt 0) {
+                $penalty = [Math]::Min(20, $atRiskReviewers.Count * 10)
+                $accountabilityScore -= $penalty
+                $accountabilityFactors.Add("$($atRiskReviewers.Count) At Risk reviewer(s) (-$penalty)")
+
+                $atRiskNames = @($atRiskReviewers | ForEach-Object {
+                    if ($_ -is [hashtable] -and $_.ContainsKey('ReviewerName')) { $_['ReviewerName'] }
+                    elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReviewerName']) { $_.ReviewerName }
+                    else { 'Unknown' }
+                })
+                $accountabilityImprovement = "Address $($atRiskNames -join ', ') performance (At Risk tier)"
+            }
+
+            # Bonus: All Good or Excellent
+            $repSummary = & $safeGet $ReviewerReputation 'Summary'
+            $allGoodOrExcellent = $false
+            if ($null -ne $repSummary -and $repSummary -is [hashtable]) {
+                $atRiskCount = if ($repSummary.ContainsKey('AtRisk')) { [int]$repSummary['AtRisk'] } else { 0 }
+                $needsAttCount = if ($repSummary.ContainsKey('NeedsAttention')) { [int]$repSummary['NeedsAttention'] } else { 0 }
+                if ($atRiskCount -eq 0 -and $needsAttCount -eq 0 -and $reviewers.Count -gt 0) {
+                    $allGoodOrExcellent = $true
+                }
+            }
+
+            if ($allGoodOrExcellent) {
+                $accountabilityScore += 10
+                $accountabilityFactors.Add('All reviewers Good or Excellent (+10)')
+                $accountabilityImprovement = 'Maintain current reviewer performance'
+            } elseif ($atRiskReviewers.Count -eq 0) {
+                $accountabilityImprovement = 'Improve Needs Attention reviewers to Good tier'
+            }
+        } else {
+            $accountabilityFactors.Add('No reviewer data available')
+        }
+    } else {
+        $accountabilityFactors.Add('Insufficient data')
+    }
+
+    $accountabilityScore = [Math]::Min(100, [Math]::Max(0, $accountabilityScore))
+
+    # ===================================================================
+    # Dimension 5: Documentation (weight 10%)
+    # ===================================================================
+    $documentationScore = 0.0
+    $documentationFactors = [System.Collections.Generic.List[string]]::new()
+    $documentationImprovement = 'Implement governance policy engine and run policy compliance checks'
+
+    if ($null -ne $PolicyCompliance) {
+        # PolicyCompliance from Test-SPGovernancePolicy:
+        # @{ OverallCompliant; Policies=@(@{Result='PASS'/'FAIL'/'SKIPPED'; ...}); Summary=@{...} }
+        $policies = @()
+        if ($PolicyCompliance.ContainsKey('Policies') -and $null -ne $PolicyCompliance['Policies']) {
+            $policies = @($PolicyCompliance['Policies'])
+        }
+
+        if ($policies.Count -gt 0) {
+            $skippedCount = 0
+            $totalPolicies = $policies.Count
+            $passedCount = 0
+
+            foreach ($pol in $policies) {
+                $result = ''
+                if ($pol -is [hashtable] -and $pol.ContainsKey('Result')) { $result = [string]$pol['Result'] }
+                elseif ($null -ne $pol.PSObject -and $null -ne $pol.PSObject.Properties['Result']) { $result = [string]$pol.Result }
+                if ($result -eq 'SKIPPED') { $skippedCount++ }
+                if ($result -eq 'PASS') { $passedCount++ }
+            }
+
+            # Baseline: All policies evaluated (not skipped) = 80
+            $evaluated = $totalPolicies - $skippedCount
+            if ($evaluated -eq $totalPolicies -and $totalPolicies -gt 0) {
+                $documentationScore = 80
+                $documentationFactors.Add("$totalPolicies/$totalPolicies policies evaluated")
+            } elseif ($totalPolicies -gt 0) {
+                $documentationScore = [Math]::Round(($evaluated / $totalPolicies) * 80, 1)
+                $documentationFactors.Add("$evaluated/$totalPolicies policies evaluated ($skippedCount skipped)")
+            }
+
+            # Bonus: policy compliance rate > 80%
+            if ($evaluated -gt 0) {
+                $complianceRate = [Math]::Round(($passedCount / $evaluated) * 100, 1)
+                $documentationFactors.Add("$([Math]::Round($complianceRate, 0))% policy compliance")
+                if ($complianceRate -gt 80) {
+                    $documentationScore += 10
+                    $documentationFactors.Add('Policy compliance > 80% (+10)')
+                }
+
+                if ($complianceRate -le 80) {
+                    $documentationImprovement = "Improve policy compliance above 80% (currently $($complianceRate)%)"
+                } else {
+                    $documentationImprovement = 'Maintain current policy compliance'
+                }
+            }
+
+            # Bonus: compliance evidence packages generated (+10)
+            $overallCompliant = $false
+            if ($PolicyCompliance.ContainsKey('OverallCompliant')) {
+                $overallCompliant = [bool]$PolicyCompliance['OverallCompliant']
+            }
+            if ($overallCompliant) {
+                $documentationScore += 10
+                $documentationFactors.Add('Compliance evidence generated (+10)')
+            }
+        } else {
+            $documentationFactors.Add('No policies configured')
+        }
+    } else {
+        $documentationFactors.Add('Insufficient data')
+    }
+
+    $documentationScore = [Math]::Min(100, [Math]::Max(0, $documentationScore))
+
+    # ===================================================================
+    # Dimension 6: Automation (weight 15%)
+    # ===================================================================
+    $automationScore = 0.0
+    $automationFactors = [System.Collections.Generic.List[string]]::new()
+    $automationImprovement = 'Configure and run the daily orchestrator to assess automation maturity'
+
+    if ($null -ne $OrchestratorHistory) {
+        $metrics = & $safeGet $OrchestratorHistory 'Metrics'
+
+        if ($null -ne $metrics -and $metrics -is [hashtable]) {
+            $successRate = if ($metrics.ContainsKey('SuccessRate')) { [double]$metrics['SuccessRate'] } else { 0 }
+            $consecutiveFailures = if ($metrics.ContainsKey('ConsecutiveFailures')) { [int]$metrics['ConsecutiveFailures'] } else { 0 }
+            $runCount = if ($metrics.ContainsKey('RunCount')) { [int]$metrics['RunCount'] } else { 0 }
+
+            # Success rate maps directly
+            $automationScore = $successRate
+            $automationFactors.Add("Orchestrator success $($successRate)%")
+
+            # Penalty: consecutive failures > 2 = -15
+            if ($consecutiveFailures -gt 2) {
+                $automationScore -= 15
+                $automationFactors.Add("$consecutiveFailures consecutive failures (-15)")
+                $automationImprovement = "Investigate $consecutiveFailures consecutive orchestrator failures"
+            }
+
+            # Bonus: daily runs for 30+ days
+            if ($runCount -ge 30) {
+                $automationScore += 10
+                $automationFactors.Add("$runCount runs (30+ days, +10)")
+                if ($consecutiveFailures -le 2) {
+                    $failedRuns = $runCount - [Math]::Round($runCount * $successRate / 100)
+                    if ($failedRuns -gt 0) {
+                        $automationImprovement = "Investigate $failedRuns failed run(s) for root cause"
+                    } else {
+                        $automationImprovement = 'Maintain current automation reliability'
+                    }
+                }
+            } else {
+                if ($consecutiveFailures -le 2) {
+                    $automationImprovement = "Increase orchestrator run frequency (currently $runCount runs, target 30+)"
+                }
+            }
+        } else {
+            $automationFactors.Add('No orchestrator metrics available')
+        }
+    } else {
+        $automationFactors.Add('Insufficient data')
+    }
+
+    $automationScore = [Math]::Min(100, [Math]::Max(0, $automationScore))
+
+    # ===================================================================
+    # Build dimension results and weighted overall score
+    # ===================================================================
+    $weights = @{
+        Coverage       = 0.20
+        Timeliness     = 0.20
+        Enforcement    = 0.20
+        Accountability = 0.15
+        Documentation  = 0.10
+        Automation     = 0.15
+    }
+
+    $dimensionScores = @{
+        Coverage       = $coverageScore
+        Timeliness     = $timelinessScore
+        Enforcement    = $enforcementScore
+        Accountability = $accountabilityScore
+        Documentation  = $documentationScore
+        Automation     = $automationScore
+    }
+
+    $overallScore = 0.0
+    foreach ($dim in $weights.Keys) {
+        $overallScore += $dimensionScores[$dim] * $weights[$dim]
+    }
+    $overallScore = [Math]::Round($overallScore, 1)
+    $overallScore = [Math]::Min(100, [Math]::Max(0, $overallScore))
+
+    $overall = & $getLevel $overallScore
+
+    $dimensions = @{
+        Coverage = @{
+            Score       = [Math]::Round($coverageScore, 1)
+            Level       = (& $getLevel $coverageScore).Level
+            Weight      = $weights['Coverage']
+            KeyFactors  = @($coverageFactors)
+            Improvement = $coverageImprovement
+        }
+        Timeliness = @{
+            Score       = [Math]::Round($timelinessScore, 1)
+            Level       = (& $getLevel $timelinessScore).Level
+            Weight      = $weights['Timeliness']
+            KeyFactors  = @($timelinessFactors)
+            Improvement = $timelinessImprovement
+        }
+        Enforcement = @{
+            Score       = [Math]::Round($enforcementScore, 1)
+            Level       = (& $getLevel $enforcementScore).Level
+            Weight      = $weights['Enforcement']
+            KeyFactors  = @($enforcementFactors)
+            Improvement = $enforcementImprovement
+        }
+        Accountability = @{
+            Score       = [Math]::Round($accountabilityScore, 1)
+            Level       = (& $getLevel $accountabilityScore).Level
+            Weight      = $weights['Accountability']
+            KeyFactors  = @($accountabilityFactors)
+            Improvement = $accountabilityImprovement
+        }
+        Documentation = @{
+            Score       = [Math]::Round($documentationScore, 1)
+            Level       = (& $getLevel $documentationScore).Level
+            Weight      = $weights['Documentation']
+            KeyFactors  = @($documentationFactors)
+            Improvement = $documentationImprovement
+        }
+        Automation = @{
+            Score       = [Math]::Round($automationScore, 1)
+            Level       = (& $getLevel $automationScore).Level
+            Weight      = $weights['Automation']
+            KeyFactors  = @($automationFactors)
+            Improvement = $automationImprovement
+        }
+    }
+
+    # ===================================================================
+    # Top improvements sorted by potential score impact (highest first)
+    # ===================================================================
+    $improvements = [System.Collections.Generic.List[hashtable]]::new()
+    $maintainPhrases = @(
+        'Maintain current coverage level',
+        'Maintain current response time performance',
+        'Maintain current SLA compliance',
+        'Maintain current reviewer performance',
+        'Maintain current policy compliance',
+        'Maintain current automation reliability',
+        'No action needed'
+    )
+
+    foreach ($dimName in @('Coverage','Timeliness','Enforcement','Accountability','Documentation','Automation')) {
+        $dim = $dimensions[$dimName]
+        $potential = [Math]::Round((100 - $dim['Score']) * $dim['Weight'] * 100 / 100, 0)
+        if ($potential -gt 0 -and $dim['Improvement'] -notin $maintainPhrases) {
+            $improvements.Add(@{
+                Dimension   = $dimName
+                Improvement = $dim['Improvement']
+                Potential   = $potential
+            })
+        }
+    }
+
+    $sortedImprovements = @($improvements | Sort-Object { $_['Potential'] } -Descending)
+    $topImprovements = @($sortedImprovements | Select-Object -First 3 | ForEach-Object {
+        "$($_['Improvement']) ($($_['Dimension']): +$($_['Potential']) potential)"
+    })
+
+    Write-SPLog -Message "Measure-SPGovernanceMaturity: Overall=$overallScore (Level $($overall.Level) - $($overall.Name)), Coverage=$([Math]::Round($coverageScore,1)), Timeliness=$([Math]::Round($timelinessScore,1)), Enforcement=$([Math]::Round($enforcementScore,1)), Accountability=$([Math]::Round($accountabilityScore,1)), Documentation=$([Math]::Round($documentationScore,1)), Automation=$([Math]::Round($automationScore,1))" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPGovernanceMaturity' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        OverallScore     = $overallScore
+        OverallLevel     = $overall.Level
+        OverallLevelName = $overall.Name
+        EvaluatedAt      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        Dimensions       = $dimensions
+        TopImprovements  = $topImprovements
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
     'Measure-SPCampaignTrends',
     'Measure-SPReviewerReputation',
     'Measure-SPIdentityRisk',
-    'Measure-SPSourceGovernance'
+    'Measure-SPSourceGovernance',
+    'Measure-SPGovernanceMaturity'
 )

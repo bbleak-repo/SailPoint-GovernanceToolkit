@@ -7190,6 +7190,227 @@ function Export-SPGovernanceBIData {
 
 #endregion Orchestrator and BI Export
 
+#region Remediation Priority Report (P14-02)
+
+function Export-SPRemediationPriorityHtml {
+    <#
+    .SYNOPSIS
+        Generates an HTML remediation priority report and CSV export from
+        Get-SPRemediationPriority output.
+    .DESCRIPTION
+        Produces a Word-compatible HTML report with a ranked table of remediation
+        items, severity badges, expandable rationale sections, action type breakdown,
+        and a summary card. Also produces a companion CSV file for ServiceNow/Jira
+        import.
+        Uses inline CSS only (no flexbox/grid) for Word paste compatibility.
+    .PARAMETER PriorityData
+        Hashtable output from Get-SPRemediationPriority.
+    .PARAMETER OutputPath
+        Directory for the HTML and CSV output files.
+    .PARAMETER CorrelationID
+        Correlation ID for the report footer.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ HtmlPath; CsvPath }; Error }
+    .EXAMPLE
+        $queue = Get-SPRemediationPriority -IdentityRisk $risk -StaleAccess $stale
+        $result = Export-SPRemediationPriorityHtml -PriorityData $queue -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$PriorityData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+        New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+    }
+
+    $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    $dateStamp   = (Get-Date).ToString('yyyy-MM-dd')
+    $htmlFile    = Join-Path $OutputPath "RemediationPriority-${timestamp}.html"
+    $csvFile     = Join-Path $OutputPath "remediation-priority-${dateStamp}.csv"
+
+    $summary = $PriorityData['Summary']
+    $items   = @($PriorityData['Items'])
+
+    # --- Summary card ---
+    $summaryHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:12px 16px; background:#336699; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Total Items<br/><span style="font-size:22px;">$($summary['TotalItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#c0392b; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Critical<br/><span style="font-size:22px;">$($summary['CriticalItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#e67e22; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+High<br/><span style="font-size:22px;">$($summary['HighItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#f39c12; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Medium<br/><span style="font-size:22px;">$($summary['MediumItems'])</span>
+</td>
+<td style="padding:12px 16px; background:#27ae60; color:#ffffff; font-weight:bold; border:1px solid #dddddd; width:16%; text-align:center;">
+Low<br/><span style="font-size:22px;">$($summary['LowItems'])</span>
+</td>
+</tr>
+</table>
+"@
+
+    # --- Action type breakdown ---
+    $breakdown = $summary['ActionTypeBreakdown']
+    $breakdownHtml = @"
+<table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+<tr>
+<td style="padding:8px 12px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">RevokeAccess<br/><span style="font-size:18px;">$($breakdown['RevokeAccess'])</span></td>
+<td style="padding:8px 12px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">PendingRemediation<br/><span style="font-size:18px;">$($breakdown['CompletePendingRemediation'])</span></td>
+<td style="padding:8px 12px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">StaleEntitlement<br/><span style="font-size:18px;">$($breakdown['ReviewStaleEntitlement'])</span></td>
+<td style="padding:8px 12px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">ReviewerPerformance<br/><span style="font-size:18px;">$($breakdown['AddressReviewerPerformance'])</span></td>
+<td style="padding:8px 12px; background:#34495e; color:#ffffff; font-weight:bold; border:1px solid #dddddd; text-align:center;">PolicyViolation<br/><span style="font-size:18px;">$($breakdown['RemediatePolicyViolation'])</span></td>
+</tr>
+</table>
+"@
+
+    # --- Priority table ---
+    $headerRow = Build-HtmlTableHeader -Headers @(
+        'Rank', 'Severity', 'Priority', 'Action Type', 'Summary',
+        'Identity', 'Source', 'Entitlement', 'Effort', 'Rationale'
+    )
+
+    $bodyRows = [System.Collections.Generic.List[string]]::new()
+    $rowIdx = 0
+
+    foreach ($item in $items) {
+        $rowIdx++
+
+        $severityColor = switch ($item['Severity']) {
+            'Critical' { 'color:#fff; background:#c0392b;' }
+            'High'     { 'color:#fff; background:#e67e22;' }
+            'Medium'   { 'color:#fff; background:#f39c12;' }
+            'Low'      { 'color:#fff; background:#27ae60;' }
+            default    { 'color:#fff; background:#777777;' }
+        }
+        $severityBadge = "<span style=""display:inline-block; padding:2px 8px; border-radius:3px; font-size:11px; font-weight:bold; $severityColor"">$(ConvertTo-SafeHtml $item['Severity'])</span>"
+
+        $rationaleItems = @($item['Rationale'])
+        $rationaleHtml = if ($rationaleItems.Count -gt 0) {
+            $rationaleList = ($rationaleItems | ForEach-Object { ConvertTo-SafeHtml $_ }) -join '<br/>'
+            "<details><summary style=""cursor:pointer; font-size:12px; color:#336699;"">Details ($($rationaleItems.Count))</summary><div style=""font-size:12px; color:#555555; padding:4px 0;"">$rationaleList</div></details>"
+        } else { '-' }
+
+        $cells = @(
+            [string]$item['Rank'],
+            $severityBadge,
+            [string]$item['Priority'],
+            (ConvertTo-SafeHtml $item['ActionType']),
+            (ConvertTo-SafeHtml $item['Summary']),
+            (ConvertTo-SafeHtml $item['IdentityName']),
+            (ConvertTo-SafeHtml $item['SourceName']),
+            (ConvertTo-SafeHtml $item['EntitlementName']),
+            (ConvertTo-SafeHtml $item['EstimatedEffort']),
+            $rationaleHtml
+        )
+
+        $bodyRows.Add((Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 0)))
+    }
+
+    $tableHtml = @"
+<table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:20px;">
+${headerRow}
+<tbody>
+$($bodyRows -join "`n")
+</tbody>
+</table>
+"@
+
+    # --- Assemble full HTML ---
+    $html = @"
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Remediation Priority Queue</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; max-width:1200px; margin:0 auto; padding:20px; color:#333333;">
+
+<h1 style="font-size:22px; color:#2c3e50; margin-bottom:4px;">Remediation Priority Queue</h1>
+<p style="font-size:13px; color:#888888; margin-top:0;">Generated: ${generatedAt}</p>
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Severity Distribution</h2>
+${summaryHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Action Type Breakdown</h2>
+${breakdownHtml}
+
+<h2 style="font-size:16px; color:#2c3e50; margin-top:24px; margin-bottom:8px;">Priority Queue ($($items.Count) items)</h2>
+${tableHtml}
+
+<p style="font-size:12px; color:#888888; margin-top:16px;">CSV export: remediation-priority-${dateStamp}.csv</p>
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+    # --- CSV export ---
+    $csvRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($item in $items) {
+        $rationaleStr = @($item['Rationale']) -join '; '
+
+        $csvRows.Add([PSCustomObject]@{
+            Rank            = $item['Rank']
+            ActionType      = $item['ActionType']
+            Priority        = $item['Priority']
+            Severity        = $item['Severity']
+            Summary         = $item['Summary']
+            IdentityName    = $item['IdentityName']
+            SourceName      = $item['SourceName']
+            EntitlementName = $item['EntitlementName']
+            EstimatedEffort = $item['EstimatedEffort']
+            Rationale       = $rationaleStr
+        })
+    }
+
+    if ($csvRows.Count -gt 0) {
+        $csvRows | Export-Csv -Path $csvFile -NoTypeInformation -Encoding UTF8
+    } else {
+        # Write headers only
+        'Rank,ActionType,Priority,Severity,Summary,IdentityName,SourceName,EntitlementName,EstimatedEffort,Rationale' |
+            Set-Content -Path $csvFile -Encoding UTF8
+    }
+
+    Write-SPLog -Message "Remediation priority HTML written: $htmlFile, CSV: $csvFile" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRemediationPriorityHtml' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Success = $true
+        Data    = @{
+            HtmlPath = $htmlFile
+            CsvPath  = $csvFile
+        }
+        Error   = $null
+    }
+}
+
+#endregion Remediation Priority Report
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -7210,5 +7431,6 @@ Export-ModuleMember -Function @(
     'Export-SPStaleAccessHtml',
     'Export-SPCampaignCompletionReport',
     'Export-SPOrchestratorHistoryHtml',
-    'Export-SPGovernanceBIData'
+    'Export-SPGovernanceBIData',
+    'Export-SPRemediationPriorityHtml'
 )

@@ -108,6 +108,22 @@
 
         # SP.AuditQueries - Role Inventory (P13-02)
         'Get-SPRoleInventory'
+
+        # SP.AuditQueries - Configuration Snapshot (P14-06)
+        'Save-SPConfigurationSnapshot'
+        'Get-SPConfigurationSnapshot'
+
+        # SP.AuditAnalytics - Identity Access Spread (P13-03)
+        'Get-SPIdentityAccessSpread'
+
+        # SP.AuditReportHtml - Identity Access Spread Report (P13-03)
+        'Export-SPIdentityAccessSpreadHtml'
+
+        # SP.AuditAnalytics - Remediation Priority Queue (P14-02)
+        'Get-SPRemediationPriority'
+
+        # SP.AuditReportHtml - Remediation Priority Report (P14-02)
+        'Export-SPRemediationPriorityHtml'
     )
 
     # Do not export variables or aliases from nested modules
