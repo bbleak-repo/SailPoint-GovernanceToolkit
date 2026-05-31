@@ -1880,11 +1880,1992 @@ function Measure-SPSourceGovernance {
 
 #endregion
 
+#region P14-01: Governance Maturity Scorecard
+
+function Measure-SPGovernanceMaturity {
+    <#
+    .SYNOPSIS
+        Produces a composite governance maturity assessment across six dimensions.
+    .DESCRIPTION
+        Scores the organization across six governance dimensions (Coverage, Timeliness,
+        Enforcement, Accountability, Documentation, Automation) from 0 to 100, then maps
+        to a five-level maturity model aligned with CMMI / ISO 27001 Annex A.9.
+
+        Consumes pre-computed analytics outputs from existing toolkit functions. Dimensions
+        with null input data score 0 with note "Insufficient data". All null inputs returns
+        Level 1 with all dimensions at 0.
+    .PARAMETER SourceGovernance
+        Hashtable output from Measure-SPSourceGovernance.
+    .PARAMETER IdentityRisk
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER ReviewerReputation
+        Hashtable output from Measure-SPReviewerReputation.
+    .PARAMETER CampaignMetrics
+        Hashtable output from Measure-SPCampaignMetrics.
+    .PARAMETER StaleAccess
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER PolicyCompliance
+        Hashtable output from Test-SPGovernancePolicy.
+    .PARAMETER RemediationStatus
+        Hashtable output from Get-SPRemediationStatus.
+    .PARAMETER OrchestratorHistory
+        Hashtable output from Get-SPOrchestratorHistory.
+    .PARAMETER EntitlementInventory
+        Hashtable output from Get-SPEntitlementInventory.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] Maturity scorecard with OverallScore, OverallLevel, Dimensions, TopImprovements.
+    .EXAMPLE
+        $maturity = Measure-SPGovernanceMaturity -SourceGovernance $gov -ReviewerReputation $rep
+        $maturity.OverallLevelName   # 'Managed'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [hashtable]$SourceGovernance,
+
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [hashtable]$CampaignMetrics,
+
+        [Parameter()]
+        [hashtable]$StaleAccess,
+
+        [Parameter()]
+        [hashtable]$PolicyCompliance,
+
+        [Parameter()]
+        [hashtable]$RemediationStatus,
+
+        [Parameter()]
+        [hashtable]$OrchestratorHistory,
+
+        [Parameter()]
+        [hashtable]$EntitlementInventory,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Measure-SPGovernanceMaturity: starting maturity assessment" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPGovernanceMaturity' `
+        -CorrelationID $CorrelationID
+
+    # Helper: get maturity level from score
+    $getLevel = {
+        param([double]$score)
+        if ($score -le 20) { return @{ Level = 1; Name = 'Initial' } }
+        if ($score -le 40) { return @{ Level = 2; Name = 'Developing' } }
+        if ($score -le 60) { return @{ Level = 3; Name = 'Defined' } }
+        if ($score -le 80) { return @{ Level = 4; Name = 'Managed' } }
+        return @{ Level = 5; Name = 'Optimizing' }
+    }
+
+    # Helper: safely read hashtable key
+    $safeGet = {
+        param([hashtable]$ht, [string]$key)
+        if ($null -eq $ht) { return $null }
+        if ($ht.ContainsKey($key)) { return $ht[$key] }
+        return $null
+    }
+
+    # ===================================================================
+    # Dimension 1: Coverage (weight 20%)
+    # ===================================================================
+    $coverageScore = 0.0
+    $coverageFactors = [System.Collections.Generic.List[string]]::new()
+    $coverageImprovement = 'Provide source governance data to assess coverage'
+
+    if ($null -ne $SourceGovernance) {
+        $summary = & $safeGet $SourceGovernance 'Summary'
+        $sources = $SourceGovernance['Sources']
+
+        $overallCoverage = 0.0
+        if ($null -ne $summary -and $summary -is [hashtable] -and $summary.ContainsKey('OverallCoveragePct')) {
+            $overallCoverage = [double]$summary['OverallCoveragePct']
+        }
+
+        $coverageScore = $overallCoverage
+        $coverageFactors.Add("Overall coverage $($overallCoverage)%")
+
+        # Penalty: -15 per Grade F source
+        $gradeFCount = 0
+        if ($null -ne $sources) {
+            foreach ($src in @($sources)) {
+                if ($null -eq $src) { continue }
+                $grade = ''
+                if ($src -is [hashtable] -and $src.ContainsKey('GovernanceGrade')) {
+                    $grade = [string]$src['GovernanceGrade']
+                } elseif ($null -ne $src.PSObject -and $null -ne $src.PSObject.Properties['GovernanceGrade']) {
+                    $grade = [string]$src.GovernanceGrade
+                }
+                if ($grade -eq 'F') { $gradeFCount++ }
+            }
+        }
+
+        if ($gradeFCount -gt 0) {
+            $penalty = $gradeFCount * 15
+            $coverageScore = $coverageScore - $penalty
+            $coverageFactors.Add("$gradeFCount source(s) at Grade F (-$penalty)")
+            $fSourceNames = @(@($sources) | Where-Object {
+                $g = ''
+                if ($_ -is [hashtable] -and $_.ContainsKey('GovernanceGrade')) { $g = $_['GovernanceGrade'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['GovernanceGrade']) { $g = $_.GovernanceGrade }
+                $g -eq 'F'
+            } | ForEach-Object {
+                if ($_ -is [hashtable] -and $_.ContainsKey('SourceName')) { $_['SourceName'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['SourceName']) { $_.SourceName }
+                else { 'Unknown' }
+            })
+            $coverageImprovement = "Bring $($fSourceNames -join ', ') source(s) to Grade C or above"
+        } else {
+            if ($overallCoverage -lt 90) {
+                $coverageImprovement = "Increase overall coverage from $($overallCoverage)% toward 90%+"
+            } else {
+                $coverageImprovement = 'Maintain current coverage level'
+            }
+        }
+    } else {
+        $coverageFactors.Add('Insufficient data')
+    }
+
+    $coverageScore = [Math]::Min(100, [Math]::Max(0, $coverageScore))
+
+    # ===================================================================
+    # Dimension 2: Timeliness (weight 20%)
+    # ===================================================================
+    $timelinessScore = 0.0
+    $timelinessFactors = [System.Collections.Generic.List[string]]::new()
+    $timelinessImprovement = 'Provide campaign metrics data to assess timeliness'
+
+    if ($null -ne $CampaignMetrics) {
+        # CampaignMetrics from Measure-SPCampaignMetrics: @{Success; Data=@(PSCustomObject...)}
+        $metricsData = @()
+        if ($CampaignMetrics.ContainsKey('Data') -and $null -ne $CampaignMetrics['Data']) {
+            $metricsData = @($CampaignMetrics['Data'])
+        }
+
+        if ($metricsData.Count -gt 0) {
+            # Avg response hours across all campaigns
+            $responseHours = @($metricsData | ForEach-Object {
+                $h = $null
+                if ($_ -is [hashtable] -and $_.ContainsKey('AvgResponseTimeHours')) { $h = $_['AvgResponseTimeHours'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['AvgResponseTimeHours']) { $h = $_.AvgResponseTimeHours }
+                if ($null -ne $h) { [double]$h }
+            } | Where-Object { $_ -ge 0 })
+
+            $avgResponse = 36.0
+            if ($responseHours.Count -gt 0) {
+                $avgResponse = ($responseHours | Measure-Object -Average).Average
+            }
+
+            # Linear scale: <12h = 100, >72h = 0
+            $clamped = [Math]::Min(72, [Math]::Max(12, $avgResponse))
+            $timelinessScore = [Math]::Round((1 - (($clamped - 12) / 60)) * 100, 1)
+            $timelinessFactors.Add("Avg response $([Math]::Round($avgResponse, 1)) hours")
+
+            # Bonus/Penalty: deadline status
+            $overdueCount = 0
+            $totalCampaigns = $metricsData.Count
+            foreach ($m in $metricsData) {
+                $status = ''
+                if ($m -is [hashtable] -and $m.ContainsKey('DeadlineStatus')) { $status = [string]$m['DeadlineStatus'] }
+                elseif ($null -ne $m.PSObject -and $null -ne $m.PSObject.Properties['DeadlineStatus']) { $status = [string]$m.DeadlineStatus }
+                if ($status -eq 'Overdue') { $overdueCount++ }
+            }
+
+            if ($overdueCount -eq 0 -and $totalCampaigns -gt 0) {
+                $timelinessScore += 10
+                $timelinessFactors.Add('100% on-time completion (+10)')
+            }
+
+            if ($overdueCount -gt 0) {
+                $penalty = $overdueCount * 10
+                $timelinessScore -= $penalty
+                $timelinessFactors.Add("$overdueCount overdue campaign(s) (-$penalty)")
+            }
+
+            if ($avgResponse -gt 12) {
+                $timelinessImprovement = "Reduce avg response time below 12 hours (currently $([Math]::Round($avgResponse, 1))h)"
+            } else {
+                $timelinessImprovement = 'Maintain current response time performance'
+            }
+        } else {
+            $timelinessFactors.Add('No campaign metrics data available')
+        }
+    } else {
+        $timelinessFactors.Add('Insufficient data')
+    }
+
+    $timelinessScore = [Math]::Min(100, [Math]::Max(0, $timelinessScore))
+
+    # ===================================================================
+    # Dimension 3: Enforcement (weight 20%)
+    # ===================================================================
+    $enforcementScore = 0.0
+    $enforcementFactors = [System.Collections.Generic.List[string]]::new()
+    $enforcementImprovement = 'Provide remediation status data to assess enforcement'
+
+    if ($null -ne $RemediationStatus) {
+        $remData = $null
+        if ($RemediationStatus.ContainsKey('Data') -and $null -ne $RemediationStatus['Data']) {
+            $remData = $RemediationStatus['Data']
+        }
+
+        $remSummary = $null
+        if ($null -ne $remData -and $remData -is [hashtable] -and $remData.ContainsKey('Summary')) {
+            $remSummary = $remData['Summary']
+        }
+
+        if ($null -ne $remSummary -and $remSummary -is [hashtable]) {
+            $total = if ($remSummary.ContainsKey('Total')) { [int]$remSummary['Total'] } else { 0 }
+            $overdue = if ($remSummary.ContainsKey('Overdue')) { [int]$remSummary['Overdue'] } else { 0 }
+            $failed = if ($remSummary.ContainsKey('Failed')) { [int]$remSummary['Failed'] } else { 0 }
+
+            if ($total -gt 0) {
+                $slaCompliance = [Math]::Round((($total - $overdue - $failed) / $total) * 100, 1)
+                $enforcementScore = $slaCompliance
+                $enforcementFactors.Add("SLA compliance $($slaCompliance)%")
+
+                # Penalty: -5 per overdue item (max -20)
+                if ($overdue -gt 0) {
+                    $penalty = [Math]::Min(20, $overdue * 5)
+                    $enforcementScore -= $penalty
+                    $enforcementFactors.Add("$overdue overdue remediation(s) (-$penalty)")
+                    $enforcementImprovement = "Clear $overdue overdue remediation(s)"
+                } else {
+                    $enforcementImprovement = 'Maintain current SLA compliance'
+                }
+            } else {
+                $enforcementScore = 100
+                $enforcementFactors.Add('No remediations required (full compliance)')
+                $enforcementImprovement = 'No action needed'
+            }
+        } else {
+            $enforcementFactors.Add('Remediation summary not available')
+        }
+    } else {
+        $enforcementFactors.Add('Insufficient data')
+    }
+
+    # Bonus: Stale access < 5% of total entitlements
+    if ($null -ne $StaleAccess -and $null -ne $EntitlementInventory) {
+        $staleCount = 0
+        $staleSummary = & $safeGet $StaleAccess 'Summary'
+        if ($null -ne $staleSummary -and $staleSummary -is [hashtable] -and $staleSummary.ContainsKey('TotalStaleItems')) {
+            $staleCount = [int]$staleSummary['TotalStaleItems']
+        }
+
+        $totalEnts = 0
+        if ($EntitlementInventory -is [hashtable] -and $EntitlementInventory.ContainsKey('Data')) {
+            $invData = $EntitlementInventory['Data']
+            if ($null -ne $invData -and $invData -is [hashtable] -and $invData.ContainsKey('TotalEntitlements')) {
+                $totalEnts = [int]$invData['TotalEntitlements']
+            }
+        }
+
+        if ($totalEnts -gt 0) {
+            $stalePct = [Math]::Round(($staleCount / $totalEnts) * 100, 1)
+            if ($stalePct -lt 5) {
+                $enforcementScore += 10
+                $enforcementFactors.Add("Stale access $($stalePct)% (< 5%, +10)")
+            }
+        }
+    }
+
+    $enforcementScore = [Math]::Min(100, [Math]::Max(0, $enforcementScore))
+
+    # ===================================================================
+    # Dimension 4: Accountability (weight 15%)
+    # ===================================================================
+    $accountabilityScore = 0.0
+    $accountabilityFactors = [System.Collections.Generic.List[string]]::new()
+    $accountabilityImprovement = 'Provide reviewer reputation data to assess accountability'
+
+    if ($null -ne $ReviewerReputation) {
+        $reviewers = @()
+        if ($ReviewerReputation.ContainsKey('Reviewers') -and $null -ne $ReviewerReputation['Reviewers']) {
+            $reviewers = @($ReviewerReputation['Reviewers'])
+        }
+
+        if ($reviewers.Count -gt 0) {
+            # Avg reputation score maps directly
+            $repScores = @($reviewers | ForEach-Object {
+                if ($_ -is [hashtable] -and $_.ContainsKey('ReputationScore')) { [double]$_['ReputationScore'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReputationScore']) { [double]$_.ReputationScore }
+            } | Where-Object { $_ -ge 0 })
+
+            $avgReputation = 50.0
+            if ($repScores.Count -gt 0) {
+                $avgReputation = [Math]::Round(($repScores | Measure-Object -Average).Average, 1)
+            }
+
+            $accountabilityScore = $avgReputation
+            $accountabilityFactors.Add("Avg reputation $avgReputation")
+
+            # Penalty: -10 per At Risk reviewer (max -20)
+            $atRiskReviewers = @($reviewers | Where-Object {
+                $tier = ''
+                if ($_ -is [hashtable] -and $_.ContainsKey('ReputationTier')) { $tier = $_['ReputationTier'] }
+                elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReputationTier']) { $tier = $_.ReputationTier }
+                $tier -eq 'At Risk'
+            })
+
+            if ($atRiskReviewers.Count -gt 0) {
+                $penalty = [Math]::Min(20, $atRiskReviewers.Count * 10)
+                $accountabilityScore -= $penalty
+                $accountabilityFactors.Add("$($atRiskReviewers.Count) At Risk reviewer(s) (-$penalty)")
+
+                $atRiskNames = @($atRiskReviewers | ForEach-Object {
+                    if ($_ -is [hashtable] -and $_.ContainsKey('ReviewerName')) { $_['ReviewerName'] }
+                    elseif ($null -ne $_.PSObject -and $null -ne $_.PSObject.Properties['ReviewerName']) { $_.ReviewerName }
+                    else { 'Unknown' }
+                })
+                $accountabilityImprovement = "Address $($atRiskNames -join ', ') performance (At Risk tier)"
+            }
+
+            # Bonus: All Good or Excellent
+            $repSummary = & $safeGet $ReviewerReputation 'Summary'
+            $allGoodOrExcellent = $false
+            if ($null -ne $repSummary -and $repSummary -is [hashtable]) {
+                $atRiskCount = if ($repSummary.ContainsKey('AtRisk')) { [int]$repSummary['AtRisk'] } else { 0 }
+                $needsAttCount = if ($repSummary.ContainsKey('NeedsAttention')) { [int]$repSummary['NeedsAttention'] } else { 0 }
+                if ($atRiskCount -eq 0 -and $needsAttCount -eq 0 -and $reviewers.Count -gt 0) {
+                    $allGoodOrExcellent = $true
+                }
+            }
+
+            if ($allGoodOrExcellent) {
+                $accountabilityScore += 10
+                $accountabilityFactors.Add('All reviewers Good or Excellent (+10)')
+                $accountabilityImprovement = 'Maintain current reviewer performance'
+            } elseif ($atRiskReviewers.Count -eq 0) {
+                $accountabilityImprovement = 'Improve Needs Attention reviewers to Good tier'
+            }
+        } else {
+            $accountabilityFactors.Add('No reviewer data available')
+        }
+    } else {
+        $accountabilityFactors.Add('Insufficient data')
+    }
+
+    $accountabilityScore = [Math]::Min(100, [Math]::Max(0, $accountabilityScore))
+
+    # ===================================================================
+    # Dimension 5: Documentation (weight 10%)
+    # ===================================================================
+    $documentationScore = 0.0
+    $documentationFactors = [System.Collections.Generic.List[string]]::new()
+    $documentationImprovement = 'Implement governance policy engine and run policy compliance checks'
+
+    if ($null -ne $PolicyCompliance) {
+        # PolicyCompliance from Test-SPGovernancePolicy:
+        # @{ OverallCompliant; Policies=@(@{Result='PASS'/'FAIL'/'SKIPPED'; ...}); Summary=@{...} }
+        $policies = @()
+        if ($PolicyCompliance.ContainsKey('Policies') -and $null -ne $PolicyCompliance['Policies']) {
+            $policies = @($PolicyCompliance['Policies'])
+        }
+
+        if ($policies.Count -gt 0) {
+            $skippedCount = 0
+            $totalPolicies = $policies.Count
+            $passedCount = 0
+
+            foreach ($pol in $policies) {
+                $result = ''
+                if ($pol -is [hashtable] -and $pol.ContainsKey('Result')) { $result = [string]$pol['Result'] }
+                elseif ($null -ne $pol.PSObject -and $null -ne $pol.PSObject.Properties['Result']) { $result = [string]$pol.Result }
+                if ($result -eq 'SKIPPED') { $skippedCount++ }
+                if ($result -eq 'PASS') { $passedCount++ }
+            }
+
+            # Baseline: All policies evaluated (not skipped) = 80
+            $evaluated = $totalPolicies - $skippedCount
+            if ($evaluated -eq $totalPolicies -and $totalPolicies -gt 0) {
+                $documentationScore = 80
+                $documentationFactors.Add("$totalPolicies/$totalPolicies policies evaluated")
+            } elseif ($totalPolicies -gt 0) {
+                $documentationScore = [Math]::Round(($evaluated / $totalPolicies) * 80, 1)
+                $documentationFactors.Add("$evaluated/$totalPolicies policies evaluated ($skippedCount skipped)")
+            }
+
+            # Bonus: policy compliance rate > 80%
+            if ($evaluated -gt 0) {
+                $complianceRate = [Math]::Round(($passedCount / $evaluated) * 100, 1)
+                $documentationFactors.Add("$([Math]::Round($complianceRate, 0))% policy compliance")
+                if ($complianceRate -gt 80) {
+                    $documentationScore += 10
+                    $documentationFactors.Add('Policy compliance > 80% (+10)')
+                }
+
+                if ($complianceRate -le 80) {
+                    $documentationImprovement = "Improve policy compliance above 80% (currently $($complianceRate)%)"
+                } else {
+                    $documentationImprovement = 'Maintain current policy compliance'
+                }
+            }
+
+            # Bonus: compliance evidence packages generated (+10)
+            $overallCompliant = $false
+            if ($PolicyCompliance.ContainsKey('OverallCompliant')) {
+                $overallCompliant = [bool]$PolicyCompliance['OverallCompliant']
+            }
+            if ($overallCompliant) {
+                $documentationScore += 10
+                $documentationFactors.Add('Compliance evidence generated (+10)')
+            }
+        } else {
+            $documentationFactors.Add('No policies configured')
+        }
+    } else {
+        $documentationFactors.Add('Insufficient data')
+    }
+
+    $documentationScore = [Math]::Min(100, [Math]::Max(0, $documentationScore))
+
+    # ===================================================================
+    # Dimension 6: Automation (weight 15%)
+    # ===================================================================
+    $automationScore = 0.0
+    $automationFactors = [System.Collections.Generic.List[string]]::new()
+    $automationImprovement = 'Configure and run the daily orchestrator to assess automation maturity'
+
+    if ($null -ne $OrchestratorHistory) {
+        $metrics = & $safeGet $OrchestratorHistory 'Metrics'
+
+        if ($null -ne $metrics -and $metrics -is [hashtable]) {
+            $successRate = if ($metrics.ContainsKey('SuccessRate')) { [double]$metrics['SuccessRate'] } else { 0 }
+            $consecutiveFailures = if ($metrics.ContainsKey('ConsecutiveFailures')) { [int]$metrics['ConsecutiveFailures'] } else { 0 }
+            $runCount = if ($metrics.ContainsKey('RunCount')) { [int]$metrics['RunCount'] } else { 0 }
+
+            # Success rate maps directly
+            $automationScore = $successRate
+            $automationFactors.Add("Orchestrator success $($successRate)%")
+
+            # Penalty: consecutive failures > 2 = -15
+            if ($consecutiveFailures -gt 2) {
+                $automationScore -= 15
+                $automationFactors.Add("$consecutiveFailures consecutive failures (-15)")
+                $automationImprovement = "Investigate $consecutiveFailures consecutive orchestrator failures"
+            }
+
+            # Bonus: daily runs for 30+ days
+            if ($runCount -ge 30) {
+                $automationScore += 10
+                $automationFactors.Add("$runCount runs (30+ days, +10)")
+                if ($consecutiveFailures -le 2) {
+                    $failedRuns = $runCount - [Math]::Round($runCount * $successRate / 100)
+                    if ($failedRuns -gt 0) {
+                        $automationImprovement = "Investigate $failedRuns failed run(s) for root cause"
+                    } else {
+                        $automationImprovement = 'Maintain current automation reliability'
+                    }
+                }
+            } else {
+                if ($consecutiveFailures -le 2) {
+                    $automationImprovement = "Increase orchestrator run frequency (currently $runCount runs, target 30+)"
+                }
+            }
+        } else {
+            $automationFactors.Add('No orchestrator metrics available')
+        }
+    } else {
+        $automationFactors.Add('Insufficient data')
+    }
+
+    $automationScore = [Math]::Min(100, [Math]::Max(0, $automationScore))
+
+    # ===================================================================
+    # Build dimension results and weighted overall score
+    # ===================================================================
+    $weights = @{
+        Coverage       = 0.20
+        Timeliness     = 0.20
+        Enforcement    = 0.20
+        Accountability = 0.15
+        Documentation  = 0.10
+        Automation     = 0.15
+    }
+
+    $dimensionScores = @{
+        Coverage       = $coverageScore
+        Timeliness     = $timelinessScore
+        Enforcement    = $enforcementScore
+        Accountability = $accountabilityScore
+        Documentation  = $documentationScore
+        Automation     = $automationScore
+    }
+
+    $overallScore = 0.0
+    foreach ($dim in $weights.Keys) {
+        $overallScore += $dimensionScores[$dim] * $weights[$dim]
+    }
+    $overallScore = [Math]::Round($overallScore, 1)
+    $overallScore = [Math]::Min(100, [Math]::Max(0, $overallScore))
+
+    $overall = & $getLevel $overallScore
+
+    $dimensions = @{
+        Coverage = @{
+            Score       = [Math]::Round($coverageScore, 1)
+            Level       = (& $getLevel $coverageScore).Level
+            Weight      = $weights['Coverage']
+            KeyFactors  = @($coverageFactors)
+            Improvement = $coverageImprovement
+        }
+        Timeliness = @{
+            Score       = [Math]::Round($timelinessScore, 1)
+            Level       = (& $getLevel $timelinessScore).Level
+            Weight      = $weights['Timeliness']
+            KeyFactors  = @($timelinessFactors)
+            Improvement = $timelinessImprovement
+        }
+        Enforcement = @{
+            Score       = [Math]::Round($enforcementScore, 1)
+            Level       = (& $getLevel $enforcementScore).Level
+            Weight      = $weights['Enforcement']
+            KeyFactors  = @($enforcementFactors)
+            Improvement = $enforcementImprovement
+        }
+        Accountability = @{
+            Score       = [Math]::Round($accountabilityScore, 1)
+            Level       = (& $getLevel $accountabilityScore).Level
+            Weight      = $weights['Accountability']
+            KeyFactors  = @($accountabilityFactors)
+            Improvement = $accountabilityImprovement
+        }
+        Documentation = @{
+            Score       = [Math]::Round($documentationScore, 1)
+            Level       = (& $getLevel $documentationScore).Level
+            Weight      = $weights['Documentation']
+            KeyFactors  = @($documentationFactors)
+            Improvement = $documentationImprovement
+        }
+        Automation = @{
+            Score       = [Math]::Round($automationScore, 1)
+            Level       = (& $getLevel $automationScore).Level
+            Weight      = $weights['Automation']
+            KeyFactors  = @($automationFactors)
+            Improvement = $automationImprovement
+        }
+    }
+
+    # ===================================================================
+    # Top improvements sorted by potential score impact (highest first)
+    # ===================================================================
+    $improvements = [System.Collections.Generic.List[hashtable]]::new()
+    $maintainPhrases = @(
+        'Maintain current coverage level',
+        'Maintain current response time performance',
+        'Maintain current SLA compliance',
+        'Maintain current reviewer performance',
+        'Maintain current policy compliance',
+        'Maintain current automation reliability',
+        'No action needed'
+    )
+
+    foreach ($dimName in @('Coverage','Timeliness','Enforcement','Accountability','Documentation','Automation')) {
+        $dim = $dimensions[$dimName]
+        $potential = [Math]::Round((100 - $dim['Score']) * $dim['Weight'] * 100 / 100, 0)
+        if ($potential -gt 0 -and $dim['Improvement'] -notin $maintainPhrases) {
+            $improvements.Add(@{
+                Dimension   = $dimName
+                Improvement = $dim['Improvement']
+                Potential   = $potential
+            })
+        }
+    }
+
+    $sortedImprovements = @($improvements | Sort-Object { $_['Potential'] } -Descending)
+    $topImprovements = @($sortedImprovements | Select-Object -First 3 | ForEach-Object {
+        "$($_['Improvement']) ($($_['Dimension']): +$($_['Potential']) potential)"
+    })
+
+    Write-SPLog -Message "Measure-SPGovernanceMaturity: Overall=$overallScore (Level $($overall.Level) - $($overall.Name)), Coverage=$([Math]::Round($coverageScore,1)), Timeliness=$([Math]::Round($timelinessScore,1)), Enforcement=$([Math]::Round($enforcementScore,1)), Accountability=$([Math]::Round($accountabilityScore,1)), Documentation=$([Math]::Round($documentationScore,1)), Automation=$([Math]::Round($automationScore,1))" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Measure-SPGovernanceMaturity' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        OverallScore     = $overallScore
+        OverallLevel     = $overall.Level
+        OverallLevelName = $overall.Name
+        EvaluatedAt      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        Dimensions       = $dimensions
+        TopImprovements  = $topImprovements
+    }
+}
+
+#endregion
+
+#region Multi-Source Identity Correlation (P13-03)
+
+function Get-SPIdentityAccessSpread {
+    <#
+    .SYNOPSIS
+        Analyzes campaign audit data to identify identities with access spanning multiple sources.
+    .DESCRIPTION
+        Iterates campaign audit decision items to build a per-identity map of unique
+        sources they hold access on. Filters to identities meeting a minimum source
+        count threshold, with optional filtering to privileged-only sources.
+
+        Answers: "Which identities have the broadest access footprint across our
+        environment? Who has accounts on 5+ sources? Where is privilege concentrated?"
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables with Decisions (Approved/Revoked/Pending arrays).
+    .PARAMETER MinSources
+        Minimum number of unique sources an identity must have access on to be included. Default 3.
+    .PARAMETER PrivilegedOnly
+        When set, only count sources where the identity holds at least one privileged entitlement.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Identities = @(...); Summary = @{...} }
+    .EXAMPLE
+        $spread = Get-SPIdentityAccessSpread -CampaignAudits $audits -MinSources 3
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [hashtable[]]$CampaignAudits,
+
+        [Parameter()]
+        [int]$MinSources = 3,
+
+        [Parameter()]
+        [switch]$PrivilegedOnly,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPIdentityAccessSpread: starting with $($CampaignAudits.Count) campaign(s), MinSources=$MinSources, PrivilegedOnly=$PrivilegedOnly" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityAccessSpread' `
+        -CorrelationID $CorrelationID
+
+    if ($null -eq $CampaignAudits -or $CampaignAudits.Count -eq 0) {
+        return @{
+            Identities = @()
+            Summary    = @{
+                TotalIdentitiesAnalyzed        = 0
+                IdentitiesAboveThreshold       = 0
+                AvgSourceCount                 = 0
+                MaxSourceCount                 = 0
+                IdentitiesWithPrivilegedSpread = 0
+            }
+        }
+    }
+
+    $identityMap = @{}
+
+    foreach ($audit in $CampaignAudits) {
+        if ($null -eq $audit) { continue }
+
+        $decisions = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) {
+            $audit['Decisions']
+        } else { @{ Approved = @(); Revoked = @(); Pending = @() } }
+
+        foreach ($category in @('Approved', 'Revoked', 'Pending')) {
+            $items = @()
+            if ($decisions -is [hashtable] -and $decisions.ContainsKey($category) -and $null -ne $decisions[$category]) {
+                $items = @($decisions[$category])
+            }
+
+            foreach ($item in $items) {
+                if ($null -eq $item) { continue }
+
+                $identityId   = ''
+                $identityName = ''
+                $sourceName   = ''
+                $accessName   = ''
+                $decisionDate = ''
+                $decision     = ''
+                $riskFlags    = @()
+
+                if ($item -is [hashtable]) {
+                    $identityId   = if ($item.ContainsKey('IdentityId'))   { [string]$item['IdentityId'] }   else { '' }
+                    $identityName = if ($item.ContainsKey('IdentityName')) { [string]$item['IdentityName'] } else { '' }
+                    $sourceName   = if ($item.ContainsKey('SourceName'))   { [string]$item['SourceName'] }   else { '' }
+                    $accessName   = if ($item.ContainsKey('AccessName'))   { [string]$item['AccessName'] }   else { '' }
+                    $decisionDate = if ($item.ContainsKey('DecisionDate')) { [string]$item['DecisionDate'] } else { '' }
+                    $decision     = if ($item.ContainsKey('Decision'))     { [string]$item['Decision'] }     else { '' }
+                    $riskFlags    = if ($item.ContainsKey('RiskFlags') -and $null -ne $item['RiskFlags']) { @($item['RiskFlags']) } else { @() }
+                } else {
+                    $idProp = $item.PSObject.Properties['IdentityId']
+                    $identityId = if ($null -ne $idProp -and $null -ne $idProp.Value) { [string]$idProp.Value } else { '' }
+                    $nmProp = $item.PSObject.Properties['IdentityName']
+                    $identityName = if ($null -ne $nmProp -and $null -ne $nmProp.Value) { [string]$nmProp.Value } else { '' }
+                    $snProp = $item.PSObject.Properties['SourceName']
+                    $sourceName = if ($null -ne $snProp -and $null -ne $snProp.Value) { [string]$snProp.Value } else { '' }
+                    $anProp = $item.PSObject.Properties['AccessName']
+                    $accessName = if ($null -ne $anProp -and $null -ne $anProp.Value) { [string]$anProp.Value } else { '' }
+                    $ddProp = $item.PSObject.Properties['DecisionDate']
+                    $decisionDate = if ($null -ne $ddProp -and $null -ne $ddProp.Value) { [string]$ddProp.Value } else { '' }
+                    $dcProp = $item.PSObject.Properties['Decision']
+                    $decision = if ($null -ne $dcProp -and $null -ne $dcProp.Value) { [string]$dcProp.Value } else { '' }
+                    $rfProp = $item.PSObject.Properties['RiskFlags']
+                    $riskFlags = if ($null -ne $rfProp -and $null -ne $rfProp.Value) { @($rfProp.Value) } else { @() }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($identityId)) { continue }
+                if ([string]::IsNullOrWhiteSpace($sourceName)) { continue }
+
+                $isPrivileged = $false
+                foreach ($flag in $riskFlags) {
+                    if ($flag -eq 'PRIVILEGED') { $isPrivileged = $true; break }
+                }
+
+                if ([string]::IsNullOrWhiteSpace($decision)) {
+                    $decision = switch ($category) {
+                        'Approved' { 'APPROVE' }
+                        'Revoked'  { 'REVOKE' }
+                        default    { '' }
+                    }
+                }
+
+                if (-not $identityMap.ContainsKey($identityId)) {
+                    $identityMap[$identityId] = @{
+                        IdentityId    = $identityId
+                        IdentityName  = $identityName
+                        Sources       = @{}
+                        HasRevocation = $false
+                    }
+                }
+
+                $idRec = $identityMap[$identityId]
+
+                if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                    $idRec['IdentityName'] = $identityName
+                }
+
+                if ($decision.ToUpperInvariant() -eq 'REVOKE') {
+                    $idRec['HasRevocation'] = $true
+                }
+
+                if (-not $idRec['Sources'].ContainsKey($sourceName)) {
+                    $idRec['Sources'][$sourceName] = @{
+                        SourceName       = $sourceName
+                        EntitlementCount = 0
+                        PrivilegedCount  = 0
+                        LastReviewDate   = $null
+                        Entitlements     = @{}
+                    }
+                }
+
+                $srcRec = $idRec['Sources'][$sourceName]
+
+                if (-not [string]::IsNullOrWhiteSpace($accessName) -and -not $srcRec['Entitlements'].ContainsKey($accessName)) {
+                    $srcRec['Entitlements'][$accessName] = $true
+                    $srcRec['EntitlementCount']++
+                    if ($isPrivileged) {
+                        $srcRec['PrivilegedCount']++
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($decisionDate)) {
+                    try {
+                        $dt = [datetime]::Parse($decisionDate,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($null -eq $srcRec['LastReviewDate'] -or $dt -gt $srcRec['LastReviewDate']) {
+                            $srcRec['LastReviewDate'] = $dt
+                        }
+                    } catch { }
+                }
+            }
+        }
+    }
+
+    $totalAnalyzed = $identityMap.Count
+    $identityResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    foreach ($idKey in $identityMap.Keys) {
+        $idRec = $identityMap[$idKey]
+        $sources = $idRec['Sources']
+
+        $effectiveSources = @{}
+        foreach ($srcName in $sources.Keys) {
+            $srcRec = $sources[$srcName]
+            if ($PrivilegedOnly) {
+                if ($srcRec['PrivilegedCount'] -gt 0) {
+                    $effectiveSources[$srcName] = $srcRec
+                }
+            } else {
+                $effectiveSources[$srcName] = $srcRec
+            }
+        }
+
+        $sourceCount = $effectiveSources.Count
+        if ($sourceCount -lt $MinSources) { continue }
+
+        $totalEntitlements = 0
+        $privilegedEntitlements = 0
+        $broadestSourceName = ''
+        $broadestSourceCount = 0
+
+        $sourceDetails = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($srcName in $effectiveSources.Keys) {
+            $srcRec = $effectiveSources[$srcName]
+            $totalEntitlements += $srcRec['EntitlementCount']
+            $privilegedEntitlements += $srcRec['PrivilegedCount']
+
+            if ($srcRec['EntitlementCount'] -gt $broadestSourceCount) {
+                $broadestSourceCount = $srcRec['EntitlementCount']
+                $broadestSourceName = $srcName
+            }
+
+            $lastReviewStr = if ($null -ne $srcRec['LastReviewDate']) {
+                $srcRec['LastReviewDate'].ToString('yyyy-MM-dd')
+            } else { $null }
+
+            $sourceDetails.Add(@{
+                SourceId         = ''
+                SourceName       = $srcName
+                EntitlementCount = $srcRec['EntitlementCount']
+                PrivilegedCount  = $srcRec['PrivilegedCount']
+                LastReviewDate   = $lastReviewStr
+            })
+        }
+
+        $sortedSources = @($sourceDetails | Sort-Object { $_['EntitlementCount'] } -Descending)
+
+        $identityResults.Add(@{
+            IdentityId             = $idRec['IdentityId']
+            IdentityName           = $idRec['IdentityName']
+            SourceCount            = $sourceCount
+            TotalEntitlements      = $totalEntitlements
+            PrivilegedEntitlements = $privilegedEntitlements
+            ApprovalOnlyFlag       = (-not $idRec['HasRevocation'])
+            BroadestSource         = $broadestSourceName
+            Sources                = $sortedSources
+        })
+    }
+
+    $sorted = @($identityResults | Sort-Object @(
+        @{ Expression = { $_['SourceCount'] }; Descending = $true },
+        @{ Expression = { $_['PrivilegedEntitlements'] }; Descending = $true }
+    ))
+
+    $aboveThreshold = $sorted.Count
+    $maxSourceCount = 0
+    $totalSourceCounts = 0
+    $privilegedSpreadCount = 0
+
+    foreach ($id in $sorted) {
+        $totalSourceCounts += $id['SourceCount']
+        if ($id['SourceCount'] -gt $maxSourceCount) {
+            $maxSourceCount = $id['SourceCount']
+        }
+        $privSourceCount = 0
+        foreach ($src in $id['Sources']) {
+            if ($src['PrivilegedCount'] -gt 0) { $privSourceCount++ }
+        }
+        if ($privSourceCount -ge 2) { $privilegedSpreadCount++ }
+    }
+
+    $avgSourceCount = if ($aboveThreshold -gt 0) {
+        [Math]::Round($totalSourceCounts / $aboveThreshold, 1)
+    } else { 0 }
+
+    Write-SPLog -Message "Get-SPIdentityAccessSpread: analyzed $totalAnalyzed identities, $aboveThreshold above threshold (MinSources=$MinSources)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPIdentityAccessSpread' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Identities = $sorted
+        Summary    = @{
+            TotalIdentitiesAnalyzed        = $totalAnalyzed
+            IdentitiesAboveThreshold       = $aboveThreshold
+            AvgSourceCount                 = $avgSourceCount
+            MaxSourceCount                 = $maxSourceCount
+            IdentitiesWithPrivilegedSpread = $privilegedSpreadCount
+        }
+    }
+}
+
+#endregion
+
+
+#region P13-06: Audit Period Comparison
+
+function Compare-SPAuditPeriods {
+    <#
+    .SYNOPSIS
+        Compares two time windows across all governance dimensions.
+    .DESCRIPTION
+        Accepts two period hashtables, each containing pre-computed analytics output
+        (campaign metrics, identity risk, source governance, reviewer reputation,
+        stale access, remediation status), and produces a structured side-by-side
+        comparison with delta calculations and governance direction classification.
+
+        Direction classification:
+        - Improved: Metric moved in the governance-positive direction
+        - Degraded: Metric moved in the governance-negative direction
+        - Stable: Change within +/- 2% threshold
+
+        Answers: "How did our governance posture change between Q1 and Q2?"
+    .PARAMETER PeriodA
+        Hashtable for the baseline period. Expected keys: Label, DateRange,
+        CampaignMetrics, IdentityRisk, SourceGovernance, ReviewerReputation,
+        StaleAccess, RemediationStatus (optional).
+    .PARAMETER PeriodB
+        Hashtable for the comparison period (same structure as PeriodA).
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] Comparison result with Dimensions, OverallDirection, Summary.
+    .EXAMPLE
+        $q1 = @{ Label='Q1 2026'; DateRange=@{After='2026-01-01';Before='2026-03-31'}; CampaignMetrics=$cm1; IdentityRisk=$ir1 }
+        $q2 = @{ Label='Q2 2026'; DateRange=@{After='2026-04-01';Before='2026-06-30'}; CampaignMetrics=$cm2; IdentityRisk=$ir2 }
+        $result = Compare-SPAuditPeriods -PeriodA $q1 -PeriodB $q2
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$PeriodA,
+
+        [Parameter(Mandatory)]
+        [hashtable]$PeriodB,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Compare-SPAuditPeriods: comparing '$($PeriodA['Label'])' vs '$($PeriodB['Label'])'" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPAuditPeriods' `
+        -CorrelationID $CorrelationID
+
+    # --- Helper: safe hashtable key access ---
+    function Get-SafeValue {
+        param([object]$Obj, [string]$Key)
+        if ($null -eq $Obj) { return $null }
+        if ($Obj -is [hashtable]) {
+            if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }
+            return $null
+        }
+        $prop = $Obj.PSObject.Properties[$Key]
+        if ($null -ne $prop) { return $prop.Value }
+        return $null
+    }
+
+    # --- Helper: classify governance direction ---
+    function Get-Direction {
+        param(
+            [object]$ValA,
+            [object]$ValB,
+            [string]$PositiveDirection,  # 'higher', 'lower', 'none'
+            [double]$Threshold = 2.0
+        )
+        if ($null -eq $ValA -or $null -eq $ValB) { return 'N/A' }
+        $a = [double]$ValA
+        $b = [double]$ValB
+        $delta = [Math]::Round($b - $a, 2)
+        if ([Math]::Abs($delta) -le $Threshold) { return 'Stable' }
+        if ($PositiveDirection -eq 'none') { return 'Stable' }
+        if ($PositiveDirection -eq 'higher') {
+            return $(if ($delta -gt 0) { 'Improved' } else { 'Degraded' })
+        }
+        if ($PositiveDirection -eq 'lower') {
+            return $(if ($delta -lt 0) { 'Improved' } else { 'Degraded' })
+        }
+        return 'Stable'
+    }
+
+    # --- Helper: build metric comparison object ---
+    function New-MetricComparison {
+        param(
+            [object]$ValA,
+            [object]$ValB,
+            [string]$PositiveDirection,
+            [double]$Threshold = 2.0
+        )
+        if ($null -eq $ValA -and $null -eq $ValB) {
+            return @{ A = $null; B = $null; Delta = $null; Direction = 'N/A' }
+        }
+        if ($null -eq $ValA -or $null -eq $ValB) {
+            return @{
+                A = $ValA
+                B = $ValB
+                Delta = $null
+                Direction = 'N/A'
+            }
+        }
+        $a = [Math]::Round([double]$ValA, 1)
+        $b = [Math]::Round([double]$ValB, 1)
+        $delta = [Math]::Round($b - $a, 1)
+        $direction = Get-Direction -ValA $a -ValB $b -PositiveDirection $PositiveDirection -Threshold $Threshold
+        return @{ A = $a; B = $b; Delta = $delta; Direction = $direction }
+    }
+
+    # Direction counters for overall summary
+    $improvedCount = 0
+    $degradedCount = 0
+    $stableCount = 0
+
+    function Update-DirectionCounts {
+        param([string]$Dir)
+        switch ($Dir) {
+            'Improved' { $script:improvedCount++ }
+            'Degraded' { $script:degradedCount++ }
+            'Stable'   { $script:stableCount++ }
+        }
+    }
+
+    # ========================================
+    # 1. Campaign Metrics Delta
+    # ========================================
+    $campaignMetricsDim = $null
+    $cmA = Get-SafeValue $PeriodA 'CampaignMetrics'
+    $cmB = Get-SafeValue $PeriodB 'CampaignMetrics'
+
+    if ($null -ne $cmA -or $null -ne $cmB) {
+        # Extract aggregate values from Measure-SPCampaignMetrics output
+        # Output is @{ Success; Data = @(PSCustomObject[]) }
+        function Get-CampaignAggregates {
+            param([object]$CmOutput)
+            if ($null -eq $CmOutput) { return $null }
+            $data = $null
+            if ($CmOutput -is [hashtable] -and $CmOutput.ContainsKey('Data') -and $null -ne $CmOutput['Data']) {
+                $data = @($CmOutput['Data'])
+            } elseif ($CmOutput -is [array]) {
+                $data = @($CmOutput)
+            } else {
+                return $null
+            }
+            if ($data.Count -eq 0) { return $null }
+            $totalCampaigns = $data.Count
+            $sumApproval = 0.0; $sumRevocation = 0.0; $sumResponse = 0.0; $sumCompletion = 0.0
+            $responseCount = 0
+            foreach ($c in $data) {
+                $ar = Get-SafeValue $c 'ApprovalRate'
+                $rr = Get-SafeValue $c 'RevocationRate'
+                $rt = Get-SafeValue $c 'AvgResponseTimeHours'
+                $cr = Get-SafeValue $c 'CompletionRate'
+                if ($null -ne $ar) { $sumApproval += [double]$ar }
+                if ($null -ne $rr) { $sumRevocation += [double]$rr }
+                if ($null -ne $rt -and [double]$rt -gt 0) { $sumResponse += [double]$rt; $responseCount++ }
+                if ($null -ne $cr) { $sumCompletion += [double]$cr }
+            }
+            return @{
+                TotalCampaigns = $totalCampaigns
+                AvgApprovalRate = [Math]::Round($sumApproval / $totalCampaigns, 1)
+                AvgRevocationRate = [Math]::Round($sumRevocation / $totalCampaigns, 1)
+                AvgResponseHrs = if ($responseCount -gt 0) { [Math]::Round($sumResponse / $responseCount, 1) } else { $null }
+                AvgCompletionRate = [Math]::Round($sumCompletion / $totalCampaigns, 1)
+            }
+        }
+
+        $aggA = Get-CampaignAggregates $cmA
+        $aggB = Get-CampaignAggregates $cmB
+
+        $approvalComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgApprovalRate') `
+            -ValB (Get-SafeValue $aggB 'AvgApprovalRate') -PositiveDirection 'none'
+        Update-DirectionCounts $approvalComp['Direction']
+
+        $revocationComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgRevocationRate') `
+            -ValB (Get-SafeValue $aggB 'AvgRevocationRate') -PositiveDirection 'higher'
+        Update-DirectionCounts $revocationComp['Direction']
+
+        $responseComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgResponseHrs') `
+            -ValB (Get-SafeValue $aggB 'AvgResponseHrs') -PositiveDirection 'lower'
+        Update-DirectionCounts $responseComp['Direction']
+
+        $completionComp = New-MetricComparison -ValA (Get-SafeValue $aggA 'AvgCompletionRate') `
+            -ValB (Get-SafeValue $aggB 'AvgCompletionRate') -PositiveDirection 'higher'
+        Update-DirectionCounts $completionComp['Direction']
+
+        $campaignMetricsDim = @{
+            ApprovalRate   = $approvalComp
+            RevocationRate = $revocationComp
+            AvgResponseHrs = $responseComp
+            CompletionRate = $completionComp
+        }
+    }
+
+    # ========================================
+    # 2. Identity Risk Delta
+    # ========================================
+    $identityRiskDim = $null
+    $irA = Get-SafeValue $PeriodA 'IdentityRisk'
+    $irB = Get-SafeValue $PeriodB 'IdentityRisk'
+
+    if ($null -ne $irA -or $null -ne $irB) {
+        $irSumA = Get-SafeValue $irA 'Summary'
+        $irSumB = Get-SafeValue $irB 'Summary'
+
+        $highComp = New-MetricComparison -ValA (Get-SafeValue $irSumA 'High') `
+            -ValB (Get-SafeValue $irSumB 'High') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $highComp['Direction']
+
+        $avgRiskComp = New-MetricComparison -ValA (Get-SafeValue $irSumA 'AvgRiskScore') `
+            -ValB (Get-SafeValue $irSumB 'AvgRiskScore') -PositiveDirection 'lower'
+        Update-DirectionCounts $avgRiskComp['Direction']
+
+        # Identify new High-risk identities in B not in A
+        $newHighRisk = @()
+        $identsA = Get-SafeValue $irA 'Identities'
+        $identsB = Get-SafeValue $irB 'Identities'
+        if ($null -ne $identsA -and $null -ne $identsB) {
+            $highA = @{}
+            foreach ($id in @($identsA)) {
+                $tier = Get-SafeValue $id 'RiskTier'
+                if ($tier -eq 'High') {
+                    $idId = Get-SafeValue $id 'IdentityId'
+                    if (-not [string]::IsNullOrWhiteSpace($idId)) { $highA[$idId] = $true }
+                }
+            }
+            foreach ($id in @($identsB)) {
+                $tier = Get-SafeValue $id 'RiskTier'
+                if ($tier -eq 'High') {
+                    $idId = Get-SafeValue $id 'IdentityId'
+                    $idName = Get-SafeValue $id 'IdentityName'
+                    if (-not [string]::IsNullOrWhiteSpace($idId) -and -not $highA.ContainsKey($idId)) {
+                        $newHighRisk += if (-not [string]::IsNullOrWhiteSpace($idName)) { $idName } else { $idId }
+                    }
+                }
+            }
+        }
+
+        $identityRiskDim = @{
+            HighCount    = $highComp
+            AvgRiskScore = $avgRiskComp
+            NewHighRisk  = $newHighRisk
+        }
+    }
+
+    # ========================================
+    # 3. Source Governance Delta
+    # ========================================
+    $sourceGovernanceDim = $null
+    $sgA = Get-SafeValue $PeriodA 'SourceGovernance'
+    $sgB = Get-SafeValue $PeriodB 'SourceGovernance'
+
+    if ($null -ne $sgA -or $null -ne $sgB) {
+        $sgSumA = Get-SafeValue $sgA 'Summary'
+        $sgSumB = Get-SafeValue $sgB 'Summary'
+
+        $coverageComp = New-MetricComparison -ValA (Get-SafeValue $sgSumA 'OverallCoveragePct') `
+            -ValB (Get-SafeValue $sgSumB 'OverallCoveragePct') -PositiveDirection 'higher'
+        Update-DirectionCounts $coverageComp['Direction']
+
+        # Per-source grade changes
+        $gradeChanges = @()
+        $sourcesA = Get-SafeValue $sgA 'Sources'
+        $sourcesB = Get-SafeValue $sgB 'Sources'
+        if ($null -ne $sourcesA -and $null -ne $sourcesB) {
+            $gradeOrder = @{ 'A' = 5; 'B' = 4; 'C' = 3; 'D' = 2; 'F' = 1 }
+            $srcMapA = @{}
+            foreach ($s in @($sourcesA)) {
+                $sName = Get-SafeValue $s 'SourceName'
+                $sId = Get-SafeValue $s 'SourceId'
+                $key = if (-not [string]::IsNullOrWhiteSpace($sId)) { $sId } else { $sName }
+                if (-not [string]::IsNullOrWhiteSpace($key)) { $srcMapA[$key] = $s }
+            }
+            foreach ($sB in @($sourcesB)) {
+                $sName = Get-SafeValue $sB 'SourceName'
+                $sId = Get-SafeValue $sB 'SourceId'
+                $key = if (-not [string]::IsNullOrWhiteSpace($sId)) { $sId } else { $sName }
+                if ([string]::IsNullOrWhiteSpace($key)) { continue }
+                if ($srcMapA.ContainsKey($key)) {
+                    $sA = $srcMapA[$key]
+                    $gradeA = [string](Get-SafeValue $sA 'GovernanceGrade')
+                    $gradeB = [string](Get-SafeValue $sB 'GovernanceGrade')
+                    if ($gradeA -ne $gradeB) {
+                        $ordA = if ($gradeOrder.ContainsKey($gradeA)) { $gradeOrder[$gradeA] } else { 0 }
+                        $ordB = if ($gradeOrder.ContainsKey($gradeB)) { $gradeOrder[$gradeB] } else { 0 }
+                        $dir = if ($ordB -gt $ordA) { 'Improved' } elseif ($ordB -lt $ordA) { 'Degraded' } else { 'Stable' }
+                        $displayName = if (-not [string]::IsNullOrWhiteSpace($sName)) { $sName } else { $key }
+                        $gradeChanges += @{
+                            Source     = $displayName
+                            GradeA     = $gradeA
+                            GradeB     = $gradeB
+                            Direction  = $dir
+                        }
+                    }
+                }
+            }
+        }
+
+        $sourceGovernanceDim = @{
+            OverallCoverage = $coverageComp
+            GradeChanges    = $gradeChanges
+        }
+    }
+
+    # ========================================
+    # 4. Reviewer Reputation Delta
+    # ========================================
+    $reviewerReputationDim = $null
+    $rrA = Get-SafeValue $PeriodA 'ReviewerReputation'
+    $rrB = Get-SafeValue $PeriodB 'ReviewerReputation'
+
+    if ($null -ne $rrA -or $null -ne $rrB) {
+        # Compute average reputation score from Reviewers array
+        function Get-AvgReputationScore {
+            param([object]$RepData)
+            if ($null -eq $RepData) { return $null }
+            $reviewers = Get-SafeValue $RepData 'Reviewers'
+            if ($null -eq $reviewers -or @($reviewers).Count -eq 0) { return $null }
+            $total = 0.0
+            $count = 0
+            foreach ($r in @($reviewers)) {
+                $score = Get-SafeValue $r 'ReputationScore'
+                if ($null -ne $score) { $total += [double]$score; $count++ }
+            }
+            if ($count -eq 0) { return $null }
+            return [Math]::Round($total / $count, 1)
+        }
+
+        $avgScoreComp = New-MetricComparison -ValA (Get-AvgReputationScore $rrA) `
+            -ValB (Get-AvgReputationScore $rrB) -PositiveDirection 'higher'
+        Update-DirectionCounts $avgScoreComp['Direction']
+
+        # New At Risk reviewers in B not in A
+        $newAtRisk = @()
+        $tierImprovements = @()
+        $reviewersA = Get-SafeValue $rrA 'Reviewers'
+        $reviewersB = Get-SafeValue $rrB 'Reviewers'
+        if ($null -ne $reviewersA -and $null -ne $reviewersB) {
+            $tierMapA = @{}
+            foreach ($r in @($reviewersA)) {
+                $rName = Get-SafeValue $r 'ReviewerName'
+                $rTier = Get-SafeValue $r 'ReputationTier'
+                if (-not [string]::IsNullOrWhiteSpace($rName)) { $tierMapA[$rName] = $rTier }
+            }
+            foreach ($r in @($reviewersB)) {
+                $rName = Get-SafeValue $r 'ReviewerName'
+                $rTierB = Get-SafeValue $r 'ReputationTier'
+                if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+                $rTierA = if ($tierMapA.ContainsKey($rName)) { $tierMapA[$rName] } else { $null }
+
+                if ($rTierB -eq 'At Risk' -and $rTierA -ne 'At Risk') {
+                    $newAtRisk += $rName
+                }
+                # Detect tier improvements
+                if ($null -ne $rTierA -and $rTierA -ne $rTierB) {
+                    $tierOrder = @{ 'At Risk' = 1; 'Needs Attention' = 2; 'Good' = 3; 'Excellent' = 4 }
+                    $ordA = if ($tierOrder.ContainsKey($rTierA)) { $tierOrder[$rTierA] } else { 0 }
+                    $ordB = if ($tierOrder.ContainsKey($rTierB)) { $tierOrder[$rTierB] } else { 0 }
+                    if ($ordB -gt $ordA) {
+                        $tierImprovements += "${rName}: ${rTierA} -> ${rTierB}"
+                    }
+                }
+            }
+        }
+
+        $reviewerReputationDim = @{
+            AvgScore         = $avgScoreComp
+            NewAtRisk        = $newAtRisk
+            TierImprovements = $tierImprovements
+        }
+    }
+
+    # ========================================
+    # 5. Stale Access Delta
+    # ========================================
+    $staleAccessDim = $null
+    $saA = Get-SafeValue $PeriodA 'StaleAccess'
+    $saB = Get-SafeValue $PeriodB 'StaleAccess'
+
+    if ($null -ne $saA -or $null -ne $saB) {
+        $saSumA = Get-SafeValue $saA 'Summary'
+        $saSumB = Get-SafeValue $saB 'Summary'
+
+        $totalStaleComp = New-MetricComparison -ValA (Get-SafeValue $saSumA 'TotalStaleItems') `
+            -ValB (Get-SafeValue $saSumB 'TotalStaleItems') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $totalStaleComp['Direction']
+
+        $neverReviewedComp = New-MetricComparison -ValA (Get-SafeValue $saSumA 'NeverReviewed') `
+            -ValB (Get-SafeValue $saSumB 'NeverReviewed') -PositiveDirection 'lower' -Threshold 0
+        Update-DirectionCounts $neverReviewedComp['Direction']
+
+        $staleAccessDim = @{
+            TotalStale    = $totalStaleComp
+            NeverReviewed = $neverReviewedComp
+        }
+    }
+
+    # ========================================
+    # 6. Remediation Delta
+    # ========================================
+    $remediationDim = $null
+    $remA = Get-SafeValue $PeriodA 'RemediationStatus'
+    $remB = Get-SafeValue $PeriodB 'RemediationStatus'
+
+    if ($null -ne $remA -or $null -ne $remB) {
+        # RemediationStatus output: @{ Success; Data = @{ Items; Summary } }
+        function Get-RemediationSummary {
+            param([object]$RemOutput)
+            if ($null -eq $RemOutput) { return $null }
+            if ($RemOutput -is [hashtable] -and $RemOutput.ContainsKey('Data') -and $null -ne $RemOutput['Data']) {
+                $data = $RemOutput['Data']
+                if ($data -is [hashtable] -and $data.ContainsKey('Summary')) { return $data['Summary'] }
+            }
+            if ($RemOutput -is [hashtable] -and $RemOutput.ContainsKey('Summary')) { return $RemOutput['Summary'] }
+            return $null
+        }
+
+        $remSumA = Get-RemediationSummary $remA
+        $remSumB = Get-RemediationSummary $remB
+
+        # SLA compliance = (Provisioned / Total) * 100
+        function Get-SlaComplianceRate {
+            param([object]$Summary)
+            if ($null -eq $Summary) { return $null }
+            $total = Get-SafeValue $Summary 'Total'
+            $provisioned = Get-SafeValue $Summary 'Provisioned'
+            if ($null -eq $total -or [int]$total -eq 0) { return $null }
+            return [Math]::Round(([double]$provisioned / [double]$total) * 100, 1)
+        }
+
+        $slaComp = New-MetricComparison -ValA (Get-SlaComplianceRate $remSumA) `
+            -ValB (Get-SlaComplianceRate $remSumB) -PositiveDirection 'higher'
+        Update-DirectionCounts $slaComp['Direction']
+
+        $avgDaysComp = New-MetricComparison -ValA (Get-SafeValue $remSumA 'AvgDaysToRemediate') `
+            -ValB (Get-SafeValue $remSumB 'AvgDaysToRemediate') -PositiveDirection 'lower'
+        Update-DirectionCounts $avgDaysComp['Direction']
+
+        $remediationDim = @{
+            SlaCompliance      = $slaComp
+            AvgDaysToRemediate = $avgDaysComp
+        }
+    }
+
+    # ========================================
+    # Overall Direction (majority vote)
+    # ========================================
+    $overallDirection = 'Stable'
+    if ($improvedCount -gt $degradedCount -and $improvedCount -gt $stableCount) {
+        $overallDirection = 'Improved'
+    } elseif ($degradedCount -gt $improvedCount -and $degradedCount -gt $stableCount) {
+        $overallDirection = 'Degraded'
+    }
+
+    # Handle all-N/A case
+    $totalDirectional = $improvedCount + $degradedCount + $stableCount
+    if ($totalDirectional -eq 0) {
+        $overallDirection = 'N/A'
+    }
+
+    $dimensions = @{}
+    if ($null -ne $campaignMetricsDim)   { $dimensions['CampaignMetrics']    = $campaignMetricsDim }
+    if ($null -ne $identityRiskDim)      { $dimensions['IdentityRisk']       = $identityRiskDim }
+    if ($null -ne $sourceGovernanceDim)  { $dimensions['SourceGovernance']   = $sourceGovernanceDim }
+    if ($null -ne $reviewerReputationDim){ $dimensions['ReviewerReputation'] = $reviewerReputationDim }
+    if ($null -ne $staleAccessDim)       { $dimensions['StaleAccess']        = $staleAccessDim }
+    if ($null -ne $remediationDim)       { $dimensions['Remediation']        = $remediationDim }
+
+    Write-SPLog -Message "Compare-SPAuditPeriods: completed -- Improved=$improvedCount, Degraded=$degradedCount, Stable=$stableCount, Overall=$overallDirection" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Compare-SPAuditPeriods' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        PeriodA          = @{
+            Label     = Get-SafeValue $PeriodA 'Label'
+            DateRange = Get-SafeValue $PeriodA 'DateRange'
+        }
+        PeriodB          = @{
+            Label     = Get-SafeValue $PeriodB 'Label'
+            DateRange = Get-SafeValue $PeriodB 'DateRange'
+        }
+        Dimensions       = $dimensions
+        OverallDirection = $overallDirection
+        Summary          = @{
+            Improved = $improvedCount
+            Degraded = $degradedCount
+            Stable   = $stableCount
+        }
+    }
+}
+
+#endregion
+
+#region P14-02: Remediation Priority Queue
+
+function Get-SPRemediationPriority {
+    <#
+    .SYNOPSIS
+        Produces a ranked queue of actionable remediation items across all governance dimensions.
+    .DESCRIPTION
+        Synthesizes identity risk, stale access, policy violations, remediation status,
+        and reviewer reputation into a single ranked list of specific, actionable
+        remediation items. Each item has a priority score, severity, and rationale.
+
+        Action types:
+        - RevokeAccess: Identity with high risk + stale/privileged entitlement
+        - CompletePendingRemediation: Revocation decided but not yet provisioned
+        - ReviewStaleEntitlement: Entitlement never reviewed or review expired
+        - AddressReviewerPerformance: Reviewer at At Risk tier
+        - RemediatePolicyViolation: Policy in FAIL state
+
+        Items are deduplicated by identity+entitlement pair (highest priority kept)
+        and sorted by priority descending.
+    .PARAMETER IdentityRisk
+        Hashtable output from Measure-SPIdentityRisk.
+    .PARAMETER StaleAccess
+        Hashtable output from Get-SPStaleAccess.
+    .PARAMETER PolicyCompliance
+        Hashtable output from Test-SPGovernancePolicy.
+    .PARAMETER RemediationStatus
+        Hashtable output from Get-SPRemediationStatus.
+    .PARAMETER ReviewerReputation
+        Hashtable output from Measure-SPReviewerReputation.
+    .PARAMETER MaxItems
+        Maximum number of items to return. Default 50.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ Items = @(...); Summary = @{...} }
+    .EXAMPLE
+        $queue = Get-SPRemediationPriority -IdentityRisk $risk -StaleAccess $stale -MaxItems 20
+        $queue.Items | Where-Object { $_.Severity -eq 'Critical' }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [hashtable]$IdentityRisk,
+
+        [Parameter()]
+        [hashtable]$StaleAccess,
+
+        [Parameter()]
+        [hashtable]$PolicyCompliance,
+
+        [Parameter()]
+        [hashtable]$RemediationStatus,
+
+        [Parameter()]
+        [hashtable]$ReviewerReputation,
+
+        [Parameter()]
+        [int]$MaxItems = 50,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Get-SPRemediationPriority: starting priority queue generation, MaxItems=$MaxItems" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPRemediationPriority' `
+        -CorrelationID $CorrelationID
+
+    $candidates = [System.Collections.Generic.List[hashtable]]::new()
+    $dedupMap = @{}
+
+    function _SafeVal ($obj, [string]$key, $default = $null) {
+        if ($null -eq $obj) { return $default }
+        if ($obj -is [hashtable]) {
+            if ($obj.ContainsKey($key) -and $null -ne $obj[$key]) { return $obj[$key] }
+            return $default
+        }
+        if ($null -ne $obj.PSObject -and $null -ne $obj.PSObject.Properties[$key]) {
+            $v = $obj.PSObject.Properties[$key].Value
+            if ($null -ne $v) { return $v }
+        }
+        return $default
+    }
+
+    function _Severity ([int]$priority) {
+        if ($priority -ge 80) { return 'Critical' }
+        if ($priority -ge 60) { return 'High' }
+        if ($priority -ge 40) { return 'Medium' }
+        return 'Low'
+    }
+
+    # Action Type 1: RevokeAccess (from IdentityRisk + StaleAccess)
+    if ($null -ne $IdentityRisk -and $IdentityRisk.ContainsKey('Identities')) {
+        foreach ($identity in @($IdentityRisk['Identities'])) {
+            if ($null -eq $identity) { continue }
+            $riskScore    = [int](_SafeVal $identity 'RiskScore' 0)
+            $riskTier     = [string](_SafeVal $identity 'RiskTier' 'Low')
+            $identityId   = [string](_SafeVal $identity 'IdentityId' '')
+            $identityName = [string](_SafeVal $identity 'IdentityName' '')
+            if ($riskTier -eq 'Low') { continue }
+            $privCount  = [int](_SafeVal $identity 'PrivilegedAccessCount' 0)
+            $staleCount = [int](_SafeVal $identity 'StaleAccessCount' 0)
+            if ($privCount -gt 0 -or $staleCount -gt 0) {
+                $isPrivileged = ($privCount -gt 0)
+                $isStale = ($staleCount -gt 0)
+                $priority = $riskScore + $(if ($isPrivileged) { 20 } else { 0 }) + $(if ($isStale) { 15 } else { 0 })
+                $priority = [Math]::Min(100, $priority)
+                $rationale = [System.Collections.Generic.List[string]]::new()
+                $rationale.Add("Identity risk score $riskScore ($riskTier tier)")
+                if ($isPrivileged) { $rationale.Add('Privileged entitlement') }
+                if ($isStale) { $rationale.Add('Stale access detected') }
+                $candidates.Add(@{
+                    ActionType      = 'RevokeAccess'
+                    Priority        = $priority
+                    Severity        = (_Severity $priority)
+                    Summary         = "Revoke access for $identityName (risk $riskScore)"
+                    IdentityName    = $identityName
+                    IdentityId      = $identityId
+                    SourceName      = ''
+                    EntitlementName = 'Privileged/Stale Access'
+                    Rationale       = @($rationale)
+                    EstimatedEffort = $(if ($isPrivileged) { 'Medium' } else { 'Low' })
+                })
+            }
+        }
+    }
+
+    # Action Type 2: CompletePendingRemediation (from RemediationStatus)
+    if ($null -ne $RemediationStatus) {
+        $remData = $null
+        if ($RemediationStatus.ContainsKey('Data') -and $null -ne $RemediationStatus['Data']) {
+            $remData = $RemediationStatus['Data']
+        } elseif ($RemediationStatus.ContainsKey('Items')) {
+            $remData = $RemediationStatus
+        }
+        if ($null -ne $remData -and $remData.ContainsKey('Items')) {
+            foreach ($remItem in @($remData['Items'])) {
+                if ($null -eq $remItem) { continue }
+                $status = [string](_SafeVal $remItem 'Status' '')
+                if ($status -ne 'Pending' -and $status -ne 'Overdue') { continue }
+                $isOverdue = ($status -eq 'Overdue')
+                $daysOverdue = 0
+                $decisionDateStr = [string](_SafeVal $remItem 'DecisionDate' '')
+                if ($isOverdue -and -not [string]::IsNullOrWhiteSpace($decisionDateStr)) {
+                    try {
+                        $decDt = [datetime]::Parse($decisionDateStr,
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        $daysOverdue = [int]((Get-Date) - $decDt).TotalDays
+                    } catch { }
+                }
+                $priority = 80 + $(if ($isOverdue) { 20 } else { 0 }) + [Math]::Min($daysOverdue * 2, 20)
+                $priority = [Math]::Min(100, $priority)
+                $identityName    = [string](_SafeVal $remItem 'IdentityName' 'Unknown')
+                $identityId      = [string](_SafeVal $remItem 'IdentityId' '')
+                $entitlementName = [string](_SafeVal $remItem 'EntitlementName' '')
+                $sourceName      = [string](_SafeVal $remItem 'SourceName' '')
+                $rationale = [System.Collections.Generic.List[string]]::new()
+                $rationale.Add("Revocation decided but not provisioned ($status)")
+                if ($isOverdue) { $rationale.Add("$daysOverdue days overdue") }
+                $candidates.Add(@{
+                    ActionType      = 'CompletePendingRemediation'
+                    Priority        = $priority
+                    Severity        = (_Severity $priority)
+                    Summary         = "Complete pending remediation: $entitlementName for $identityName"
+                    IdentityName    = $identityName
+                    IdentityId      = $identityId
+                    SourceName      = $sourceName
+                    EntitlementName = $entitlementName
+                    Rationale       = @($rationale)
+                    EstimatedEffort = 'Low'
+                })
+            }
+        }
+    }
+
+    # Action Type 3: ReviewStaleEntitlement (from StaleAccess)
+    if ($null -ne $StaleAccess -and $StaleAccess.ContainsKey('StaleItems')) {
+        foreach ($staleItem in @($StaleAccess['StaleItems'])) {
+            if ($null -eq $staleItem) { continue }
+            $isPrivileged    = [bool](_SafeVal $staleItem 'Privileged' $false)
+            $classification  = [string](_SafeVal $staleItem 'Classification' '')
+            $isNeverReviewed = ($classification -eq 'NeverReviewed')
+            $priority = 50 + $(if ($isPrivileged) { 25 } else { 0 }) + $(if ($isNeverReviewed) { 15 } else { 0 })
+            $priority = [Math]::Min(100, $priority)
+            $entitlementName = [string](_SafeVal $staleItem 'EntitlementName' '')
+            $sourceName      = [string](_SafeVal $staleItem 'SourceName' '')
+            $daysSince       = _SafeVal $staleItem 'DaysSinceReview' $null
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            if ($isNeverReviewed) {
+                $rationale.Add('Entitlement has never been reviewed')
+            } else {
+                $rationale.Add($(if ($null -ne $daysSince) { "$daysSince days since last review" } else { 'Review expired' }))
+            }
+            if ($isPrivileged) { $rationale.Add('Privileged entitlement') }
+            $candidates.Add(@{
+                ActionType      = 'ReviewStaleEntitlement'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Review stale entitlement: $entitlementName on $sourceName"
+                IdentityName    = ''
+                IdentityId      = ''
+                SourceName      = $sourceName
+                EntitlementName = $entitlementName
+                Rationale       = @($rationale)
+                EstimatedEffort = $(if ($isPrivileged) { 'Medium' } else { 'Low' })
+            })
+        }
+    }
+
+    # Action Type 4: AddressReviewerPerformance (from ReviewerReputation)
+    if ($null -ne $ReviewerReputation -and $ReviewerReputation.ContainsKey('Reviewers')) {
+        foreach ($reviewer in @($ReviewerReputation['Reviewers'])) {
+            if ($null -eq $reviewer) { continue }
+            $repTier = [string](_SafeVal $reviewer 'ReputationTier' '')
+            if ($repTier -ne 'At Risk') { continue }
+            $repScore = [int](_SafeVal $reviewer 'ReputationScore' 50)
+            $priority = 60 + $(if ($repScore -lt 20) { 20 } else { 0 })
+            $priority = [Math]::Min(100, $priority)
+            $reviewerName = [string](_SafeVal $reviewer 'ReviewerName' 'Unknown')
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            $rationale.Add("Reviewer reputation score $repScore (At Risk tier)")
+            $rationale.Add('Reviewer needs coaching or reassignment')
+            $candidates.Add(@{
+                ActionType      = 'AddressReviewerPerformance'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Address reviewer performance: $reviewerName"
+                IdentityName    = $reviewerName
+                IdentityId      = [string](_SafeVal $reviewer 'ReviewerIdentityId' '')
+                SourceName      = ''
+                EntitlementName = ''
+                Rationale       = @($rationale)
+                EstimatedEffort = 'Medium'
+            })
+        }
+    }
+
+    # Action Type 5: RemediatePolicyViolation (from PolicyCompliance)
+    if ($null -ne $PolicyCompliance -and $PolicyCompliance.ContainsKey('Policies')) {
+        foreach ($policy in @($PolicyCompliance['Policies'])) {
+            if ($null -eq $policy) { continue }
+            $result = [string](_SafeVal $policy 'Result' '')
+            if ($result -ne 'FAIL') { continue }
+            $severity    = [string](_SafeVal $policy 'Severity' 'Warning')
+            $isCritical  = ($severity -eq 'Critical')
+            $violations  = @(_SafeVal $policy 'Violations' @())
+            $violationCount = $violations.Count
+            $priority = $(if ($isCritical) { 90 } else { 60 }) + [Math]::Min($violationCount, 10)
+            $priority = [Math]::Min(100, $priority)
+            $policyName = [string](_SafeVal $policy 'Name' 'Unknown Policy')
+            $policyId   = [string](_SafeVal $policy 'Id' '')
+            $details    = [string](_SafeVal $policy 'Details' '')
+            $rationale = [System.Collections.Generic.List[string]]::new()
+            $rationale.Add("Policy $policyId ($policyName) in FAIL state")
+            if (-not [string]::IsNullOrWhiteSpace($details)) { $rationale.Add($details) }
+            $rationale.Add("Severity: $severity")
+            $candidates.Add(@{
+                ActionType      = 'RemediatePolicyViolation'
+                Priority        = $priority
+                Severity        = (_Severity $priority)
+                Summary         = "Remediate policy violation: $policyName"
+                IdentityName    = ''
+                IdentityId      = ''
+                SourceName      = ''
+                EntitlementName = $policyId
+                Rationale       = @($rationale)
+                EstimatedEffort = $(if ($isCritical) { 'High' } else { 'Medium' })
+            })
+        }
+    }
+
+    # Deduplication: same identity + entitlement pair keeps highest priority
+    $deduped = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($item in $candidates) {
+        $idVal  = $item['IdentityId']
+        $entVal = $item['EntitlementName']
+        if ([string]::IsNullOrWhiteSpace($idVal) -or [string]::IsNullOrWhiteSpace($entVal)) {
+            $deduped.Add($item)
+            continue
+        }
+        $dedupKey = "$idVal|$entVal"
+        if ($dedupMap.ContainsKey($dedupKey)) {
+            $existingIdx = $dedupMap[$dedupKey]
+            if ($item['Priority'] -gt $deduped[$existingIdx]['Priority']) {
+                $deduped[$existingIdx] = $item
+            }
+        } else {
+            $dedupMap[$dedupKey] = $deduped.Count
+            $deduped.Add($item)
+        }
+    }
+
+    # Sort by priority descending and apply MaxItems
+    $sorted = @($deduped | Sort-Object { $_['Priority'] } -Descending)
+    if ($sorted.Count -gt $MaxItems) {
+        $sorted = @($sorted[0..($MaxItems - 1)])
+    }
+
+    # Assign ranks and build summary
+    $rank = 0
+    $criticalCount = 0; $highCount = 0; $mediumCount = 0; $lowCount = 0
+    $actionBreakdown = @{
+        RevokeAccess               = 0
+        CompletePendingRemediation = 0
+        ReviewStaleEntitlement     = 0
+        AddressReviewerPerformance = 0
+        RemediatePolicyViolation   = 0
+    }
+    foreach ($item in $sorted) {
+        $rank++
+        $item['Rank'] = $rank
+        switch ($item['Severity']) {
+            'Critical' { $criticalCount++ }
+            'High'     { $highCount++ }
+            'Medium'   { $mediumCount++ }
+            'Low'      { $lowCount++ }
+        }
+        $at = $item['ActionType']
+        if ($actionBreakdown.ContainsKey($at)) { $actionBreakdown[$at]++ }
+    }
+
+    Write-SPLog -Message "Get-SPRemediationPriority: generated $($sorted.Count) items (Critical=$criticalCount, High=$highCount, Medium=$mediumCount, Low=$lowCount)" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Get-SPRemediationPriority' `
+        -CorrelationID $CorrelationID
+
+    return @{
+        Items   = $sorted
+        Summary = @{
+            TotalItems          = $sorted.Count
+            CriticalItems       = $criticalCount
+            HighItems           = $highCount
+            MediumItems         = $mediumCount
+            LowItems            = $lowCount
+            ActionTypeBreakdown = $actionBreakdown
+        }
+    }
+}
+
+#endregion
+
+#region Governance Policy Engine (P13-04)
+
+function Test-SPGovernancePolicy {
+    <#
+    .SYNOPSIS
+        Evaluates the current governance state against configurable policies.
+    .DESCRIPTION
+        Checks governance data against policies defined in GovernancePolicy config.
+        Produces a pass/fail result per policy. Policy types: ReviewFrequency,
+        SourceCoverage, IdentityRisk, StaleAccess, ReviewerPerformance.
+    .PARAMETER CampaignAudits
+        Array of campaign audit hashtables.
+    .PARAMETER IdentityRisk
+        Hashtable from Measure-SPIdentityRisk output.
+    .PARAMETER SourceGovernance
+        Hashtable from Measure-SPSourceGovernance output.
+    .PARAMETER StaleAccess
+        Hashtable from Get-SPStaleAccess output.
+    .PARAMETER ReviewerReputation
+        Hashtable from Measure-SPReviewerReputation output.
+    .PARAMETER EntitlementInventory
+        Hashtable from Get-SPEntitlementInventory .Data output.
+    .PARAMETER CorrelationID
+        Correlation ID for logging.
+    .OUTPUTS
+        [hashtable] @{ OverallCompliant; EvaluatedAt; Policies; Summary }
+    .EXAMPLE
+        $result = Test-SPGovernancePolicy -IdentityRisk $risk -SourceGovernance $gov
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][hashtable[]]$CampaignAudits,
+        [Parameter()][hashtable]$IdentityRisk,
+        [Parameter()][hashtable]$SourceGovernance,
+        [Parameter()][hashtable]$StaleAccess,
+        [Parameter()][hashtable]$ReviewerReputation,
+        [Parameter()][hashtable]$EntitlementInventory,
+        [Parameter()][string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+
+    Write-SPLog -Message "Test-SPGovernancePolicy: starting policy evaluation" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+
+    $evaluatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    # Load governance policy config
+    $config = $null
+    try { $config = Get-SPConfig } catch { }
+
+    $policyConfig = $null
+    if ($null -ne $config) {
+        if ($config -is [hashtable] -and $config.ContainsKey('GovernancePolicy')) { $policyConfig = $config['GovernancePolicy'] }
+        elseif ($null -ne $config.PSObject -and $null -ne $config.PSObject.Properties['GovernancePolicy']) { $policyConfig = $config.GovernancePolicy }
+    }
+    if ($null -eq $policyConfig) {
+        $defaults = Get-SPConfigDefaults
+        if ($defaults.ContainsKey('GovernancePolicy')) { $policyConfig = $defaults['GovernancePolicy'] }
+    }
+
+    $gpEnabled = $true
+    if ($null -ne $policyConfig) {
+        if ($policyConfig -is [hashtable] -and $policyConfig.ContainsKey('Enabled')) { $gpEnabled = [bool]$policyConfig['Enabled'] }
+        elseif ($null -ne $policyConfig.PSObject -and $null -ne $policyConfig.PSObject.Properties['Enabled']) { $gpEnabled = [bool]$policyConfig.Enabled }
+    }
+
+    $gpPolicies = @()
+    if ($null -ne $policyConfig) {
+        if ($policyConfig -is [hashtable] -and $policyConfig.ContainsKey('Policies')) { $gpPolicies = @($policyConfig['Policies']) }
+        elseif ($null -ne $policyConfig.PSObject -and $null -ne $policyConfig.PSObject.Properties['Policies']) { $gpPolicies = @($policyConfig.Policies) }
+    }
+
+    if ($null -eq $gpPolicies -or $gpPolicies.Count -eq 0) {
+        Write-SPLog -Message "Test-SPGovernancePolicy: no policies configured" -Severity WARN -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+        return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = @(); Summary = @{ TotalPolicies = 0; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = 0 } }
+    }
+
+    if (-not $gpEnabled) {
+        Write-SPLog -Message "Test-SPGovernancePolicy: GovernancePolicy.Enabled is false, skipping all" -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+        $skippedPols = @()
+        foreach ($pol in $gpPolicies) {
+            $pId = if ($pol -is [hashtable]) { $pol['Id'] } else { $pol.Id }; $pNm = if ($pol -is [hashtable]) { $pol['Name'] } else { $pol.Name }; $pSv = if ($pol -is [hashtable]) { $pol['Severity'] } else { $pol.Severity }
+            $skippedPols += @{ Id = $pId; Name = $pNm; Severity = $pSv; Result = 'SKIPPED'; Details = 'GovernancePolicy.Enabled is false'; Violations = @() }
+        }
+        return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = $skippedPols; Summary = @{ TotalPolicies = $gpPolicies.Count; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = $gpPolicies.Count } }
+    }
+
+    # Helper to read a property from hashtable or PSCustomObject
+    function Get-PolProp { param($Obj, [string]$Key, $Default = $null); if ($null -eq $Obj) { return $Default }; if ($Obj -is [hashtable]) { if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }; return $Default }; $p = $Obj.PSObject.Properties[$Key]; if ($null -ne $p) { return $p.Value }; return $Default }
+
+    $policyResults = [System.Collections.Generic.List[hashtable]]::new()
+
+    foreach ($pol in $gpPolicies) {
+        if ($null -eq $pol) { continue }
+        $polId = Get-PolProp $pol 'Id'; $polName = Get-PolProp $pol 'Name'; $polType = Get-PolProp $pol 'Type'
+        $polSeverity = Get-PolProp $pol 'Severity' 'Warning'; $polScope = Get-PolProp $pol 'Scope'
+        $polResult = 'PASS'; $polDetails = ''; $polViolations = @()
+
+        switch ($polType) {
+            'ReviewFrequency' {
+                $maxDays = [int](Get-PolProp $pol 'MaxDaysSinceReview' 90)
+                if ($null -eq $StaleAccess -and $null -eq $EntitlementInventory) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (StaleAccess and EntitlementInventory are null)'; break }
+                $overdueItems = @()
+                if ($null -ne $StaleAccess) {
+                    $staleItemsList = @(); if ($StaleAccess -is [hashtable] -and $StaleAccess.ContainsKey('StaleItems')) { $staleItemsList = @($StaleAccess['StaleItems']) }
+                    foreach ($item in $staleItemsList) {
+                        if ($null -eq $item) { continue }
+                        $itemPriv = Get-PolProp $item 'Privileged' $false; $dSince = Get-PolProp $item 'DaysSinceReview'; $classif = Get-PolProp $item 'Classification'
+                        if ($polScope -eq 'Privileged' -and -not $itemPriv) { continue }
+                        if ($classif -eq 'NeverReviewed') { $overdueItems += @{ Item = (Get-PolProp $item 'EntitlementName'); Source = (Get-PolProp $item 'SourceName'); DaysSinceReview = $null }; continue }
+                        if ($null -ne $dSince -and [int]$dSince -gt $maxDays) { $overdueItems += @{ Item = (Get-PolProp $item 'EntitlementName'); Source = (Get-PolProp $item 'SourceName'); DaysSinceReview = [int]$dSince } }
+                    }
+                }
+                $scopeLabel = if ($polScope -eq 'Privileged') { 'privileged ' } else { '' }
+                if ($overdueItems.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($overdueItems.Count) ${scopeLabel}entitlement(s) not reviewed within $maxDays days"; $polViolations = $overdueItems }
+                else { $polDetails = "All ${scopeLabel}entitlements reviewed within $maxDays days" }
+            }
+            'SourceCoverage' {
+                $minCov = [double](Get-PolProp $pol 'MinCoveragePercent' 75)
+                if ($null -eq $SourceGovernance) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (SourceGovernance is null)'; break }
+                $govSources = @(); if ($SourceGovernance -is [hashtable] -and $SourceGovernance.ContainsKey('Sources')) { $govSources = @($SourceGovernance['Sources']) }
+                $belowThresh = @()
+                foreach ($src in $govSources) {
+                    if ($null -eq $src) { continue }
+                    $cov = 0
+                    if ($src -is [hashtable]) { $cov = if ($src.ContainsKey('EntitlementCoveragePct')) { [double]$src['EntitlementCoveragePct'] } else { 0 } }
+                    else { $cp = $src.PSObject.Properties['EntitlementCoveragePct']; $cov = if ($null -ne $cp -and $null -ne $cp.Value) { [double]$cp.Value } else { 0 } }
+                    if ($cov -lt $minCov) {
+                        $sn = if ($src -is [hashtable]) { if ($src.ContainsKey('SourceName')) { $src['SourceName'] } else { 'Unknown' } } else { $sp = $src.PSObject.Properties['SourceName']; if ($null -ne $sp -and $null -ne $sp.Value) { $sp.Value } else { 'Unknown' } }
+                        $belowThresh += @{ Item = $sn; Source = $sn; CoveragePct = $cov }
+                    }
+                }
+                if ($belowThresh.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($belowThresh.Count) source(s) below $minCov% coverage"; $polViolations = $belowThresh }
+                else { $polDetails = "All $($govSources.Count) source(s) above $minCov% coverage" }
+            }
+            'IdentityRisk' {
+                $maxRisk = [int](Get-PolProp $pol 'MaxRiskScore' 70)
+                if ($null -eq $IdentityRisk) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (IdentityRisk is null)'; break }
+                $riskIds = @(); if ($IdentityRisk -is [hashtable] -and $IdentityRisk.ContainsKey('Identities')) { $riskIds = @($IdentityRisk['Identities']) }
+                $highRiskIds = @()
+                foreach ($id in $riskIds) {
+                    if ($null -eq $id) { continue }; $idScore = 0; $idName = ''
+                    if ($id -is [hashtable]) { $idScore = if ($id.ContainsKey('RiskScore')) { [int]$id['RiskScore'] } else { 0 }; $idName = if ($id.ContainsKey('IdentityName')) { $id['IdentityName'] } else { 'Unknown' } }
+                    else { $rp = $id.PSObject.Properties['RiskScore']; $idScore = if ($null -ne $rp -and $null -ne $rp.Value) { [int]$rp.Value } else { 0 }; $np = $id.PSObject.Properties['IdentityName']; $idName = if ($null -ne $np -and $null -ne $np.Value) { $np.Value } else { 'Unknown' } }
+                    if ($idScore -gt $maxRisk) { $highRiskIds += @{ Item = $idName; Source = ''; RiskScore = $idScore } }
+                }
+                if ($highRiskIds.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($highRiskIds.Count) identity(ies) exceed risk score $maxRisk"; $polViolations = $highRiskIds }
+                else { $polDetails = "No identities exceed risk score $maxRisk" }
+            }
+            'StaleAccess' {
+                $maxStalePct = [double](Get-PolProp $pol 'MaxStalePercent' 10)
+                if ($null -eq $StaleAccess) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (StaleAccess is null)'; break }
+                $totalStale = 0
+                if ($StaleAccess -is [hashtable] -and $StaleAccess.ContainsKey('Summary')) { $staleSumm = $StaleAccess['Summary']; if ($staleSumm -is [hashtable] -and $staleSumm.ContainsKey('TotalStaleItems')) { $totalStale = [int]$staleSumm['TotalStaleItems'] } }
+                $totalEnt = 0
+                if ($null -ne $EntitlementInventory -and $EntitlementInventory -is [hashtable] -and $EntitlementInventory.ContainsKey('Summary')) {
+                    $invSumm = $EntitlementInventory['Summary']
+                    if ($invSumm -is [hashtable] -and $invSumm.ContainsKey('TotalEntitlements')) { $totalEnt = [int]$invSumm['TotalEntitlements'] }
+                    elseif ($null -ne $invSumm.PSObject -and $null -ne $invSumm.PSObject.Properties['TotalEntitlements']) { $totalEnt = [int]$invSumm.TotalEntitlements }
+                }
+                if ($totalEnt -le 0) { $totalEnt = $totalStale; if ($totalEnt -le 0) { $polDetails = "No stale items and no entitlement inventory to compute percentage"; break } }
+                $stalePct = [Math]::Round(($totalStale / $totalEnt) * 100, 1)
+                if ($stalePct -gt $maxStalePct) { $polResult = 'FAIL'; $polDetails = "Stale access is $stalePct% ($totalStale of $totalEnt), exceeds $maxStalePct% threshold"; $polViolations = @(@{ Item = 'Stale Access'; Source = ''; StalePct = $stalePct; StaleCount = $totalStale; TotalCount = $totalEnt }) }
+                else { $polDetails = "Stale access is $stalePct% ($totalStale of $totalEnt), within $maxStalePct% threshold" }
+            }
+            'ReviewerPerformance' {
+                $minRepScore = [int](Get-PolProp $pol 'MinReputationScore' 40)
+                if ($null -eq $ReviewerReputation) { $polResult = 'SKIPPED'; $polDetails = 'Required input data not available (ReviewerReputation is null)'; break }
+                $repRevs = @(); if ($ReviewerReputation -is [hashtable] -and $ReviewerReputation.ContainsKey('Reviewers')) { $repRevs = @($ReviewerReputation['Reviewers']) }
+                $underperf = @()
+                foreach ($rev in $repRevs) {
+                    if ($null -eq $rev) { continue }; $revScore = 0; $revName = ''
+                    if ($rev -is [hashtable]) { $revScore = if ($rev.ContainsKey('ReputationScore')) { [int]$rev['ReputationScore'] } else { 0 }; $revName = if ($rev.ContainsKey('ReviewerName')) { $rev['ReviewerName'] } else { 'Unknown' } }
+                    else { $rp = $rev.PSObject.Properties['ReputationScore']; $revScore = if ($null -ne $rp -and $null -ne $rp.Value) { [int]$rp.Value } else { 0 }; $np = $rev.PSObject.Properties['ReviewerName']; $revName = if ($null -ne $np -and $null -ne $np.Value) { $np.Value } else { 'Unknown' } }
+                    if ($revScore -lt $minRepScore) { $underperf += @{ Item = $revName; Source = ''; ReputationScore = $revScore } }
+                }
+                if ($underperf.Count -gt 0) { $polResult = 'FAIL'; $polDetails = "$($underperf.Count) reviewer(s) below reputation score $minRepScore"; $polViolations = $underperf }
+                else { $polDetails = "All $($repRevs.Count) reviewer(s) meet minimum reputation score $minRepScore" }
+            }
+            default { $polResult = 'SKIPPED'; $polDetails = "Unknown policy type: $polType" }
+        }
+        $policyResults.Add(@{ Id = $polId; Name = $polName; Severity = $polSeverity; Result = $polResult; Details = $polDetails; Violations = $polViolations })
+    }
+
+    $gpResOrd = @{ 'FAIL' = 0; 'PASS' = 1; 'SKIPPED' = 2 }; $gpSevOrd = @{ 'Critical' = 0; 'Warning' = 1 }
+    $sortedPols = @($policyResults | Sort-Object { $ro = if ($gpResOrd.ContainsKey($_['Result'])) { $gpResOrd[$_['Result']] } else { 99 }; $ro }, { $so = if ($gpSevOrd.ContainsKey($_['Severity'])) { $gpSevOrd[$_['Severity']] } else { 99 }; $so })
+
+    $gpPassed = @($sortedPols | Where-Object { $_['Result'] -eq 'PASS' }).Count
+    $gpFailed = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' }).Count
+    $gpSkipped = @($sortedPols | Where-Object { $_['Result'] -eq 'SKIPPED' }).Count
+    $gpCritFail = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' -and $_['Severity'] -eq 'Critical' }).Count
+    $gpWarnFail = @($sortedPols | Where-Object { $_['Result'] -eq 'FAIL' -and $_['Severity'] -eq 'Warning' }).Count
+
+    Write-SPLog -Message "Test-SPGovernancePolicy: evaluated $($sortedPols.Count) policies -- Passed=$gpPassed, Failed=$gpFailed (Critical=$gpCritFail, Warning=$gpWarnFail), Skipped=$gpSkipped" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Test-SPGovernancePolicy' -CorrelationID $CorrelationID
+
+    return @{
+        OverallCompliant = ($gpFailed -eq 0)
+        EvaluatedAt      = $evaluatedAt
+        Policies         = $sortedPols
+        Summary          = @{ TotalPolicies = $sortedPols.Count; Passed = $gpPassed; Failed = $gpFailed; CriticalFailures = $gpCritFail; WarningFailures = $gpWarnFail; Skipped = $gpSkipped }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaigns',
     'Get-SPAuditTrail',
     'Measure-SPCampaignTrends',
     'Measure-SPReviewerReputation',
     'Measure-SPIdentityRisk',
-    'Measure-SPSourceGovernance'
+    'Measure-SPSourceGovernance',
+    'Measure-SPGovernanceMaturity',
+    'Get-SPRemediationPriority',
+    'Get-SPIdentityAccessSpread',
+    'Compare-SPAuditPeriods',
+    'Test-SPGovernancePolicy'
 )

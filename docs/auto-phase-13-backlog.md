@@ -46,10 +46,10 @@ Safe to modify:
 |----|---------|------------|--------|
 | P13-01 | Access Profile Inventory | none | DONE |
 | P13-02 | Role Inventory & Assignment Analysis | P13-01 | DONE |
-| P13-03 | Multi-Source Identity Correlation | none | PENDING |
-| P13-04 | Governance Policy Engine | none | PENDING |
+| P13-03 | Multi-Source Identity Correlation | none | DONE |
+| P13-04 | Governance Policy Engine | none | DONE |
 | P13-05 | Policy Compliance Report | P13-04 | PENDING |
-| P13-06 | Audit Period Comparison | none | PENDING |
+| P13-06 | Audit Period Comparison | none | DONE |
 | P13-07 | Campaign Planning Calculator | none | PENDING |
 | P13-08 | Governance Dashboard Data Export | none | PENDING |
 | P13-09 | Invoke-SPGovernanceReport.ps1 | P13-08 | PENDING |
@@ -314,7 +314,7 @@ New function `Export-SPRoleInventoryHtml`:
 
 ## P13-03: Multi-Source Identity Correlation
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**
@@ -420,7 +420,7 @@ New function `Export-SPIdentityAccessSpreadHtml`:
 
 ## P13-04: Governance Policy Engine
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**
@@ -659,7 +659,7 @@ function Export-SPPolicyComplianceHtml {
 
 ## P13-06: Audit Period Comparison
 
-- **Status:** `PENDING`
+- **Status:** `DONE`
 - **Depends On:** none
 
 **Description:**
