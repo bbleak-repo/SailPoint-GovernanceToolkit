@@ -185,6 +185,30 @@ function Get-SPConfigDefaults {
             MetricsOutputPath    = '.\GovernanceMetrics'
             HealthCheckOnStartup = $false
         }
+        Sdk = @{
+            OutputPath = '.\SdkReports'
+            CampaignTemplates = @{
+                DefaultDeadlineDuration = 'P14D'
+                DefaultReviewerType     = 'MANAGER'
+            }
+            Approvals = @{
+                DefaultDaysBack  = 30
+                IncludeCompleted = $true
+            }
+            WorkItems = @{
+                DefaultDaysBack          = 30
+                ShowCompletedByDefault   = $false
+            }
+            Workflows = @{
+                DefaultTestTimeout = 300
+                OOOFallback = @{
+                    Enabled             = $false
+                    FallbackDays        = 3
+                    FallbackReviewerId  = ''
+                    WorkflowId          = ''
+                }
+            }
+        }
         GovernancePolicy = @{
             Enabled  = $true
             Policies = @(

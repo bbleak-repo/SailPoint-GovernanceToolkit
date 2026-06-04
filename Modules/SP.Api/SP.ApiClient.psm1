@@ -226,7 +226,11 @@ function Invoke-SPApiRequest {
     .PARAMETER Endpoint
         Relative path appended to the configured Api.BaseUrl (e.g. "/campaigns").
     .PARAMETER Body
-        Request body hashtable. Converted to JSON for POST/PUT/PATCH.
+        Request body (hashtable or array). Converted to JSON for POST/PUT/PATCH.
+        Arrays are supported for JSON Patch (RFC 6902) operations.
+    .PARAMETER ContentType
+        Content-Type header for the request body. Defaults to 'application/json'.
+        Use 'application/json-patch+json' for RFC 6902 PATCH operations.
     .PARAMETER QueryParams
         Query string parameters as a hashtable.
     .PARAMETER CorrelationID
@@ -254,7 +258,10 @@ function Invoke-SPApiRequest {
         [string]$Endpoint,
 
         [Parameter()]
-        [hashtable]$Body,
+        $Body,
+
+        [Parameter()]
+        [string]$ContentType = 'application/json',
 
         [Parameter()]
         [hashtable]$QueryParams,
@@ -351,7 +358,7 @@ function Invoke-SPApiRequest {
             # Attach body for mutating methods
             if ($Method -in @('POST', 'PUT', 'PATCH') -and $null -ne $Body) {
                 $invokeParams['Body']        = $Body | ConvertTo-Json -Depth 20
-                $invokeParams['ContentType'] = 'application/json'
+                $invokeParams['ContentType'] = $ContentType
             }
 
             # Record timestamp before the call

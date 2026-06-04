@@ -45,6 +45,10 @@ function Import-SPTestModules {
         Imports SP.DisconnectedAppValidator, SP.DisconnectedAppSnapshot,
         SP.DisconnectedAppDelta, SP.DisconnectedAppRunner,
         SP.DisconnectedAppAnalytics, SP.DisconnectedAppReports.
+    .PARAMETER Sdk
+        Imports SP.SdkCommon, SP.SdkPatch, SP.SdkCampaignTemplates,
+        SP.SdkCertSummaries, SP.SdkApprovals, SP.SdkWorkItems, SP.SdkWorkflows,
+        SP.SdkCampaignFilters.
     #>
     [CmdletBinding()]
     param(
@@ -53,7 +57,8 @@ function Import-SPTestModules {
         [switch]$Audit,
         [switch]$Testing,
         [switch]$DeltaCert,
-        [switch]$DisconnectedApps
+        [switch]$DisconnectedApps,
+        [switch]$Sdk
     )
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
@@ -95,5 +100,15 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppRunner.psm1')    -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppAnalytics.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppReports.psm1')   -Force -DisableNameChecking
+    }
+    if ($Sdk) {
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkCommon.psm1')             -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkPatch.psm1')              -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkCampaignTemplates.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkCertSummaries.psm1')      -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkApprovals.psm1')          -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkWorkItems.psm1')          -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkWorkflows.psm1')          -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkCampaignFilters.psm1')   -Force -DisableNameChecking
     }
 }
