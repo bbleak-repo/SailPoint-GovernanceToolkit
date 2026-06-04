@@ -842,7 +842,9 @@ try {
         } else {
             $beforeExplorer = Get-NewProcessesByName -Names @('explorer') -Since $scriptStart
             $beforeCount = $beforeExplorer.Count
-            $btnOpen = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnOpenAuditFolder' -ControlType 'Button' -TimeoutMs 2000
+            # 5000ms (was 2000): the toolbar button can take longer than one UIA
+            # poll cycle to surface on a loaded host or after a large audit run.
+            $btnOpen = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnOpenAuditFolder' -ControlType 'Button' -TimeoutMs 5000
             $btnOpen.Patterns.Invoke.Pattern.Invoke()
             $sawExplorer = $false
             $deadline = (Get-Date).AddSeconds(8)
