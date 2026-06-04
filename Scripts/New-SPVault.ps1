@@ -79,14 +79,14 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 $coreModulePath = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1'
 
 if (Test-Path $coreModulePath) {
-    Import-Module $coreModulePath -Force -ErrorAction Stop
+    Import-Module $coreModulePath -Force -ErrorAction Stop -DisableNameChecking
 }
 else {
     $moduleDir = Join-Path $toolkitRoot 'Modules\SP.Core'
     $psm1Files = Get-ChildItem -Path $moduleDir -Filter '*.psm1' -ErrorAction SilentlyContinue
     if ($psm1Files) {
         foreach ($psm1 in $psm1Files) {
-            Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue
+            Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue -DisableNameChecking
         }
     }
     else {

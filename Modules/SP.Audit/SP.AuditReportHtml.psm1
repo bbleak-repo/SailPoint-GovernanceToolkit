@@ -3533,10 +3533,13 @@ function Export-SPLeadershipBandHtml {
     }
     $filteredLeadershipData['Levels'] = $filteredLevels
 
-    # Determine effective start/lowest levels from filtered data
+    # Determine effective start/lowest levels from filtered data. Cast to [int]:
+    # Measure-Object .Maximum/.Minimum return a type that does not hash-match the
+    # integer hashtable keys, so $filteredLevels.ContainsKey($lvl) would always be
+    # false and no level report would ever be generated.
     $filteredLevelNums = @($filteredLevels.Keys | ForEach-Object { [int]$_ })
-    $effectiveStartLevel  = ($filteredLevelNums | Measure-Object -Maximum).Maximum
-    $effectiveLowestLevel = ($filteredLevelNums | Measure-Object -Minimum).Minimum
+    $effectiveStartLevel  = [int]($filteredLevelNums | Measure-Object -Maximum).Maximum
+    $effectiveLowestLevel = [int]($filteredLevelNums | Measure-Object -Minimum).Minimum
 
     # --- Generate reports per level ---
     $allFiles = [System.Collections.Generic.List[string]]::new()

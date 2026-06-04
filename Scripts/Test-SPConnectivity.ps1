@@ -61,14 +61,14 @@ foreach ($moduleDef in @(
     @{ Path = $apiModulePath;  Name = 'SP.Api';  Required = $true }
 )) {
     if (Test-Path $moduleDef.Path) {
-        Import-Module $moduleDef.Path -Force -ErrorAction SilentlyContinue
+        Import-Module $moduleDef.Path -Force -ErrorAction SilentlyContinue -DisableNameChecking
     }
     else {
         $moduleDir = Split-Path -Parent $moduleDef.Path
         $psm1Files = Get-ChildItem -Path $moduleDir -Filter '*.psm1' -ErrorAction SilentlyContinue
         if ($psm1Files) {
             foreach ($psm1 in $psm1Files) {
-                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue
+                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue -DisableNameChecking
             }
         }
         elseif ($moduleDef.Required) {

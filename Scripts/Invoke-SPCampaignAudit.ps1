@@ -187,7 +187,7 @@ foreach ($moduleDef in @(
     @{ Path = $deltaCertModulePath; Name = 'SP.DeltaCert'; Required = $false }
 )) {
     if (Test-Path $moduleDef.Path) {
-        Import-Module $moduleDef.Path -Force -ErrorAction Stop
+        Import-Module $moduleDef.Path -Force -ErrorAction Stop -DisableNameChecking
     }
     else {
         # Attempt to load nested modules directly if psd1 not yet created
@@ -195,7 +195,7 @@ foreach ($moduleDef in @(
         $psm1Files  = Get-ChildItem -Path $moduleDir -Filter '*.psm1' -ErrorAction SilentlyContinue
         if ($psm1Files) {
             foreach ($psm1 in $psm1Files) {
-                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue
+                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue -DisableNameChecking
             }
         }
         elseif ($moduleDef.Required) {

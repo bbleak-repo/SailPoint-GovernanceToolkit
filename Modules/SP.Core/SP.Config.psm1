@@ -273,10 +273,14 @@ function Merge-SPConfigWithDefaults {
                 $script:SPConfigWarnedKeys = New-Object 'System.Collections.Generic.HashSet[string]'
             }
             if ($script:SPConfigWarnedKeys.Add($currentPath)) {
-                $warningMsg = "Configuration key '$currentPath' not found. Using default value."
-                Write-Warning $warningMsg
+                # A missing section is benign -- the schema default is applied. This
+                # is informational (DEBUG), not a warning: it is normal for a partial
+                # config to omit optional sections. (Unknown/unrecognized keys are a
+                # different case and still warn below.)
+                $message = "Configuration key '$currentPath' not found. Using default value."
+                Write-Verbose $message
                 if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
-                    Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                    Write-SPLog -Message $message -Severity 'DEBUG' -Component 'SP.Config' -Action 'MergeConfig'
                 }
             }
         }

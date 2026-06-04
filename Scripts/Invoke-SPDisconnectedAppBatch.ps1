@@ -123,14 +123,14 @@ $moduleChain = @(
 
 foreach ($mod in $moduleChain) {
     if (Test-Path $mod.Path) {
-        Import-Module $mod.Path -Force -ErrorAction Stop
+        Import-Module $mod.Path -Force -ErrorAction Stop -DisableNameChecking
     }
     else {
         $moduleDir = Split-Path -Parent $mod.Path
         $psm1Files = Get-ChildItem -Path $moduleDir -Filter '*.psm1' -ErrorAction SilentlyContinue
         if ($psm1Files) {
             foreach ($psm1 in $psm1Files) {
-                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue
+                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue -DisableNameChecking
             }
         }
         elseif ($mod.Required) {
