@@ -3785,21 +3785,24 @@ function Show-SPDashboard {
     # to fit, then re-center inside WorkingArea.
     $window.add_Loaded({
         try {
-            try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop } catch { }
-            $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-            if ($null -eq $screen) { return }
-            $work = $screen.WorkingArea
-            $margin = 8
+            # Use WPF's DIP-based work area, NOT System.Windows.Forms (which reports
+            # PHYSICAL pixels). $this.Width/Height are device-independent units;
+            # mixing them with physical px makes this clamp wrong on DPI-scaled
+            # displays (125%/150% laptops), leaving the window -- and the right-edge
+            # toolbar buttons -- partly off-screen. SystemParameters.WorkArea is in
+            # the same DIP units as the window, so the math is correct at any DPI.
+            $work = [System.Windows.SystemParameters]::WorkArea
+            $margin = 8.0
 
             # If the window is taller/wider than the work area, shrink it.
-            $newW = [Math]::Min($this.Width,  [double]($work.Width  - 2 * $margin))
-            $newH = [Math]::Min($this.Height, [double]($work.Height - 2 * $margin))
-            if ($newW -ne $this.Width)  { $this.Width  = $newW }
-            if ($newH -ne $this.Height) { $this.Height = $newH }
+            $maxW = $work.Width  - 2 * $margin
+            $maxH = $work.Height - 2 * $margin
+            if ($this.Width  -gt $maxW) { $this.Width  = $maxW }
+            if ($this.Height -gt $maxH) { $this.Height = $maxH }
 
-            # Re-center inside the work area (accounts for taskbar + multi-monitor origin).
-            $this.Left = [double]$work.X + [Math]::Max(0, ($work.Width  - $this.Width)  / 2)
-            $this.Top  = [double]$work.Y + [Math]::Max(0, ($work.Height - $this.Height) / 2)
+            # Re-center inside the work area (accounts for taskbar position).
+            $this.Left = $work.X + [Math]::Max(0, ($work.Width  - $this.Width)  / 2)
+            $this.Top  = $work.Y + [Math]::Max(0, ($work.Height - $this.Height) / 2)
         } catch {
             try {
                 Write-SPLog -Message "Window fit-to-screen failed: $($_.Exception.Message)" `
