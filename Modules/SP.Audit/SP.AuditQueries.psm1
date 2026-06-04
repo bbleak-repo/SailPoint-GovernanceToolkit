@@ -4729,7 +4729,7 @@ function Get-SPOrphanAccounts {
                 -QueryParams $queryParams -CorrelationID $CorrelationID
 
             if (-not $result.Success) {
-                Write-SPLog -Message "Get-SPOrphanAccounts: API error for source '$sourceName' at page $pageNum: $($result.Error)" `
+                Write-SPLog -Message "Get-SPOrphanAccounts: API error for source '$sourceName' at page ${pageNum}: $($result.Error)" `
                     -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPOrphanAccounts' `
                     -CorrelationID $CorrelationID
                 break

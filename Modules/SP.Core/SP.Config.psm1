@@ -1190,6 +1190,47 @@ function Resolve-SPConfigPath {
     return $defaultPath
 }
 
+function Get-SPConfigJsonHint {
+    <#
+    .SYNOPSIS
+        Diagnoses common, non-obvious causes of ConvertFrom-Json failures in a
+        settings file and returns an actionable hint string ('' if none found).
+    .DESCRIPTION
+        PowerShell 5.1's ConvertFrom-Json reports terse errors. The two causes
+        that bite hand-edited settings files are (1) UTF-16 / BOM encoding from
+        an editor that re-saved the file, and (2) unescaped backslashes in
+        Windows paths or secrets ('\D' etc. are invalid JSON escapes). This
+        surfaces both with line context.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $hints = [System.Collections.Generic.List[string]]::new()
+
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) } catch { return '' }
+
+    # UTF-16 is the encoding that actually trips PS 5.1 here; a UTF-8 BOM is
+    # handled by Get-Content, so it is not flagged (it would be a red herring).
+    if ($bytes.Length -ge 2 -and (($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) -or ($bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF))) {
+        $hints.Add("The file is UTF-16 encoded; re-save it as UTF-8 (without a BOM).")
+    }
+
+    try {
+        $text = [System.IO.File]::ReadAllText($Path)
+        # A backslash NOT followed by a valid JSON escape char (" \ / b f n r t u).
+        $m = [regex]::Match($text, '\\(?![\\/"bfnrtu])')
+        if ($m.Success) {
+            $line    = ($text.Substring(0, $m.Index) -split "`n").Count
+            $start   = [Math]::Max(0, $m.Index - 15)
+            $snippet = ($text.Substring($start, [Math]::Min(35, $text.Length - $start)) -replace "`r?`n", ' ').Trim()
+            $hints.Add("Found an invalid '\' escape near line $line (...$snippet...). In JSON, backslashes must be doubled -- use '\\' in Windows paths (e.g. C:\\Data\\file) or forward slashes (C:/Data/file).")
+        }
+    } catch { }
+
+    return ($hints -join ' ')
+}
+
 function Get-SPConfig {
     <#
     .SYNOPSIS
@@ -1254,13 +1295,20 @@ function Get-SPConfig {
     # Load JSON file
     try {
         $jsonContent = Get-Content -Path $ConfigPath -Raw -ErrorAction Stop
-        $loadedConfig = $jsonContent | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch [System.ArgumentException] {
-        throw "Invalid JSON in configuration file: $ConfigPath. Error: $($_.Exception.Message)"
     }
     catch {
         throw "Failed to read configuration file: $ConfigPath. Error: $($_.Exception.Message)"
+    }
+    try {
+        $loadedConfig = $jsonContent | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        # ConvertFrom-Json failed -- add an actionable hint for the common,
+        # non-obvious causes (UTF-16/BOM encoding, unescaped Windows backslashes).
+        $hint = Get-SPConfigJsonHint -Path $ConfigPath
+        $message = "Invalid JSON in configuration file: $ConfigPath. Error: $($_.Exception.Message)"
+        if ($hint) { $message += " HINT: $hint" }
+        throw $message
     }
 
     # Get defaults and merge

@@ -215,3 +215,29 @@ Describe "New-SPConfigFile" {
         }
     }
 }
+
+Describe "Get-SPConfig invalid-JSON diagnostics" {
+
+    Context "CFG-08: unescaped Windows backslash in settings.json" {
+        It "Should throw an Invalid JSON error with an actionable backslash HINT" {
+            $bad = Join-Path $TestDrive 'bad-backslash-settings.json'
+            # '\D' and '\s' are not valid JSON escapes -- a classic hand-edit mistake.
+            Set-Content -Path $bad -Encoding UTF8 -Value '{ "Authentication": { "Vault": { "VaultPath": "C:\Data\sp-vault.enc" } } }'
+            $err = $null
+            try { Get-SPConfig -ConfigPath $bad -Force } catch { $err = $_.Exception.Message }
+            $err | Should -Not -BeNullOrEmpty
+            $err | Should -BeLike '*Invalid JSON in configuration file*'
+            $err | Should -BeLike '*HINT:*'
+            $err | Should -Match '(?i)backslash'
+        }
+    }
+
+    Context "CFG-09: malformed JSON still reports the file clearly" {
+        It "Should throw an Invalid JSON error naming the config file" {
+            $bad = Join-Path $TestDrive 'bad-syntax-settings.json'
+            Set-Content -Path $bad -Encoding UTF8 -Value '{ "Global": { "EnvironmentName": "x" '  # unterminated
+            { Get-SPConfig -ConfigPath $bad -Force } |
+                Should -Throw -ExpectedMessage '*Invalid JSON in configuration file*'
+        }
+    }
+}
