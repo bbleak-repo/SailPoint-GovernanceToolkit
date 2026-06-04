@@ -6560,6 +6560,7 @@ Export-ModuleMember -Function @(
     'Get-SPEntitlementInventory',
     'Get-SPStaleAccess',
     'Get-SPAccessProfileInventory',
+    'Get-SPRoleInventory',
     'Save-SPConfigurationSnapshot',
     'Get-SPConfigurationSnapshot',
     'Get-SPOrphanAccounts',
