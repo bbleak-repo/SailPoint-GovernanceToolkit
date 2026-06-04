@@ -2918,10 +2918,12 @@ function Compare-SPAuditPeriods {
         return @{ A = $a; B = $b; Delta = $delta; Direction = $direction }
     }
 
-    # Direction counters for overall summary
-    $improvedCount = 0
-    $degradedCount = 0
-    $stableCount = 0
+    # Direction counters for overall summary. Script-scoped because the nested
+    # Update-DirectionCounts helper cannot assign to function-local variables;
+    # reset to 0 here so counts never carry over between calls.
+    $script:improvedCount = 0
+    $script:degradedCount = 0
+    $script:stableCount = 0
 
     function Update-DirectionCounts {
         param([string]$Dir)
@@ -3256,6 +3258,12 @@ function Compare-SPAuditPeriods {
     # ========================================
     # Overall Direction (majority vote)
     # ========================================
+    # Copy the script-scoped tallies (written by Update-DirectionCounts) into
+    # locals for the rollup below.
+    $improvedCount = $script:improvedCount
+    $degradedCount = $script:degradedCount
+    $stableCount   = $script:stableCount
+
     $overallDirection = 'Stable'
     if ($improvedCount -gt $degradedCount -and $improvedCount -gt $stableCount) {
         $overallDirection = 'Improved'

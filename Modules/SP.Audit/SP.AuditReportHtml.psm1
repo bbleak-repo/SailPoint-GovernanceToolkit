@@ -10289,8 +10289,8 @@ $($policyRows -join "`n")
             if ($null -eq $viol) { continue }
             $vIdx++
             $vCells = @(
-                (ConvertTo-SafeHtml (if ($viol -is [hashtable]) { $viol['Item'] } else { $viol.Item })),
-                (ConvertTo-SafeHtml (if ($viol -is [hashtable]) { $viol['Source'] } else { $viol.Source }))
+                (ConvertTo-SafeHtml $(if ($viol -is [hashtable]) { $viol['Item'] } else { $viol.Item })),
+                (ConvertTo-SafeHtml $(if ($viol -is [hashtable]) { $viol['Source'] } else { $viol.Source }))
             )
             foreach ($vk in $violKeys) {
                 $vVal = if ($viol -is [hashtable]) { $viol[$vk] } else { $viol.PSObject.Properties[$vk].Value }

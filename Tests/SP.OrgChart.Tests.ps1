@@ -457,11 +457,13 @@ Describe "OC-02-T: Show-SPOrgTree renders ASCII with correct indentation" {
         }
 
         It "Should include a Summary line" {
-            $script:output | Should -Match '^Summary:'
+            # (?m) so ^ matches the start of any line in the joined multi-line output
+            # (the Summary/Depth lines are a footer, not the first line).
+            $script:output | Should -Match '(?m)^Summary:'
         }
 
         It "Should include Depth line" {
-            $script:output | Should -Match '^Depth: \d+ levels'
+            $script:output | Should -Match '(?m)^Depth: \d+ levels'
         }
 
         It "Should count 5 ICs in summary" {

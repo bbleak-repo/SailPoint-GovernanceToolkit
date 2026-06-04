@@ -764,7 +764,7 @@ Describe "LR-05: Export-SPLeadershipDirectorHtml generates per-director files" {
 #region LR-06: Send-SPReport stub logs intent without SMTP calls
 # ---------------------------------------------------------------------------
 
-Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
+Describe "LR-06: Send-SPReport logs when SMTP disabled, sends when enabled" {
 
     Context "When SMTP is disabled (default)" {
         BeforeAll {
@@ -826,7 +826,7 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
     }
 
-    Context "When SMTP is enabled (stub mode)" {
+    Context "When SMTP is enabled (sends via Send-MailMessage)" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.AuditOperations { }
             Mock Send-MailMessage -ModuleName SP.AuditOperations { }
@@ -846,8 +846,13 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
                 }
             }
 
+            # QH-02 replaced the stub with a real send that attaches the report,
+            # so the report file must exist on disk.
+            $script:LR06ReportFile = Join-Path $TestDrive 'director-DirA.html'
+            Set-Content -Path $script:LR06ReportFile -Value '<html><body>report</body></html>' -Encoding UTF8
+
             $script:LR06EnabledResult = Send-SPReport `
-                -ReportPath 'C:\Audit\leadership\director-DirA.html' `
+                -ReportPath $script:LR06ReportFile `
                 -RecipientEmail 'director.a@corp.com' `
                 -RecipientName 'Director A' `
                 -CorrelationID 'lr-06-corr-enabled'
@@ -857,13 +862,13 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
             $script:LR06EnabledResult.Success | Should -Be $true
         }
 
-        It "Should return Action=Logged (stub, not actually sent)" {
-            $script:LR06EnabledResult.Data.Action | Should -Be 'Logged'
+        It "Should return Action=Sent" {
+            $script:LR06EnabledResult.Data.Action | Should -Be 'Sent'
         }
 
-        It "Should log at INFO level when SMTP is enabled (stub)" {
+        It "Should log at INFO level that the report was sent" {
             Should -Invoke Write-SPLog -ModuleName SP.AuditOperations -Scope Context -ParameterFilter {
-                $Severity -eq 'INFO' -and $Message -match 'SMTP stub'
+                $Severity -eq 'INFO' -and $Message -match 'sent'
             }
         }
 
@@ -871,8 +876,8 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
             $script:LR06EnabledResult.Data.Subject | Should -Match '\[Corp Audit\]'
         }
 
-        It "Should NOT invoke Send-MailMessage (stub only)" {
-            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditOperations -Scope Context
+        It "Should invoke Send-MailMessage exactly once" {
+            Should -Invoke Send-MailMessage -ModuleName SP.AuditOperations -Scope Context -Times 1 -Exactly
         }
     }
 

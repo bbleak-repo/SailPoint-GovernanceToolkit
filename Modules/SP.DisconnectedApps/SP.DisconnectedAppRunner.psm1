@@ -1491,7 +1491,10 @@ function Update-SPRemediationStatus {
                 Error   = $null
             }
         }
-        $tracker = @(ConvertFrom-Json -InputObject $raw)
+        # PS 5.1: @(ConvertFrom-Json ...) double-nests a single-element JSON array
+        # (the lone record ends up as Object[] at [0]). Piping through
+        # ForEach-Object enumerates it so each record stays a PSCustomObject.
+        $tracker = [object[]](ConvertFrom-Json -InputObject $raw | ForEach-Object { $_ })
 
         # Parse today's CSV into a lookup: AccountId -> Set of entitlements
         $csvData = Import-Csv -Path $AccountFilePath -Encoding UTF8
@@ -1744,7 +1747,10 @@ function Get-SPRemediationReport {
             }
         }
 
-        $tracker = @(ConvertFrom-Json -InputObject $raw)
+        # PS 5.1: @(ConvertFrom-Json ...) double-nests a single-element JSON array
+        # (the lone record ends up as Object[] at [0]). Piping through
+        # ForEach-Object enumerates it so each record stays a PSCustomObject.
+        $tracker = [object[]](ConvertFrom-Json -InputObject $raw | ForEach-Object { $_ })
 
         $pending   = [System.Collections.Generic.List[object]]::new()
         $overdue   = [System.Collections.Generic.List[object]]::new()
