@@ -536,7 +536,7 @@ Describe "DA-010: Export-SPDisconnectedAppDeltaHtml generates valid HTML" {
 
     Context "When given a delta result with changes" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppReports { }
         }
 
         It "Should create an HTML file with correct sections" {
@@ -588,7 +588,7 @@ Describe "DA-010: Export-SPDisconnectedAppDeltaHtml generates valid HTML" {
 
     Context "When given a delta result with no changes" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppReports { }
         }
 
         It "Should create an HTML file with a no-changes notice" {
@@ -938,8 +938,8 @@ Describe "DA-16-T: Get-SPDisconnectedAppDeliveryStatus classifies Delivered vs M
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
-            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppAnalytics { }
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1028,8 +1028,8 @@ Describe "DA-17-T: Cross-app identity risk flags 3+ app identities as High" {
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
-            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppAnalytics { }
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1129,8 +1129,8 @@ Describe "DA-18-T: Entitlement catalog aggregates across multiple apps" {
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
-            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppAnalytics { }
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1188,7 +1188,7 @@ Describe "DA-19-T: Export-SPDisconnectedAppBatchHtml generates valid HTML" {
 
     Context "When given batch results with mixed statuses" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppReports { }
         }
 
         It "Should generate a valid HTML report with all sections" {
@@ -1315,8 +1315,8 @@ Describe "DA-20-T: SLA tracking calculates delivery rate from snapshot filenames
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
-            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppAnalytics { }
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1385,10 +1385,10 @@ Describe "DA-21-T: Decision collection retrieves campaign decisions from ISC (mo
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppAnalytics { }
 
             # Mock Get-SPCampaign: camp-aaa completed, camp-bbb active
-            Mock Get-SPCampaign -ModuleName SP.DisconnectedAppRunner {
+            Mock Get-SPCampaign -ModuleName SP.DisconnectedAppAnalytics {
                 if ($CampaignId -eq 'camp-aaa') {
                     return @{
                         Success = $true
@@ -1407,7 +1407,7 @@ Describe "DA-21-T: Decision collection retrieves campaign decisions from ISC (mo
             }
 
             # Mock Get-SPAuditCertifications: one certification per completed campaign
-            Mock Get-SPAuditCertifications -ModuleName SP.DisconnectedAppRunner {
+            Mock Get-SPAuditCertifications -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1421,7 +1421,7 @@ Describe "DA-21-T: Decision collection retrieves campaign decisions from ISC (mo
             }
 
             # Mock Get-SPAuditCertificationItems: 2 approved, 1 revoked
-            Mock Get-SPAuditCertificationItems -ModuleName SP.DisconnectedAppRunner {
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DisconnectedAppAnalytics {
                 return @{
                     Success = $true
                     Data    = @(
@@ -2138,9 +2138,9 @@ Describe "DA-29-T: Team dashboard HTML generated with delivery status section" {
         }
 
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.DisconnectedAppRunner { }
+            Mock Write-SPLog -ModuleName SP.DisconnectedAppReports { }
 
-            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppRunner {
+            Mock Get-SPRegisteredApps -ModuleName SP.DisconnectedAppReports {
                 return @{
                     Success = $true
                     Data    = @(

@@ -576,9 +576,9 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
 
     Context "When a campaign has certifications but no access review items" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
-            Mock Get-SPAuditCertifications -ModuleName SP.AuditReport {
+            Mock Get-SPAuditCertifications -ModuleName SP.AuditReportCore {
                 return @{
                     Success = $true
                     Data    = @(
@@ -594,7 +594,7 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
                 }
             }
 
-            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditReport {
+            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditReportCore {
                 return @{
                     Success = $true
                     Data    = @()
@@ -602,7 +602,7 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
                 }
             }
 
-            Mock Measure-SPAuditReviewerMetrics -ModuleName SP.AuditReport {
+            Mock Measure-SPAuditReviewerMetrics -ModuleName SP.AuditReportCore {
                 return @{
                     ReviewerMetrics     = @()
                     CampaignMinHours    = $null
@@ -635,9 +635,9 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
 
     Context "When a campaign has items with decisions" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
-            Mock Get-SPAuditCertifications -ModuleName SP.AuditReport {
+            Mock Get-SPAuditCertifications -ModuleName SP.AuditReportCore {
                 return @{
                     Success = $true
                     Data    = @(
@@ -653,7 +653,7 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
                 }
             }
 
-            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditReport {
+            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditReportCore {
                 return @{
                     Success = $true
                     Data    = @(
@@ -666,7 +666,7 @@ Describe "CS-006: Measure-SPCampaignMetrics handles zero-decision campaigns" {
                 }
             }
 
-            Mock Measure-SPAuditReviewerMetrics -ModuleName SP.AuditReport {
+            Mock Measure-SPAuditReviewerMetrics -ModuleName SP.AuditReportCore {
                 return @{
                     ReviewerMetrics     = @(
                         [PSCustomObject]@{ Name = 'Bob Manager'; AvgHours = 22.0 }
@@ -799,13 +799,13 @@ Describe "CS-008: Compare-SPCampaigns produces side-by-side metrics" {
 
     Context "When two campaign objects are provided for comparison" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
 
-            Mock Get-SPAuditCampaigns -ModuleName SP.AuditReport {
+            Mock Get-SPAuditCampaigns -ModuleName SP.AuditAnalytics {
                 return @{ Success = $true; Data = @(); Error = $null }
             }
 
-            Mock Measure-SPCampaignMetrics -ModuleName SP.AuditReport {
+            Mock Measure-SPCampaignMetrics -ModuleName SP.AuditAnalytics {
                 return @{
                     Success = $true
                     Data    = @(

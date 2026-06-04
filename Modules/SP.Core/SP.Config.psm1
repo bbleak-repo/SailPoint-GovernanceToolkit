@@ -171,8 +171,19 @@ function Get-SPConfigDefaults {
         Leadership = @{
             OrgChartSupplementPath  = ''
             UseSupplementForReports = $false
-            DefaultBandMapping      = @{}
+            DefaultBandMapping      = @{
+                '0' = 'E'; '1' = 'D'; '2' = 'C'; '3' = 'B'; '4' = 'A'
+            }
             ISCBandAttribute        = 'jobLevel'
+        }
+        Metrics = @{
+            Path          = '.\Audit\metrics'
+            RetentionDays = 365
+            AutoCapture   = $true
+        }
+        Governance = @{
+            MetricsOutputPath    = '.\GovernanceMetrics'
+            HealthCheckOnStartup = $false
         }
         GovernancePolicy = @{
             Enabled  = $true
@@ -283,16 +294,20 @@ function Merge-SPConfigWithDefaults {
     if ($null -ne $LoadedConfig -and $LoadedConfig.PSObject.Properties) {
         foreach ($prop in $LoadedConfig.PSObject.Properties) {
             if (-not $Defaults.ContainsKey($prop.Name)) {
-                $currentPath = if ($ParentPath) { "$ParentPath.$($prop.Name)" } else { $prop.Name }
-                if ($null -eq $script:SPConfigWarnedKeys) {
-                    $script:SPConfigWarnedKeys = New-Object 'System.Collections.Generic.HashSet[string]'
-                }
-                $sentinel = "UNKNOWN:$currentPath"
-                if ($script:SPConfigWarnedKeys.Add($sentinel)) {
-                    $warningMsg = "Unknown configuration key '$currentPath' found. This key is not recognized."
-                    Write-Warning $warningMsg
-                    if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
-                        Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                # Keys prefixed with '_' are inline documentation notes in the
+                # template (e.g. '_note'); include them in the result but never warn.
+                if ($prop.Name -notlike '_*') {
+                    $currentPath = if ($ParentPath) { "$ParentPath.$($prop.Name)" } else { $prop.Name }
+                    if ($null -eq $script:SPConfigWarnedKeys) {
+                        $script:SPConfigWarnedKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+                    }
+                    $sentinel = "UNKNOWN:$currentPath"
+                    if ($script:SPConfigWarnedKeys.Add($sentinel)) {
+                        $warningMsg = "Unknown configuration key '$currentPath' found. This key is not recognized."
+                        Write-Warning $warningMsg
+                        if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
+                            Write-SPLog -Message $warningMsg -Severity 'WARN' -Component 'SP.Config' -Action 'MergeConfig'
+                        }
                     }
                 }
                 # Still include unknown keys in result

@@ -116,3 +116,27 @@ Describe "DIST: portable zip initializes from a clean extract" {
         (Join-Path $script:PortRoot 'Tests\Import-TestModules.ps1') | Should -Exist
     }
 }
+
+Describe "DIST: shipped settings.json template integrity" {
+    BeforeAll {
+        # Clean child session so the once-per-session unknown-key warning cache
+        # cannot mask drift. Exit code = number of warnings (0 = clean).
+        $script:CfgProbe = Join-Path $TestDrive 'cfgprobe.ps1'
+        Set-Content -Path $script:CfgProbe -Encoding UTF8 -Value @'
+param([Parameter(Mandatory)][string]$RepoRoot)
+Import-Module (Join-Path $RepoRoot 'Modules\SP.Core\SP.Config.psm1') -Force -DisableNameChecking
+$w = @()
+$cfg = Get-SPConfig -ConfigPath (Join-Path $RepoRoot 'Config\settings.json') -Force -WarningVariable +w -WarningAction SilentlyContinue
+if ($w.Count -ne 0) { [Console]::Error.WriteLine(($w -join ' | ')); exit $w.Count }
+if (-not (Test-SPConfigFirstRun -Config $cfg)) { exit 250 }  # template must still read as first-run
+exit 0
+'@
+    }
+
+    It "DIST-06: template loads with zero unknown-key warnings and is still first-run" {
+        $ps = (Get-Command powershell.exe).Source
+        $p = Start-Process -FilePath $ps -PassThru -Wait -NoNewWindow `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script:CfgProbe`"", '-RepoRoot', "`"$script:RepoRoot`"")
+        $p.ExitCode | Should -Be 0
+    }
+}

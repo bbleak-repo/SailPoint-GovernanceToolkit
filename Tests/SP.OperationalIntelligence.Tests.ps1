@@ -22,8 +22,8 @@ Describe "P12-T01: Export-SPCompliancePackage creates ZIP with manifest.json con
 
     Context "When audit and deltacert directories contain artifacts" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Audit     = [PSCustomObject]@{ OutputPath = (Join-Path $TestDrive 'pkg-audit') }
                     DeltaCert = [PSCustomObject]@{ OutputPath = (Join-Path $TestDrive 'pkg-dc') }
@@ -111,8 +111,8 @@ Describe "P12-T02: Export-SPCompliancePackage -Scope AuditOnly excludes DeltaCer
 
     Context "When Scope is AuditOnly" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Audit     = [PSCustomObject]@{ OutputPath = (Join-Path $TestDrive 'scope-audit') }
                     DeltaCert = [PSCustomObject]@{ OutputPath = (Join-Path $TestDrive 'scope-dc') }
@@ -175,7 +175,7 @@ Describe "P12-T03: Measure-SPIdentityRisk scores identity with 2 privileged + 3 
 
     Context "When comparing two identities with different risk profiles" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should score the identity with more risk signals higher" {
@@ -228,7 +228,7 @@ Describe "P12-T04: Measure-SPIdentityRisk returns empty summary for empty campai
 
     Context "When no campaigns are provided" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should return empty identities array" {
@@ -254,7 +254,7 @@ Describe "P12-T05: Measure-SPSourceGovernance assigns Grade A to source with 100
 
     Context "When source has full coverage, recent review, and multiple campaigns" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should assign Grade A" {
@@ -314,7 +314,7 @@ Describe "P12-T06: Measure-SPSourceGovernance assigns Grade F to source with 0 c
 
     Context "When source is in inventory but has never been reviewed" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should assign Grade F" {
@@ -461,7 +461,7 @@ Describe "P12-T09: Export-SPCampaignCompletionReport generates HTML with all 6 s
 
     Context "When given a full campaign audit with remediation and prior cycle" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:completionDir = Join-Path $TestDrive 'completion-t09'
             $null = New-Item -ItemType Directory -Path $script:completionDir -Force
@@ -568,8 +568,8 @@ Describe "P12-T10: Send-SPNotification with Backends=['Log'] only logs, no HTTP 
 
     Context "When only Log backend is configured" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Notification = [PSCustomObject]@{
                         Backends = @('Log')
@@ -588,8 +588,8 @@ Describe "P12-T10: Send-SPNotification with Backends=['Log'] only logs, no HTTP 
                     }
                 }
             }
-            Mock Send-MailMessage -ModuleName SP.AuditReport { }
-            Mock Invoke-RestMethod -ModuleName SP.AuditReport { }
+            Mock Send-MailMessage -ModuleName SP.AuditOperations { }
+            Mock Invoke-RestMethod -ModuleName SP.AuditOperations { }
         }
 
         It "Should return Success true with Log backend sent" {
@@ -603,12 +603,12 @@ Describe "P12-T10: Send-SPNotification with Backends=['Log'] only logs, no HTTP 
 
         It "Should NOT call Send-MailMessage" {
             Send-SPNotification -Subject 'Test Alert' -Body 'Test body'
-            Should -Invoke Send-MailMessage -ModuleName SP.AuditReport -Times 0 -Exactly
+            Should -Invoke Send-MailMessage -ModuleName SP.AuditOperations -Times 0 -Exactly
         }
 
         It "Should NOT call Invoke-RestMethod" {
             Send-SPNotification -Subject 'Test Alert' -Body 'Test body'
-            Should -Invoke Invoke-RestMethod -ModuleName SP.AuditReport -Times 0 -Exactly
+            Should -Invoke Invoke-RestMethod -ModuleName SP.AuditOperations -Times 0 -Exactly
         }
     }
 }
@@ -621,8 +621,8 @@ Describe "P12-T11: Send-SPWebhook sends JSON POST and returns status code" {
 
     Context "When sending a webhook payload" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Invoke-RestMethod -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Invoke-RestMethod -ModuleName SP.AuditOperations {
                 return @{ ok = $true }
             }
         }
@@ -638,7 +638,7 @@ Describe "P12-T11: Send-SPWebhook sends JSON POST and returns status code" {
             Send-SPWebhook -Url 'https://hooks.example.com/test' `
                 -Payload @{ text = 'Hello' }
 
-            Should -Invoke Invoke-RestMethod -ModuleName SP.AuditReport -Times 1 -Exactly `
+            Should -Invoke Invoke-RestMethod -ModuleName SP.AuditOperations -Times 1 -Exactly `
                 -ParameterFilter {
                     $Uri -eq 'https://hooks.example.com/test' -and
                     $Method -eq 'POST' -and
@@ -663,8 +663,8 @@ Describe "P12-T12: Get-SPOrchestratorHistory parses JSONL and calculates correct
 
     Context "When JSONL contains mixed exit codes" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     DeltaCert = [PSCustomObject]@{
                         OutputPath = (Join-Path $TestDrive 'orch-t12')
@@ -733,8 +733,8 @@ Describe "P12-T13: Get-SPOrchestratorHistory returns empty metrics for missing J
 
     Context "When JSONL file does not exist" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     DeltaCert = [PSCustomObject]@{
                         OutputPath = (Join-Path $TestDrive 'orch-missing')
@@ -807,8 +807,8 @@ Describe "P12-T15: Invoke-SPLogRetention with Enabled=false returns no-op" {
 
     Context "When Retention.Enabled is false in config" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Retention = [PSCustomObject]@{
                         Enabled     = $false
@@ -844,7 +844,7 @@ Describe "P12-T16: Invoke-SPLogRetention with WhatIf describes actions without p
 
     Context "When WhatIf is set with old files present" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
 
             $script:retDir   = Join-Path $TestDrive 'retention-t16'
             $script:auditRet = Join-Path $script:retDir 'Audit'
@@ -864,7 +864,7 @@ Describe "P12-T16: Invoke-SPLogRetention with WhatIf describes actions without p
             $file3 = Join-Path $script:auditRet 'new-report.html'
             [System.IO.File]::WriteAllText($file3, '<html>new</html>')
 
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Retention = [PSCustomObject]@{
                         Enabled     = $true

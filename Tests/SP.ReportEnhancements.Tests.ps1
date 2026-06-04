@@ -371,7 +371,7 @@ Describe "RE-02: Group-SPAuditByLeadership groups by all levels (not just 2)" {
 
     Context "When given a 4-level org tree with decisions" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             $script:orgTree4   = New-Mock4LevelOrgTreeData
             $script:decisions4 = New-Mock4LevelDecisions
@@ -442,7 +442,7 @@ Describe "RE-03: Export-SPLeadershipLevelHtml generates reports at each level" {
 
     Context "When generating Director-level reports for a 4-level org" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:RE03Dir = Join-Path $TestDrive 're-03-level'
             $null = New-Item -ItemType Directory -Path $script:RE03Dir -Force
@@ -510,7 +510,7 @@ Describe "RE-04: HTML uses collapsible detail sections in Detailed mode, none in
 
     Context "When generating reports in Detailed mode" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:RE04DetailedDir = Join-Path $TestDrive 're-04-detailed'
             $null = New-Item -ItemType Directory -Path $script:RE04DetailedDir -Force
@@ -549,7 +549,7 @@ Describe "RE-04: HTML uses collapsible detail sections in Detailed mode, none in
 
     Context "When generating reports in Summary mode" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:RE04SummaryDir = Join-Path $TestDrive 're-04-summary'
             $null = New-Item -ItemType Directory -Path $script:RE04SummaryDir -Force
@@ -796,7 +796,7 @@ Describe "RE-07: Measure-SPAuditRubberStampRisk flags bulk-approve pattern" {
 
     Context "When a reviewer approves 100 items in 30 seconds" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             # Build 100 APPROVE decisions with timestamps clustered in 30 seconds
             # Parse as UTC so the literal 'Z' in the formatted timestamps below is
@@ -868,7 +868,7 @@ Describe "RE-07: Measure-SPAuditRubberStampRisk flags bulk-approve pattern" {
 
     Context "When a reviewer takes 2 hours to review 20 items with some revocations" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             # Parse as UTC so the literal 'Z' in the formatted timestamps below is
             # truthful regardless of host timezone. Otherwise Parse() yields a
@@ -946,7 +946,7 @@ Describe "RE-08: Get-SPAuditRiskFlags returns TERMINATED for terminated identity
 
     Context "When an identity is terminated but still has active access" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             $script:re08Decisions = @{
                 Approved = @(
@@ -1067,7 +1067,7 @@ Describe "RE-09: Group-SPAuditDecisions includes Justification and RemediationSt
 
     Context "When items have comment fields and campaign metadata" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
         }
 
         It "Should include Justification from the item comment field" {

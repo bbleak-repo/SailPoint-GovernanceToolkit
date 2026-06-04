@@ -472,7 +472,7 @@ Describe "LR-03: Group-SPAuditByLeadership aggregation math" {
 
     Context "When given decisions and a complete org tree" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             $script:orgTree   = New-MockOrgTreeData
             $script:decisions = New-MockDecisions
@@ -566,7 +566,7 @@ Describe "LR-03: Group-SPAuditByLeadership aggregation math" {
 
     Context "When an identity name cannot be resolved in the org tree" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
 
             $script:orgTreeSmall = New-MockOrgTreeData
             # Decisions include a name that is not in the org tree
@@ -601,7 +601,7 @@ Describe "LR-04: Export-SPLeadershipExecutiveHtml generates valid HTML" {
 
     Context "When given well-formed leadership data" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:LR04Dir = Join-Path $TestDrive 'lr-04-exec'
             $null = New-Item -ItemType Directory -Path $script:LR04Dir -Force
@@ -678,7 +678,7 @@ Describe "LR-05: Export-SPLeadershipDirectorHtml generates per-director files" {
 
     Context "When given leadership data with 2 directors" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:LR05Dir = Join-Path $TestDrive 'lr-05-directors'
             $null = New-Item -ItemType Directory -Path $script:LR05Dir -Force
@@ -768,10 +768,10 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
 
     Context "When SMTP is disabled (default)" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Send-MailMessage -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Send-MailMessage -ModuleName SP.AuditOperations { }
 
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Audit = [PSCustomObject]@{
                         Smtp = [PSCustomObject]@{
@@ -816,22 +816,22 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
 
         It "Should log at DEBUG level when SMTP is disabled" {
             # Send-SPReport runs in the Context BeforeAll -- assert at Context scope.
-            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -Scope Context -ParameterFilter {
+            Should -Invoke Write-SPLog -ModuleName SP.AuditOperations -Scope Context -ParameterFilter {
                 $Severity -eq 'DEBUG' -and $Message -match 'SMTP disabled'
             }
         }
 
         It "Should NOT invoke Send-MailMessage" {
-            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport -Scope Context
+            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditOperations -Scope Context
         }
     }
 
     Context "When SMTP is enabled (stub mode)" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
-            Mock Send-MailMessage -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Send-MailMessage -ModuleName SP.AuditOperations { }
 
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{
                     Audit = [PSCustomObject]@{
                         Smtp = [PSCustomObject]@{
@@ -862,7 +862,7 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
 
         It "Should log at INFO level when SMTP is enabled (stub)" {
-            Should -Invoke Write-SPLog -ModuleName SP.AuditReport -Scope Context -ParameterFilter {
+            Should -Invoke Write-SPLog -ModuleName SP.AuditOperations -Scope Context -ParameterFilter {
                 $Severity -eq 'INFO' -and $Message -match 'SMTP stub'
             }
         }
@@ -872,15 +872,15 @@ Describe "LR-06: Send-SPReport stub logs intent without SMTP calls" {
         }
 
         It "Should NOT invoke Send-MailMessage (stub only)" {
-            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditReport -Scope Context
+            Should -Not -Invoke Send-MailMessage -ModuleName SP.AuditOperations -Scope Context
         }
     }
 
     Context "When SMTP config is unavailable" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
 
-            Mock Get-SPConfig -ModuleName SP.AuditReport {
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
                 return [PSCustomObject]@{}
             }
 

@@ -160,7 +160,7 @@ Describe "P11-T03: Get-SPAuditTrail reads and merges JSONL from multiple directo
 
     Context "When JSONL files exist in audit and deltacert directories" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
 
             $script:auditDir    = Join-Path $TestDrive 'trail-t03-audit'
             $script:deltaCertDir = Join-Path $TestDrive 'trail-t03-dc'
@@ -220,7 +220,7 @@ Describe "P11-T04: Get-SPAuditTrail filters by date range correctly" {
 
     Context "When filtering with -After and -Before" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
 
             $script:auditDir2    = Join-Path $TestDrive 'trail-t04-audit'
             $script:deltaCertDir2 = Join-Path $TestDrive 'trail-t04-dc'
@@ -261,7 +261,7 @@ Describe "P11-T05: Export-SPAuditCsv produces valid CSV with correct headers" {
 
     Context "When given a well-formed CampaignAudit" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:csvTestDir = Join-Path $TestDrive 'csv-t05'
             $null = New-Item -ItemType Directory -Path $script:csvTestDir -Force
@@ -603,7 +603,7 @@ Describe "P11-T10: Measure-SPCampaignTrends calculates correct deltas" {
 
     Context "When given metrics across three months" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should calculate period-over-period deltas correctly" {
@@ -672,7 +672,7 @@ Describe "P11-T11: Measure-SPCampaignTrends identifies Improving trend" {
 
     Context "When approval rate improves across 4 consecutive months" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should classify ApprovalRate trend as Improving" {
@@ -820,7 +820,7 @@ Describe "P11-T13: Measure-SPReviewerReputation excludes low-campaign reviewers"
 
     Context "When a reviewer has fewer campaigns than MinCampaigns threshold" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditAnalytics { }
         }
 
         It "Should exclude the reviewer with only 1 campaign" {

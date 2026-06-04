@@ -122,8 +122,15 @@ catch {
 }
 
 if (Test-SPConfigFirstRun -Config $config) {
-    Write-Host "ERROR: First-run configuration detected. Populate settings.json before creating vault." -ForegroundColor Red
-    exit 1
+    # Informational only -- do NOT block. The vault is precisely where the
+    # ClientSecret belongs, so creating it before settings.json is fully
+    # populated is the expected flow. Blocking here was a chicken-and-egg:
+    # you could not store the secret in the vault until it was already in
+    # settings.json, which defeats the vault.
+    Write-Host "  Note: settings.json still contains placeholder (CHANGE_ME) values." -ForegroundColor DarkYellow
+    Write-Host "  That's fine -- store the OAuth ClientSecret in the vault now, then" -ForegroundColor DarkYellow
+    Write-Host "  fill in TenantUrl / ClientId / Api.BaseUrl in settings.json afterward." -ForegroundColor DarkYellow
+    Write-Host ''
 }
 
 # Initialize logging

@@ -866,10 +866,10 @@ Describe "OC-07-T: Export-SPLeadershipBandHtml filters by band" {
 
     Context "When TargetBands filters to B and C only" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             # Mock the delegated HTML generator to avoid full HTML rendering
-            Mock Export-SPLeadershipLevelHtml -ModuleName SP.AuditReport {
+            Mock Export-SPLeadershipLevelHtml -ModuleName SP.AuditReportHtml {
                 param($LeadershipData, $Decisions, $OrgTree, $Level, $StartLevel,
                       $LowestLevel, $CampaignName, $DateRange, $OutputPath,
                       $CorrelationID, $DetailLevel, $BandData)
@@ -945,9 +945,9 @@ Describe "OC-07-T: Export-SPLeadershipBandHtml filters by band" {
 
     Context "When ExcludeBands removes D and E" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
-            Mock Export-SPLeadershipLevelHtml -ModuleName SP.AuditReport {
+            Mock Export-SPLeadershipLevelHtml -ModuleName SP.AuditReportHtml {
                 param($LeadershipData, $Decisions, $OrgTree, $Level, $StartLevel,
                       $LowestLevel, $CampaignName, $DateRange, $OutputPath,
                       $CorrelationID, $DetailLevel, $BandData)
@@ -978,7 +978,7 @@ Describe "OC-07-T: Export-SPLeadershipBandHtml filters by band" {
 
     Context "When TargetBands and ExcludeBands both exclude all leaders" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:oc07EmptyDir = Join-Path $TestDrive 'oc-07-empty'
             $null = New-Item -ItemType Directory -Path $script:oc07EmptyDir -Force

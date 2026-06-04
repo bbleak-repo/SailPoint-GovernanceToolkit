@@ -43,7 +43,8 @@ function Import-SPTestModules {
         Imports SP.DeltaCertQueries, SP.DeltaCertRunner.
     .PARAMETER DisconnectedApps
         Imports SP.DisconnectedAppValidator, SP.DisconnectedAppSnapshot,
-        SP.DisconnectedAppDelta, SP.DisconnectedAppRunner.
+        SP.DisconnectedAppDelta, SP.DisconnectedAppRunner,
+        SP.DisconnectedAppAnalytics, SP.DisconnectedAppReports.
     #>
     [CmdletBinding()]
     param(
@@ -92,5 +93,7 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppSnapshot.psm1')  -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppDelta.psm1')     -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppRunner.psm1')    -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppAnalytics.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedAppReports.psm1')   -Force -DisableNameChecking
     }
 }

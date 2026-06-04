@@ -201,7 +201,7 @@ Describe "AR-001: Group-SPAuditDecisions categorizes review items" {
 
     Context "When items have a mix of APPROVE, REVOKE, and null decisions" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
         }
 
         It "Should return a grouping object with Approved, Revoked, and Pending properties" {
@@ -254,7 +254,7 @@ Describe "AR-002: Group-SPReviewerActions separates primary and reassigned revie
 
     Context "When certifications have a mix of primary and reassigned reviewers" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
         }
 
         It "Should place certifications in the Primary collection" {
@@ -294,7 +294,7 @@ Describe "AR-003: Group-SPAuditIdentityEvents groups events by operation" {
 
     Context "When events include REMOVE, ADD, and DELETE operations" {
         BeforeEach {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
         }
 
         It "Should return Revoked and Granted collections" {
@@ -346,7 +346,7 @@ Describe "AR-004: Export-SPAuditHtml generates a valid HTML report" {
 
     Context "When given a well-formed CampaignAudit object" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:ARHtmlTestDir = Join-Path $TestDrive 'ar-004-html'
             $null = New-Item -ItemType Directory -Path $script:ARHtmlTestDir -Force
@@ -405,7 +405,7 @@ Describe "AR-005: Export-SPAuditText generates a formatted text report" {
 
     Context "When given a well-formed CampaignAudit object" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:ARTextTestDir = Join-Path $TestDrive 'ar-005-text'
             $null = New-Item -ItemType Directory -Path $script:ARTextTestDir -Force
@@ -456,7 +456,7 @@ Describe "AR-006: Export-SPAuditJsonl writes a valid JSONL audit trail" {
 
     Context "When given one or more CampaignAudit objects" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:ARJsonlTestDir = Join-Path $TestDrive 'ar-006-jsonl'
             $null = New-Item -ItemType Directory -Path $script:ARJsonlTestDir -Force
@@ -515,7 +515,7 @@ Describe "AR-006: Export-SPAuditJsonl writes a valid JSONL audit trail" {
 
     Context "When given an empty events array" {
         BeforeAll {
-            Mock Write-SPLog -ModuleName SP.AuditReport { }
+            Mock Write-SPLog -ModuleName SP.AuditReportHtml { }
 
             $script:ARJsonlEmptyDir = Join-Path $TestDrive 'ar-006-empty'
             $null = New-Item -ItemType Directory -Path $script:ARJsonlEmptyDir -Force
