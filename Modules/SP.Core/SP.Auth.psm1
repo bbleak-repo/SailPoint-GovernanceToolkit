@@ -21,6 +21,17 @@
     Version: 1.1.0
 #>
 
+# --- Ensure modern TLS for the OAuth token call to ISC ---
+# Windows PowerShell 5.1 / .NET can negotiate TLS 1.0 by default, which modern
+# SailPoint ISC tenants reject. The token request is the first real-tenant call,
+# so enable TLS 1.2 (and 1.3 when supported) here without downgrading anything.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if ([enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13
+    }
+} catch { }
+
 # Script-scoped variables
 $script:CurrentToken = $null
 $script:TokenExpiry  = $null

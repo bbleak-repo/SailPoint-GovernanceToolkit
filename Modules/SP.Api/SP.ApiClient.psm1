@@ -12,6 +12,18 @@
     Version: 1.0.0
 #>
 
+# --- Ensure modern TLS for HTTPS calls to ISC ---
+# Windows PowerShell 5.1 / .NET can negotiate TLS 1.0 by default, which modern
+# SailPoint ISC tenants reject ("Could not create SSL/TLS secure channel"). Add
+# TLS 1.2 (and 1.3 when the runtime supports it) without downgrading any protocol
+# already enabled. This never triggers against the HTTP mock, only real tenants.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if ([enum]::GetNames([Net.SecurityProtocolType]) -contains 'Tls13') {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls13
+    }
+} catch { }
+
 # Script-scoped rate limiter queue: stores DateTime of each request timestamp
 # within the current sliding window.
 $script:RequestTimestamps = [System.Collections.Generic.Queue[datetime]]::new()
