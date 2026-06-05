@@ -36,7 +36,7 @@ the loop only authors it.
 | SDK-07 | HIGH | SdkTab.xaml -- nested 6 sub-tabs + controls + tooltips | L | none | DONE |
 | SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | DONE |
 | SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | DONE |
-| SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | TODO |
+| SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | DONE |
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | TODO |
 | SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | TODO |
 | SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | TODO |
@@ -212,7 +212,7 @@ code-behind).
 
 ## SDK-10: Initialize-SdkTab region
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-08
 - **Size:** L
 

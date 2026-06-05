@@ -48,6 +48,18 @@ $script:LastDeltaCertParams         = $null
 $script:LastEscalationParams        = $null
 $script:LastAuditQueryParams        = $null
 
+# SDK Features tab data sources (one ObservableCollection per sub-tab grid).
+# Populated on a background runspace in SDK-11; bound to each grid's
+# ItemsSource inside Initialize-SdkTab.
+$script:SdkTemplateDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkCertSummaryDataSource    = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkApprovalDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkWorkItemDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkWorkflowDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkExecutionDataSource      = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkFilterDataSource         = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:IsSdkRunning                = $false
+
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
 # WPF stores click handlers as delegates and PowerShell 5.1 drops module
@@ -3532,6 +3544,546 @@ function Resolve-GovernanceOutputPath {
     }
 
     return [System.IO.Path]::GetFullPath($rawPath)
+}
+
+#endregion
+
+#region SDK Features Tab
+
+function Initialize-SdkTab {
+    <#
+    .SYNOPSIS
+        Wires up the SDK Features tab controls and event handlers.
+    .DESCRIPTION
+        Structure/wiring only (SDK-10). Captures the module reference, binds each
+        sub-tab grid to its module-scoped ObservableCollection, locates every
+        control via Find-Control, and attaches every button / checkbox / radio /
+        sub-tab handler using the mandatory `& $module { } + .GetNewClosure()`
+        idiom (WPF note 2) so private helpers resolve at fire-time.
+
+        No bridge/API calls are made on the UI thread (WPF note 3). Each handler
+        routes to a module-private refresh/action helper. In SDK-10 those helpers
+        are thin stubs that only set the sub-tab status label to a
+        'deferred to SDK-11' message; SDK-11 replaces the stub bodies with the
+        background-runspace data loads. SDK-12 adds the Show-SPGuiDialog modals
+        and Safety/What-If confirmations.
+    .PARAMETER TabContent
+        The inlined SDK Features tab content root (Grid 'SdkTabContent').
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $module = $script:ThisModule
+
+    # --- Bind each grid to its module-scoped ObservableCollection ---------------
+    $templateGrid = Find-Control -Parent $TabContent -Name 'SdkTemplateGrid'
+    if ($templateGrid)    { $templateGrid.ItemsSource    = $script:SdkTemplateDataSource }
+    $certSummaryGrid = Find-Control -Parent $TabContent -Name 'SdkCertSummaryGrid'
+    if ($certSummaryGrid) { $certSummaryGrid.ItemsSource = $script:SdkCertSummaryDataSource }
+    $approvalGrid = Find-Control -Parent $TabContent -Name 'SdkApprovalGrid'
+    if ($approvalGrid)    { $approvalGrid.ItemsSource    = $script:SdkApprovalDataSource }
+    $workItemGrid = Find-Control -Parent $TabContent -Name 'SdkWorkItemGrid'
+    if ($workItemGrid)    { $workItemGrid.ItemsSource    = $script:SdkWorkItemDataSource }
+    $workflowGrid = Find-Control -Parent $TabContent -Name 'SdkWorkflowGrid'
+    if ($workflowGrid)    { $workflowGrid.ItemsSource    = $script:SdkWorkflowDataSource }
+    $executionGrid = Find-Control -Parent $TabContent -Name 'SdkExecutionGrid'
+    if ($executionGrid)   { $executionGrid.ItemsSource   = $script:SdkExecutionDataSource }
+    $filterGrid = Find-Control -Parent $TabContent -Name 'SdkFilterGrid'
+    if ($filterGrid)      { $filterGrid.ItemsSource      = $script:SdkFilterDataSource }
+
+    # === Sub-tab 1: Templates ==================================================
+    $btnRefreshTemplates = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshTemplates'
+    if ($btnRefreshTemplates) {
+        $btnRefreshTemplates.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnNewTemplate = Find-Control -Parent $TabContent -Name 'BtnSdkNewTemplate'
+    if ($btnNewTemplate) {
+        $btnNewTemplate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateNew -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEditSchedule = Find-Control -Parent $TabContent -Name 'BtnSdkEditSchedule'
+    if ($btnEditSchedule) {
+        $btnEditSchedule.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateEditSchedule -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnRemoveSchedule = Find-Control -Parent $TabContent -Name 'BtnSdkRemoveSchedule'
+    if ($btnRemoveSchedule) {
+        $btnRemoveSchedule.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateRemoveSchedule -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeleteTemplate = Find-Control -Parent $TabContent -Name 'BtnSdkDeleteTemplate'
+    if ($btnDeleteTemplate) {
+        $btnDeleteTemplate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateDelete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 2: Cert Summaries ============================================
+    $btnRefreshSummaries = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshSummaries'
+    if ($btnRefreshSummaries) {
+        $btnRefreshSummaries.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboCertCampaign = Find-Control -Parent $TabContent -Name 'CboSdkCertCampaign'
+    if ($cboCertCampaign) {
+        $cboCertCampaign.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboCertification = Find-Control -Parent $TabContent -Name 'CboSdkCertification'
+    if ($cboCertification) {
+        $cboCertification.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboAccessType = Find-Control -Parent $TabContent -Name 'CboSdkAccessType'
+    if ($cboAccessType) {
+        $cboAccessType.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 3: Approvals =================================================
+    $rbPending = Find-Control -Parent $TabContent -Name 'RbSdkPending'
+    if ($rbPending) {
+        $rbPending.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $rbCompleted = Find-Control -Parent $TabContent -Name 'RbSdkCompleted'
+    if ($rbCompleted) {
+        $rbCompleted.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnRefreshApprovals = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshApprovals'
+    if ($btnRefreshApprovals) {
+        $btnRefreshApprovals.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnApprove = Find-Control -Parent $TabContent -Name 'BtnSdkApprove'
+    if ($btnApprove) {
+        $btnApprove.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalApprove -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeny = Find-Control -Parent $TabContent -Name 'BtnSdkDeny'
+    if ($btnDeny) {
+        $btnDeny.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalDeny -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnForward = Find-Control -Parent $TabContent -Name 'BtnSdkForward'
+    if ($btnForward) {
+        $btnForward.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalForward -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 4: Work Items ================================================
+    $btnRefreshWorkItems = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshWorkItems'
+    if ($btnRefreshWorkItems) {
+        $btnRefreshWorkItems.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnCompleteWorkItem = Find-Control -Parent $TabContent -Name 'BtnSdkCompleteWorkItem'
+    if ($btnCompleteWorkItem) {
+        $btnCompleteWorkItem.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemComplete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnForwardWorkItem = Find-Control -Parent $TabContent -Name 'BtnSdkForwardWorkItem'
+    if ($btnForwardWorkItem) {
+        $btnForwardWorkItem.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemForward -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnBulkApprove = Find-Control -Parent $TabContent -Name 'BtnSdkBulkApprove'
+    if ($btnBulkApprove) {
+        $btnBulkApprove.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemBulkApprove -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $chkShowCompleted = Find-Control -Parent $TabContent -Name 'ChkSdkShowCompleted'
+    if ($chkShowCompleted) {
+        $chkShowCompleted.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+        $chkShowCompleted.Add_Unchecked({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 5: Workflows =================================================
+    $btnRefreshWorkflows = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshWorkflows'
+    if ($btnRefreshWorkflows) {
+        $btnRefreshWorkflows.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEnableWorkflow = Find-Control -Parent $TabContent -Name 'BtnSdkEnableWorkflow'
+    if ($btnEnableWorkflow) {
+        $btnEnableWorkflow.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowToggleEnabled -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnTestWorkflow = Find-Control -Parent $TabContent -Name 'BtnSdkTestWorkflow'
+    if ($btnTestWorkflow) {
+        $btnTestWorkflow.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowTest -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnViewExecutions = Find-Control -Parent $TabContent -Name 'BtnSdkViewExecutions'
+    if ($btnViewExecutions) {
+        $btnViewExecutions.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowViewExecutions -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnCreateOOO = Find-Control -Parent $TabContent -Name 'BtnSdkCreateOOO'
+    if ($btnCreateOOO) {
+        $btnCreateOOO.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowCreateOOO -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 6: Filters ===================================================
+    $btnRefreshFilters = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshFilters'
+    if ($btnRefreshFilters) {
+        $btnRefreshFilters.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnNewFilter = Find-Control -Parent $TabContent -Name 'BtnSdkNewFilter'
+    if ($btnNewFilter) {
+        $btnNewFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterNew -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEditFilter = Find-Control -Parent $TabContent -Name 'BtnSdkEditFilter'
+    if ($btnEditFilter) {
+        $btnEditFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterEdit -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeleteFilter = Find-Control -Parent $TabContent -Name 'BtnSdkDeleteFilter'
+    if ($btnDeleteFilter) {
+        $btnDeleteFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterDelete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $chkIncludeSystem = Find-Control -Parent $TabContent -Name 'ChkSdkIncludeSystem'
+    if ($chkIncludeSystem) {
+        $chkIncludeSystem.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+        $chkIncludeSystem.Add_Unchecked({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab control: lazy-load the newly-selected sub-tab's data ==========
+    $subTabControl = Find-Control -Parent $TabContent -Name 'SdkSubTabControl'
+    if ($subTabControl) {
+        $subTabControl.Add_SelectionChanged({
+            & $module {
+                param($tc, $sender, $evt)
+                # Only react to the TabControl's own selection, not bubbled
+                # SelectionChanged events from inner ComboBoxes / grids.
+                if ($null -ne $evt -and $evt.OriginalSource -ne $sender) { return }
+                Invoke-SdkSubTabLoad -TabContent $tc -SelectedTab $sender.SelectedItem
+            } $TabContent $this $_
+        }.GetNewClosure())
+    }
+
+    # Initial status labels for every sub-tab, then load the default (Templates).
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel'    -Message 'Ready. Click Refresh to load campaign templates.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Ready. Select a campaign and click Refresh.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel'    -Message 'Ready. Click Refresh to load approvals.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel'    -Message 'Ready. Click Refresh to load work items.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel'    -Message 'Ready. Click Refresh to load workflows.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel'      -Message 'Ready. Click Refresh to load filters.'
+
+    # Default sub-tab is Templates -- trigger its initial (stub) load.
+    Invoke-SdkTemplateRefresh -TabContent $TabContent
+}
+
+# ---------------------------------------------------------------------------
+# Sub-tab helpers
+#
+# SDK-10 ships THIN STUBS: each only updates the sub-tab status label to a
+# 'deferred to SDK-11' message. They are the named extension points the SDK-11
+# background-runspace data loads (and SDK-12 dialog/Safety wiring) plug into.
+# No bridge/API call (Get-SPGuiSdk* / Invoke-SPGuiSdk*) is made here yet.
+# ---------------------------------------------------------------------------
+
+function Set-SdkSubTabStatus {
+    <#
+    .SYNOPSIS
+        Sets the text of a named SDK sub-tab status label, if present.
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [Parameter(Mandatory)][string]$StatusName,
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    $label = Find-Control -Parent $TabContent -Name $StatusName
+    if ($null -ne $label) {
+        $label.Text = $Message
+    }
+}
+
+function Invoke-SdkSubTabLoad {
+    <#
+    .SYNOPSIS
+        Lazy-loads the default data for the newly-selected SDK sub-tab by routing
+        to that sub-tab's refresh helper (stub in SDK-10).
+    #>
+    [CmdletBinding()]
+    param($TabContent, $SelectedTab)
+
+    $header = if ($null -ne $SelectedTab) { [string]$SelectedTab.Header } else { '' }
+    switch ($header) {
+        'Templates'      { Invoke-SdkTemplateRefresh    -TabContent $TabContent }
+        'Cert Summaries' { Invoke-SdkCertSummaryRefresh -TabContent $TabContent }
+        'Approvals'      { Invoke-SdkApprovalRefresh     -TabContent $TabContent }
+        'Work Items'     { Invoke-SdkWorkItemRefresh     -TabContent $TabContent }
+        'Workflows'      { Invoke-SdkWorkflowRefresh      -TabContent $TabContent }
+        'Filters'        { Invoke-SdkFilterRefresh        -TabContent $TabContent }
+    }
+}
+
+# --- Templates -------------------------------------------------------------
+function Invoke-SdkTemplateRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+function Invoke-SdkTemplateNew {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkTemplateEditSchedule {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Edit Schedule: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkTemplateRemoveSchedule {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Remove Schedule: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkTemplateDelete {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Delete Template: action deferred to SDK-11/SDK-12.'
+}
+
+# --- Cert Summaries --------------------------------------------------------
+function Invoke-SdkCertSummaryRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+
+# --- Approvals -------------------------------------------------------------
+function Invoke-SdkApprovalRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+function Invoke-SdkApprovalApprove {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Approve: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkApprovalDeny {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Deny: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkApprovalForward {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Forward: action deferred to SDK-11/SDK-12.'
+}
+
+# --- Work Items ------------------------------------------------------------
+function Invoke-SdkWorkItemRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+function Invoke-SdkWorkItemComplete {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Complete Work Item: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkWorkItemForward {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward Work Item: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkWorkItemBulkApprove {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Bulk Approve: action deferred to SDK-11/SDK-12.'
+}
+
+# --- Workflows -------------------------------------------------------------
+function Invoke-SdkWorkflowRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+function Invoke-SdkWorkflowToggleEnabled {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Enable/Disable Workflow: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkWorkflowTest {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Test Workflow: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkWorkflowViewExecutions {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'View Executions: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkWorkflowCreateOOO {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO: action deferred to SDK-11/SDK-12.'
+}
+
+# --- Filters ---------------------------------------------------------------
+function Invoke-SdkFilterRefresh {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+}
+function Invoke-SdkFilterNew {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkFilterEdit {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter: action deferred to SDK-11/SDK-12.'
+}
+function Invoke-SdkFilterDelete {
+    [CmdletBinding()] param($TabContent)
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Delete Filter: action deferred to SDK-11/SDK-12.'
 }
 
 #endregion
