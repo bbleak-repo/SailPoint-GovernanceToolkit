@@ -34,7 +34,7 @@ the loop only authors it.
 | SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | DONE |
 | SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | DONE |
 | SDK-07 | HIGH | SdkTab.xaml -- nested 6 sub-tabs + controls + tooltips | L | none | DONE |
-| SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | TODO |
+| SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | DONE |
 | SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | TODO |
 | SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | TODO |
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | TODO |
@@ -181,7 +181,7 @@ SDK-15). Cert Summaries sub-tab respects SDK-18 scope decision.
 
 ## SDK-08: MainWindow.xaml -- add SDK Features TabItem
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-07
 - **Size:** M
 

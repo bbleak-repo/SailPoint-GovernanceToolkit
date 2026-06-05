@@ -1103,6 +1103,571 @@
                 </Grid>
             </TabItem>
 
+            <!-- SDK Features Tab -->
+            <TabItem Header="SDK Features" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="SdkTabContent" Background="#1E1E2E" Margin="12,8">
+                    <TabControl x:Name="SdkSubTabControl" Background="#1E1E2E" BorderBrush="#3D3D5C">
+
+                        <!-- Sub-tab 1: Templates -->
+                        <TabItem Header="Templates" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="BtnSdkRefreshTemplates" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Reload campaign templates from ISC"/>
+                                    <Button x:Name="BtnSdkNewTemplate" Content="New Template"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Create a new campaign template (POST /campaign-templates)"/>
+                                    <Button x:Name="BtnSdkEditSchedule" Content="Edit Schedule"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Set a recurring schedule for the selected template (MONTHLY, WEEKLY, ANNUALLY)"/>
+                                    <Button x:Name="BtnSdkRemoveSchedule" Content="Remove Schedule"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Remove the schedule from the selected template"/>
+                                    <Button x:Name="BtnSdkDeleteTemplate" Content="Delete"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Permanently delete the selected campaign template"/>
+                                </StackPanel>
+
+                                <!-- Templates DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkTemplateGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn     Header="Name"      Binding="{Binding name}"             Width="*"/>
+                                            <DataGridTextColumn     Header="ID"        Binding="{Binding id}"               Width="160"/>
+                                            <DataGridTextColumn     Header="Deadline"  Binding="{Binding deadlineDuration}" Width="90"/>
+                                            <DataGridCheckBoxColumn Header="Scheduled" Binding="{Binding scheduled}"        Width="80"/>
+                                            <DataGridTextColumn     Header="Modified"  Binding="{Binding modified}"         Width="150"/>
+                                            <DataGridTextColumn     Header="Owner"     Binding="{Binding ownerRef.name}"    Width="140"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status -->
+                                <TextBlock Grid.Row="2" x:Name="SdkTemplateStatusLabel"
+                                           Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                           Margin="2,8,0,0"/>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Sub-tab 2: Cert Summaries -->
+                        <TabItem Header="Cert Summaries" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Campaign:" Foreground="#AAAACC"
+                                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <ComboBox x:Name="CboSdkCertCampaign" Width="180" Margin="0,0,12,0"
+                                              Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                              ToolTip="Select a campaign to view certification summaries"/>
+                                    <TextBlock Text="Certification:" Foreground="#AAAACC"
+                                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <ComboBox x:Name="CboSdkCertification" Width="180" Margin="0,0,12,0"
+                                              Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                              ToolTip="Select a certification reviewer to view identity summaries"/>
+                                    <TextBlock Text="Access Type:" Foreground="#AAAACC"
+                                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <ComboBox x:Name="CboSdkAccessType" Width="140" Margin="0,0,12,0"
+                                              Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
+                                              ToolTip="Filter by access type: Role, Access Profile, or Entitlement"/>
+                                    <Button x:Name="BtnSdkRefreshSummaries" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}"
+                                            ToolTip="Reload summaries for the selected certification"/>
+                                </StackPanel>
+
+                                <!-- Cert Summary DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkCertSummaryGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn     Header="Identity Name" Binding="{Binding identityName}" Width="*"/>
+                                            <DataGridCheckBoxColumn Header="Completed"     Binding="{Binding completed}"    Width="90"/>
+                                            <DataGridTextColumn     Header="Total Items"   Binding="{Binding totalItems}"   Width="90"/>
+                                            <DataGridTextColumn     Header="Approved"      Binding="{Binding approved}"     Width="90"/>
+                                            <DataGridTextColumn     Header="Revoked"       Binding="{Binding revoked}"      Width="90"/>
+                                            <DataGridTextColumn     Header="No Decision"   Binding="{Binding noDecision}"   Width="100"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status + decision summary -->
+                                <Grid Grid.Row="2" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" x:Name="SdkCertSummaryStatusLabel"
+                                               Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                               VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                    <StackPanel Grid.Column="1" x:Name="SdkDecisionSummaryPanel"
+                                                Orientation="Horizontal" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Sub-tab 3: Approvals -->
+                        <TabItem Header="Approvals" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <RadioButton x:Name="RbSdkPending" Content="Pending" GroupName="SdkApprovalState"
+                                                 IsChecked="True" Foreground="#E0E0E0" VerticalAlignment="Center"
+                                                 Margin="0,0,10,0" ToolTip="Show pending approvals awaiting action"/>
+                                    <RadioButton x:Name="RbSdkCompleted" Content="Completed" GroupName="SdkApprovalState"
+                                                 Foreground="#E0E0E0" VerticalAlignment="Center"
+                                                 Margin="0,0,16,0" ToolTip="Show historical completed approvals"/>
+                                    <Button x:Name="BtnSdkRefreshApprovals" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Reload approvals from ISC"/>
+                                    <Button x:Name="BtnSdkApprove" Content="Approve"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Approve the selected access request"/>
+                                    <Button x:Name="BtnSdkDeny" Content="Deny"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Deny the selected access request (comment required)"/>
+                                    <Button x:Name="BtnSdkForward" Content="Forward"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Forward the selected approval to another reviewer"/>
+                                </StackPanel>
+
+                                <!-- Approvals DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkApprovalGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Name"          Binding="{Binding name}"           Width="*"/>
+                                            <DataGridTextColumn Header="Requester"     Binding="{Binding requester}"      Width="140"/>
+                                            <DataGridTextColumn Header="Requested For" Binding="{Binding requestedFor}"   Width="140"/>
+                                            <DataGridTextColumn Header="Request Type"  Binding="{Binding requestType}"    Width="130"/>
+                                            <DataGridTextColumn Header="Created"       Binding="{Binding created}"        Width="150"/>
+                                            <DataGridTextColumn Header="Owner"         Binding="{Binding owner}"          Width="140"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status + summary -->
+                                <Grid Grid.Row="2" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" x:Name="SdkApprovalStatusLabel"
+                                               Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                               VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                    <StackPanel Grid.Column="1" x:Name="SdkApprovalSummaryPanel"
+                                                Orientation="Horizontal" HorizontalAlignment="Right"/>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Sub-tab 4: Work Items -->
+                        <TabItem Header="Work Items" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="BtnSdkRefreshWorkItems" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Reload work items from ISC"/>
+                                    <Button x:Name="BtnSdkCompleteWorkItem" Content="Complete"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Mark the selected work item as complete"/>
+                                    <Button x:Name="BtnSdkForwardWorkItem" Content="Forward"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Forward the selected work item to another reviewer"/>
+                                    <Button x:Name="BtnSdkBulkApprove" Content="Bulk Approve"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,16,0"
+                                            ToolTip="Approve all approval items within the selected work item"/>
+                                    <CheckBox x:Name="ChkSdkShowCompleted" Content="Show Completed"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              ToolTip="Include completed work items in the list"/>
+                                </StackPanel>
+
+                                <!-- Work Items DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkWorkItemGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Type"        Binding="{Binding type}"        Width="130"/>
+                                            <DataGridTextColumn Header="Description" Binding="{Binding description}" Width="*"/>
+                                            <DataGridTextColumn Header="Owner"       Binding="{Binding owner}"       Width="140"/>
+                                            <DataGridTextColumn Header="State"       Binding="{Binding state}"       Width="100"/>
+                                            <DataGridTextColumn Header="Created"     Binding="{Binding created}"     Width="150"/>
+                                            <DataGridTextColumn Header="Num Items"   Binding="{Binding numItems}"    Width="90"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status + badges -->
+                                <Grid Grid.Row="2" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" x:Name="SdkWorkItemStatusLabel"
+                                               Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                               VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                    <StackPanel Grid.Column="1" x:Name="SdkWorkItemSummaryPanel"
+                                                Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Border Background="#252538" BorderBrush="#666677" BorderThickness="1"
+                                                CornerRadius="4" Padding="10,6" Margin="0,0,8,0" MinWidth="80">
+                                            <StackPanel>
+                                                <TextBlock Text="Open" Foreground="#AAAACC" FontSize="10"
+                                                           TextAlignment="Center" Margin="0,0,0,2"/>
+                                                <TextBlock x:Name="SdkWiBadgeOpen" Text="-" Foreground="#5B9BD5"
+                                                           FontSize="13" FontWeight="SemiBold" TextAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="#252538" BorderBrush="#666677" BorderThickness="1"
+                                                CornerRadius="4" Padding="10,6" Margin="0,0,8,0" MinWidth="80">
+                                            <StackPanel>
+                                                <TextBlock Text="Completed" Foreground="#AAAACC" FontSize="10"
+                                                           TextAlignment="Center" Margin="0,0,0,2"/>
+                                                <TextBlock x:Name="SdkWiBadgeCompleted" Text="-" Foreground="#5B9BD5"
+                                                           FontSize="13" FontWeight="SemiBold" TextAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="#252538" BorderBrush="#666677" BorderThickness="1"
+                                                CornerRadius="4" Padding="10,6" MinWidth="80">
+                                            <StackPanel>
+                                                <TextBlock Text="Total" Foreground="#AAAACC" FontSize="10"
+                                                           TextAlignment="Center" Margin="0,0,0,2"/>
+                                                <TextBlock x:Name="SdkWiBadgeTotal" Text="-" Foreground="#5B9BD5"
+                                                           FontSize="13" FontWeight="SemiBold" TextAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Sub-tab 5: Workflows -->
+                        <TabItem Header="Workflows" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="BtnSdkRefreshWorkflows" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Reload workflows from ISC"/>
+                                    <Button x:Name="BtnSdkEnableWorkflow" Content="Enable/Disable"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Toggle the enabled state of the selected workflow"/>
+                                    <Button x:Name="BtnSdkTestWorkflow" Content="Test"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Test the selected workflow with sample input (workflow must be disabled)"/>
+                                    <Button x:Name="BtnSdkViewExecutions" Content="Executions"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="View execution history for the selected workflow"/>
+                                    <Button x:Name="BtnSdkCreateOOO" Content="Create OOO"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Create an OOO fallback reviewer workflow"/>
+                                </StackPanel>
+
+                                <!-- Workflow DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                                    <DataGrid x:Name="SdkWorkflowGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn     Header="Name"            Binding="{Binding name}"           Width="*"/>
+                                            <DataGridTextColumn     Header="ID"              Binding="{Binding id}"             Width="160"/>
+                                            <DataGridCheckBoxColumn Header="Enabled"         Binding="{Binding enabled}"        Width="80"/>
+                                            <DataGridTextColumn     Header="Trigger Type"    Binding="{Binding triggerType}"    Width="120"/>
+                                            <DataGridTextColumn     Header="Execution Count" Binding="{Binding executionCount}" Width="120"/>
+                                            <DataGridTextColumn     Header="Failure Count"   Binding="{Binding failureCount}"   Width="110"/>
+                                            <DataGridTextColumn     Header="Modified"        Binding="{Binding modified}"       Width="150"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Execution DataGrid -->
+                                <Border Grid.Row="2" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkExecutionGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Single"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Execution ID" Binding="{Binding executionId}" Width="*"/>
+                                            <DataGridTextColumn Header="Status"       Binding="{Binding status}"      Width="110"/>
+                                            <DataGridTextColumn Header="Start Time"   Binding="{Binding startTime}"   Width="150"/>
+                                            <DataGridTextColumn Header="Close Time"   Binding="{Binding closeTime}"   Width="150"/>
+                                            <DataGridTextColumn Header="Workflow ID"  Binding="{Binding workflowId}"  Width="160"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status -->
+                                <TextBlock Grid.Row="3" x:Name="SdkWorkflowStatusLabel"
+                                           Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                           Margin="2,8,0,0"/>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- Sub-tab 6: Filters -->
+                        <TabItem Header="Filters" Style="{StaticResource ToolkitTabItem}">
+                            <Grid Background="#1E1E2E" Margin="8,8">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Toolbar -->
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="BtnSdkRefreshFilters" Content="Refresh"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                            ToolTip="Reload campaign filters from ISC"/>
+                                    <Button x:Name="BtnSdkNewFilter" Content="New Filter"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Create a new campaign filter"/>
+                                    <Button x:Name="BtnSdkEditFilter" Content="Edit"
+                                            Style="{StaticResource ToolkitButton}" Margin="0,0,6,0"
+                                            ToolTip="Edit the selected campaign filter (full replacement)"/>
+                                    <Button x:Name="BtnSdkDeleteFilter" Content="Delete"
+                                            Style="{StaticResource SecondaryButton}" Margin="0,0,16,0"
+                                            ToolTip="Delete the selected campaign filter(s)"/>
+                                    <CheckBox x:Name="ChkSdkIncludeSystem" Content="Include System"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              ToolTip="Show system-created filters alongside custom filters"/>
+                                </StackPanel>
+
+                                <!-- Filters DataGrid -->
+                                <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                    <DataGrid x:Name="SdkFilterGrid"
+                                              AutoGenerateColumns="False"
+                                              Background="#2D2D44"
+                                              Foreground="#E0E0E0"
+                                              BorderThickness="0"
+                                              GridLinesVisibility="Horizontal"
+                                              HorizontalGridLinesBrush="#3D3D5C"
+                                              RowBackground="#2D2D44"
+                                              AlternatingRowBackground="#252538"
+                                              SelectionMode="Extended"
+                                              CanUserAddRows="False"
+                                              CanUserDeleteRows="False"
+                                              IsReadOnly="True"
+                                              HeadersVisibility="Column"
+                                              ColumnHeaderHeight="32"
+                                              RowHeight="28"
+                                              Margin="2">
+                                        <DataGrid.ColumnHeaderStyle>
+                                            <Style TargetType="DataGridColumnHeader">
+                                                <Setter Property="Background"   Value="#252538"/>
+                                                <Setter Property="Foreground"   Value="#5B9BD5"/>
+                                                <Setter Property="FontWeight"   Value="SemiBold"/>
+                                                <Setter Property="Padding"      Value="8,4"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush"  Value="#3D3D5C"/>
+                                            </Style>
+                                        </DataGrid.ColumnHeaderStyle>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn     Header="Name"          Binding="{Binding name}"        Width="*"/>
+                                            <DataGridTextColumn     Header="ID"            Binding="{Binding id}"          Width="160"/>
+                                            <DataGridTextColumn     Header="Mode"          Binding="{Binding mode}"        Width="110"/>
+                                            <DataGridTextColumn     Header="Description"   Binding="{Binding description}" Width="*"/>
+                                            <DataGridCheckBoxColumn Header="System Filter" Binding="{Binding isSystem}"    Width="100"/>
+                                            <DataGridTextColumn     Header="Modified"      Binding="{Binding modified}"    Width="150"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Border>
+
+                                <!-- Status -->
+                                <TextBlock Grid.Row="2" x:Name="SdkFilterStatusLabel"
+                                           Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
+                                           Margin="2,8,0,0"/>
+                            </Grid>
+                        </TabItem>
+
+                    </TabControl>
+                </Grid>
+            </TabItem>
+
             <!-- Settings Tab -->
             <TabItem Header="Settings" Style="{StaticResource ToolkitTabItem}">
                 <Grid x:Name="SettingsTabContent" Background="#1E1E2E" Margin="12,8">
