@@ -41,7 +41,7 @@ the loop only authors it.
 | SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | DONE |
 | SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | DONE |
 | SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | DONE |
-| SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | TODO |
+| SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | DONE |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | TODO |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | TODO |
 | SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | TODO |
@@ -314,7 +314,7 @@ a sub-task; add them to the mock if trivial.
 
 ## SDK-15: Test-W08-SdkTabStructure.ps1 (headless)
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-08, SDK-09
 - **Size:** M
 
