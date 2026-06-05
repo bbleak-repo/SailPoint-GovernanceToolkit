@@ -28,7 +28,7 @@ the loop only authors it.
 | # | Priority | Feature | Size | Depends | Status |
 |---|----------|---------|------|---------|--------|
 | SDK-01 | CRITICAL | SP.SdkBridge.psm1 -- read functions (9) | M | none | DONE |
-| SDK-02 | CRITICAL | SP.SdkBridge.psm1 -- write dispatchers (5) | M | SDK-01 | TODO |
+| SDK-02 | CRITICAL | SP.SdkBridge.psm1 -- write dispatchers (5) | M | SDK-01 | DONE |
 | SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | TODO |
 | SDK-04 | HIGH | SP.Gui.psd1 -- register SP.SdkBridge + exports | S | SDK-01 | TODO |
 | SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | TODO |
@@ -78,7 +78,7 @@ the underlying SP.Sdk call is mocked.
 
 ## SDK-02: SP.SdkBridge.psm1 -- write dispatchers
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-01
 - **Size:** M
 

@@ -660,6 +660,465 @@ function Get-SPGuiSdkCertCampaigns {
 
 #endregion
 
+#region Campaign Templates (WRITE)
+
+function Invoke-SPGuiSdkTemplateAction {
+    <#
+    .SYNOPSIS
+        Write dispatcher for campaign-template actions (SDK tab).
+    .DESCRIPTION
+        Routes -Action to the matching SP.Sdk write function:
+          Create         -> New-SPSdkCampaignTemplate    (requires -Template)
+          Update         -> Update-SPSdkCampaignTemplate (requires -TemplateId, -PatchOperations)
+          Delete         -> Remove-SPSdkCampaignTemplate (requires -TemplateId)
+          SetSchedule    -> Set-SPSdkTemplateSchedule    (requires -TemplateId, -Schedule)
+          RemoveSchedule -> Remove-SPSdkTemplateSchedule (requires -TemplateId)
+
+        ValidateSet is the PRIMARY unknown-verb guard (a verb outside the set is a
+        parameter-binding error); the switch's default arm is the belt-and-suspenders
+        path the Accept asks for (returns Success=$false / 'Unknown action: ...').
+
+        Pure/synchronous and never throws: the whole body is wrapped in try/catch and
+        failures return @{Success=$false; Data=@(); Error=<message>}. No UI, no
+        Dispatcher, no $script: state -- safe to call from a background runspace.
+    .OUTPUTS
+        @{ Success=$bool; Data=$object; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Create', 'Update', 'Delete', 'SetSchedule', 'RemoveSchedule')]
+        [string]$Action,
+
+        [Parameter()] [string]$TemplateId,
+        [Parameter()] [hashtable]$Template,
+        [Parameter()] $PatchOperations,
+        [Parameter()] [hashtable]$Schedule,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # SDK-03 inserts the Safety / What-If gate (RequireWhatIfOnProd, bulk caps) here.
+
+        switch ($Action) {
+            'Create' {
+                if ($null -eq $Template) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Create requires -Template' }
+                }
+                $result = New-SPSdkCampaignTemplate -Template $Template -CorrelationID $CorrelationID
+            }
+            'Update' {
+                if ([string]::IsNullOrWhiteSpace($TemplateId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Update requires -TemplateId' }
+                }
+                if ($null -eq $PatchOperations) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Update requires -PatchOperations' }
+                }
+                $result = Update-SPSdkCampaignTemplate -TemplateId $TemplateId -PatchOperations $PatchOperations -CorrelationID $CorrelationID
+            }
+            'Delete' {
+                if ([string]::IsNullOrWhiteSpace($TemplateId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Delete requires -TemplateId' }
+                }
+                $result = Remove-SPSdkCampaignTemplate -TemplateId $TemplateId -CorrelationID $CorrelationID
+            }
+            'SetSchedule' {
+                if ([string]::IsNullOrWhiteSpace($TemplateId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action SetSchedule requires -TemplateId' }
+                }
+                if ($null -eq $Schedule) {
+                    return @{ Success = $false; Data = @(); Error = 'Action SetSchedule requires -Schedule' }
+                }
+                $result = Set-SPSdkTemplateSchedule -TemplateId $TemplateId -Schedule $Schedule -CorrelationID $CorrelationID
+            }
+            'RemoveSchedule' {
+                if ([string]::IsNullOrWhiteSpace($TemplateId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action RemoveSchedule requires -TemplateId' }
+                }
+                $result = Remove-SPSdkTemplateSchedule -TemplateId $TemplateId -CorrelationID $CorrelationID
+            }
+            default {
+                return @{ Success = $false; Data = @(); Error = "Unknown action: $Action" }
+            }
+        }
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+        return @{ Success = $true; Data = $result.Data; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiSdkTemplateAction failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Invoke-SPGuiSdkTemplateAction' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Invoke-SPGuiSdkTemplateAction failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
+#region Approvals (WRITE)
+
+function Invoke-SPGuiSdkApprovalAction {
+    <#
+    .SYNOPSIS
+        Write dispatcher for access-request approval actions (SDK tab).
+    .DESCRIPTION
+        Routes -Action to the matching SP.Sdk write function:
+          Approve -> Approve-SPSdkAccessRequest (requires -ApprovalId; -Comment optional)
+          Deny    -> Deny-SPSdkAccessRequest    (requires -ApprovalId, -Comment)
+          Forward -> Forward-SPSdkAccessRequest (requires -ApprovalId, -NewOwnerId, -Comment)
+
+        ValidateSet is the PRIMARY unknown-verb guard; the default arm is the explicit
+        Accept-satisfying path. Never throws (try/catch). No UI/Safety code here --
+        SDK-03 adds gates.
+    .OUTPUTS
+        @{ Success=$bool; Data=$object; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Approve', 'Deny', 'Forward')]
+        [string]$Action,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ApprovalId,
+
+        [Parameter()] [string]$Comment,
+        [Parameter()] [string]$NewOwnerId,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # SDK-03 inserts the Safety / What-If gate here.
+
+        switch ($Action) {
+            'Approve' {
+                $params = @{ ApprovalId = $ApprovalId; CorrelationID = $CorrelationID }
+                if (-not [string]::IsNullOrWhiteSpace($Comment)) { $params['Comment'] = $Comment }
+                $result = Approve-SPSdkAccessRequest @params
+            }
+            'Deny' {
+                if ([string]::IsNullOrWhiteSpace($Comment)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Deny requires -Comment' }
+                }
+                $result = Deny-SPSdkAccessRequest -ApprovalId $ApprovalId -Comment $Comment -CorrelationID $CorrelationID
+            }
+            'Forward' {
+                if ([string]::IsNullOrWhiteSpace($NewOwnerId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Forward requires -NewOwnerId' }
+                }
+                if ([string]::IsNullOrWhiteSpace($Comment)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Forward requires -Comment' }
+                }
+                $result = Forward-SPSdkAccessRequest -ApprovalId $ApprovalId -NewOwnerId $NewOwnerId -Comment $Comment -CorrelationID $CorrelationID
+            }
+            default {
+                return @{ Success = $false; Data = @(); Error = "Unknown action: $Action" }
+            }
+        }
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+        return @{ Success = $true; Data = $result.Data; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiSdkApprovalAction failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Invoke-SPGuiSdkApprovalAction' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Invoke-SPGuiSdkApprovalAction failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
+#region Work Items (WRITE)
+
+function Invoke-SPGuiSdkWorkItemAction {
+    <#
+    .SYNOPSIS
+        Write dispatcher for work-item actions (SDK tab).
+    .DESCRIPTION
+        Routes -Action to the matching SP.Sdk write function:
+          Complete    -> Complete-SPSdkWorkItem          (requires -WorkItemId; -Body optional)
+          Forward     -> Forward-SPSdkWorkItem           (requires -WorkItemId, -TargetOwnerId, -Comment; -SendNotifications optional)
+          BulkApprove -> Invoke-SPSdkBulkApproveWorkItem (requires -WorkItemId)
+          BulkReject  -> Invoke-SPSdkBulkRejectWorkItem  (requires -WorkItemId)
+
+        ValidateSet is the PRIMARY unknown-verb guard; the default arm is the explicit
+        Accept-satisfying path. Never throws (try/catch). No UI/Safety code here --
+        SDK-03 adds gates.
+    .OUTPUTS
+        @{ Success=$bool; Data=$object; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Complete', 'Forward', 'BulkApprove', 'BulkReject')]
+        [string]$Action,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$WorkItemId,
+
+        [Parameter()] [string]$TargetOwnerId,
+        [Parameter()] [string]$Comment,
+        [Parameter()] [bool]$SendNotifications = $true,
+        [Parameter()] [string]$Body,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # SDK-03 inserts the Safety / What-If gate here.
+
+        switch ($Action) {
+            'Complete' {
+                $params = @{ WorkItemId = $WorkItemId; CorrelationID = $CorrelationID }
+                if (-not [string]::IsNullOrWhiteSpace($Body)) { $params['Body'] = $Body }
+                $result = Complete-SPSdkWorkItem @params
+            }
+            'Forward' {
+                if ([string]::IsNullOrWhiteSpace($TargetOwnerId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Forward requires -TargetOwnerId' }
+                }
+                if ([string]::IsNullOrWhiteSpace($Comment)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Forward requires -Comment' }
+                }
+                $params = @{
+                    WorkItemId        = $WorkItemId
+                    TargetOwnerId     = $TargetOwnerId
+                    Comment           = $Comment
+                    SendNotifications = $SendNotifications
+                    CorrelationID     = $CorrelationID
+                }
+                $result = Forward-SPSdkWorkItem @params
+            }
+            'BulkApprove' {
+                $result = Invoke-SPSdkBulkApproveWorkItem -WorkItemId $WorkItemId -CorrelationID $CorrelationID
+            }
+            'BulkReject' {
+                $result = Invoke-SPSdkBulkRejectWorkItem -WorkItemId $WorkItemId -CorrelationID $CorrelationID
+            }
+            default {
+                return @{ Success = $false; Data = @(); Error = "Unknown action: $Action" }
+            }
+        }
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+        return @{ Success = $true; Data = $result.Data; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiSdkWorkItemAction failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Invoke-SPGuiSdkWorkItemAction' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Invoke-SPGuiSdkWorkItemAction failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
+#region Workflows (WRITE)
+
+function Invoke-SPGuiSdkWorkflowAction {
+    <#
+    .SYNOPSIS
+        Write dispatcher for workflow actions (SDK tab).
+    .DESCRIPTION
+        Routes -Action to the matching SP.Sdk write function:
+          Toggle    -> Update-SPSdkWorkflow         (requires -WorkflowId, -Enabled; PATCH /enabled)
+          Test      -> Test-SPSdkWorkflow           (requires -WorkflowId, -TestInput)
+          CreateOOO -> Set-SPSdkOOOFallbackWorkflow (requires -PrimaryReviewerId, -FallbackReviewerId; -FallbackDays/-WorkflowName optional)
+
+        PLAN DISAGREEMENT (resolved in favour of the code -- see round-02.md): the
+        mapping table maps Toggle -> Set-SPSdkWorkflow, but that backing is a full PUT
+        requiring a complete WorkflowBody the GUI does not hold. Toggle is therefore
+        implemented via Update-SPSdkWorkflow (PATCH /workflows/{id},
+        application/json-patch+json) with a single replace op on '/enabled'.
+
+        ValidateSet is the PRIMARY unknown-verb guard; the default arm is the explicit
+        Accept-satisfying path. Never throws (try/catch). No UI/Safety code here --
+        SDK-03 adds gates.
+    .OUTPUTS
+        @{ Success=$bool; Data=$object; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Toggle', 'Test', 'CreateOOO')]
+        [string]$Action,
+
+        [Parameter()] [string]$WorkflowId,
+        [Parameter()] [bool]$Enabled,
+        [Parameter()] $PatchOperations,
+        [Parameter()] [hashtable]$TestInput,
+        [Parameter()] [string]$PrimaryReviewerId,
+        [Parameter()] [string]$FallbackReviewerId,
+        [Parameter()] [int]$FallbackDays = 3,
+        [Parameter()] [string]$WorkflowName,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # SDK-03 inserts the Safety / What-If gate here.
+
+        switch ($Action) {
+            'Toggle' {
+                if ([string]::IsNullOrWhiteSpace($WorkflowId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Toggle requires -WorkflowId' }
+                }
+                if (-not $PSBoundParameters.ContainsKey('Enabled')) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Toggle requires -Enabled' }
+                }
+                $ops = @(New-SPSdkPatchReplace -Path '/enabled' -Value $Enabled -CorrelationID $CorrelationID)
+                $result = Update-SPSdkWorkflow -WorkflowId $WorkflowId -PatchOperations $ops -CorrelationID $CorrelationID
+            }
+            'Test' {
+                if ([string]::IsNullOrWhiteSpace($WorkflowId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Test requires -WorkflowId' }
+                }
+                if ($null -eq $TestInput) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Test requires -TestInput' }
+                }
+                $result = Test-SPSdkWorkflow -WorkflowId $WorkflowId -TestInput $TestInput -CorrelationID $CorrelationID
+            }
+            'CreateOOO' {
+                if ([string]::IsNullOrWhiteSpace($PrimaryReviewerId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action CreateOOO requires -PrimaryReviewerId' }
+                }
+                if ([string]::IsNullOrWhiteSpace($FallbackReviewerId)) {
+                    return @{ Success = $false; Data = @(); Error = 'Action CreateOOO requires -FallbackReviewerId' }
+                }
+                $params = @{
+                    PrimaryReviewerId  = $PrimaryReviewerId
+                    FallbackReviewerId = $FallbackReviewerId
+                    CorrelationID      = $CorrelationID
+                }
+                if ($PSBoundParameters.ContainsKey('FallbackDays')) { $params['FallbackDays'] = $FallbackDays }
+                if (-not [string]::IsNullOrWhiteSpace($WorkflowName)) { $params['WorkflowName'] = $WorkflowName }
+                $result = Set-SPSdkOOOFallbackWorkflow @params
+            }
+            default {
+                return @{ Success = $false; Data = @(); Error = "Unknown action: $Action" }
+            }
+        }
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+        return @{ Success = $true; Data = $result.Data; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiSdkWorkflowAction failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Invoke-SPGuiSdkWorkflowAction' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Invoke-SPGuiSdkWorkflowAction failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
+#region Campaign Filters (WRITE)
+
+function Invoke-SPGuiSdkFilterAction {
+    <#
+    .SYNOPSIS
+        Write dispatcher for campaign-filter actions (SDK tab).
+    .DESCRIPTION
+        Routes -Action to the matching SP.Sdk write function:
+          Create -> New-SPSdkCampaignFilter    (requires -Filter)
+          Update -> Update-SPSdkCampaignFilter (requires a SINGLE -FilterId, -Filter)
+          Delete -> Remove-SPSdkCampaignFilter (requires -FilterId; accepts one or many)
+
+        ASYMMETRY (intentional, mirrors the backings): Update takes a single FilterId
+        (full-replacement POST /campaign-filters/{id}); Delete takes a string[] (bulk
+        POST /campaign-filters/delete). On Update the dispatcher uses the first id.
+
+        ValidateSet is the PRIMARY unknown-verb guard; the default arm is the explicit
+        Accept-satisfying path. Never throws (try/catch). No UI/Safety code here --
+        SDK-03 adds gates.
+    .OUTPUTS
+        @{ Success=$bool; Data=$object; Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Create', 'Update', 'Delete')]
+        [string]$Action,
+
+        [Parameter()] [string[]]$FilterId,
+        [Parameter()] [hashtable]$Filter,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # SDK-03 inserts the Safety / What-If gate here.
+
+        switch ($Action) {
+            'Create' {
+                if ($null -eq $Filter) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Create requires -Filter' }
+                }
+                $result = New-SPSdkCampaignFilter -Filter $Filter -CorrelationID $CorrelationID
+            }
+            'Update' {
+                if ($null -eq $FilterId -or @($FilterId).Count -eq 0 -or [string]::IsNullOrWhiteSpace(@($FilterId)[0])) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Update requires -FilterId' }
+                }
+                if ($null -eq $Filter) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Update requires -Filter' }
+                }
+                $result = Update-SPSdkCampaignFilter -FilterId @($FilterId)[0] -Filter $Filter -CorrelationID $CorrelationID
+            }
+            'Delete' {
+                if ($null -eq $FilterId -or @($FilterId).Count -eq 0 -or [string]::IsNullOrWhiteSpace(@($FilterId)[0])) {
+                    return @{ Success = $false; Data = @(); Error = 'Action Delete requires -FilterId' }
+                }
+                $result = Remove-SPSdkCampaignFilter -FilterId $FilterId -CorrelationID $CorrelationID
+            }
+            default {
+                return @{ Success = $false; Data = @(); Error = "Unknown action: $Action" }
+            }
+        }
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+        return @{ Success = $true; Data = $result.Data; Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiSdkFilterAction failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Invoke-SPGuiSdkFilterAction' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Invoke-SPGuiSdkFilterAction failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPGuiSdkCampaignTemplates',
     'Get-SPGuiSdkApprovals',
@@ -669,5 +1128,10 @@ Export-ModuleMember -Function @(
     'Get-SPGuiSdkCampaignFilters',
     'Get-SPGuiSdkCertSummaries',
     'Get-SPGuiSdkDecisionSummary',
-    'Get-SPGuiSdkCertCampaigns'
+    'Get-SPGuiSdkCertCampaigns',
+    'Invoke-SPGuiSdkTemplateAction',
+    'Invoke-SPGuiSdkApprovalAction',
+    'Invoke-SPGuiSdkWorkItemAction',
+    'Invoke-SPGuiSdkWorkflowAction',
+    'Invoke-SPGuiSdkFilterAction'
 )
