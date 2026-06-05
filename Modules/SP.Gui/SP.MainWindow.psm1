@@ -4002,7 +4002,7 @@ function Invoke-SdkGridRefresh {
         [Parameter(Mandatory)]$TabContent,
         [Parameter(Mandatory)][string]$BridgeFunction,
         [hashtable]$BridgeArgs = @{},
-        [Parameter(Mandatory)][System.Collections.ObjectModel.ObservableCollection[PSObject]]$DataSource,
+        [Parameter(Mandatory)]$DataSource,
         [Parameter(Mandatory)][string]$StatusLabelName,
         [string]$LoadingMessage,
         [scriptblock]$OnLoaded

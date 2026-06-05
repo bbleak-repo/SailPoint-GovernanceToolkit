@@ -292,9 +292,136 @@ function Save-SPUiScreenshot {
     return (Get-Item $Path).FullName
 }
 
+function Get-SPUiGridRows {
+    <#
+    .SYNOPSIS
+        Returns the data rows of a DataGrid, polling until the expected count
+        appears or TimeoutMs elapses.
+    .PARAMETER Grid   AutomationElement of the DataGrid.
+    .PARAMETER TimeoutMs  Poll deadline. Default 5000.
+    .PARAMETER Expected   If provided, polling stops early when count >= Expected.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Grid,
+        [int]$TimeoutMs = 5000,
+        [int]$Expected  = 1
+    )
+
+    Initialize-SPUiAutomation
+
+    $cf       = $Grid.ConditionFactory
+    $rowType  = [FlaUI.Core.Definitions.ControlType]::DataItem
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    $rows     = @()
+    while ((Get-Date) -lt $deadline) {
+        $rows = @($Grid.FindAllDescendants($cf.ByControlType($rowType)))
+        if ($rows.Count -ge $Expected) { break }
+        Start-Sleep -Milliseconds 150
+    }
+    return $rows
+}
+
+function Select-SPUiRow {
+    <#
+    .SYNOPSIS
+        Clicks a DataGrid row to select it. Returns $true on success.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Row)
+
+    try {
+        $Row.Click()
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Invoke-SPUiButton {
+    <#
+    .SYNOPSIS
+        Invokes a Button element (click). Handles both Click() and Invoke pattern.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Button)
+
+    try {
+        $Button.Patterns.Invoke.Pattern.Invoke()
+    }
+    catch {
+        $Button.Click()
+    }
+}
+
+function Set-SPUiCheckTo {
+    <#
+    .SYNOPSIS
+        Sets a CheckBox to the desired state ($true=checked, $false=unchecked).
+        Returns the actual IsChecked state after setting.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $CheckBox,
+        [Parameter(Mandatory)] [bool]$Desired,
+        [int]$TimeoutMs = 5000
+    )
+
+    $current = $CheckBox.Patterns.Toggle.Pattern.ToggleState
+    $wantOn  = $Desired
+    $isOn    = ($current -eq [FlaUI.Core.Definitions.ToggleState]::On)
+
+    if ($isOn -ne $wantOn) {
+        $CheckBox.Click()
+        $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+        while ((Get-Date) -lt $deadline) {
+            $state = $CheckBox.Patterns.Toggle.Pattern.ToggleState
+            $isOn  = ($state -eq [FlaUI.Core.Definitions.ToggleState]::On)
+            if ($isOn -eq $wantOn) { break }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    return ($CheckBox.Patterns.Toggle.Pattern.ToggleState -eq [FlaUI.Core.Definitions.ToggleState]::On)
+}
+
+function Find-SPModalByTitle {
+    <#
+    .SYNOPSIS
+        Searches the automation tree for a window matching the given title,
+        polling up to TimeoutMs. Returns the window element or $null.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Automation,
+        [Parameter(Mandatory)] [string]$Title,
+        [int]$TimeoutMs = 5000
+    )
+
+    Initialize-SPUiAutomation
+
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $desktop = $Automation.GetDesktop()
+            $cf      = $desktop.ConditionFactory
+            $win     = $desktop.FindFirstDescendant($cf.ByName($Title))
+            if ($win) { return $win }
+        }
+        catch { }
+        Start-Sleep -Milliseconds 200
+    }
+    return $null
+}
+
 Export-ModuleMember -Function Initialize-SPUiAutomation,
                               Start-SPDashboardForTest,
                               Stop-SPDashboardForTest,
                               Find-SPUiElement,
                               Find-SPUiTab,
-                              Save-SPUiScreenshot
+                              Save-SPUiScreenshot,
+                              Get-SPUiGridRows,
+                              Select-SPUiRow,
+                              Invoke-SPUiButton,
+                              Set-SPUiCheckTo,
+                              Find-SPModalByTitle
