@@ -113,7 +113,7 @@ Tokens are cached in module scope (`$script:TokenCache`). Expiry is tracked to a
 
 ### SP.Vault.psm1
 
-AES-256-CBC encrypted credential store:
+Authenticated-encryption credential store — AES-256-CBC + HMAC-SHA256 (encrypt-then-MAC):
 
 | Function | Purpose |
 |----------|---------|
@@ -123,7 +123,7 @@ AES-256-CBC encrypted credential store:
 | `Remove-SPVaultCredential` | Delete a stored credential |
 | `Test-SPVaultExists` | Check if vault file exists |
 
-Key derivation: PBKDF2 with SHA-256, 600,000 iterations (configurable). The passphrase is never stored.
+On-disk layout: `[32 B salt][16 B IV][32 B HMAC-SHA256][N B AES-CBC ciphertext]`. Key derivation: PBKDF2 (`Rfc2898DeriveBytes`, HMAC-SHA1 PRF — the .NET default for the 3-arg constructor), 600,000 iterations (configurable via `Vault.Pbkdf2Iterations`), producing 64 bytes split into a 32-byte AES-256 key + 32-byte HMAC-SHA256 key. Fresh random salt + IV per save; the passphrase is never stored.
 
 ---
 

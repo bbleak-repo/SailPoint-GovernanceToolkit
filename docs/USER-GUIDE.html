@@ -786,12 +786,6 @@ body {
 <a href="javascript:void(0)" onclick="showSection('cli-disconnected-applications'); return false;"><span class="sidebar-num">16</span><span>4. Disconnected applications</span></a>
 <a href="javascript:void(0)" onclick="showSection('cli-governance-reporting'); return false;"><span class="sidebar-num">17</span><span>5. Governance &amp; reporting</span></a>
 <a href="javascript:void(0)" onclick="showSection('cli-sdk-features'); return false;"><span class="sidebar-num">18</span><span>6. SDK features</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-1-templates');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.1</span><span>Templates</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-2-cert-summaries');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.2</span><span>Cert Summaries</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-3-approvals');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.3</span><span>Approvals</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-4-work-items');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.4</span><span>Work Items</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-5-workflows');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.5</span><span>Workflows</span></a>
-<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('cli-sdk-features'); setTimeout(function(){var e=document.getElementById('6-6-filters');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.6</span><span>Filters</span></a>
 <a href="javascript:void(0)" onclick="showSection('cli-operations-scheduling'); return false;"><span class="sidebar-num">19</span><span>7. Operations &amp; scheduling</span></a>
 <div class="sidebar-group-label">GUI Reference</div>
 <a href="javascript:void(0)" onclick="showSection('gui-overview'); return false;"><span class="sidebar-num">20</span><span>Launching &amp; Conventions</span></a>
@@ -832,10 +826,6 @@ body {
 <th>Detail</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>OS</strong></td>
 <td>Windows 10/11 or Windows Server.</td>
 </tr>
@@ -845,7 +835,7 @@ body {
 </tr>
 <tr>
 <td><strong>.NET Framework</strong></td>
-<td>4.7.2+ (only for the GUI dashboard / WPF).</td>
+<td><strong>4.8+</strong> (only for the GUI dashboard / WPF). Pre-installed on Windows 10 1903+ and all Windows 11 machines — no action needed on modern Windows. <code>Show-SPDashboard.ps1</code> checks this at launch and exits with a clear error and download link if needed.</td>
 </tr>
 <tr>
 <td><strong>Network / TLS</strong></td>
@@ -853,7 +843,7 @@ body {
 </tr>
 <tr>
 <td><strong>ISC credentials</strong></td>
-<td>An ISC <strong>OAuth client</strong> (client_credentials grant) with <code>ClientId</code> + <code>ClientSecret</code>, or a personal <strong>bearer token</strong> from the browser for short-lived use.</td>
+<td>An ISC <strong>Personal Access Token (PAT)</strong> — a <code>client_credentials</code> OAuth client that yields a <code>ClientId</code> + <code>ClientSecret</code> pair — or a short-lived <strong>bearer token</strong> copied from the browser. The PAT must be created by an identity with the <strong><code>CERT_ADMIN</code></strong> or <strong><code>ORG_ADMIN</code></strong> role and granted the scopes for what you intend to do (read-only audit vs. campaign creation vs. delta cert). See §5 for the scope matrix and <code>docs/SANDBOX-API-SETUP.md</code> for the click-by-click setup.</td>
 </tr>
 <tr>
 <td><strong>Pester</strong> (optional)</td>
@@ -881,11 +871,6 @@ body {
 <th>Key</th>
 <th>Purpose</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Global</strong></td>
 <td><code>EnvironmentName</code></td>
@@ -1036,16 +1021,45 @@ body {
 </div>
 <div id="section-found-authentication" class="report-section" style="display:none">
 <h2>5. Authentication</h2>
-<p>Set <code>Authentication.Mode</code> to one of:</p>
-<h3 id="configfile">ConfigFile</h3>
-<p><code>ClientId</code> + <code>ClientSecret</code> are read directly from config. Simplest, but the secret sits in a file — only use with <code>settings.local.json</code> (gitignored) or for the mock.</p>
-<h3 id="vault-recommended-for-real-tenants">Vault (recommended for real tenants)</h3>
-<p>Credentials live in an <strong>encrypted vault</strong> (<code>AES-256-CBC</code> with <code>PBKDF2</code>, 600,000 iterations) unlocked by a passphrase — the secret is never stored in plain text on disk. Set up once:</p>
+<p>The toolkit authenticates to ISC three ways, selected by <code>Authentication.Mode</code>: <strong><code>ConfigFile</code></strong> and <strong><code>Vault</code></strong> both use an OAuth <strong>Personal Access Token (PAT)</strong>; <strong><code>Token</code></strong> uses a short-lived browser bearer token. Read §5.1 first to create the credential, then pick a storage mode (§5.2–§5.4).</p>
+<h3 id="5-1-the-isc-credential-a-personal-access-token-pat">5.1 The ISC credential: a Personal Access Token (PAT)</h3>
+<p>For anything beyond a quick browser-token run, the toolkit uses the OAuth 2.0 <strong><code>client_credentials</code></strong> grant. In the ISC admin console this is created as a <strong>Personal Access Token</strong> — despite the name, it issues a <strong><code>ClientId</code> + <code>ClientSecret</code></strong> pair and is the standard non-interactive service credential. Create it under <strong>Admin → Preferences → Personal Access Tokens</strong> (or <strong>Security Settings → API Management</strong> with <code>ORG_ADMIN</code>).</p>
+<p>A PAT <strong>inherits the permissions of the identity that creates it</strong>, then the selected <strong>scopes</strong> further restrict it. Create it as a <strong><code>CERT_ADMIN</code></strong> (campaigns + certifications — all the toolkit needs) or <strong><code>ORG_ADMIN</code></strong>, and grant the scopes that match your intended use:</p>
+<table>
+<thead><tr>
+<th>Use case</th>
+<th>Scopes to grant</th>
+<th>Covers</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Read-only audit</strong> (query + audit existing campaigns, reports)</td>
+<td><code>idn:campaign:read</code>, <code>idn:campaign-report:read</code>, <code>sp:report:read</code>, <code>sp:search:read</code>, <code>idn:sources:read</code>, <code>idn:accounts:read</code></td>
+<td>Audit, search, governance/data-quality reporting, leadership rollups.</td>
+</tr>
+<tr>
+<td><strong>Full toolkit</strong> (also create/activate/decide campaigns)</td>
+<td><code>idn:campaign:manage</code>, <code>idn:campaign-report:manage</code>, <code>sp:report:manage</code>, <code>sp:search:read</code>, <code>idn:sources:read</code>, <code>idn:accounts:read</code></td>
+<td>Everything above <strong>plus</strong> campaign creation, delta-cert/disconnected-app campaign creation, decisions, sign-off. <code>…:manage</code> is a superset of <code>…:read</code>.</td>
+</tr>
+<tr>
+<td><strong>Delta cert / orchestrator</strong> (account-activities)</td>
+<td>the Full-toolkit set <strong>plus</strong> <code>sp:scopes:all</code> <em>(or a browser token)</em></td>
+<td><code>GET /v3/account-activities</code> has <strong>no</strong> granular scope — it requires <code>sp:scopes:all</code>. Affects <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaReport</code>, and the daily orchestrator steps 2–5.</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Why <code>sp:search:read</code> for a "read-only" PAT?</strong> Delta cert and disconnected-app correlation resolve identities (and their managers) via <code>GET /v3/search/identities/{id}</code> and <code>POST /v3/search</code>. The plain <code>idn:campaign:read</code> set is <strong>not</strong> sufficient for those. For the full endpoint-to-scope mapping and a click-by-click walkthrough, see <strong><code>docs/SANDBOX-API-SETUP.md</code></strong> (sandbox-framed but the steps apply to any tenant).</p></div>
+<h3 id="5-2-configfile">5.2 ConfigFile</h3>
+<p><code>ClientId</code> + <code>ClientSecret</code> are read directly from config. Simplest, but the secret sits in a file in plain text — only use with <code>settings.local.json</code> (gitignored) or the mock, never in the committed <code>settings.json</code>.</p>
+<h3 id="5-3-vault-recommended-for-real-tenants">5.3 Vault (recommended for real tenants)</h3>
+<p>Credentials live in an <strong>encrypted vault file</strong> unlocked by a passphrase — the secret is never stored in plain text on disk, and the passphrase is never written to disk at all. Set up once:</p>
 <pre><code>.\Scripts\New-SPVault.ps1            # interactive: prompts for passphrase + ClientId/Secret
-.\Scripts\New-SPVault.ps1 -ClientId 'abc123'   # pre-supply the id, prompt for the rest</code></pre>
-<p>The vault is created at <code>Authentication.Vault.VaultPath</code> (default <code>.\Data\sp-vault.enc</code>). At runtime the toolkit prompts for (or is given) the passphrase to unlock it.</p>
-<h3 id="token">Token</h3>
-<p>Paste a short-lived <strong>bearer token</strong> (e.g. copied from the ISC web session) via the <code>-Token</code> parameter on most scripts, or the GUI's token field. Good for quick ad-hoc runs; expires quickly.</p>
+.\Scripts\New-SPVault.ps1 -ClientId 'abc123'   # pre-supply the id, prompt for the rest
+.\Scripts\New-SPVault.ps1 -VaultPath 'D:\Secure\team.enc'   # custom location</code></pre>
+<p>Then set <code>Authentication.Mode = "Vault"</code>. The vault is created at <code>Authentication.Vault.VaultPath</code> (default <code>.\Data\sp-vault.enc</code>); at runtime the toolkit prompts for (or is given) the passphrase to unlock it.</p>
+<p><strong>How the encryption works.</strong> The vault is authenticated encryption — <strong>AES-256-CBC for confidentiality plus HMAC-SHA256 for integrity</strong> (encrypt-then-MAC, so tampering is detected before decryption). The passphrase is stretched with <strong>PBKDF2 (<code>Rfc2898DeriveBytes</code>, 600,000 iterations</strong> — tunable via <code>Vault.Pbkdf2Iterations</code>) into a 64-byte key that is split into a separate 32-byte AES key and 32-byte HMAC key. Each save uses a fresh random 32-byte salt and 16-byte IV, so the on-disk blob is <code>[salt][IV][HMAC][ciphertext]</code>. <strong>What it supports:</strong> storing the ISC <code>ClientId</code> + <code>ClientSecret</code> under a named key (<code>Vault.CredentialKey</code>, default <code>sailpoint-isc</code>), rotation/re-keying by re-running <code>New-SPVault.ps1</code> (it warns before overwriting), and a custom vault path for shared/team locations. The <code>*.enc</code> file is gitignored.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Store the passphrase in a password manager.</strong> It is never logged and cannot be recovered — lose it and you must recreate the vault (and rotate the PAT secret).</p></div>
+<h3 id="5-4-token">5.4 Token</h3>
+<p>Paste a short-lived <strong>bearer token</strong> (copied from an active ISC web session: F12 → Network → copy the <code>Authorization</code> value) via the <code>-Token</code> parameter on most scripts, or the GUI's Settings-tab token field. No PAT or scopes setup needed — it carries your browser session's full permissions — but it expires in ~10–12 minutes, so it's for quick ad-hoc/<code>account-activities</code> runs, not automation.</p>
 <div class="callout callout-warning"><div class="callout-label">TLS / Security</div><p><strong>TLS:</strong> the toolkit enforces TLS 1.2 (and 1.3 if the OS supports it) on every HTTPS call automatically — no configuration needed. This is the #1 fix for "connection closed" errors against ISC.</p></div>
 </div>
 <div id="section-found-environments-mock-vs-real" class="report-section" style="display:none">
@@ -1061,10 +1075,6 @@ body {
 <th>Control</th>
 <th>Effect</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>RequireWhatIfOnProd</code></td>
 <td>On a real environment, mutating actions require explicit confirmation (CLI <code>-WhatIf</code> preview, GUI Yes/No prompt) before they execute.</td>
@@ -1087,10 +1097,6 @@ body {
 <th>Location</th>
 <th>Contents</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>Logs\</code></td>
 <td>Structured run logs (<code>&lt;FilePrefix&gt;-*.log</code>), severity-filtered.</td>
@@ -1128,10 +1134,6 @@ body {
 <th>Meaning</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>Console</code></td>
 <td>Human-readable to the terminal.</td>
 </tr>
@@ -1156,10 +1158,6 @@ body {
 <th>Term</th>
 <th>Meaning</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Campaign</strong></td>
 <td>A certification campaign — a scheduled review of access. Types: <code>MANAGER</code>, <code>SOURCE_OWNER</code>, <code>SEARCH</code>, <code>ROLE_COMPOSITION</code>.</td>
@@ -1255,10 +1253,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-VaultPath &lt;file&gt;</code></td>
 <td>Override the vault path from <code>settings.json</code> (default <code>.\Data\sp-vault.enc</code>).</td>
 </tr>
@@ -1283,10 +1277,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-ConfigPath &lt;file&gt;</code></td>
 <td>Settings file to test against (e.g. point at <code>settings-mock.json</code> or <code>settings.local.json</code>).</td>
 </tr>
@@ -1301,10 +1291,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-ConfigPath &lt;file&gt;</code></td>
 <td>Settings file the GUI uses.</td>
@@ -1327,10 +1313,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Tags &lt;names&gt;</code></td>
 <td>Run only campaigns whose <code>Tags</code> column matches one of these (e.g. <code>smoke</code>, <code>regression</code>, <code>full</code>).</td>
@@ -1362,10 +1344,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-CampaignName &lt;name&gt;</code></td>
 <td>Exact (case-insensitive) campaign name.</td>
@@ -1425,10 +1403,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Keyword &lt;kw&gt;</code></td>
 <td>Substring search on campaign name (ISC <code>co</code> filter).</td>
@@ -1498,10 +1472,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-SourceId &lt;ids&gt;</code> <em>(required)</em></td>
 <td>ISC source ID(s) to monitor (ISC Admin → Sources → ID in URL).</td>
 </tr>
@@ -1549,10 +1519,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-CampaignNamePrefix &lt;s&gt;</code></td>
 <td>Prefix used to find delta-cert campaigns (default <code>DeltaCert.Escalation.CampaignNamePrefix</code>).</td>
 </tr>
@@ -1574,10 +1540,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-SourceId &lt;ids&gt;</code> <em>(required)</em></td>
 <td>Source ID(s) to monitor.</td>
@@ -1604,10 +1566,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Action &lt;op&gt;</code> <em>(required)</em></td>
 <td><code>Register</code>, <code>Unregister</code>, <code>List</code>, or <code>Test</code>.</td>
@@ -1640,10 +1598,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-AppName &lt;name&gt;</code> <em>(required)</em></td>
 <td>App name (paths, campaign naming, titles).</td>
@@ -1687,10 +1641,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-AppNames &lt;list&gt;</code></td>
 <td>Only process these apps (default: all enabled).</td>
 </tr>
@@ -1712,10 +1662,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-SourceId &lt;ids&gt;</code></td>
 <td>Sources to assess (default: configured/all enabled).</td>
@@ -1755,10 +1701,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-CaptureOnly</code> / <code>-TrendOnly</code></td>
 <td>Capture without reporting / report without recomputing.</td>
 </tr>
@@ -1792,10 +1734,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Status</code>, <code>-DaysBack</code>, <code>-CampaignName*</code></td>
 <td>Campaign selection (same semantics as audit).</td>
@@ -1831,10 +1769,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-SkipOrphanAccounts</code> / <code>-SkipIdentityQuality</code> / <code>-SkipAggregationHealth</code></td>
 <td>Drop a section.</td>
 </tr>
@@ -1860,10 +1794,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Status &lt;list&gt;</code> <em>(required)</em></td>
 <td>Campaign statuses to include.</td>
@@ -1908,10 +1838,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-DaysBack &lt;n&gt;</code></td>
 <td>Window (default 7).</td>
 </tr>
@@ -1942,10 +1868,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-Action &lt;op&gt;</code></td>
 <td><code>List</code> (default), <code>Get</code>, <code>Schedule</code>.</td>
 </tr>
@@ -1972,10 +1894,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-OwnerId &lt;id&gt;</code></td>
 <td>Filter by owner identity (default: all visible).</td>
 </tr>
@@ -1993,10 +1911,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-Action &lt;op&gt;</code></td>
 <td><code>List</code> (default), <code>Get</code>, <code>Executions</code>.</td>
@@ -2024,10 +1938,6 @@ body {
 <th>Description</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><code>-SourceId &lt;ids&gt;</code></td>
 <td>Sources for the delta-cert steps.</td>
 </tr>
@@ -2045,10 +1955,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-TemplateName &lt;name&gt;</code></td>
 <td>Run one template (else all, filtered by cadence).</td>
@@ -2079,10 +1985,6 @@ body {
 <th>Parameter</th>
 <th>Description</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><code>-ArchiveDays &lt;n&gt;</code></td>
 <td>Archive files older than this (min 7; overrides <code>Retention.ArchiveDays</code>).</td>
@@ -2133,10 +2035,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td>Campaign grid + tag filter</td>
 <td>Lists campaign test cases; the tag combo filters by tag (smoke/regression/full). Checkbox column selects rows.</td>
 </tr>
@@ -2168,10 +2066,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td>Evidence grid</td>
 <td>Lists generated evidence artifacts.</td>
 </tr>
@@ -2198,10 +2092,6 @@ body {
 <th>Control</th>
 <th>What it does</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Configure Audit</strong> (<code>BtnConfigureAudit</code>)</td>
 <td>Opens a dialog to set the campaign filter, status, look-back window, and options (persisted for the session).</td>
@@ -2239,10 +2129,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Configure Delta Cert</strong> (<code>BtnConfigureDeltaCert</code>)</td>
 <td>Dialog for source IDs, look-back, deadline, reviewer mode, prefix (session-persisted).</td>
 </tr>
@@ -2274,10 +2160,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Run Disconnected Batch</strong> (<code>BtnRunDisconnectedBatch</code>)</td>
 <td>Run the certification pipeline for all registered disconnected apps.</td>
 </tr>
@@ -2305,10 +2187,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Run Health Check</strong> (<code>BtnRunHealthCheck</code>)</td>
 <td>Run the six-dimension health check and show pass/fail/warn + grade.</td>
 </tr>
@@ -2330,7 +2208,7 @@ body {
 <div id="section-gui-sdk-features-tab" class="report-section" style="display:none">
 <h2>6. SDK Features tab</h2>
 <p><strong>Purpose:</strong> operate the vendor-SDK governance features. Contains six sub-tabs. Every grid loads via <strong>Refresh</strong>; write actions honor the Safety model. <strong>When to use:</strong> managing campaign templates/schedules, approvals, work items, workflows, and campaign filters interactively.</p>
-<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Phase-2 note.</strong> Five write actions are present but not yet wired to their input dialogs and currently show a <em>"requires dialog (phase 2)"</em> status when clicked: <strong>New Template</strong>, <strong>New Filter</strong>, <strong>Edit Filter</strong>, <strong>Create OOO</strong>, and <strong>Forward Work Item</strong>. All other actions are fully functional.</p></div>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>All write actions are live.</strong> Every button below — including New Template, New Filter, Edit Filter, Create OOO, and Forward Work Item — opens its input dialog, validates the entered values, applies the Safety gate (<code>RequireWhatIfOnProd</code>), and calls the SDK bridge. There are no placeholder/"coming soon" actions on this tab.</p></div>
 <h3 id="6-1-templates">6.1 Templates</h3>
 <table>
 <thead><tr>
@@ -2338,16 +2216,12 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Refresh</strong> (<code>BtnSdkRefreshTemplates</code>)</td>
 <td>Load campaign templates + their schedule status.</td>
 </tr>
 <tr>
 <td><strong>New Template</strong> (<code>BtnSdkNewTemplate</code>)</td>
-<td><em>Planned (phase 2).</em> Create a template.</td>
+<td>Create a campaign template (dialog: name, deadline duration, owner identity, reviewer type).</td>
 </tr>
 <tr>
 <td><strong>Edit Schedule</strong> (<code>BtnSdkEditSchedule</code>)</td>
@@ -2368,10 +2242,6 @@ body {
 <th>Control</th>
 <th>What it does</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Campaign</strong> (<code>CboSdkCertCampaign</code>)</td>
 <td>Pick a campaign; populates the certification list.</td>
@@ -2398,10 +2268,6 @@ body {
 <th>Control</th>
 <th>What it does</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Pending / Completed</strong> (<code>RbSdkPending</code> / <code>RbSdkCompleted</code>)</td>
 <td>Toggle between pending and historical approvals (swaps the column set + counts).</td>
@@ -2431,10 +2297,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Refresh</strong> (<code>BtnSdkRefreshWorkItems</code>)</td>
 <td>Load work items + the Open/Completed/Total badges.</td>
 </tr>
@@ -2452,7 +2314,7 @@ body {
 </tr>
 <tr>
 <td><strong>Forward</strong> (<code>BtnSdkForwardWorkItem</code>)</td>
-<td><em>Planned (phase 2).</em> Forward the work item.</td>
+<td>Forward the work item to another owner (dialog: target identity ID + comment; confirm).</td>
 </tr>
 </tbody></table>
 <p><strong>Related CLI:</strong> <code>Invoke-SPSdkWorkItems.ps1</code> (read/list).</p>
@@ -2462,10 +2324,6 @@ body {
 <th>Control</th>
 <th>What it does</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Refresh</strong> (<code>BtnSdkRefreshWorkflows</code>)</td>
 <td>Load the workflow list (Enabled, trigger type, execution/failure counts).</td>
@@ -2484,7 +2342,7 @@ body {
 </tr>
 <tr>
 <td><strong>Create OOO</strong> (<code>BtnSdkCreateOOO</code>)</td>
-<td><em>Planned (phase 2).</em> Create an out-of-office fallback workflow.</td>
+<td>Create an out-of-office fallback workflow (dialog: primary + fallback reviewer IDs, fallback days).</td>
 </tr>
 </tbody></table>
 <p><strong>Related CLI:</strong> <code>Invoke-SPSdkWorkflows.ps1</code> (read/list/executions).</p>
@@ -2495,10 +2353,6 @@ body {
 <th>What it does</th>
 </tr></thead><tbody>
 <tr>
-<td>---</td>
-<td>---</td>
-</tr>
-<tr>
 <td><strong>Refresh</strong> (<code>BtnSdkRefreshFilters</code>)</td>
 <td>Load campaign filters.</td>
 </tr>
@@ -2508,11 +2362,11 @@ body {
 </tr>
 <tr>
 <td><strong>New Filter</strong> (<code>BtnSdkNewFilter</code>)</td>
-<td><em>Planned (phase 2).</em> Create a filter.</td>
+<td>Create a campaign filter (dialog: name, mode <code>INCLUSION</code>/<code>EXCLUSION</code>, description).</td>
 </tr>
 <tr>
 <td><strong>Edit Filter</strong> (<code>BtnSdkEditFilter</code>)</td>
-<td><em>Planned (phase 2).</em> Edit the selected filter.</td>
+<td>Edit the selected filter (dialog pre-populated with its current name/mode/description).</td>
 </tr>
 <tr>
 <td><strong>Delete Filter</strong> (<code>BtnSdkDeleteFilter</code>)</td>
@@ -2529,10 +2383,6 @@ body {
 <th>Control</th>
 <th>What it does</th>
 </tr></thead><tbody>
-<tr>
-<td>---</td>
-<td>---</td>
-</tr>
 <tr>
 <td><strong>Debug Mode</strong> (<code>ChkDebugMode</code>)</td>
 <td>Toggle <code>Global.DebugMode</code> (verbose diagnostics).</td>

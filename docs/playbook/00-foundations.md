@@ -39,7 +39,7 @@ rules.
 | **PowerShell** | **Windows PowerShell 5.1 (Desktop edition).** Not PowerShell 7/Core — the modules rely on 5.1 behavior and the GUI requires .NET Framework WPF. |
 | **.NET Framework** | **4.8+** (only for the GUI dashboard / WPF). Pre-installed on Windows 10 1903+ and all Windows 11 machines — no action needed on modern Windows. `Show-SPDashboard.ps1` checks this at launch and exits with a clear error and download link if needed. |
 | **Network / TLS** | Outbound HTTPS to your ISC tenant. The toolkit forces **TLS 1.2 (and 1.3 where available)** automatically. |
-| **ISC credentials** | An ISC **OAuth client** (client_credentials grant) with `ClientId` + `ClientSecret`, or a personal **bearer token** from the browser for short-lived use. |
+| **ISC credentials** | An ISC **Personal Access Token (PAT)** — a `client_credentials` OAuth client that yields a `ClientId` + `ClientSecret` pair — or a short-lived **bearer token** copied from the browser. The PAT must be created by an identity with the **`CERT_ADMIN`** or **`ORG_ADMIN`** role and granted the scopes for what you intend to do (read-only audit vs. campaign creation vs. delta cert). See §5 for the scope matrix and `docs/SANDBOX-API-SETUP.md` for the click-by-click setup. |
 | **Pester** (optional) | 5.x — only needed to run the test suite. |
 
 ---
@@ -126,29 +126,78 @@ Top-level sections and the keys that matter most:
 
 ## 5. Authentication
 
-Set `Authentication.Mode` to one of:
+The toolkit authenticates to ISC three ways, selected by `Authentication.Mode`:
+**`ConfigFile`** and **`Vault`** both use an OAuth **Personal Access Token (PAT)**;
+**`Token`** uses a short-lived browser bearer token. Read §5.1 first to create the
+credential, then pick a storage mode (§5.2–§5.4).
 
-### ConfigFile
+### 5.1 The ISC credential: a Personal Access Token (PAT)
+
+For anything beyond a quick browser-token run, the toolkit uses the OAuth 2.0
+**`client_credentials`** grant. In the ISC admin console this is created as a
+**Personal Access Token** — despite the name, it issues a **`ClientId` + `ClientSecret`**
+pair and is the standard non-interactive service credential. Create it under
+**Admin → Preferences → Personal Access Tokens** (or **Security Settings → API
+Management** with `ORG_ADMIN`).
+
+A PAT **inherits the permissions of the identity that creates it**, then the selected
+**scopes** further restrict it. Create it as a **`CERT_ADMIN`** (campaigns +
+certifications — all the toolkit needs) or **`ORG_ADMIN`**, and grant the scopes that
+match your intended use:
+
+| Use case | Scopes to grant | Covers |
+|---|---|---|
+| **Read-only audit** (query + audit existing campaigns, reports) | `idn:campaign:read`, `idn:campaign-report:read`, `sp:report:read`, `sp:search:read`, `idn:sources:read`, `idn:accounts:read` | Audit, search, governance/data-quality reporting, leadership rollups. |
+| **Full toolkit** (also create/activate/decide campaigns) | `idn:campaign:manage`, `idn:campaign-report:manage`, `sp:report:manage`, `sp:search:read`, `idn:sources:read`, `idn:accounts:read` | Everything above **plus** campaign creation, delta-cert/disconnected-app campaign creation, decisions, sign-off. `…:manage` is a superset of `…:read`. |
+| **Delta cert / orchestrator** (account-activities) | the Full-toolkit set **plus** `sp:scopes:all` *(or a browser token)* | `GET /v3/account-activities` has **no** granular scope — it requires `sp:scopes:all`. Affects `Invoke-SPADDeltaCert`, `Invoke-SPDeltaReport`, and the daily orchestrator steps 2–5. |
+
+> **Why `sp:search:read` for a "read-only" PAT?** Delta cert and disconnected-app
+> correlation resolve identities (and their managers) via `GET /v3/search/identities/{id}`
+> and `POST /v3/search`. The plain `idn:campaign:read` set is **not** sufficient for those.
+> For the full endpoint-to-scope mapping and a click-by-click walkthrough, see
+> **`docs/SANDBOX-API-SETUP.md`** (sandbox-framed but the steps apply to any tenant).
+
+### 5.2 ConfigFile
 `ClientId` + `ClientSecret` are read directly from config. Simplest, but the secret
-sits in a file — only use with `settings.local.json` (gitignored) or for the mock.
+sits in a file in plain text — only use with `settings.local.json` (gitignored) or the
+mock, never in the committed `settings.json`.
 
-### Vault (recommended for real tenants)
-Credentials live in an **encrypted vault** (`AES-256-CBC` with `PBKDF2`,
-600,000 iterations) unlocked by a passphrase — the secret is never stored in plain
-text on disk. Set up once:
+### 5.3 Vault (recommended for real tenants)
+
+Credentials live in an **encrypted vault file** unlocked by a passphrase — the secret
+is never stored in plain text on disk, and the passphrase is never written to disk at
+all. Set up once:
 
 ```powershell
 .\Scripts\New-SPVault.ps1            # interactive: prompts for passphrase + ClientId/Secret
 .\Scripts\New-SPVault.ps1 -ClientId 'abc123'   # pre-supply the id, prompt for the rest
+.\Scripts\New-SPVault.ps1 -VaultPath 'D:\Secure\team.enc'   # custom location
 ```
 
-The vault is created at `Authentication.Vault.VaultPath` (default `.\Data\sp-vault.enc`).
-At runtime the toolkit prompts for (or is given) the passphrase to unlock it.
+Then set `Authentication.Mode = "Vault"`. The vault is created at
+`Authentication.Vault.VaultPath` (default `.\Data\sp-vault.enc`); at runtime the
+toolkit prompts for (or is given) the passphrase to unlock it.
 
-### Token
-Paste a short-lived **bearer token** (e.g. copied from the ISC web session) via the
-`-Token` parameter on most scripts, or the GUI's token field. Good for quick ad-hoc
-runs; expires quickly.
+**How the encryption works.** The vault is authenticated encryption — **AES-256-CBC for
+confidentiality plus HMAC-SHA256 for integrity** (encrypt-then-MAC, so tampering is
+detected before decryption). The passphrase is stretched with **PBKDF2 (`Rfc2898DeriveBytes`,
+600,000 iterations** — tunable via `Vault.Pbkdf2Iterations`) into a 64-byte key that is
+split into a separate 32-byte AES key and 32-byte HMAC key. Each save uses a fresh random
+32-byte salt and 16-byte IV, so the on-disk blob is
+`[salt][IV][HMAC][ciphertext]`. **What it supports:** storing the ISC `ClientId` +
+`ClientSecret` under a named key (`Vault.CredentialKey`, default `sailpoint-isc`),
+rotation/re-keying by re-running `New-SPVault.ps1` (it warns before overwriting), and a
+custom vault path for shared/team locations. The `*.enc` file is gitignored.
+
+> **Store the passphrase in a password manager.** It is never logged and cannot be
+> recovered — lose it and you must recreate the vault (and rotate the PAT secret).
+
+### 5.4 Token
+Paste a short-lived **bearer token** (copied from an active ISC web session: F12 →
+Network → copy the `Authorization` value) via the `-Token` parameter on most scripts,
+or the GUI's Settings-tab token field. No PAT or scopes setup needed — it carries your
+browser session's full permissions — but it expires in ~10–12 minutes, so it's for
+quick ad-hoc/`account-activities` runs, not automation.
 
 > **TLS:** the toolkit enforces TLS 1.2 (and 1.3 if the OS supports it) on every HTTPS
 > call automatically — no configuration needed. This is the #1 fix for "connection

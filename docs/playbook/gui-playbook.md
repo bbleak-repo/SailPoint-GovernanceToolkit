@@ -139,16 +139,16 @@ loads via **Refresh**; write actions honor the Safety model.
 **When to use:** managing campaign templates/schedules, approvals, work items, workflows,
 and campaign filters interactively.
 
-> **Phase-2 note.** Five write actions are present but not yet wired to their input
-> dialogs and currently show a *"requires dialog (phase 2)"* status when clicked:
-> **New Template**, **New Filter**, **Edit Filter**, **Create OOO**, and **Forward Work
-> Item**. All other actions are fully functional.
+> **All write actions are live.** Every button below — including New Template, New
+> Filter, Edit Filter, Create OOO, and Forward Work Item — opens its input dialog,
+> validates the entered values, applies the Safety gate (`RequireWhatIfOnProd`), and
+> calls the SDK bridge. There are no placeholder/"coming soon" actions on this tab.
 
 ### 6.1 Templates
 | Control | What it does |
 |---|---|
 | **Refresh** (`BtnSdkRefreshTemplates`) | Load campaign templates + their schedule status. |
-| **New Template** (`BtnSdkNewTemplate`) | *Planned (phase 2).* Create a template. |
+| **New Template** (`BtnSdkNewTemplate`) | Create a campaign template (dialog: name, deadline duration, owner identity, reviewer type). |
 | **Edit Schedule** (`BtnSdkEditSchedule`) | Set a recurring schedule on the selected template (dialog). |
 | **Remove Schedule** (`BtnSdkRemoveSchedule`) | Remove the schedule (confirm). |
 | **Delete Template** (`BtnSdkDeleteTemplate`) | Delete the selected template (confirm). |
@@ -186,7 +186,7 @@ access summaries by type.
 | **Show Completed** (`ChkSdkShowCompleted`) | Include completed items in the list. |
 | **Complete** (`BtnSdkCompleteWorkItem`) | Mark the selected work item complete (confirm). |
 | **Bulk Approve** (`BtnSdkBulkApprove`) | Approve all approval items in the selected work item (confirm; Safety-gated). |
-| **Forward** (`BtnSdkForwardWorkItem`) | *Planned (phase 2).* Forward the work item. |
+| **Forward** (`BtnSdkForwardWorkItem`) | Forward the work item to another owner (dialog: target identity ID + comment; confirm). |
 
 **Related CLI:** `Invoke-SPSdkWorkItems.ps1` (read/list).
 
@@ -197,7 +197,7 @@ access summaries by type.
 | **Enable/Disable** (`BtnSdkEnableWorkflow`) | Toggle the selected workflow's enabled state (confirm on disable). |
 | **Test** (`BtnSdkTestWorkflow`) | Test the selected workflow with sample input (dialog; workflow must be disabled). |
 | **View Executions** (`BtnSdkViewExecutions`) | Load recent execution history into the executions grid. |
-| **Create OOO** (`BtnSdkCreateOOO`) | *Planned (phase 2).* Create an out-of-office fallback workflow. |
+| **Create OOO** (`BtnSdkCreateOOO`) | Create an out-of-office fallback workflow (dialog: primary + fallback reviewer IDs, fallback days). |
 
 **Related CLI:** `Invoke-SPSdkWorkflows.ps1` (read/list/executions).
 
@@ -206,8 +206,8 @@ access summaries by type.
 |---|---|
 | **Refresh** (`BtnSdkRefreshFilters`) | Load campaign filters. |
 | **Include System** (`ChkSdkIncludeSystem`) | Show system-created filters alongside custom ones. |
-| **New Filter** (`BtnSdkNewFilter`) | *Planned (phase 2).* Create a filter. |
-| **Edit Filter** (`BtnSdkEditFilter`) | *Planned (phase 2).* Edit the selected filter. |
+| **New Filter** (`BtnSdkNewFilter`) | Create a campaign filter (dialog: name, mode `INCLUSION`/`EXCLUSION`, description). |
+| **Edit Filter** (`BtnSdkEditFilter`) | Edit the selected filter (dialog pre-populated with its current name/mode/description). |
 | **Delete Filter** (`BtnSdkDeleteFilter`) | Delete the selected filter(s) (confirm). |
 
 **Related CLI:** `Invoke-SPSdkCampaignTemplates.ps1` (templates/schedules).

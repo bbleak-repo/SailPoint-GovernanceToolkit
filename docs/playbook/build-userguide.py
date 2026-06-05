@@ -74,7 +74,14 @@ def split_row(line):
     return [c.strip() for c in line.split("|")]
 
 def is_sep_row(line):
-    return bool(re.match(r"^\s*\|?[\s:|-]+\|[\s:|-|]+\s*$", line))
+    # A GitHub-flavoured-Markdown table separator: every cell is dashes with
+    # optional leading/trailing colon for alignment (e.g. ---, :--, :-:, --:).
+    # Checked per-cell rather than with one regex over the whole line, because a
+    # single char-class like [...|-|...] silently reads the '-' as a range and
+    # drops the literal hyphen, which is what previously let separator rows leak
+    # through and render as a spurious "---" data row in every table.
+    cells = split_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-+:?", c) for c in cells)
 
 def render_table(raw_rows):
     """raw_rows: list of raw table lines (may include sep row)."""
@@ -363,8 +370,14 @@ def build_sidebar(all_secs):
         parts.append(nav_link(sid, sec["nav"], counter))
         mobile.append(mobile_link(sid, sec["nav"]))
 
-        # inject SDK sub-tab scroll links after the SDK Features section
-        if "sdk-features" in sid or sid == "gui-sdk-features-tab":
+        # Inject the SDK sub-tab scroll links ONLY under the GUI SDK Features
+        # tab. The 6.1-6.6 sub-tabs (Templates ... Filters) are a GUI concept and
+        # their anchors (6-1-templates ...) live only in the GUI section's body.
+        # The CLI "6. SDK features" section (cli-sdk-features) documents 3 scripts
+        # by name and has none of those anchors, so injecting the sub-links there
+        # produced dead links to a different (hidden) section -- match the GUI id
+        # exactly rather than the loose substring "sdk-features".
+        if sid == "gui-sdk-features-tab":
             sdk_sid = sid
             for stnum, stname, stanchor in SDK_SUBTABS:
                 parts.append(

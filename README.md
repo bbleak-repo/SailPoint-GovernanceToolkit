@@ -160,7 +160,19 @@ The file is already gitignored (`Config/*.local.json` is in `.gitignore`). No ad
 
 ## Authentication Modes
 
-The toolkit supports three authentication modes, configured via `Authentication.Mode` in settings.json.
+The toolkit supports three authentication modes, configured via `Authentication.Mode` in settings.json. Two of them (`ConfigFile`, `Vault`) use an OAuth PAT; the third uses a browser token.
+
+### Creating the API client (Personal Access Token)
+
+The non-interactive credential is an ISC **Personal Access Token (PAT)** — the OAuth 2.0 `client_credentials` grant, which yields a `ClientId` + `ClientSecret` pair. Create it under **Admin → Preferences → Personal Access Tokens** as a `CERT_ADMIN` (or `ORG_ADMIN`) identity. A PAT inherits the creating identity's permissions, narrowed by the scopes you grant:
+
+| Use case | Scopes |
+|----------|--------|
+| Read-only audit (query/audit existing campaigns + reports) | `idn:campaign:read`, `idn:campaign-report:read`, `sp:report:read`, `sp:search:read`, `idn:sources:read`, `idn:accounts:read` |
+| Full toolkit (also create/activate/decide campaigns) | `idn:campaign:manage`, `idn:campaign-report:manage`, `sp:report:manage`, `sp:search:read`, `idn:sources:read`, `idn:accounts:read` |
+| Delta cert / orchestrator (`/v3/account-activities`) | the above **plus** `sp:scopes:all` (no granular scope exists) or a browser token |
+
+`sp:search:read` is required even for read-only use because delta cert and disconnected-app correlation resolve identities via `/v3/search`. For the full endpoint-to-scope mapping and a click-by-click walkthrough, see [`docs/SANDBOX-API-SETUP.md`](docs/SANDBOX-API-SETUP.md).
 
 ### ConfigFile
 
@@ -170,7 +182,7 @@ Use only in isolated development environments where the config file is not share
 
 ### Vault
 
-Credentials are stored in an AES-256-CBC encrypted vault file (`Data\sp-vault.enc` by default). The passphrase is never written to disk.
+Credentials are stored in an authenticated-encryption vault file (`Data\sp-vault.enc` by default): **AES-256-CBC for confidentiality + HMAC-SHA256 for integrity** (encrypt-then-MAC), with the passphrase stretched via PBKDF2 (600,000 iterations) into separate encryption and authentication keys. The passphrase is never written to disk. Re-running `New-SPVault.ps1` rotates/re-keys the vault (it warns before overwriting).
 
 ```powershell
 # One-time setup
@@ -1127,7 +1139,7 @@ SailPoint-GovernanceToolkit/
 
 **Credential storage:**
 - `ConfigFile` mode stores the `ClientSecret` in plain text in settings.json. Acceptable only in isolated development environments.
-- `Vault` mode encrypts credentials using AES-256-CBC with PBKDF2 key derivation (600,000 iterations by default). Use this for any shared or production-adjacent environment.
+- `Vault` mode uses authenticated encryption: AES-256-CBC + HMAC-SHA256 (encrypt-then-MAC), keyed by PBKDF2 (600,000 iterations by default) which derives separate 32-byte encryption and authentication keys from the passphrase. On-disk layout is `[salt][IV][HMAC][ciphertext]`. Use this for any shared or production-adjacent environment.
 - The vault passphrase is never written to disk. Store it in a password manager.
 
 **WhatIf safety:**
