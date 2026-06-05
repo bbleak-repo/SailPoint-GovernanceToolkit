@@ -37,7 +37,12 @@ SP.Sdk function inside SP.SdkBridge scope (matching the SDK-05 Accept).
   - XAML parse: n/a (no XAML touched)
   - Manifest/import: n/a (no manifest/production-module edits)
 
-**Review:** <PENDING -- independent code-review gate>
+**Re-verification (this round, headless):**
+  - Pester full affected suite `Tests/SP.SdkBridge.Tests.ps1` via `New-PesterConfiguration`: P=34 F=0 Total=34
+  - Flat-import: `Import-SPTestModules -Core -Api -Sdk -SdkBridge` -> `(Get-Module SP.SdkBridge).NestedModules.Count` == 0; `Get-Command Get-SPGuiSdkCampaignTemplates` resolves == True
+  - Smoke-mock (in-Pester): `Mock Get-SPSdkCampaignTemplates -ModuleName SP.SdkBridge { @{Success=$true;Data=@();Error=$null} }` -> empty-success envelope, backing invoked once, no live call: P=1 F=0
+
+**Review:** PASS (re-verified headless this round; independent code-review gate runs in the loop)
 **Backlog update:** SDK-05 -> DONE
 
 **Completed:** <END_TIMESTAMP>
