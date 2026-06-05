@@ -30,6 +30,7 @@ docs/*.log
 docs/*.log.err
 docs/pester-*.xml
 docs/windows-test-rounds/full-gui-validation-*/
+docs/windows-test-rounds/session-*/
 docs/windows-test-rounds/round-.md
 
 # Local working notes (not repo content)
