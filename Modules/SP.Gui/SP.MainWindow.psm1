@@ -4500,9 +4500,10 @@ function Invoke-SdkTemplateDelete {
 # --- Cert Summaries --------------------------------------------------------
 function Invoke-SdkCertSummaryRefresh {
     # Cert Summaries is DEFERRED (SDK-18 ship-vs-defer decision). The sub-tab's
-    # interactive controls are disabled (IsEnabled=False) in SdkTab.xaml and a
-    # "coming soon" overlay covers the grid. This remains a documented no-op:
-    # it makes NO bridge/API/runspace call -- it only sets the status label.
+    # interactive controls are disabled (IsEnabled=False) in the runtime
+    # Gui/MainWindow.xaml and a "coming soon" overlay (SdkCertSummaryComingSoon)
+    # covers the collapsed grid. This remains a documented no-op: it makes NO
+    # bridge/API/runspace call -- it only sets the status label.
     [CmdletBinding()] param($TabContent)
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Certification Summaries are deferred to a future release.'
 }

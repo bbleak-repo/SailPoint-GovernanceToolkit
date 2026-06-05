@@ -44,7 +44,7 @@ the loop only authors it.
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | DONE |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | DONE |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | DONE |
-| SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | DEFERRED |
+| SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- DEFERRED to phase 2; sub-tab cleanly disabled) | M | SDK-11 | DONE |
 | SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | TODO |
 
 Exit criteria for the loop: SDK-01..SDK-17 `DONE`, SDK-18 `DONE` or explicitly
@@ -378,7 +378,7 @@ Notes and GUI Testing Methods do not apply.
 
 ## SDK-18: Cert Summaries sub-tab (SCOPE DECISION)
 
-- **Status:** `DEFERRED`
+- **Status:** `DONE` (scope decision: DEFER the feature; sub-tab cleanly disabled)
 - **Depends On:** SDK-11
 - **Size:** M
 
@@ -387,7 +387,10 @@ If shipping: requires SDK-14 cert-summary mock fixtures + the campaign->cert
 combo cascade + a W-08b test. If deferring: mark the sub-tab disabled/hidden with
 a "coming soon" note and set Status `DEFERRED`.
 
-**Files:** `Gui/SdkTab.xaml`, `Modules/SP.Gui/SP.MainWindow.psm1`.
+**Files:** `Gui/MainWindow.xaml` (the runtime SDK tab is inlined here; the spec's
+`Gui/SdkTab.xaml` is a *dead design reference* that is never loaded at runtime --
+the GUI loads `MainWindow.xaml` via `Get-XamlPath -FileName 'MainWindow.xaml'`),
+`Modules/SP.Gui/SP.MainWindow.psm1`.
 **Accept:** either functional + tested, or cleanly disabled and documented.
 
 **Decision (round-18, FLAGGED FOR HUMAN RATIFICATION): DEFER.** Three blockers
@@ -407,6 +410,15 @@ status label (no bridge/API/runspace call). The SP.Sdk-layer tests
 (`Tests/SP.SdkCertSummaries.Tests.ps1` SDK-CERT-001..006) and the bridge functions
 remain untouched and passing. No W-08b authored for this sub-tab (SDK-19 should omit
 the Cert Summaries interactive steps).
+
+**Round-18 retry correction:** the first attempt applied the defer edits only to
+`Gui/SdkTab.xaml`, which is NOT loaded at runtime, so the live GUI still showed an
+enabled, uncovered sub-tab. The retry applied the IsEnabled=False / collapsed-grid /
+`SdkCertSummaryComingSoon` overlay edits to the runtime `Gui/MainWindow.xaml`
+(Cert Summaries TabItem) and re-verified by parsing that file: all four x:Names
+resolve, the three combos + Refresh button report `IsEnabled -eq $false`, and the
+overlay carries the deferral text. The spec's `SdkTab.xaml` file reference was
+inaccurate about the live file (flagged upstream).
 
 ---
 
