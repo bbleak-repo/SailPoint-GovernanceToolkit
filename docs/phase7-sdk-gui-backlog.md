@@ -40,7 +40,7 @@ the loop only authors it.
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | DONE |
 | SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | DONE |
 | SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | DONE |
-| SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | TODO |
+| SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | DONE |
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | TODO |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | TODO |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | TODO |
@@ -287,9 +287,20 @@ Verified: AST clean both files; fresh-session chain loads SP.Sdk and resolves
 
 ## SDK-14: Mock parity audit
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-01
 - **Size:** M
+
+> **Round 14 (DONE, documentation-only):** Audited all 11 read paths (5 non-cert
+> bridges + `Get-SPGuiSdkCertCampaigns` + the 3 cert-summary handlers, incl. the
+> ENTITLEMENT / ROLE / ACCESS_PROFILE access-summary splits) -- full coverage
+> table in `docs/phase7-sdk-gui-rounds/round-14.md`. Every read is COVERED except
+> one parity hole: `access-summaries/{ROLE,ACCESS_PROFILE}` has 0 fixtures (all 81
+> seed ARIs are `access.type=ENTITLEMENT`; 0/81 carry `access.id`). Filling it is
+> GATED by the SDK-18 ship-vs-defer decision (escalated to outer loop), so it is
+> FLAGGED as an SDK-18 sub-task with NO mock edit this round. Default path
+> (-AccessType ENTITLEMENT), identity-summaries, and decision-summary are all
+> covered via dynamically-derived `accessReviewItems`.
 
 **Goal:** Confirm `API-MockServer/Profiles/SailPoint-ISC` (seed + SdkHandlers)
 serves every endpoint the bridge reads call -- especially the **cert-summary**
