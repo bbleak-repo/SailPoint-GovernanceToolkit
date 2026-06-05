@@ -58,6 +58,13 @@ $script:SdkWorkItemDataSource       = [System.Collections.ObjectModel.Observable
 $script:SdkWorkflowDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:SdkExecutionDataSource      = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:SdkFilterDataSource         = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+
+# Cert Summaries cascade state (SDK-18 shipped). $SdkCertCascadeBusy guards the
+# combo SelectionChanged handlers against re-entrancy while we mutate the combos
+# programmatically; $SdkCertLoadedCampaign records which campaign's certifications
+# are currently loaded so we only repopulate the cert combo on a campaign change.
+$script:SdkCertCascadeBusy          = $false
+$script:SdkCertLoadedCampaign       = $null
 $script:IsSdkRunning                = $false
 
 # Module reference used to re-enter module scope from WPF event handlers.
@@ -3925,7 +3932,7 @@ function Initialize-SdkTab {
 
     # Initial status labels for every sub-tab, then load the default (Templates).
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel'    -Message 'Ready. Click Refresh to load campaign templates.'
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Certification Summaries are deferred to a future release.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a campaign, then a certification, to load summaries.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel'    -Message 'Ready. Click Refresh to load approvals.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel'    -Message 'Ready. Click Refresh to load work items.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel'    -Message 'Ready. Click Refresh to load workflows.'
@@ -4499,13 +4506,99 @@ function Invoke-SdkTemplateDelete {
 
 # --- Cert Summaries --------------------------------------------------------
 function Invoke-SdkCertSummaryRefresh {
-    # Cert Summaries is DEFERRED (SDK-18 ship-vs-defer decision). The sub-tab's
-    # interactive controls are disabled (IsEnabled=False) in the runtime
-    # Gui/MainWindow.xaml and a "coming soon" overlay (SdkCertSummaryComingSoon)
-    # covers the collapsed grid. This remains a documented no-op: it makes NO
-    # bridge/API/runspace call -- it only sets the status label.
+    # SDK-18 (SHIPPED): drives the campaign -> certification cascade and then loads
+    # Identity or Access summaries into SdkCertSummaryGrid.
+    #
+    # The two combo lists (campaigns, certifications) are small reads and are
+    # populated SYNCHRONOUSLY here so the cascade stays simple; the potentially
+    # larger summary read runs on the background runspace via Invoke-SdkGridRefresh
+    # (WPF note 3). $script:SdkCertCascadeBusy guards the combo SelectionChanged
+    # handlers from re-entering while we set ItemsSource/SelectedIndex ourselves.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Certification Summaries are deferred to a future release.'
+
+    if ($script:SdkCertCascadeBusy) { return }
+
+    $cboCampaign = Find-Control -Parent $TabContent -Name 'CboSdkCertCampaign'
+    $cboCert     = Find-Control -Parent $TabContent -Name 'CboSdkCertification'
+    $cboType     = Find-Control -Parent $TabContent -Name 'CboSdkAccessType'
+
+    # 1. Populate the campaign combo once (from the existing GUI campaign cache).
+    if ($null -ne $cboCampaign -and $cboCampaign.Items.Count -eq 0) {
+        $script:SdkCertCascadeBusy = $true
+        try {
+            $campaigns = Get-SPGuiSdkCertCampaigns
+            if ($campaigns.Success) {
+                $cboCampaign.ItemsSource = @($campaigns.Data)
+            }
+            else {
+                Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' `
+                    -Message "Cannot load campaigns: $($campaigns.Error)"
+            }
+        }
+        finally { $script:SdkCertCascadeBusy = $false }
+    }
+
+    # 2. A campaign must be selected to go further.
+    $campaignId = if ($null -ne $cboCampaign -and $null -ne $cboCampaign.SelectedValue) { [string]$cboCampaign.SelectedValue } else { '' }
+    if ([string]::IsNullOrWhiteSpace($campaignId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a campaign to load certifications.'
+        return
+    }
+
+    # 3. (Re)populate the certification combo only when the campaign changed.
+    if ($script:SdkCertLoadedCampaign -ne $campaignId) {
+        $script:SdkCertCascadeBusy = $true
+        try {
+            $certs = Get-SPGuiSdkCertifications -CampaignId $campaignId
+            if ($certs.Success) {
+                $cboCert.ItemsSource = @($certs.Data)
+                $script:SdkCertLoadedCampaign = $campaignId
+                if ($cboCert.Items.Count -gt 0) { $cboCert.SelectedIndex = 0 }
+            }
+            else {
+                $cboCert.ItemsSource = @()
+                $script:SdkCertLoadedCampaign = $campaignId
+                Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' `
+                    -Message "Cannot load certifications: $($certs.Error)"
+                return
+            }
+        }
+        finally { $script:SdkCertCascadeBusy = $false }
+    }
+
+    # 4. A certification must be selected to load summaries.
+    $certId = if ($null -ne $cboCert -and $null -ne $cboCert.SelectedValue) { [string]$cboCert.SelectedValue } else { '' }
+    if ([string]::IsNullOrWhiteSpace($certId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a certification to load summaries.'
+        return
+    }
+
+    # 5. Identity (default) vs Access-by-type, from CboSdkAccessType.
+    $typeChoice = if ($null -ne $cboType -and $null -ne $cboType.SelectedItem) { [string]$cboType.SelectedItem.Content } else { 'Identity' }
+    $bridgeArgs = @{ CertificationId = $certId }
+    if ([string]::IsNullOrWhiteSpace($typeChoice) -or $typeChoice -eq 'Identity') {
+        $bridgeArgs['SummaryType'] = 'Identity'
+        $loadingMsg = 'Loading identity summaries...'
+    }
+    else {
+        $apiType = switch ($typeChoice) {
+            'Entitlement'    { 'ENTITLEMENT' }
+            'Role'           { 'ROLE' }
+            'Access Profile' { 'ACCESS_PROFILE' }
+            default          { 'ENTITLEMENT' }
+        }
+        $bridgeArgs['SummaryType'] = 'Access'
+        $bridgeArgs['AccessType']  = $apiType
+        $loadingMsg = "Loading $typeChoice access summaries..."
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCertSummaries' `
+        -BridgeArgs      $bridgeArgs `
+        -DataSource      $script:SdkCertSummaryDataSource `
+        -StatusLabelName 'SdkCertSummaryStatusLabel' `
+        -LoadingMessage  $loadingMsg
 }
 
 # --- Approvals -------------------------------------------------------------

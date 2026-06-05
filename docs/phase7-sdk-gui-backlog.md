@@ -378,9 +378,30 @@ Notes and GUI Testing Methods do not apply.
 
 ## SDK-18: Cert Summaries sub-tab (SCOPE DECISION)
 
-- **Status:** `DONE` (scope decision: DEFER the feature; sub-tab cleanly disabled)
+- **Status:** `DONE` (RESOLVED 2026-06-05: **SHIPPED** -- human ratification overrode the loop's DEFER)
 - **Depends On:** SDK-11
 - **Size:** M
+
+> **RESOLUTION (2026-06-05, human-directed, supersedes the loop's DEFER below).**
+> SHIPPED the Cert Summaries sub-tab. The loop's defer rested on a wrong premise:
+> the campaign->certification cascade backing **does** exist
+> (`Get-SPAllCertifications -CampaignId`, tested as CERT-002), and the mock serves
+> all three cert-summary endpoints, generating Identity + Decision summaries
+> dynamically from `accessReviewItems`. Changes:
+> - Added bridge `Get-SPGuiSdkCertifications -CampaignId` (backs the cert combo).
+> - Fixed `Get-SPGuiSdkCertSummaries` field mapping to surface the grid columns
+>   (`identityName/completed/totalItems/approved/revoked/noDecision`); previously
+>   it only surfaced `Name/Id/Completed`, so the grid would have shown blank rows.
+> - Enabled the 4 controls in `MainWindow.xaml`; `CboSdkAccessType` now offers
+>   Identity (default) + Entitlement/Role/Access Profile; coming-soon overlay
+>   collapsed; grid uncollapsed; combos bind `DisplayMemberPath=Name`/`SelectedValuePath=Id`.
+> - Rewrote `Invoke-SdkCertSummaryRefresh` into a real campaign->cert cascade
+>   (synchronous small combo reads, re-entrancy-guarded) + async summary load via
+>   the existing `Invoke-SdkGridRefresh` engine.
+> - Tests: SDK-BR-008/009 added (bridge suite now 44/44 green).
+> Known v1 limitation: ROLE/ACCESS_PROFILE access-summaries have no mock fixtures
+> (empty grid against the mock; real tenants return data). Final visual proof is
+> the live FlaUI pass.
 
 **Decision:** ship now or defer to phase 2 (see plan's SCOPE DECISION callout).
 If shipping: requires SDK-14 cert-summary mock fixtures + the campaign->cert

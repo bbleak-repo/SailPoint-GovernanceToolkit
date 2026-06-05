@@ -1199,32 +1199,34 @@
                                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <ComboBox x:Name="CboSdkCertCampaign" Width="180" Margin="0,0,12,0"
                                               Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                              IsEnabled="False"
+                                              DisplayMemberPath="Name" SelectedValuePath="Id"
                                               ToolTip="Select a campaign to view certification summaries"/>
                                     <TextBlock Text="Certification:" Foreground="#AAAACC"
                                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <ComboBox x:Name="CboSdkCertification" Width="180" Margin="0,0,12,0"
                                               Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                              IsEnabled="False"
+                                              DisplayMemberPath="Name" SelectedValuePath="Id"
                                               ToolTip="Select a certification reviewer to view identity summaries"/>
                                     <TextBlock Text="Access Type:" Foreground="#AAAACC"
                                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <ComboBox x:Name="CboSdkAccessType" Width="140" Margin="0,0,12,0"
                                               Background="#2D2D44" Foreground="#E0E0E0" BorderBrush="#3D3D5C"
-                                              IsEnabled="False"
-                                              ToolTip="Filter by access type: Role, Access Profile, or Entitlement"/>
+                                              SelectedIndex="0"
+                                              ToolTip="View: Identity summaries, or Access summaries by type (Entitlement, Role, Access Profile)">
+                                        <ComboBoxItem Content="Identity"/>
+                                        <ComboBoxItem Content="Entitlement"/>
+                                        <ComboBoxItem Content="Role"/>
+                                        <ComboBoxItem Content="Access Profile"/>
+                                    </ComboBox>
                                     <Button x:Name="BtnSdkRefreshSummaries" Content="Refresh"
                                             Style="{StaticResource SecondaryButton}"
-                                            IsEnabled="False"
                                             ToolTip="Reload summaries for the selected certification"/>
                                 </StackPanel>
 
-                                <!-- Cert Summary DataGrid (deferred per SDK-18: collapsed but kept
-                                     in the visual tree so x:Name SdkCertSummaryGrid still resolves
-                                     for the W-08 structural walk). -->
+                                <!-- Cert Summary DataGrid (SDK-18 shipped: Identity + Access
+                                     summaries bound to the cascade). -->
                                 <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                                        BorderBrush="#3D3D5C" BorderThickness="1"
-                                        Visibility="Collapsed">
+                                        BorderBrush="#3D3D5C" BorderThickness="1">
                                     <DataGrid x:Name="SdkCertSummaryGrid"
                                               AutoGenerateColumns="False"
                                               Background="#2D2D44"
@@ -1263,10 +1265,11 @@
                                     </DataGrid>
                                 </Border>
 
-                                <!-- Coming-soon overlay (deferred per SDK-18). Sits in the same
-                                     grid row as the collapsed DataGrid so it fills the content area. -->
+                                <!-- Coming-soon overlay retired (SDK-18 shipped). Kept collapsed
+                                     so the x:Name still resolves for the W-08 structural walk. -->
                                 <Border Grid.Row="1" Background="#2D2D44" CornerRadius="6"
-                                        BorderBrush="#3D3D5C" BorderThickness="1">
+                                        BorderBrush="#3D3D5C" BorderThickness="1"
+                                        Visibility="Collapsed">
                                     <TextBlock x:Name="SdkCertSummaryComingSoon"
                                                Text="Certification Summaries -- coming in a future release."
                                                Foreground="#AAAACC" FontSize="14" FontStyle="Italic"

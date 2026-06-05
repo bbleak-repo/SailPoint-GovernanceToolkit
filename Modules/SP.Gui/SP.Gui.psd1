@@ -80,6 +80,7 @@
         'Get-SPGuiSdkCertSummaries',
         'Get-SPGuiSdkDecisionSummary',
         'Get-SPGuiSdkCertCampaigns',
+        'Get-SPGuiSdkCertifications',
         'Invoke-SPGuiSdkTemplateAction',
         'Invoke-SPGuiSdkApprovalAction',
         'Invoke-SPGuiSdkWorkItemAction',

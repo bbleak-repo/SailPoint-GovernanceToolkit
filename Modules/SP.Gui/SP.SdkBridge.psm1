@@ -614,13 +614,33 @@ function Get-SPGuiSdkCertSummaries {
             return @{ Success = $false; Data = @(); Error = $result.Error }
         }
 
+        # Map backing summary objects onto the grid's column bindings
+        # (identityName/completed/totalItems/approved/revoked/noDecision). The
+        # mock + ISC identity-summary shape is {name; totalItems; completedItems;
+        # approved; revoked}; noDecision is derived (total - completed) and
+        # completed (bool) is "all items decided". Access summaries reuse the same
+        # columns (name -> identityName) for a single shared grid.
         $displayItems = foreach ($summary in @($result.Data)) {
+            $total = if ($null -ne $summary.totalItems)     { [int]$summary.totalItems }     else { 0 }
+            $done  = if ($null -ne $summary.completedItems) { [int]$summary.completedItems } else { 0 }
+            $name  = if ($null -ne $summary.name)       { [string]$summary.name }
+                     elseif ($null -ne $summary.accessName) { [string]$summary.accessName }
+                     else { '' }
+            $isComplete = if ($null -ne $summary.completed) { [bool]$summary.completed }
+                          else { ($total -gt 0 -and $done -ge $total) }
+            $noDec = if ($null -ne $summary.noDecision) { [int]$summary.noDecision }
+                     else { [Math]::Max(0, $total - $done) }
             [PSCustomObject]@{
-                IsSelected = $false
-                Name       = if ($null -ne $summary.name)        { [string]$summary.name }        else { '' }
-                Id         = if ($null -ne $summary.id)          { [string]$summary.id }          else { '' }
-                Completed  = if ($null -ne $summary.completed)   { [bool]$summary.completed }     else { $false }
-                _Raw       = $summary
+                IsSelected   = $false
+                identityName = $name
+                completed    = $isComplete
+                totalItems   = $total
+                approved     = if ($null -ne $summary.approved) { [int]$summary.approved } else { 0 }
+                revoked      = if ($null -ne $summary.revoked)  { [int]$summary.revoked }  else { 0 }
+                noDecision   = $noDec
+                Name         = $name
+                Id           = if ($null -ne $summary.id) { [string]$summary.id } else { '' }
+                _Raw         = $summary
             }
         }
 
@@ -747,6 +767,70 @@ function Get-SPGuiSdkCertCampaigns {
         Write-SPLog -Message "Get-SPGuiSdkCertCampaigns failed: $($_.Exception.Message)" `
             -Severity ERROR -Component 'SP.SdkBridge' -Action 'Get-SPGuiSdkCertCampaigns' -CorrelationID $CorrelationID
         return @{ Success = $false; Data = @(); Error = "Get-SPGuiSdkCertCampaigns failed: $($_.Exception.Message)" }
+    }
+}
+
+function Get-SPGuiSdkCertifications {
+    <#
+    .SYNOPSIS
+        List certifications for a campaign to feed the CboSdkCertification combo.
+    .DESCRIPTION
+        Backs the campaign -> certification cascade on the Cert Summaries sub-tab.
+        Wraps Get-SPAllCertifications (SP.Certifications, campaign-filtered, auto-
+        paginated) -- the cascade backing the original plan claimed was missing.
+        Returns Id/Name pairs for combobox binding; Name prefers the certification
+        name, else the reviewer name, else the id.
+    .OUTPUTS
+        @{ Success=$bool; Data=@([PSCustomObject]); Error=$string }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$CampaignId,
+
+        [Parameter()] [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        if (-not (Get-Command -Name Get-SPAllCertifications -ErrorAction SilentlyContinue)) {
+            return @{
+                Success = $false
+                Data    = @()
+                Error   = 'Certification list unavailable: Get-SPAllCertifications (SP.Certifications) is not loaded.'
+            }
+        }
+
+        $result = Get-SPAllCertifications -CampaignId $CampaignId -CorrelationID $CorrelationID
+
+        if (-not $result.Success) {
+            return @{ Success = $false; Data = @(); Error = $result.Error }
+        }
+
+        $displayItems = foreach ($cert in @($result.Data)) {
+            $certName = if ($null -ne $cert.name) { [string]$cert.name }
+                        elseif ($null -ne $cert.reviewerName) { [string]$cert.reviewerName }
+                        elseif ($null -ne $cert.reviewer -and $null -ne $cert.reviewer.name) { [string]$cert.reviewer.name }
+                        elseif ($null -ne $cert.id) { [string]$cert.id }
+                        else { '' }
+            [PSCustomObject]@{
+                Id   = if ($null -ne $cert.id) { [string]$cert.id } else { '' }
+                Name = $certName
+                _Raw = $cert
+            }
+        }
+
+        return @{ Success = $true; Data = @($displayItems); Error = $null }
+    }
+    catch {
+        Write-SPLog -Message "Get-SPGuiSdkCertifications failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.SdkBridge' -Action 'Get-SPGuiSdkCertifications' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @(); Error = "Get-SPGuiSdkCertifications failed: $($_.Exception.Message)" }
     }
 }
 
@@ -1249,6 +1333,7 @@ Export-ModuleMember -Function @(
     'Get-SPGuiSdkCertSummaries',
     'Get-SPGuiSdkDecisionSummary',
     'Get-SPGuiSdkCertCampaigns',
+    'Get-SPGuiSdkCertifications',
     'Invoke-SPGuiSdkTemplateAction',
     'Invoke-SPGuiSdkApprovalAction',
     'Invoke-SPGuiSdkWorkItemAction',

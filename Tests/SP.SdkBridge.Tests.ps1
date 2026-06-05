@@ -596,4 +596,85 @@ Describe 'SP.SdkBridge - SDK-to-GUI Bridge Adapter' {
             Should -Invoke Invoke-SPSdkBulkApproveWorkItem -ModuleName SP.SdkBridge -Times 1 -Exactly
         }
     }
+
+    Context 'SDK-BR-008: Get-SPGuiSdkCertifications maps the campaign cert list (SDK-18 cascade)' {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.SdkBridge { }
+            Mock Get-SPAllCertifications -ModuleName SP.SdkBridge {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = 'cert-1'; name = 'Alice Manager Cert' },
+                        [PSCustomObject]@{ id = 'cert-2'; reviewerName = 'Bob Reviewer' }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It 'returns Id/Name rows for combobox binding' {
+            $result = Get-SPGuiSdkCertifications -CampaignId 'camp-1' -CorrelationID 'sdk-br-008a'
+            $result.Success    | Should -Be $true
+            $result.Data.Count | Should -Be 2
+            $result.Data[0].Id   | Should -Be 'cert-1'
+            $result.Data[0].Name | Should -Be 'Alice Manager Cert'
+        }
+
+        It 'falls back to reviewerName when name is absent' {
+            $result = Get-SPGuiSdkCertifications -CampaignId 'camp-1' -CorrelationID 'sdk-br-008b'
+            $result.Data[1].Name | Should -Be 'Bob Reviewer'
+        }
+
+        It 'passes the campaign id through to the backing' {
+            Get-SPGuiSdkCertifications -CampaignId 'camp-xyz' -CorrelationID 'sdk-br-008c' | Out-Null
+            Should -Invoke Get-SPAllCertifications -ModuleName SP.SdkBridge -Times 1 -Exactly `
+                -ParameterFilter { $CampaignId -eq 'camp-xyz' }
+        }
+    }
+
+    Context 'SDK-BR-009: Get-SPGuiSdkCertSummaries maps identity-summary fields to grid columns (SDK-18)' {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.SdkBridge { }
+            Mock Get-SPSdkIdentitySummaries -ModuleName SP.SdkBridge {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = 'id-1'; name = 'Alice'; totalItems = 4; completedItems = 4; approved = 3; revoked = 1 },
+                        [PSCustomObject]@{ id = 'id-2'; name = 'Bob';   totalItems = 5; completedItems = 2; approved = 2; revoked = 0 }
+                    )
+                    Error   = $null
+                }
+            }
+        }
+
+        It 'surfaces identityName/totalItems/approved/revoked for the grid bindings' {
+            $result = Get-SPGuiSdkCertSummaries -CertificationId 'cert-1' -SummaryType Identity -CorrelationID 'sdk-br-009a'
+            $result.Success         | Should -Be $true
+            $result.Data.Count      | Should -Be 2
+            $result.Data[0].identityName | Should -Be 'Alice'
+            $result.Data[0].totalItems   | Should -Be 4
+            $result.Data[0].approved     | Should -Be 3
+            $result.Data[0].revoked      | Should -Be 1
+        }
+
+        It 'derives completed (all decided) and noDecision (= total - completed)' {
+            $result = Get-SPGuiSdkCertSummaries -CertificationId 'cert-1' -SummaryType Identity -CorrelationID 'sdk-br-009b'
+            # Alice: 4/4 decided -> completed=$true, noDecision=0
+            $result.Data[0].completed  | Should -Be $true
+            $result.Data[0].noDecision | Should -Be 0
+            # Bob: 2/5 decided -> completed=$false, noDecision=3
+            $result.Data[1].completed  | Should -Be $false
+            $result.Data[1].noDecision | Should -Be 3
+        }
+
+        It 'routes -SummaryType Access to Get-SPSdkAccessSummaries with the resolved type' {
+            Mock Get-SPSdkAccessSummaries -ModuleName SP.SdkBridge {
+                return @{ Success = $true; Data = @([PSCustomObject]@{ id = 'a-1'; name = 'Entitlement A'; totalItems = 1; completedItems = 0 }); Error = $null }
+            }
+            $result = Get-SPGuiSdkCertSummaries -CertificationId 'cert-1' -SummaryType Access -AccessType 'ENTITLEMENT' -CorrelationID 'sdk-br-009c'
+            $result.Success | Should -Be $true
+            Should -Invoke Get-SPSdkAccessSummaries -ModuleName SP.SdkBridge -Times 1 -Exactly `
+                -ParameterFilter { $Type -eq 'ENTITLEMENT' }
+        }
+    }
 }
