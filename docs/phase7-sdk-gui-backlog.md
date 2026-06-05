@@ -45,7 +45,7 @@ the loop only authors it.
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | DONE |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | DONE |
 | SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- DEFERRED to phase 2; sub-tab cleanly disabled) | M | SDK-11 | DONE |
-| SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | TODO |
+| SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | AUTHORED |
 
 Exit criteria for the loop: SDK-01..SDK-17 `DONE`, SDK-18 `DONE` or explicitly
 `DEFERRED`, SDK-19 authored (`AUTHORED`, not run). Full Pester suite green
@@ -424,7 +424,7 @@ inaccurate about the live file (flagged upstream).
 
 ## SDK-19: Test-W08b-SdkTabInteractive.ps1 (AUTHOR ONLY -- DEFERRED RUN)
 
-- **Status:** `TODO`
+- **Status:** `AUTHORED`
 - **Depends On:** SDK-15, SDK-16
 - **Size:** L
 
@@ -439,3 +439,27 @@ final acceptance gate.
 
 **Files:** `Tests/Harness/Test-W08b-SdkTabInteractive.ps1` (new).
 **Accept:** file parses, structurally sound; execution deferred.
+
+**Round-19 (AUTHORED):** `Tests/Harness/Test-W08b-SdkTabInteractive.ps1` written,
+mirroring the canonical W-03b pattern (param block with `$MockBaseUrl =
+'http://localhost:8080'` + `$RefreshTimeoutMs = 5000`; `#Requires -Version 5.1`;
+STA guard -> exit 2; Add-Result JSONL sink + terminating `{summary}` line + exit
+0-on-no-FAIL/1-otherwise; Invoke-RestMethod `/health` probe -> all 12 live steps
+BLOCKED when the mock is down; try/finally with `Stop-SPDashboardForTest`).
+Defines WG-08-11..22 via Add-Result. Reuses only SP.UiTest exports
+(`Start-SPDashboardForTest`, `Find-SPUiElement`, `Find-SPUiTab`,
+`Save-SPUiScreenshot`, `Stop-SPDashboardForTest`) plus local W-03b-style helpers
+(`Add-Result`, `Find-SPModalByTitle`, grid-row poll). Every UI find uses an
+`-AutomationId` that resolves in the runtime `Gui/MainWindow.xaml` SDK tab
+(verified: SdkSubTabControl, the five active sub-tab DataGrids, BtnSdkRefresh*,
+RbSdkPending/Completed, ChkSdkShowCompleted/IncludeSystem, SdkWiBadge*,
+BtnSdkViewExecutions, SdkExecutionGrid, SdkApprovalSummaryPanel); asserts
+camelCase grid bindings. WG-08-13 opens the `SdkTemplateScheduleDialog.xaml` modal
+by its actual title "Set Template Schedule" and Cancels. **No Cert Summaries
+interactive step** (deferred per SDK-18) and **no destructive/Safety-gated action
+clicks** (no Delete/Deny/Forward/Complete/BulkApprove/CreateOOO/Test-workflow), so
+no confirmation MessageBox can block the unattended-but-human-run test.
+Verified headlessly: `[Parser]::ParseFile` -> 0 errors; all referenced x:Names
+cross-checked against MainWindow.xaml. **The interactive run is DEFERRED to a
+human Windows STA GUI session with the mock at localhost:8080** -- the loop did
+NOT execute the test.
