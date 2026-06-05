@@ -62,7 +62,7 @@
         4 = Configuration error
         5 = Grade D or F, critical data quality issues
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ConfigPath,

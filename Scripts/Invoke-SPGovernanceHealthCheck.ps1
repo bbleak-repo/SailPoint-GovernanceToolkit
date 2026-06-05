@@ -74,7 +74,7 @@
         4 = Configuration error
         5 = Critical failures (grade D or F)
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ConfigPath,
@@ -354,7 +354,7 @@ if (-not $SkipAggregationHealth) {
     $stepStart = Get-Date
 
     try {
-        $aggParams = @{ CorrelationID = $correlationID; MaxStalenessHours = $MaxStalenessHours }
+        $aggParams = @{ CorrelationID = $correlationID; MaxAcceptableStalenessHours = $MaxStalenessHours }
         if ($effectiveSourceIds.Count -gt 0) { $aggParams['SourceIds'] = $effectiveSourceIds }
 
         $aggResult = Get-SPSourceAggregationHealth @aggParams
@@ -741,6 +741,18 @@ foreach ($check in $checkResults.Keys) {
 }
 
 # Console output
+# Display labels for each check -- used by BOTH the Console and HTML blocks below.
+# Defined here (not inside the Console block) so an HTML-only run still has it;
+# previously the HTML table loop referenced an unset $checkLabels and crashed.
+$checkLabels = [ordered]@{
+    AggregationHealth = 'Source Aggregation'
+    DataQuality       = 'Identity Data Quality'
+    PolicyCompliance  = 'Policy Compliance'
+    ConfigDrift       = 'Configuration Drift'
+    OrphanAccounts    = 'Orphan Accounts'
+    CoverageGaps      = 'Campaign Coverage'
+}
+
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host '  =============================================' -ForegroundColor DarkGray
     Write-Host "  OVERALL HEALTH GRADE: $overallGrade" -ForegroundColor $(
@@ -751,15 +763,6 @@ if ($OutputMode -in @('Console', 'Both')) {
     )
     Write-Host '  =============================================' -ForegroundColor DarkGray
     Write-Host ''
-
-    $checkLabels = [ordered]@{
-        AggregationHealth = 'Source Aggregation'
-        DataQuality       = 'Identity Data Quality'
-        PolicyCompliance  = 'Policy Compliance'
-        ConfigDrift       = 'Configuration Drift'
-        OrphanAccounts    = 'Orphan Accounts'
-        CoverageGaps      = 'Campaign Coverage'
-    }
 
     foreach ($check in $checkResults.Keys) {
         $r = $checkResults[$check]

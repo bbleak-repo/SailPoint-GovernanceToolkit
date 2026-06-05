@@ -77,7 +77,7 @@
         4 = Configuration error
         5 = Partial failure (one or more sections failed)
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding()]
 param(
     # Campaign filters
     [Parameter()]

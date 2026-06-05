@@ -69,7 +69,7 @@
         4 = Configuration error
         5 = Critical campaign creation failure
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ConfigPath,
