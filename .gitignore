@@ -34,3 +34,7 @@ docs/windows-test-rounds/round-.md
 
 # Local working notes (not repo content)
 /status.md
+
+# Transient local Pester run artifacts
+Tests/_pester-*.txt
+Tests/_pester-*.xml
