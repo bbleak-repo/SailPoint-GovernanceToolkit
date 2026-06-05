@@ -10,7 +10,7 @@
     Requirements:
       - Windows (WPF is Windows-only)
       - PowerShell 5.1 Desktop edition (not Core/7+; pwsh does not ship WPF)
-      - .NET Framework 4.7.2 or later (Registry release key >= 461808)
+      - .NET Framework 4.8 or later (pre-installed on Windows 10 1903+ and Windows 11)
       - Configured settings.json (run Invoke-GovernanceTest.ps1 once to generate)
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to ..\Config\settings.json relative to the
@@ -76,11 +76,12 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
     exit 1
 }
 
-# 3. .NET Framework >= 4.7.2 (release key >= 461808).
-#    WPF itself ships with .NET 4.0, but SystemParameters.WorkArea (used for
-#    the DPI-aware window-fit) and several other layout APIs were added or
-#    stabilised in 4.7.2. Older frameworks produce silent wrong-geometry bugs
-#    rather than hard failures -- so we enforce the minimum proactively.
+# 3. .NET Framework >= 4.8 (release key >= 528040).
+#    All WPF APIs we use exist since .NET 3.0, so there is no hard API floor.
+#    4.8 is chosen because it ships pre-installed on every Windows 10 1903+
+#    (May 2019) and all Windows 11 machines -- the realistic enterprise target
+#    for this toolkit. Requiring 4.8 means users never need to install anything
+#    on a modern system; we surface a clear error on the rare older machine.
 #    Release key reference: https://learn.microsoft.com/dotnet/framework/migration-guide/versions-and-dependencies
 $netRegPath = 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full'
 $netRelease  = $null
@@ -90,15 +91,14 @@ try {
 
 if ($null -eq $netRelease) {
     Write-Host ("ERROR: .NET Framework 4.x was not found in the registry ($netRegPath). " +
-                "Install .NET Framework 4.7.2 or later and try again.") `
+                "Install .NET Framework 4.8 and try again.") `
                -ForegroundColor Red
     exit 1
 }
 
-if ($netRelease -lt 461808) {
+if ($netRelease -lt 528040) {
     # Map release key to a human-readable version for the error message.
     $netVer = switch ($netRelease) {
-        { $_ -ge 528040 } { '4.8 or later' }
         { $_ -ge 461808 } { '4.7.2' }
         { $_ -ge 461308 } { '4.7.1' }
         { $_ -ge 460798 } { '4.7' }
@@ -106,7 +106,7 @@ if ($netRelease -lt 461808) {
         { $_ -ge 394254 } { '4.6.1' }
         default            { "unknown (release=$netRelease)" }
     }
-    Write-Host ("ERROR: .NET Framework 4.7.2 or later is required for the dashboard. " +
+    Write-Host ("ERROR: .NET Framework 4.8 is required for the dashboard. " +
                 "Detected version: $netVer (release key $netRelease). " +
                 "Download .NET Framework 4.8 from https://dotnet.microsoft.com/download/dotnet-framework") `
                -ForegroundColor Red
