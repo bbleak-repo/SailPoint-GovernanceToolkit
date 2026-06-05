@@ -120,12 +120,14 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 $coreModulePath  = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1'
 $apiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1'
 $auditModulePath = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
+$sdkModulePath   = Join-Path $toolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
 $guiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
 
 foreach ($moduleDef in @(
     @{ Path = $coreModulePath;  Name = 'SP.Core';  Required = $true },
     @{ Path = $apiModulePath;   Name = 'SP.Api';   Required = $true },
     @{ Path = $auditModulePath; Name = 'SP.Audit'; Required = $true },
+    @{ Path = $sdkModulePath;   Name = 'SP.Sdk';   Required = $true },
     @{ Path = $guiModulePath;   Name = 'SP.Gui';   Required = $true }
 )) {
     if (Test-Path $moduleDef.Path) {

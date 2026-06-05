@@ -39,7 +39,7 @@ the loop only authors it.
 | SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | DONE |
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | DONE |
 | SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | DONE |
-| SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | TODO |
+| SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | DONE |
 | SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | TODO |
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | TODO |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | TODO |
@@ -264,15 +264,24 @@ deferred to SDK-19.
 
 ## SDK-13: Show-SPDashboard.ps1 wiring
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-10
 - **Size:** S
 
 **Goal:** Add `SP.Sdk\SP.Sdk.psd1` to the module-load chain (after SP.Audit) and
 call `Initialize-SdkTab` in the tab-init sequence (before Settings).
 
-**Files:** `Scripts/Show-SPDashboard.ps1`.
+**Files:** `Scripts/Show-SPDashboard.ps1`, `Modules/SP.Gui/SP.MainWindow.psm1`
+(the named `Initialize-SdkTab` call lives in the latter's tab-init sequence; the
+backlog Files list was incomplete).
 **Accept:** launcher parses; module chain loads SP.Sdk.
+
+**Done:** SP.Sdk added to load chain between SP.Audit and SP.Gui with
+`Required = $true` (deviates from plan snippet's `$false`; SP.Gui's SDK runspace
+hard-imports SP.Sdk.psd1 so fail-fast is correct -- flagged to outer loop).
+`Initialize-SdkTab -TabContent $sdkTab` invoked before the Settings tab block.
+Verified: AST clean both files; fresh-session chain loads SP.Sdk and resolves
+`Get-SPSdkCampaignTemplates`; Test-ModuleManifest OK; SP.SdkBridge tests P=38 F=0.
 
 ---
 

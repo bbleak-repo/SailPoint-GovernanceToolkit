@@ -5148,6 +5148,12 @@ function Show-SPDashboard {
             Initialize-EvidenceTab -TabContent $evidenceTab
         }
 
+        # SDK Features tab
+        $sdkTab = Find-Control -Parent $window -Name 'SdkTabContent'
+        if ($null -ne $sdkTab) {
+            Initialize-SdkTab -TabContent $sdkTab
+        }
+
         # Settings tab
         $settingsTab = Find-Control -Parent $window -Name 'SettingsTabContent'
         if ($null -ne $settingsTab) {
