@@ -37,7 +37,7 @@ rules.
 |---|---|
 | **OS** | Windows 10/11 or Windows Server. |
 | **PowerShell** | **Windows PowerShell 5.1 (Desktop edition).** Not PowerShell 7/Core — the modules rely on 5.1 behavior and the GUI requires .NET Framework WPF. |
-| **.NET Framework** | 4.7.2+ (only for the GUI dashboard / WPF). |
+| **.NET Framework** | **4.7.2+** (only for the GUI dashboard / WPF). `Show-SPDashboard.ps1` checks this at launch and exits with a clear error and download link if the requirement isn't met. |
 | **Network / TLS** | Outbound HTTPS to your ISC tenant. The toolkit forces **TLS 1.2 (and 1.3 where available)** automatically. |
 | **ISC credentials** | An ISC **OAuth client** (client_credentials grant) with `ClientId` + `ClientSecret`, or a personal **bearer token** from the browser for short-lived use. |
 | **Pester** (optional) | 5.x — only needed to run the test suite. |

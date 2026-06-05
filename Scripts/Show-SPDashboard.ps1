@@ -8,8 +8,9 @@
     evidence review, and settings configuration through a tabbed UI.
 
     Requirements:
-      - Windows with .NET Framework 4.5 or later (WPF)
-      - PowerShell 5.1 Desktop edition (not Core/6+)
+      - Windows (WPF is Windows-only)
+      - PowerShell 5.1 Desktop edition (not Core/7+; pwsh does not ship WPF)
+      - .NET Framework 4.7.2 or later (Registry release key >= 461808)
       - Configured settings.json (run Invoke-GovernanceTest.ps1 once to generate)
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to ..\Config\settings.json relative to the
@@ -51,6 +52,68 @@ if ($Help) {
     Get-Help $MyInvocation.MyCommand.Path -Detailed
     return
 }
+
+#region Pre-flight checks (OS / PSEdition / .NET Framework)
+# These run in the parent process on every launch so the user gets a clear,
+# actionable message instead of a cryptic assembly-load failure deep in the stack.
+
+# 1. Windows-only: WPF assemblies don't exist on macOS or Linux.
+if ($env:OS -ne 'Windows_NT') {
+    Write-Host ("ERROR: The dashboard requires Windows. " +
+                "WPF is a Windows-only framework and is not available on this OS ($($PSVersionTable.OS)).") `
+               -ForegroundColor Red
+    exit 1
+}
+
+# 2. PowerShell Desktop edition: pwsh (Core/7+) does not ship WPF assemblies.
+#    #Requires -Version 5.1 already enforces the minimum version number, but it
+#    passes on pwsh 7.x which also satisfies ">= 5.1".
+if ($PSVersionTable.PSEdition -ne 'Desktop') {
+    Write-Host ("ERROR: The dashboard requires Windows PowerShell 5.1 (Desktop edition). " +
+                "You are running PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)). " +
+                "Run 'powershell.exe' (not 'pwsh') to use the Desktop edition.") `
+               -ForegroundColor Red
+    exit 1
+}
+
+# 3. .NET Framework >= 4.7.2 (release key >= 461808).
+#    WPF itself ships with .NET 4.0, but SystemParameters.WorkArea (used for
+#    the DPI-aware window-fit) and several other layout APIs were added or
+#    stabilised in 4.7.2. Older frameworks produce silent wrong-geometry bugs
+#    rather than hard failures -- so we enforce the minimum proactively.
+#    Release key reference: https://learn.microsoft.com/dotnet/framework/migration-guide/versions-and-dependencies
+$netRegPath = 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full'
+$netRelease  = $null
+try {
+    $netRelease = (Get-ItemProperty -Path $netRegPath -Name Release -ErrorAction Stop).Release
+} catch { }
+
+if ($null -eq $netRelease) {
+    Write-Host ("ERROR: .NET Framework 4.x was not found in the registry ($netRegPath). " +
+                "Install .NET Framework 4.7.2 or later and try again.") `
+               -ForegroundColor Red
+    exit 1
+}
+
+if ($netRelease -lt 461808) {
+    # Map release key to a human-readable version for the error message.
+    $netVer = switch ($netRelease) {
+        { $_ -ge 528040 } { '4.8 or later' }
+        { $_ -ge 461808 } { '4.7.2' }
+        { $_ -ge 461308 } { '4.7.1' }
+        { $_ -ge 460798 } { '4.7' }
+        { $_ -ge 394802 } { '4.6.2' }
+        { $_ -ge 394254 } { '4.6.1' }
+        default            { "unknown (release=$netRelease)" }
+    }
+    Write-Host ("ERROR: .NET Framework 4.7.2 or later is required for the dashboard. " +
+                "Detected version: $netVer (release key $netRelease). " +
+                "Download .NET Framework 4.8 from https://dotnet.microsoft.com/download/dotnet-framework") `
+               -ForegroundColor Red
+    exit 1
+}
+
+#endregion
 
 #region Process Isolation
 
