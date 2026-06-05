@@ -75,13 +75,31 @@ SDK-06's test file)
     `Invoke`, singular nouns); the only warnings are PRE-EXISTING SDK-01 read-function
     items (PSUseSingularNouns on Get-...s, PSReviewUnusedParameter IncludeSystem) --
     no new findings introduced.
-  - Pester: n/a for SDK-02 (new dispatcher assertions land in
-    `Tests/SP.SdkBridge.Tests.ps1` under SDK-06; that file does not yet exist).
-    SDK-02 itself does not break import or existing suites.
+  - Pester (re-verification pass, run after SDK-06's `Tests/SP.SdkBridge.Tests.ps1`
+    landed): New-PesterConfiguration over that file -> **P=34 F=0** (Skipped=0,
+    Total=34, ~3.5s). The 34 cases assert the full SDK-02 acceptance contract --
+    all 18 verb->backing routings, the Toggle->Update-SPSdkWorkflow `/enabled`
+    PATCH op, the Filter Update(single)/Delete(bulk) asymmetry, missing-required-
+    param zero-call paths, unknown-verb, backing-failure pass-through, never-throw,
+    PLUS the SDK-03 Safety-gate cases (which remain present in the live code).
   - XAML parse: n/a (no XAML touched).
-  - Manifest/import: import OK (see above); no psd1 touched (SDK-04).
+  - Manifest/import: `Import-Module -Force` OK; `Get-Command -Module SP.SdkBridge`
+    = **14** (9 reads + 5 writes); all 5 dispatchers in Export-ModuleMember
+    (L1252-1256). No psd1 touched (SDK-04 owns that).
 
-**Review:** <PASS | FAIL: findings>
+**Re-verification pass (post-SDK-03):** This round was re-run as a
+verification/refinement pass. SDK-02's five dispatchers were already authored and
+SDK-03 had since layered `Test-SPGuiSdkSafetyGate` (L33) plus per-verb gate calls
+(Template Delete/RemoveSchedule, WorkItem Complete/BulkApprove/BulkReject, Filter
+Delete) on top of the same dispatchers. NO source changes were made -- re-authoring
+from the SDK-02 spec would have regressed SDK-03. The two documented plan-vs-code
+disagreements (Toggle -> Update-SPSdkWorkflow not Set-SPSdkWorkflow; Filter
+Update single-id vs Delete bulk string[]) remain correctly resolved in the code.
+Confirmed headlessly: AST 0 errors, import + 14 exports, P=34/F=0 on the bridge
+tests, Safety gating intact.
+
+**Review:** PASS (verification pass: spec acceptance contract satisfied by existing
+code; SDK-03 regression guard confirmed intact; no code changes).
 **Backlog update:** SDK-02 -> DONE
 
 **Completed:** <YYYY-MM-DD HH:MM:SS>
