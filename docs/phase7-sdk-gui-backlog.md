@@ -27,7 +27,7 @@ the loop only authors it.
 
 | # | Priority | Feature | Size | Depends | Status |
 |---|----------|---------|------|---------|--------|
-| SDK-01 | CRITICAL | SP.SdkBridge.psm1 -- read functions (6) | M | none | TODO |
+| SDK-01 | CRITICAL | SP.SdkBridge.psm1 -- read functions (9) | M | none | DONE |
 | SDK-02 | CRITICAL | SP.SdkBridge.psm1 -- write dispatchers (5) | M | SDK-01 | TODO |
 | SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | TODO |
 | SDK-04 | HIGH | SP.Gui.psd1 -- register SP.SdkBridge + exports | S | SDK-01 | TODO |
@@ -55,7 +55,7 @@ Exit criteria for the loop: SDK-01..SDK-17 `DONE`, SDK-18 `DONE` or explicitly
 
 ## SDK-01: SP.SdkBridge.psm1 -- read functions
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** none
 - **Size:** M
 
