@@ -4387,12 +4387,51 @@ function Get-SdkSelectedRow {
 }
 
 function Invoke-SdkTemplateNew {
-    # SDK-12 SCOPE: New Template has NO SDK-09 input modal (SDK-09 shipped only the
-    # 3 dialogs Set-Schedule/Approval/Workflow-Test). Authoring a Template-Create
-    # XAML is an SDK-09-class deliverable and out of SDK-12's Files line
-    # (SP.MainWindow.psm1 only). Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template requires a Template-Create dialog (SDK-09 follow-up / phase 2).'
+
+    $dialogPath = Get-XamlPath -FileName 'SdkTemplateCreateDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtTemplateName', 'TxtDeadlineDuration', 'TxtTemplateOwnerId', 'CboReviewerType') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template cancelled.'
+        return
+    }
+
+    $name     = [string]$values['TxtTemplateName']
+    $deadline = [string]$values['TxtDeadlineDuration']
+    $ownerId  = [string]$values['TxtTemplateOwnerId']
+    $reviewer = if ($null -ne $values['CboReviewerType']) { [string]$values['CboReviewerType'] } else { 'MANAGER' }
+
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Template Name is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($deadline)) { $deadline = 'P14D' }
+
+    $templateBody = @{
+        name             = $name
+        deadlineDuration = $deadline
+        type             = 'MANAGER'
+        reviewerType     = $reviewer
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ownerId)) {
+        $templateBody['ownerRef'] = @{ id = $ownerId; type = 'IDENTITY' }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create template '$name'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'Create'; Template = $templateBody } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  "Creating template '$name'..." `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkTemplateEditSchedule {
     [CmdletBinding()] param($TabContent)
@@ -4807,11 +4846,59 @@ function Invoke-SdkWorkItemComplete {
         -OnSuccess       $onSuccess
 }
 function Invoke-SdkWorkItemForward {
-    # SDK-12 SCOPE: Work Item Forward needs TargetOwnerId + Comment and has NO
-    # SDK-09 input modal. Authoring one is an SDK-09-class deliverable, outside
-    # SDK-12's Files line. Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward Work Item requires a Forward dialog (TargetOwnerId + Comment) (SDK-09 follow-up / phase 2).'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkItemForwardDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtForwardTargetId', 'TxtForwardComment') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward cancelled.'
+        return
+    }
+
+    $targetId = [string]$values['TxtForwardTargetId']
+    $comment  = [string]$values['TxtForwardComment']
+
+    if ([string]::IsNullOrWhiteSpace($targetId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Target owner identity ID is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($comment)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Comment is required for Forward.' -IsError
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Forward work item '$($row.Description)' to identity '$targetId'?",
+        'Confirm Forward',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "forward work item '$($row.Description)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'Forward'; WorkItemId = [string]$row.Id; TargetOwnerId = $targetId; Comment = $comment } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Forwarding work item...' `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkWorkItemBulkApprove {
     [CmdletBinding()] param($TabContent)
@@ -4969,11 +5056,46 @@ function Invoke-SdkWorkflowViewExecutions {
         -LoadingMessage  "Loading executions for '$($row.Name)'..."
 }
 function Invoke-SdkWorkflowCreateOOO {
-    # SDK-12 SCOPE: Create OOO needs PrimaryReviewerId + FallbackReviewerId and has
-    # NO SDK-09 input modal. Authoring one is an SDK-09-class deliverable, outside
-    # SDK-12's Files line. Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO requires a Reviewer dialog (Primary + Fallback reviewer ids) (SDK-09 follow-up / phase 2).'
+
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkflowOOODialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtOOOPrimaryReviewerId', 'TxtOOOFallbackReviewerId', 'TxtOOOFallbackDays') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO cancelled.'
+        return
+    }
+
+    $primaryId  = [string]$values['TxtOOOPrimaryReviewerId']
+    $fallbackId = [string]$values['TxtOOOFallbackReviewerId']
+    $days       = [string]$values['TxtOOOFallbackDays']
+
+    if ([string]::IsNullOrWhiteSpace($primaryId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Primary reviewer identity ID is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($fallbackId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Fallback reviewer identity ID is required.' -IsError
+        return
+    }
+
+    [int]$fallbackDays = 3
+    if (-not [string]::IsNullOrWhiteSpace($days)) { [int]::TryParse($days, [ref]$fallbackDays) | Out-Null }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create OOO fallback workflow (primary=$primaryId -> fallback=$fallbackId after $fallbackDays days)")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'CreateOOO'; PrimaryReviewerId = $primaryId; FallbackReviewerId = $fallbackId; FallbackDays = $fallbackDays } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  'Creating OOO fallback workflow...' `
+        -OnSuccess       $onSuccess
 }
 
 # --- Filters ---------------------------------------------------------------
@@ -4997,18 +5119,97 @@ function Invoke-SdkFilterRefresh {
         -LoadingMessage  'Loading filters...'
 }
 function Invoke-SdkFilterNew {
-    # SDK-12 SCOPE: New Filter has NO SDK-09 input modal. Authoring a Filter-Create
-    # XAML is an SDK-09-class deliverable, outside SDK-12's Files line. Deferred
-    # per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter requires a Filter-Create dialog (SDK-09 follow-up / phase 2).'
+
+    $dialogPath = Get-XamlPath -FileName 'SdkFilterDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtFilterName', 'CboFilterMode', 'TxtFilterDescription') `
+        -Defaults      @{ 'LblFilterAction' = 'New Filter'; 'CboFilterMode' = 'INCLUSION' } `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter cancelled.'
+        return
+    }
+
+    $filterName = [string]$values['TxtFilterName']
+    $mode       = if ($null -ne $values['CboFilterMode']) { [string]$values['CboFilterMode'] } else { 'INCLUSION' }
+    $desc       = [string]$values['TxtFilterDescription']
+
+    if ([string]::IsNullOrWhiteSpace($filterName)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Filter Name is required.' -IsError
+        return
+    }
+
+    $filterBody = @{ name = $filterName; mode = $mode }
+    if (-not [string]::IsNullOrWhiteSpace($desc)) { $filterBody['description'] = $desc }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create filter '$filterName'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Create'; Filter = $filterBody } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  "Creating filter '$filterName'..." `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkFilterEdit {
-    # SDK-12 SCOPE: Edit Filter has NO SDK-09 input modal. Authoring a Filter-Edit
-    # XAML is an SDK-09-class deliverable, outside SDK-12's Files line. Deferred
-    # per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter requires a Filter-Edit dialog (SDK-09 follow-up / phase 2).'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkFilterGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Select a filter first.'
+        return
+    }
+
+    # Pre-populate dialog with the selected filter's current values.
+    $currentMode = if ($null -ne $row._Raw -and $null -ne $row._Raw.mode) { [string]$row._Raw.mode } else { 'INCLUSION' }
+    $currentDesc = if ($null -ne $row._Raw -and $null -ne $row._Raw.description) { [string]$row._Raw.description } else { '' }
+
+    $dialogPath = Get-XamlPath -FileName 'SdkFilterDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtFilterName', 'CboFilterMode', 'TxtFilterDescription') `
+        -Defaults @{
+            'LblFilterAction'      = ("Edit Filter - " + $row.Name)
+            'TxtFilterName'        = [string]$row.Name
+            'CboFilterMode'        = $currentMode
+            'TxtFilterDescription' = $currentDesc
+        } `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter cancelled.'
+        return
+    }
+
+    $filterName = [string]$values['TxtFilterName']
+    $mode       = if ($null -ne $values['CboFilterMode']) { [string]$values['CboFilterMode'] } else { $currentMode }
+    $desc       = [string]$values['TxtFilterDescription']
+
+    if ([string]::IsNullOrWhiteSpace($filterName)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Filter Name is required.' -IsError
+        return
+    }
+
+    $filterBody = @{ name = $filterName; mode = $mode }
+    if (-not [string]::IsNullOrWhiteSpace($desc)) { $filterBody['description'] = $desc }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "update filter '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Update'; FilterId = @([string]$row.Id); Filter = $filterBody } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  "Updating filter '$filterName'..." `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkFilterDelete {
     [CmdletBinding()] param($TabContent)
