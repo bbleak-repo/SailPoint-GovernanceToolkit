@@ -35,7 +35,7 @@ the loop only authors it.
 | SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | DONE |
 | SDK-07 | HIGH | SdkTab.xaml -- nested 6 sub-tabs + controls + tooltips | L | none | DONE |
 | SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | DONE |
-| SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | TODO |
+| SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | DONE |
 | SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | TODO |
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | TODO |
 | SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | TODO |
@@ -196,7 +196,7 @@ wider toolbar (WPF note 4 / FlaUI (0,0) risk).
 
 ## SDK-09: Modal dialog XAMLs
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** none
 - **Size:** M
 
