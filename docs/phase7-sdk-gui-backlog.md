@@ -43,7 +43,7 @@ the loop only authors it.
 | SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | DONE |
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | DONE |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | DONE |
-| SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | TODO |
+| SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | DONE |
 | SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | TODO |
 | SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | TODO |
 
@@ -345,7 +345,7 @@ run live.
 
 ## SDK-17: OutputMode/Both consistency
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** none
 - **Size:** S
 
@@ -360,6 +360,19 @@ implement the Console+JSON branch, OR relax CLI-004 to allow richer taxonomies
 
 **Files:** `Scripts/Invoke-SPCampaignSearch.ps1` or `Tests/SP.CliScripts.Tests.ps1`.
 **Accept:** CLI-004 green; rationale documented.
+
+**Decision (round-17):** CHOSEN -- added `Both` to CampaignSearch's ValidateSet
+(`Console/JSON/CSV/HTML/Both`, preserving the richer CSV/HTML taxonomy) AND fixed
+the output gates rather than relaxing CLI-004. Console gate retargeted from
+`Console || JSON` to `-in @('Console','Both')`; JSON gate from `eq 'JSON'` to
+`-in @('JSON','Both')`. This keeps the universal Console/JSON/Both invariant
+enforced across all 20+ OutputMode scripts and incidentally fixes a latent bug
+where `JSON` mode also dumped the full tabular console view (now JSON is pure
+JSON, `Both` = console + JSON). Comment-based help updated to mention `Both`.
+Verified: CLI-004 `All scripts with OutputMode use ValidateSet Console/JSON/Both`
+now PASSES; `Invoke-Pester` on `SP.CliScripts.Tests.ps1` => P=71 F=0; AST parse
+clean. SDK-17 is CLI-only -- no XAML/WPF/bridge code touched, so the WPF Framework
+Notes and GUI Testing Methods do not apply.
 
 ---
 
