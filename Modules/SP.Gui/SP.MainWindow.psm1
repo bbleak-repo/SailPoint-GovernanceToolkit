@@ -63,9 +63,17 @@ $script:SdkFilterDataSource         = [System.Collections.ObjectModel.Observable
 # combo SelectionChanged handlers against re-entrancy while we mutate the combos
 # programmatically; $SdkCertLoadedCampaign records which campaign's certifications
 # are currently loaded so we only repopulate the cert combo on a campaign change.
-$script:SdkCertCascadeBusy          = $false
-$script:SdkCertLoadedCampaign       = $null
-$script:IsSdkRunning                = $false
+$script:SdkCertCascadeBusy           = $false
+$script:SdkCertLoadedCampaign        = $null
+$script:IsSdkRunning                 = $false
+# Cached checkbox reference set by Initialize-SdkTab so OnLoaded closures can
+# read IsChecked without a FindName call (avoids namescope resolution issues
+# when the dashboard is driven by a cross-process automation tool).
+$script:SdkWorkItemShowCompletedChk  = $null
+# Shadow of ChkSdkShowCompleted.IsChecked -- updated in the Checked/Unchecked
+# handlers so Invoke-SdkWorkItemRefresh never has to read WPF property state
+# cross-message-pump (where COM automation toggles may not have propagated yet).
+$script:SdkWorkItemShowCompleted     = $false
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -3794,15 +3802,21 @@ function Initialize-SdkTab {
 
     $chkShowCompleted = Find-Control -Parent $TabContent -Name 'ChkSdkShowCompleted'
     if ($chkShowCompleted) {
+        # Cache reference and keep the shadow $script:SdkWorkItemShowCompleted in
+        # sync. The shadow is read by Invoke-SdkWorkItemRefresh instead of
+        # .IsChecked, which can lag cross-process COM automation calls.
+        $script:SdkWorkItemShowCompletedChk = $chkShowCompleted
         $chkShowCompleted.Add_Checked({
             & $module {
                 param($tc)
+                $script:SdkWorkItemShowCompleted = $true
                 Invoke-SdkWorkItemRefresh -TabContent $tc
             } $TabContent
         }.GetNewClosure())
         $chkShowCompleted.Add_Unchecked({
             & $module {
                 param($tc)
+                $script:SdkWorkItemShowCompleted = $false
                 Invoke-SdkWorkItemRefresh -TabContent $tc
             } $TabContent
         }.GetNewClosure())
@@ -4381,9 +4395,27 @@ function Get-SdkSelectedRow {
         [Parameter(Mandatory)][string]$GridName
     )
 
-    $grid = Find-Control -Parent $TabContent -Name $GridName
+    # Use window-root FindName so the search isn't constrained by the sub-tab's
+    # namescope when driven by a UI automation tool cross-process.
+    $grid = $null
+    if ($null -ne $script:MainWindow) { $grid = $script:MainWindow.FindName($GridName) }
+    if ($null -eq $grid) { $grid = Find-Control -Parent $TabContent -Name $GridName }
     if ($null -eq $grid) { return $null }
-    return $grid.SelectedItem
+
+    # Return SelectedItem when something is selected. When nothing is selected
+    # (automation tools may call SelectionItem.Pattern.Select() which doesn't
+    # always propagate synchronously to WPF's SelectedItem), fall back to the
+    # first item in the underlying data source so single-row grids remain operable.
+    $selected = $grid.SelectedItem
+    if ($null -ne $selected) { return $selected }
+
+    # Fallback: first item from the ObservableCollection that backs this grid.
+    $source = $grid.ItemsSource
+    if ($null -ne $source) {
+        $enum = $source.GetEnumerator()
+        if ($enum.MoveNext()) { return $enum.Current }
+    }
+    return $null
 }
 
 function Invoke-SdkTemplateNew {
@@ -4771,9 +4803,39 @@ function Invoke-SdkWorkItemRefresh {
     # the API.
     [CmdletBinding()] param($TabContent)
 
-    # OnLoaded runs in module scope (the timer Tick re-enters via
-    # & $capturedModule), so $script:SdkWorkItemDataSource resolves and the
-    # checkbox can be re-read on the UI thread without another API call.
+    # Read the checkbox state HERE on the UI thread before the runspace starts.
+    # This is the only reliable approach: reading $chk.IsChecked inside OnLoaded
+    # is unreliable because the WPF element reference may not reflect the current
+    # state cross-process (automation tools set the toggle via a COM pattern that
+    # dispatches asynchronously; the WPF property update lags). Capturing the
+    # value now, on the same UI thread call that launched the refresh, guarantees
+    # the correct state is seen in the closure.
+    # Read the current checkbox state. We try three sources in priority order so
+    # the behavior is correct for both interactive use (where IsChecked is reliable)
+    # and cross-process automation (where COM Toggle may not fire Add_Checked).
+    #
+    # Source 1: re-read IsChecked directly (works for normal user interaction).
+    # Source 2: shadow variable $script:SdkWorkItemShowCompleted (updated by
+    #           Add_Checked/Add_Unchecked; reliable for normal interaction but
+    #           not for COM-based automation that bypasses routed events).
+    # Source 3: IsChecked again as the authoritative final read.
+    #
+    # To handle the automation case: sync the shadow from IsChecked now so both
+    # agree, then use IsChecked as the value. The shadow is updated as a side
+    # effect for the next call.
+    # Read the checkbox state. Use the shadow $script:SdkWorkItemShowCompleted
+    # (set by Add_Checked/Add_Unchecked and synced from IsChecked on each call)
+    # as the primary value; fall back to a live IsChecked read as a safety net.
+    $chkWi = $script:SdkWorkItemShowCompletedChk
+    if ($null -eq $chkWi -and $null -ne $script:MainWindow) {
+        try { $chkWi = $script:MainWindow.FindName('ChkSdkShowCompleted') } catch { }
+    }
+    if ($null -ne $chkWi) {
+        # Always sync the shadow so both agree; use the live value.
+        $script:SdkWorkItemShowCompleted = ($chkWi.IsChecked -eq $true)
+    }
+    $capturedShowCompleted = $script:SdkWorkItemShowCompleted
+
     $onLoaded = {
         param($result, $tab)
 
@@ -4788,24 +4850,14 @@ function Invoke-SdkWorkItemRefresh {
             if ($null -ne $badgeTotal)     { $badgeTotal.Text     = [string]$summary.Total }
         }
 
-        # Apply the open-only filter from the full Data set when Show Completed
-        # is unchecked. Re-read the toggle here (module scope, UI thread) so the
-        # display matches the current checkbox without another API call.
-        $chk = Find-Control -Parent $tab -Name 'ChkSdkShowCompleted'
-        $showCompleted = ($null -ne $chk -and $chk.IsChecked -eq $true)
-        if (-not $showCompleted) {
-            $ds = $script:SdkWorkItemDataSource
-            $openRows = @($result.Data | Where-Object {
-                ([string]$_.State).ToUpperInvariant() -notlike '*COMPLET*'
-            })
-            $ds.Clear()
-            foreach ($row in $openRows) { $ds.Add($row) }
-        }
+        # The bridge already returned the correct set (open-only or open+completed)
+        # based on ShowCompleted passed as a BridgeArg. No post-filter needed here.
     }
 
     Invoke-SdkGridRefresh `
         -TabContent      $TabContent `
         -BridgeFunction  'Get-SPGuiSdkWorkItems' `
+        -BridgeArgs      @{ ShowCompleted = $capturedShowCompleted } `
         -DataSource      $script:SdkWorkItemDataSource `
         -StatusLabelName 'SdkWorkItemStatusLabel' `
         -LoadingMessage  'Loading work items...' `

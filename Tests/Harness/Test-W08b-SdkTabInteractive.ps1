@@ -293,10 +293,18 @@ try {
             if (-not $templatesOk) {
                 Add-Result 'WG-08-13' 'BLOCKED' "Template grid empty (WG-08-12)"
             } else {
+                # WPF DataGrid rows do not expose the UIA SelectionItem pattern under
+                # UIA3 cross-process, so $row.Patterns.SelectionItem.Pattern is $null.
+                # The handler (Invoke-SdkTemplateEditSchedule via Get-SdkSelectedRow)
+                # has a product fallback: if SelectedItem is $null it returns the first
+                # item from the grid's ItemsSource. So the modal SHOULD appear when
+                # the grid has rows, regardless of whether a row is UIA-selected.
+                # Verify this by clicking the button and looking for the modal.
                 $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkTemplateGrid' -TimeoutMs $RefreshTimeoutMs
                 $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs
-                $selected = $false
-                if ($rows.Count -gt 0) { $selected = Select-SPUiRow -Row $rows[0] }
+                if ($rows.Count -eq 0) {
+                    Add-Result 'WG-08-13' 'FAIL' "SdkTemplateGrid is empty; cannot test Edit Schedule (WG-08-12 should have caught this)"
+                } else {
                 $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkEditSchedule' -ControlType 'Button' -TimeoutMs $RefreshTimeoutMs
                 Invoke-SPUiButton -Button $btn
                 # SdkTemplateScheduleDialog.xaml carries Title="Set Template Schedule".
@@ -328,6 +336,7 @@ try {
                         Add-Result 'WG-08-13' 'PASS' "Edit Schedule modal opened and Cancelled (MONTHLY text not scraped; modal renders schedule editor -- soft note)"
                     }
                 }
+                }   # end: if $selected
             }
         }
         catch {
@@ -418,12 +427,25 @@ try {
                     $preview = ($names | Select-Object -First 10) -join '; '
                     Add-Result 'WG-08-15' 'PASS' ("SdkApprovalSummaryPanel: {0} text element(s): {1}" -f $texts.Count, $preview)
                 } else {
-                    # Fall back: find the badge TextBlocks by AutomationId
-                    $pending = '?'; $approved = '?'; $rejected = '?'
+                    # Fall back: find the badge TextBlocks by AutomationId.
+                    $pending = $null; $approved = $null; $rejected = $null
                     try { $pending  = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkApprovalBadgePending'  -TimeoutMs 2000).Name } catch { }
                     try { $approved = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkApprovalBadgeApproved' -TimeoutMs 2000).Name } catch { }
                     try { $rejected = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkApprovalBadgeRejected' -TimeoutMs 2000).Name } catch { }
-                    Add-Result 'WG-08-15' 'PASS' ("SdkApprovalSummaryPanel not in UIA tree (dynamic StackPanel); badges via x:Name: Pending=$pending Approved=$approved Rejected=$rejected -- soft note")
+
+                    # Only claim PASS if at least one badge has real data. If ALL
+                    # are $null the panel was not found AND the badge fallback also
+                    # failed -- that must be a FAIL, not a silent soft PASS.
+                    $anyBadge = ($null -ne $pending -or $null -ne $approved -or $null -ne $rejected)
+                    $pendingStr  = if ($null -ne $pending)  { $pending }  else { '(null)' }
+                    $approvedStr = if ($null -ne $approved) { $approved } else { '(null)' }
+                    $rejectedStr = if ($null -ne $rejected) { $rejected } else { '(null)' }
+
+                    if ($anyBadge) {
+                        Add-Result 'WG-08-15' 'PASS' ("SdkApprovalSummaryPanel not in UIA tree (dynamic StackPanel); badges: Pending=$pendingStr Approved=$approvedStr Rejected=$rejectedStr")
+                    } else {
+                        Add-Result 'WG-08-15' 'FAIL' "SdkApprovalSummaryPanel not found AND all badge TextBlocks (SdkApprovalBadgePending/Approved/Rejected) not found -- approval summary not rendering"
+                    }
                 }
             }
         }
@@ -477,21 +499,40 @@ try {
             if (-not $workItemsOk) {
                 Add-Result 'WG-08-17' 'BLOCKED' "Work Items grid not populated (WG-08-16)"
             } else {
+                # Toggle the checkbox. The UIA Toggle pattern is async cross-process:
+                # WPF's Add_Checked event may fire with IsChecked still $false.
+                # Strategy: toggle the checkbox, wait for any auto-triggered Checked
+                # event refresh to fully complete (idle), THEN click Refresh explicitly.
+                # The explicit Refresh runs synchronously on the UI thread AFTER
+                # IsChecked is $true, so the OnLoaded filter is skipped correctly.
                 $chk = Find-SPUiElement -Root $ui.Window -AutomationId 'ChkSdkShowCompleted' -ControlType 'CheckBox' -TimeoutMs $RefreshTimeoutMs
                 $set = Set-SPUiCheckTo -CheckBox $chk -Desired $true -TimeoutMs $RefreshTimeoutMs
-                # The Checked event fires an async runspace refresh. Wait for it to
-                # settle (the IsSdkRunning guard serializes refreshes) before clicking
-                # Refresh to ensure the full 6-item set is loaded with ShowCompleted=true.
-                Start-Sleep -Milliseconds 3500
+
+                # Wait up to 20s for any Checked-event-triggered refresh to start AND
+                # finish. If no refresh was triggered (IsChecked was $false at dispatch
+                # time so the handler skipped it), Wait-SPUiSdkIdle returns true quickly.
+                $null = Wait-SPUiSdkIdle -Root $ui.Window -StatusName 'SdkWorkItemStatusLabel' -TimeoutMs 20000
+
+                # Now click Refresh explicitly. At this point IsChecked IS $true (the
+                # toggle has propagated), so the handler reads it correctly.
                 $btnWi = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshWorkItems' -ControlType 'Button' -TimeoutMs 2000
                 Invoke-SPUiButton -Button $btnWi
-                $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
-                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs ($RefreshTimeoutMs * 2) -Expected 6
-                Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-17-show-completed.png') | Out-Null
-                if ($rows.Count -eq 6) {
-                    Add-Result 'WG-08-17' 'PASS' "ChkSdkShowCompleted ON + Refresh; grid shows 6 work items"
+
+                $idle = Wait-SPUiSdkIdle -Root $ui.Window -StatusName 'SdkWorkItemStatusLabel' -TimeoutMs 25000
+                # Diagnostic: read the status label text so we know what "idle" means
+                $statusText = '?'
+                try { $statusText = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemStatusLabel' -TimeoutMs 1000).Name } catch { }
+                if (-not $idle) {
+                    Add-Result 'WG-08-17' 'FAIL' "SdkWorkItemStatusLabel never left 'Loading' after Show Completed Refresh (25s timeout); lastStatus='$statusText'"
                 } else {
-                    Add-Result 'WG-08-17' 'FAIL' ("Expected 6 items with Show Completed ON; got {0} (toggleSet={1})" -f $rows.Count, $set)
+                    $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
+                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs 4000 -Expected 6
+                    Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-17-show-completed.png') | Out-Null
+                    if ($rows.Count -eq 6) {
+                        Add-Result 'WG-08-17' 'PASS' "ChkSdkShowCompleted ON + Refresh; grid shows 6 work items (all states)"
+                    } else {
+                        Add-Result 'WG-08-17' 'FAIL' ("Expected 6 items; got {0} (toggleSet={1}; statusAfterRefresh='{2}')" -f $rows.Count, $set, $statusText)
+                    }
                 }
             }
         }

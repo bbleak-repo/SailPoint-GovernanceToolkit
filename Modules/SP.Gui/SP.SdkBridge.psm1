@@ -303,6 +303,9 @@ function Get-SPGuiSdkWorkItems {
         [Parameter()] [string]$OwnerId,
         [Parameter()] [int]$Limit = 250,
         [Parameter()] [int]$Offset = 0,
+        # When $true, fetches open (/work-items) AND completed (/work-items/completed)
+        # and returns the merged set. Needed for the "Show Completed" grid toggle.
+        [Parameter()] [bool]$ShowCompleted = $false,
         [Parameter()] [string]$CorrelationID
     )
 
@@ -319,6 +322,15 @@ function Get-SPGuiSdkWorkItems {
         if (-not [string]::IsNullOrWhiteSpace($OwnerId)) { $rowParams['OwnerId'] = $OwnerId }
 
         $result = Get-SPSdkWorkItems @rowParams
+
+        if ($result.Success -and $ShowCompleted) {
+            # Merge with completed work items from /work-items/completed.
+            $completedResult = Get-SPSdkCompletedWorkItems @rowParams
+            if ($completedResult.Success) {
+                $merged = @($result.Data) + @($completedResult.Data)
+                $result = @{ Success = $true; Data = $merged; Error = $null }
+            }
+        }
 
         if (-not $result.Success) {
             return @{ Success = $false; Data = @(); Summary = @{ Open = 0; Completed = 0; Total = 0 }; Error = $result.Error }

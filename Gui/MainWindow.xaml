@@ -1374,7 +1374,33 @@
                                                Foreground="#AAAACC" FontSize="12" FontStyle="Italic"
                                                VerticalAlignment="Center" Margin="2,0,0,0"/>
                                     <StackPanel Grid.Column="1" x:Name="SdkApprovalSummaryPanel"
-                                                Orientation="Horizontal" HorizontalAlignment="Right"/>
+                                                Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <!-- Pending / Approved / Rejected badges populated by OnLoaded -->
+                                        <Border Background="#2255AA" CornerRadius="3" Padding="6,2" Margin="0,0,4,0"
+                                                ToolTip="Pending approvals">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Pending: " Foreground="#E0E0E0" FontSize="11"/>
+                                                <TextBlock x:Name="SdkApprovalBadgePending" Text="0"
+                                                           Foreground="#FFFFFF" FontSize="11" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="#339933" CornerRadius="3" Padding="6,2" Margin="0,0,4,0"
+                                                ToolTip="Approved approvals">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Approved: " Foreground="#E0E0E0" FontSize="11"/>
+                                                <TextBlock x:Name="SdkApprovalBadgeApproved" Text="0"
+                                                           Foreground="#FFFFFF" FontSize="11" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="#CC3333" CornerRadius="3" Padding="6,2"
+                                                ToolTip="Rejected approvals">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="Rejected: " Foreground="#E0E0E0" FontSize="11"/>
+                                                <TextBlock x:Name="SdkApprovalBadgeRejected" Text="0"
+                                                           Foreground="#FFFFFF" FontSize="11" FontWeight="SemiBold"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
                                 </Grid>
                             </Grid>
                         </TabItem>
