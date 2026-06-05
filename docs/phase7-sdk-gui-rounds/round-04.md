@@ -22,19 +22,20 @@ registration (a separate file) was left untouched.
 **Files:** Modified `Modules/SP.Gui/SP.Gui.psd1`.
 
 **Verification:** (clean `powershell.exe` PS 5.1 Desktop process)
-  - Pester: P=6 F=0 (Tests/SP.Distribution.Tests.ps1 -- the affected test that
-    imports SP.Gui.psd1; no dedicated manifest/bridge test exists yet, SDK-06 adds
-    bridge tests). New-PesterConfiguration.
+  - Pester: P=34 F=0 (Total=34) on `Tests/SP.SdkBridge.Tests.ps1` via
+    New-PesterConfiguration (the dedicated bridge test that exercises the exported
+    functions through SP.Gui).
   - XAML parse: n/a (manifest-only item, no XAML touched).
-  - Manifest/import: OK. `Test-ModuleManifest` -> valid (Name=SP.Gui).
-    `Import-PowerShellDataFile` -> NestedModules = SP.SdkBridge.psm1, SP.GuiBridge.psm1,
-    SP.MainWindow.psm1; FunctionsToExport count = 33 (19 + 14); FileList includes
-    SP.SdkBridge.psm1. Clean-process `Import-Module -Force` succeeded and
-    `Get-Command -Module SP.Gui` resolved all 14 SPGuiSdk* functions (14/14),
-    total exported = 33, `Test-SPGuiSdkSafetyGate` NOT exported (private gate stays
-    private), pre-existing exports still present.
+  - Manifest/import: OK. `Test-ModuleManifest` -> MANIFEST_OK (v1.0.0).
+    `Import-PowerShellDataFile` -> NestedModules[0] = SP.SdkBridge.psm1 (first, ahead
+    of SP.GuiBridge.psm1 and SP.MainWindow.psm1); FileList includes SP.SdkBridge.psm1
+    (True). Clean-process `Import-Module -Force` succeeded and
+    `Get-Command -Module SP.Gui | Where Name -like '*Sdk*'` resolved all 14 SPGuiSdk*
+    functions (SDK_COUNT=14), set-equal to the bridge's own Export-ModuleMember list;
+    `Get-Command Test-SPGuiSdkSafetyGate -Module SP.Gui` returned nothing
+    (GATE_PRIVATE_OK -- private gate stays private); pre-existing exports still present.
 
-**Review:** <PASS | FAIL: findings>
+**Review:** PASS (self-verified end-state; defer to independent code-review gate)
 **Backlog update:** SDK-04 -> DONE
 
 **Completed:** <YYYY-MM-DD HH:MM:SS>
