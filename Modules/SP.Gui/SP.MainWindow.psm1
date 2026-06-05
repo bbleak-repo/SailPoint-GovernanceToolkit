@@ -4125,6 +4125,208 @@ function Invoke-SdkGridRefresh {
     $timer.Start()
 }
 
+function Test-SdkRequireWhatIfConfirm {
+    <#
+    .SYNOPSIS
+        UI-thread Safety.RequireWhatIfOnProd confirmation for SDK write actions.
+    .DESCRIPTION
+        Mirrors the Invoke-GuiTestRun guard (SP.MainWindow.psm1:464-490): reads
+        Safety.RequireWhatIfOnProd + Global.EnvironmentName from settings.json via
+        Get-SPConfig with the defensive `PSObject.Properties.Name -contains` idiom,
+        defaulting to safe (prompt) if config cannot be read. When the flag is set
+        it shows a YesNo MessageBox describing the live action and the environment.
+
+        Returns $true when the caller may proceed (flag off, or user chose Yes),
+        $false when the user cancelled (the caller then aborts and sets a
+        'cancelled by user (Safety.RequireWhatIfOnProd)' status). Runs entirely on
+        the UI thread BEFORE any runspace -- the bridge cannot show UI (SDK-03).
+    .PARAMETER ActionDescription
+        Human-readable description of the live action (e.g. 'delete 1 template').
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$ActionDescription
+    )
+
+    $requireConfirm = $true
+    $envName        = 'Unknown'
+    try {
+        $cfg = Get-SPConfig -ConfigPath $script:ConfigPath
+        if ($cfg -and $cfg.Safety -and ($cfg.Safety.PSObject.Properties.Name -contains 'RequireWhatIfOnProd')) {
+            $requireConfirm = [bool]$cfg.Safety.RequireWhatIfOnProd
+        }
+        if ($cfg -and $cfg.Global -and ($cfg.Global.PSObject.Properties.Name -contains 'EnvironmentName')) {
+            $envName = [string]$cfg.Global.EnvironmentName
+        }
+    } catch { }
+
+    if (-not $requireConfirm) {
+        return $true
+    }
+
+    $msg = "Safety.RequireWhatIfOnProd is enabled in settings.json.`n`n" +
+           "About to $ActionDescription against environment: $envName`n`n" +
+           "Continue with live API execution?"
+    $choice = [System.Windows.MessageBox]::Show(
+        $msg,
+        'Confirm Live SDK Action',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    return ($choice -eq [System.Windows.MessageBoxResult]::Yes)
+}
+
+function Invoke-SdkActionRun {
+    <#
+    .SYNOPSIS
+        Shared background-runspace WRITE engine for the SDK sub-tab action buttons
+        (SDK-12).
+    .DESCRIPTION
+        Mirrors the SDK-11 read engine Invoke-SdkGridRefresh skeleton: spins a
+        background STA runspace, re-imports the modules the runspace needs (it
+        starts empty -- SP.Core, SP.Api, SP.Sdk, SP.Gui; SP.Gui brings SP.SdkBridge
+        as a nested module so Invoke-SPGuiSdk* resolve here -- WPF note 3), calls
+        the named bridge WRITE dispatcher, then marshals the @{Success;Data;Error}
+        result back to the UI thread via $MainWindow.Dispatcher. Re-entrancy is
+        guarded by $script:IsSdkRunning (shared with the read engine).
+
+        The runspace ONLY runs the dispatcher: NO MessageBox / Show-SPGuiDialog /
+        control access happens off the UI thread. All confirms + dialog input must
+        be gathered on the UI thread BEFORE calling this engine (SDK-03 contract).
+
+        On dispatcher Success the completion-timer Tick re-enters module scope via
+        `& $module {...}.GetNewClosure()` (WPF note 2) and invokes the OnSuccess
+        scriptblock (the sub-tab *Refresh helper) so private helpers and $script:*
+        resolve at fire-time. On @{Success=$false} it sets the sub-tab status +
+        Set-StatusMessage -IsError with the Error string and never throws.
+    .PARAMETER OnSuccess
+        Optional scriptblock run (in module scope, on the UI thread) AFTER a
+        successful dispatch -- typically the affected sub-tab's refresh helper.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$BridgeFunction,
+        [hashtable]$BridgeArgs = @{},
+        [Parameter(Mandatory)][string]$StatusLabelName,
+        [string]$RunningMessage,
+        [scriptblock]$OnSuccess
+    )
+
+    if ($script:IsSdkRunning) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message 'An SDK operation is already in progress. Please wait...'
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RunningMessage)) {
+        $RunningMessage = 'Working...'
+    }
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $RunningMessage
+
+    $script:IsSdkRunning = $true
+
+    # Create background runspace (STA) -- mirror Invoke-SdkGridRefresh.
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    # Share inputs explicitly (PS 5.1: no closures across runspace boundaries).
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('BridgeFunction', $BridgeFunction)
+    $runspace.SessionStateProxy.SetVariable('BridgeArgs',     $BridgeArgs)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # The runspace starts empty (WPF note 3): re-import every module the
+        # bridge call needs. SP.Sdk is imported explicitly because it is not yet
+        # in the dashboard module chain (that wiring is SDK-13). SP.Gui brings
+        # SP.SdkBridge as a nested module so Invoke-SPGuiSdk* resolve here.
+        $coreModule = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule  = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $sdkModule  = Join-Path $ToolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
+        $guiModule  = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $sdkModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        # Call the bridge WRITE dispatcher (returns @{Success;Data;Error}). No UI
+        # is touched here -- the bridge enforces the Safety gate and returns a
+        # @{Success=$false;Error='blocked by Safety...'} result rather than throwing.
+        $bridgeResult = & $BridgeFunction @BridgeArgs
+
+        return $bridgeResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms), mirror Invoke-SdkGridRefresh.
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer     = $timer
+    $capturedPs        = $psInstance
+    $capturedRunspace  = $runspace
+    $capturedAsync     = $asyncResult
+    $capturedTab       = $TabContent
+    $capturedStatus    = $StatusLabelName
+    $capturedOnSuccess = $OnSuccess
+    $capturedModule    = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $statusName, $onSuccess)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $result = $null
+                try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Action failed: $errMsg"
+                    Set-StatusMessage -Message "SDK action failed: $errMsg" -IsError
+                }
+                elseif ($null -eq $result -or -not $result.Success) {
+                    # Surfaces the dispatcher's @{Success=$false;Error=...} verbatim --
+                    # including Safety-blocked results ('blocked by Safety...'). Never throws.
+                    $errMsg = if ($null -ne $result) { [string]$result.Error } else { 'Unknown error (no result returned).' }
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Action failed: $errMsg"
+                    Set-StatusMessage -Message "SDK action failed: $errMsg" -IsError
+                }
+                else {
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message 'Action completed.'
+                    Set-StatusMessage -Message 'SDK action completed.'
+                    # Refresh the affected grid (the OnSuccess scriptblock runs in
+                    # module scope so $script:* and private helpers resolve, and
+                    # the IsSdkRunning guard is cleared first so the refresh runs).
+                    $script:IsSdkRunning = $false
+                    if ($null -ne $onSuccess) { & $onSuccess $tab }
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsSdkRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnSuccess
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
 function Invoke-SdkSubTabLoad {
     <#
     .SYNOPSIS
@@ -4156,21 +4358,143 @@ function Invoke-SdkTemplateRefresh {
         -StatusLabelName 'SdkTemplateStatusLabel' `
         -LoadingMessage  'Loading templates...'
 }
+function Get-SdkSelectedRow {
+    <#
+    .SYNOPSIS
+        Returns the .SelectedItem of a named SDK grid, or $null if none selected.
+    .DESCRIPTION
+        UI-thread helper. SDK action handlers call this FIRST (before any confirm
+        or runspace) to read the operator's selected grid row. Returns $null when
+        the grid is missing or nothing is selected so callers can surface a
+        'select a row first' status without an exception.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$GridName
+    )
+
+    $grid = Find-Control -Parent $TabContent -Name $GridName
+    if ($null -eq $grid) { return $null }
+    return $grid.SelectedItem
+}
+
 function Invoke-SdkTemplateNew {
+    # SDK-12 SCOPE: New Template has NO SDK-09 input modal (SDK-09 shipped only the
+    # 3 dialogs Set-Schedule/Approval/Workflow-Test). Authoring a Template-Create
+    # XAML is an SDK-09-class deliverable and out of SDK-12's Files line
+    # (SP.MainWindow.psm1 only). Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template: action deferred to SDK-11/SDK-12.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template requires a Template-Create dialog (SDK-09 follow-up / phase 2).'
 }
 function Invoke-SdkTemplateEditSchedule {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Edit Schedule: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    # Gather schedule fields via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkTemplateScheduleDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @(
+        'CboScheduleType', 'TxtScheduleHours', 'TxtScheduleDays', 'CboScheduleTimeZone', 'TxtScheduleExpiration'
+    )
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Edit Schedule cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "set the schedule for template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $schedule = @{
+        Type       = [string]$values['CboScheduleType']
+        Hours      = [string]$values['TxtScheduleHours']
+        Days       = [string]$values['TxtScheduleDays']
+        TimeZoneId = [string]$values['CboScheduleTimeZone']
+        Expiration = [string]$values['TxtScheduleExpiration']
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'SetSchedule'; TemplateId = [string]$row.Id; Schedule = $schedule } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Setting template schedule...' `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkTemplateRemoveSchedule {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Remove Schedule: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Remove the schedule from 1 template ('$($row.Name)')?",
+        'Confirm Remove Schedule',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Remove Schedule cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "remove the schedule from template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'RemoveSchedule'; TemplateId = [string]$row.Id } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Removing template schedule...' `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkTemplateDelete {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Delete Template: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Delete 1 template ('$($row.Name)')? This cannot be undone.",
+        'Confirm Delete Template',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Delete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "delete template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'Delete'; TemplateId = [string]$row.Id } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Deleting template...' `
+        -OnSuccess       $onSuccess
 }
 
 # --- Cert Summaries --------------------------------------------------------
@@ -4226,17 +4550,83 @@ function Invoke-SdkApprovalRefresh {
         -LoadingMessage  "Loading $state approvals..." `
         -OnLoaded        $onLoaded
 }
+function Invoke-SdkApprovalAction {
+    <#
+    .SYNOPSIS
+        Shared UI-thread driver for the three approval verbs (Approve/Deny/Forward).
+    .DESCRIPTION
+        Reads the selected approval row, gathers Comment/Forward-To via the SDK-09
+        SdkApprovalActionDialog (UI thread), applies the destructive-verb confirm
+        (Deny/Forward) + RequireWhatIfOnProd gate, then dispatches via the write
+        engine. Approve is non-destructive (no affected-count confirm); Deny and
+        Forward show a YesNo confirm before dispatch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][ValidateSet('Approve', 'Deny', 'Forward')][string]$Action
+    )
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkApprovalGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Select an approval first.'
+        return
+    }
+
+    # Gather Comment / Forward-To via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkApprovalActionDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @('TxtComment', 'TxtForwardTo')
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message "$Action cancelled."
+        return
+    }
+
+    $comment    = [string]$values['TxtComment']
+    $forwardTo  = [string]$values['TxtForwardTo']
+
+    # Destructive/hand-off verbs (Deny/Forward) get an affected-count confirm.
+    if ($Action -in @('Deny', 'Forward')) {
+        $confirm = [System.Windows.MessageBox]::Show(
+            "$Action 1 approval ('$($row.Name)')?",
+            "Confirm $Action",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message "$Action cancelled."
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "$($Action.ToLower()) approval '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $bridgeArgs = @{ Action = $Action; ApprovalId = [string]$row.Id }
+    if (-not [string]::IsNullOrWhiteSpace($comment))   { $bridgeArgs['Comment']    = $comment }
+    if ($Action -eq 'Forward' -and -not [string]::IsNullOrWhiteSpace($forwardTo)) { $bridgeArgs['NewOwnerId'] = $forwardTo }
+
+    $onSuccess = { param($tab) Invoke-SdkApprovalRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkApprovalAction' `
+        -BridgeArgs      $bridgeArgs `
+        -StatusLabelName 'SdkApprovalStatusLabel' `
+        -RunningMessage  "$Action in progress..." `
+        -OnSuccess       $onSuccess
+}
 function Invoke-SdkApprovalApprove {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Approve: action deferred to SDK-11/SDK-12.'
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Approve'
 }
 function Invoke-SdkApprovalDeny {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Deny: action deferred to SDK-11/SDK-12.'
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Deny'
 }
 function Invoke-SdkApprovalForward {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Forward: action deferred to SDK-11/SDK-12.'
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Forward'
 }
 
 # --- Work Items ------------------------------------------------------------
@@ -4288,15 +4678,79 @@ function Invoke-SdkWorkItemRefresh {
 }
 function Invoke-SdkWorkItemComplete {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Complete Work Item: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Complete 1 work item ('$($row.Name)')?",
+        'Confirm Complete Work Item',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Complete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "complete work item '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'Complete'; WorkItemId = [string]$row.Id } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Completing work item...' `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkWorkItemForward {
+    # SDK-12 SCOPE: Work Item Forward needs TargetOwnerId + Comment and has NO
+    # SDK-09 input modal. Authoring one is an SDK-09-class deliverable, outside
+    # SDK-12's Files line. Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward Work Item: action deferred to SDK-11/SDK-12.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward Work Item requires a Forward dialog (TargetOwnerId + Comment) (SDK-09 follow-up / phase 2).'
 }
 function Invoke-SdkWorkItemBulkApprove {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Bulk Approve: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    # Affected-count confirm: BulkApprove approves every item under the work item.
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Bulk approve all items under 1 work item ('$($row.Name)')? This approves every decision in the item.",
+        'Confirm Bulk Approve',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Bulk Approve cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "bulk approve work item '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'BulkApprove'; WorkItemId = [string]$row.Id } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Bulk approving...' `
+        -OnSuccess       $onSuccess
 }
 
 # --- Workflows -------------------------------------------------------------
@@ -4313,19 +4767,117 @@ function Invoke-SdkWorkflowRefresh {
 }
 function Invoke-SdkWorkflowToggleEnabled {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Enable/Disable Workflow: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    $currentlyEnabled = [bool]$row.Enabled
+    $newEnabled       = -not $currentlyEnabled
+    $verb             = if ($newEnabled) { 'Enable' } else { 'Disable' }
+
+    # Disabling is the safety-relevant direction: confirm with an affected count.
+    if (-not $newEnabled) {
+        $confirm = [System.Windows.MessageBox]::Show(
+            "Disable 1 workflow ('$($row.Name)')? It will stop running until re-enabled.",
+            'Confirm Disable Workflow',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Disable cancelled.'
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "$($verb.ToLower()) workflow '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'Toggle'; WorkflowId = [string]$row.Id; Enabled = $newEnabled } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  "$($verb)ing workflow..." `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkWorkflowTest {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Test Workflow: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    # Gather JSON test input via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkflowDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @('TxtTestInput')
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Test cancelled.'
+        return
+    }
+
+    # Parse the JSON test input on the UI thread; surface a parse error here so
+    # the operator can fix it without a round-trip through the runspace.
+    $testInput = @{}
+    $raw = [string]$values['TxtTestInput']
+    if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        try {
+            $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            foreach ($prop in $parsed.PSObject.Properties) { $testInput[$prop.Name] = $prop.Value }
+        }
+        catch {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message "Test input is not valid JSON: $($_.Exception.Message)"
+            Set-StatusMessage -Message "Workflow test input is not valid JSON: $($_.Exception.Message)" -IsError
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "run a test on workflow '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'Test'; WorkflowId = [string]$row.Id; TestInput = $testInput } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  'Testing workflow...' `
+        -OnSuccess       $onSuccess
 }
 function Invoke-SdkWorkflowViewExecutions {
+    # READ path: load executions for the selected workflow into the executions
+    # grid via the SDK-11 read engine -- NOT a write dispatcher.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'View Executions: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkflowExecutions' `
+        -BridgeArgs      @{ WorkflowId = [string]$row.Id } `
+        -DataSource      $script:SdkExecutionDataSource `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -LoadingMessage  "Loading executions for '$($row.Name)'..."
 }
 function Invoke-SdkWorkflowCreateOOO {
+    # SDK-12 SCOPE: Create OOO needs PrimaryReviewerId + FallbackReviewerId and has
+    # NO SDK-09 input modal. Authoring one is an SDK-09-class deliverable, outside
+    # SDK-12's Files line. Deferred per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO: action deferred to SDK-11/SDK-12.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO requires a Reviewer dialog (Primary + Fallback reviewer ids) (SDK-09 follow-up / phase 2).'
 }
 
 # --- Filters ---------------------------------------------------------------
@@ -4349,16 +4901,57 @@ function Invoke-SdkFilterRefresh {
         -LoadingMessage  'Loading filters...'
 }
 function Invoke-SdkFilterNew {
+    # SDK-12 SCOPE: New Filter has NO SDK-09 input modal. Authoring a Filter-Create
+    # XAML is an SDK-09-class deliverable, outside SDK-12's Files line. Deferred
+    # per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter: action deferred to SDK-11/SDK-12.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter requires a Filter-Create dialog (SDK-09 follow-up / phase 2).'
 }
 function Invoke-SdkFilterEdit {
+    # SDK-12 SCOPE: Edit Filter has NO SDK-09 input modal. Authoring a Filter-Edit
+    # XAML is an SDK-09-class deliverable, outside SDK-12's Files line. Deferred
+    # per the round-12 scope decision.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter: action deferred to SDK-11/SDK-12.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter requires a Filter-Edit dialog (SDK-09 follow-up / phase 2).'
 }
 function Invoke-SdkFilterDelete {
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Delete Filter: action deferred to SDK-11/SDK-12.'
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkFilterGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Select a filter first.'
+        return
+    }
+
+    # The bridge Delete dispatcher accepts a string[] (bulk) and enforces the
+    # MaxCampaignsPerRun cap; here the grid is single-select so the count is 1.
+    $filterIds = @([string]$row.Id)
+    $count     = $filterIds.Count
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Delete $count filter(s) ('$($row.Name)')? This cannot be undone.",
+        'Confirm Delete Filter',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Delete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "delete $count filter(s)")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Delete'; FilterId = $filterIds } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  'Deleting filter(s)...' `
+        -OnSuccess       $onSuccess
 }
 
 #endregion

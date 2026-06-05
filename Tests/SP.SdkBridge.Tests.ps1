@@ -534,4 +534,66 @@ Describe 'SP.SdkBridge - SDK-to-GUI Bridge Adapter' {
             Should -Invoke Update-SPSdkWorkflow -ModuleName SP.SdkBridge -Times 1 -Exactly
         }
     }
+
+    # =======================================================================
+    # SDK-12: the GUI write handlers (SP.MainWindow.psm1) dispatch through these
+    # bridge functions on a background runspace and surface @{Success=$false;
+    # Error=...} VERBATIM via Invoke-SdkActionRun (no throw). The handler-side
+    # MessageBox/Show-SPGuiDialog/RequireWhatIfOnProd plumbing is UI-thread-only
+    # and is proven interactively in SDK-19 (W-08b); these headless cases assert
+    # the dispatcher contract the UI relies on -- specifically that the two NEW
+    # SDK-12-wired destructive verbs (Template RemoveSchedule, WorkItem
+    # BulkApprove) are Safety-blocked so the UI status label shows the block.
+    # =======================================================================
+    Context 'SDK-12: destructive-verb Safety block reaches the UI verbatim' {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.SdkBridge { }
+            Mock Remove-SPSdkTemplateSchedule -ModuleName SP.SdkBridge {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'tpl-1' }; Error = $null }
+            }
+            Mock Invoke-SPSdkBulkApproveWorkItem -ModuleName SP.SdkBridge {
+                return @{ Success = $true; Data = [PSCustomObject]@{ id = 'wi-1' }; Error = $null }
+            }
+        }
+
+        It 'Template RemoveSchedule returns a Success=$false block (backing invoked 0 times) when AllowCompleteCampaign=$false' {
+            Mock Get-SPConfig -ModuleName SP.SdkBridge {
+                return [PSCustomObject]@{ Safety = [PSCustomObject]@{ AllowCompleteCampaign = $false; MaxCampaignsPerRun = 10 } }
+            }
+            $result = Invoke-SPGuiSdkTemplateAction -Action RemoveSchedule -TemplateId 'tpl-1' -CorrelationID 'sdk-12-001a'
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'blocked by Safety'
+            # The UI engine surfaces $result.Error as a plain string -- prove it is one.
+            $result.Error   | Should -BeOfType ([string])
+            Should -Invoke Remove-SPSdkTemplateSchedule -ModuleName SP.SdkBridge -Times 0 -Exactly
+        }
+
+        It 'Template RemoveSchedule proceeds (backing invoked once) when AllowCompleteCampaign=$true' {
+            Mock Get-SPConfig -ModuleName SP.SdkBridge {
+                return [PSCustomObject]@{ Safety = [PSCustomObject]@{ AllowCompleteCampaign = $true; MaxCampaignsPerRun = 10 } }
+            }
+            $result = Invoke-SPGuiSdkTemplateAction -Action RemoveSchedule -TemplateId 'tpl-1' -CorrelationID 'sdk-12-001b'
+            $result.Success | Should -Be $true
+            Should -Invoke Remove-SPSdkTemplateSchedule -ModuleName SP.SdkBridge -Times 1 -Exactly
+        }
+
+        It 'WorkItem BulkApprove returns a Success=$false block (backing invoked 0 times) when AllowCompleteCampaign=$false' {
+            Mock Get-SPConfig -ModuleName SP.SdkBridge {
+                return [PSCustomObject]@{ Safety = [PSCustomObject]@{ AllowCompleteCampaign = $false; MaxCampaignsPerRun = 10 } }
+            }
+            $result = Invoke-SPGuiSdkWorkItemAction -Action BulkApprove -WorkItemId 'wi-1' -CorrelationID 'sdk-12-002a'
+            $result.Success | Should -Be $false
+            $result.Error   | Should -Match 'blocked by Safety'
+            Should -Invoke Invoke-SPSdkBulkApproveWorkItem -ModuleName SP.SdkBridge -Times 0 -Exactly
+        }
+
+        It 'WorkItem BulkApprove proceeds (backing invoked once) when AllowCompleteCampaign=$true' {
+            Mock Get-SPConfig -ModuleName SP.SdkBridge {
+                return [PSCustomObject]@{ Safety = [PSCustomObject]@{ AllowCompleteCampaign = $true; MaxCampaignsPerRun = 10 } }
+            }
+            $result = Invoke-SPGuiSdkWorkItemAction -Action BulkApprove -WorkItemId 'wi-1' -CorrelationID 'sdk-12-002b'
+            $result.Success | Should -Be $true
+            Should -Invoke Invoke-SPSdkBulkApproveWorkItem -ModuleName SP.SdkBridge -Times 1 -Exactly
+        }
+    }
 }

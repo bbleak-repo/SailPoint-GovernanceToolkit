@@ -38,7 +38,7 @@ the loop only authors it.
 | SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | DONE |
 | SDK-10 | HIGH | Initialize-SdkTab region in SP.MainWindow.psm1 | L | SDK-08 | DONE |
 | SDK-11 | HIGH | Wire 5 data-loading sub-tabs via bridge + runspace | L | SDK-10,01 | DONE |
-| SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | TODO |
+| SDK-12 | HIGH | Wire write actions + confirm dialogs (uses SDK-09) | L | SDK-11,03,09 | DONE |
 | SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | TODO |
 | SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | TODO |
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | TODO |
@@ -247,7 +247,7 @@ badges/labels.
 
 ## SDK-12: Wire write actions + confirms
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-11, SDK-03, SDK-09
 - **Size:** L
 
