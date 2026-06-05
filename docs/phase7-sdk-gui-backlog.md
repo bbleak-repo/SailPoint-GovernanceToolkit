@@ -32,7 +32,7 @@ the loop only authors it.
 | SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | DONE |
 | SDK-04 | HIGH | SP.Gui.psd1 -- register SP.SdkBridge + exports | S | SDK-01 | DONE |
 | SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | DONE |
-| SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | TODO |
+| SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | DONE |
 | SDK-07 | HIGH | SdkTab.xaml -- nested 6 sub-tabs + controls + tooltips | L | none | TODO |
 | SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | TODO |
 | SDK-09 | HIGH | 3 modal dialog XAMLs (Schedule/Workflow/Approval) | M | none | TODO |
@@ -147,7 +147,7 @@ the existing `-Gui` path (or a `-SdkBridge` flag) in `Tests/Import-TestModules.p
 
 ## SDK-06: Bridge Pester tests
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-02, SDK-03, SDK-05
 - **Size:** M
 
