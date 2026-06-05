@@ -3925,7 +3925,7 @@ function Initialize-SdkTab {
 
     # Initial status labels for every sub-tab, then load the default (Templates).
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel'    -Message 'Ready. Click Refresh to load campaign templates.'
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Ready. Select a campaign and click Refresh.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Certification Summaries are deferred to a future release.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel'    -Message 'Ready. Click Refresh to load approvals.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel'    -Message 'Ready. Click Refresh to load work items.'
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel'    -Message 'Ready. Click Refresh to load workflows.'
@@ -4499,10 +4499,12 @@ function Invoke-SdkTemplateDelete {
 
 # --- Cert Summaries --------------------------------------------------------
 function Invoke-SdkCertSummaryRefresh {
-    # Cert Summaries is NOT one of SDK-11's 5 data sub-tabs -- it is scope-gated
-    # to SDK-18 (ship-vs-defer). Left as a stub on purpose.
+    # Cert Summaries is DEFERRED (SDK-18 ship-vs-defer decision). The sub-tab's
+    # interactive controls are disabled (IsEnabled=False) in SdkTab.xaml and a
+    # "coming soon" overlay covers the grid. This remains a documented no-op:
+    # it makes NO bridge/API/runspace call -- it only sets the status label.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Cert Summaries are deferred to SDK-18.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Certification Summaries are deferred to a future release.'
 }
 
 # --- Approvals -------------------------------------------------------------

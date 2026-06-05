@@ -44,7 +44,7 @@ the loop only authors it.
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | DONE |
 | SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | DONE |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | DONE |
-| SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | TODO |
+| SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | DEFERRED |
 | SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | TODO |
 
 Exit criteria for the loop: SDK-01..SDK-17 `DONE`, SDK-18 `DONE` or explicitly
@@ -378,7 +378,7 @@ Notes and GUI Testing Methods do not apply.
 
 ## SDK-18: Cert Summaries sub-tab (SCOPE DECISION)
 
-- **Status:** `TODO`
+- **Status:** `DEFERRED`
 - **Depends On:** SDK-11
 - **Size:** M
 
@@ -389,6 +389,24 @@ a "coming soon" note and set Status `DEFERRED`.
 
 **Files:** `Gui/SdkTab.xaml`, `Modules/SP.Gui/SP.MainWindow.psm1`.
 **Accept:** either functional + tested, or cleanly disabled and documented.
+
+**Decision (round-18, FLAGGED FOR HUMAN RATIFICATION): DEFER.** Three blockers
+make SHIP unverifiable in the headless loop: (1) the campaign->certification combo
+cascade has no real backing -- `Get-SPGuiSdkCertifications` does not exist anywhere
+and SP.Api has no campaign-list function; (2) the mock has 0 ROLE/ACCESS_PROFILE
+access-summary fixtures (round-14 verified 0/81 seed ARIs carry `access.id`); (3)
+the W-08b interactive test for this sub-tab is unwritten and is outside the headless
+loop boundary. Cleanly disabled instead: the `Cert Summaries` TabItem header and all
+four structural x:Names (`CboSdkCertCampaign`, `CboSdkCertification`,
+`CboSdkAccessType`, `SdkCertSummaryGrid`) are preserved so WG-08-03/05 stay green;
+the three ComboBoxes and `BtnSdkRefreshSummaries` are `IsEnabled="False"`; the
+DataGrid is `Visibility="Collapsed"` (kept in the tree) under a visible
+`SdkCertSummaryComingSoon` overlay ("Coming in a future release.");
+`Invoke-SdkCertSummaryRefresh` stays a documented no-op that only sets the deferred
+status label (no bridge/API/runspace call). The SP.Sdk-layer tests
+(`Tests/SP.SdkCertSummaries.Tests.ps1` SDK-CERT-001..006) and the bridge functions
+remain untouched and passing. No W-08b authored for this sub-tab (SDK-19 should omit
+the Cert Summaries interactive steps).
 
 ---
 

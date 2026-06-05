@@ -178,22 +178,26 @@
                                VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0"/>
                     <ComboBox Grid.Column="1" x:Name="CboSdkCertCampaign"
                               VerticalAlignment="Center" Margin="0,0,12,0"
+                              IsEnabled="False"
                               ToolTip="Select a campaign to view certification summaries"/>
 
                     <TextBlock Grid.Column="2" Text="Certification:" Foreground="#E0E0E0"
                                VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0"/>
                     <ComboBox Grid.Column="3" x:Name="CboSdkCertification"
                               VerticalAlignment="Center" Margin="0,0,12,0"
+                              IsEnabled="False"
                               ToolTip="Select a certification reviewer to view identity summaries"/>
 
                     <TextBlock Grid.Column="4" Text="Access Type:" Foreground="#E0E0E0"
                                VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0"/>
                     <ComboBox Grid.Column="5" x:Name="CboSdkAccessType"
                               VerticalAlignment="Center" Margin="0,0,12,0"
+                              IsEnabled="False"
                               ToolTip="Filter by access type: Role, Access Profile, or Entitlement"/>
 
                     <Button Grid.Column="7" x:Name="BtnSdkRefreshSummaries" Content="Refresh"
                             Style="{StaticResource SecondaryButton}"
+                            IsEnabled="False"
                             ToolTip="Reload summaries for the selected certification"/>
                 </Grid>
 
@@ -234,9 +238,11 @@
                     </StackPanel>
                 </Border>
 
-                <!-- DataGrid -->
+                <!-- DataGrid (deferred per SDK-18: collapsed but kept in the visual
+                     tree so x:Name SdkCertSummaryGrid still resolves for tests). -->
                 <Border Grid.Row="2" Background="#2D2D44" CornerRadius="6"
-                        BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                        BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8"
+                        Visibility="Collapsed">
                     <DataGrid x:Name="SdkCertSummaryGrid"
                               AutoGenerateColumns="False"
                               Background="#2D2D44"
@@ -265,6 +271,21 @@
                             <DataGridTextColumn     Header="No Decision"   Binding="{Binding NoDecision}"   Width="110" IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                </Border>
+
+                <!-- Coming-soon overlay (SDK-18 DEFERRED): declared after the grid so
+                     it renders on top of the collapsed DataGrid in the same Grid.Row. -->
+                <Border Grid.Row="2" Background="#2D2D44" CornerRadius="6"
+                        BorderBrush="#3D3D5C" BorderThickness="1" Margin="0,0,0,8">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="Certification Summaries"
+                                   Foreground="#E0E0E0" FontSize="16" FontWeight="SemiBold"
+                                   TextAlignment="Center" Margin="0,0,0,8"/>
+                        <TextBlock x:Name="SdkCertSummaryComingSoon"
+                                   Text="Coming in a future release."
+                                   Foreground="#AAAACC" FontStyle="Italic" FontSize="13"
+                                   TextAlignment="Center"/>
+                    </StackPanel>
                 </Border>
 
                 <!-- Status -->
