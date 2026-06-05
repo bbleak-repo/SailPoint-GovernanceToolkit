@@ -404,8 +404,13 @@ function Invoke-Harness {
         # the captured stdout into $jsonl after the run (see below) so the existing
         # JSONL parser tallies real WG-08-01..10 counts rather than 0/0.
         'W-08'   { $psArgs += @('-ConfigPath', $settingsLocalPath) }
-        # W-08b needs NO case: its harness is absent (SDK-19) so Invoke-Harness
-        # returns SKIP before reaching here; psArgs simply gets no extra mapping.
+        # W-08b (SDK Features tab interactive, FlaUI). Authored by SDK-19 and now
+        # present, so Invoke-Harness no longer SKIPs it -- it needs the same
+        # parameter shape as W-03b/W-04: the mock-overlaid config, a phase-local
+        # JSONL sink + screenshot dir, and the mock URL. Without these it would
+        # default ConfigPath to the committed settings.json template (not the mock
+        # overlay) and write its JSONL outside the phase dir (reporting 0/0).
+        'W-08b'  { $psArgs += @('-ConfigPath', $settingsLocalPath, '-JsonlPath', $jsonl, '-ScreenshotDir', $shots, '-MockBaseUrl', $MockBaseUrl) }
     }
 
     Log "  $Name : starting ($($Spec.Description))" 'Cyan'

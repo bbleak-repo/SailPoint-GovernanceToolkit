@@ -2630,6 +2630,58 @@ function Invoke-GuiDeltaCertEscalation {
     $timer.Start()
 }
 
+function Wait-SPReportFileReady {
+    <#
+    .SYNOPSIS
+        Waits for a freshly-generated report file to be fully written before a
+        consumer (the default browser) is told to open it.
+    .DESCRIPTION
+        Report HTML is written by a background runspace. On some systems the file
+        is briefly present-but-not-readable -- the OS write-behind cache or an
+        anti-virus on-write scan can hold a lock for a moment after the path
+        exists -- so opening it immediately shows a blank or partial page. A bare
+        Test-Path is not enough. This polls until the file length is non-zero AND
+        stable across two consecutive reads AND it can be opened for shared read,
+        or until TimeoutMs elapses (caller then opens anyway, best-effort).
+
+        Runs on the UI thread, so the ceiling is deliberately low; for an
+        already-written report it returns after ~2 polls (~240ms), which is also
+        the small "settle" delay we want before handing the file to the browser.
+        Returns $true once ready, $false on timeout.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$TimeoutMs = 2500,
+        [int]$PollMs    = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $lastLen  = [long]-1
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $len = (Get-Item -LiteralPath $Path).Length
+                if ($len -gt 0 -and $len -eq $lastLen) {
+                    # Length stable across two polls -- confirm it actually opens.
+                    $fs = [System.IO.File]::Open(
+                        $Path,
+                        [System.IO.FileMode]::Open,
+                        [System.IO.FileAccess]::Read,
+                        [System.IO.FileShare]::ReadWrite)
+                    $fs.Close()
+                    return $true
+                }
+                $lastLen = $len
+            }
+        } catch {
+            # Still locked / mid-write -- keep polling until the deadline.
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+    return $false
+}
+
 function Invoke-GuiDeltaReport {
     <#
     .SYNOPSIS
@@ -2760,6 +2812,10 @@ function Invoke-GuiDeltaReport {
                         if ($result.Success -and $null -ne $result.Data -and
                             -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
                             (Test-Path $result.Data.HtmlPath)) {
+                            # Let the runspace-written file fully flush + unlock
+                            # before the browser opens it, otherwise it can render
+                            # a blank or partial page.
+                            Wait-SPReportFileReady -Path $result.Data.HtmlPath | Out-Null
                             Start-Process $result.Data.HtmlPath
                         }
                     }
