@@ -29,7 +29,7 @@ the loop only authors it.
 |---|----------|---------|------|---------|--------|
 | SDK-01 | CRITICAL | SP.SdkBridge.psm1 -- read functions (9) | M | none | DONE |
 | SDK-02 | CRITICAL | SP.SdkBridge.psm1 -- write dispatchers (5) | M | SDK-01 | DONE |
-| SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | TODO |
+| SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | DONE |
 | SDK-04 | HIGH | SP.Gui.psd1 -- register SP.SdkBridge + exports | S | SDK-01 | TODO |
 | SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | TODO |
 | SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | TODO |
@@ -98,7 +98,7 @@ unknown verb returns `Success=$false` with a clear error.
 
 ## SDK-03: Safety / What-If integration
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-02
 - **Size:** M
 

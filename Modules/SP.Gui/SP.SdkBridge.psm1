@@ -28,6 +28,98 @@
 
 Set-StrictMode -Version 1
 
+#region Safety Gate (private)
+
+function Test-SPGuiSdkSafetyGate {
+    <#
+    .SYNOPSIS
+        Private Safety-policy gate for the SDK-tab write dispatchers (SDK-03).
+    .DESCRIPTION
+        Pure/synchronous, never-throws Safety policy enforcement shared by the five
+        Invoke-SPGuiSdk*Action dispatchers. Reads the toolkit Safety config
+        defensively (Get-SPConfig in a try, PSObject guards, [bool]/[int] casts with
+        fail-safe defaults) and decides whether a write may proceed:
+
+          (a) AllowCompleteCampaign terminal gate (plan req 2). Terminal/destructive
+              verbs (passed with -IsTerminal) require Safety.AllowCompleteCampaign to
+              be $true. Default config = $false, so terminal verbs are BLOCKED unless
+              explicitly enabled. If the config cannot be read or has no Safety block,
+              the gate FAILS SAFE (terminal verbs blocked).
+
+          (b) MaxCampaignsPerRun bulk cap (plan req 4, never silently truncate). When
+              a dispatcher acts on a count (-ItemCount) above Safety.MaxCampaignsPerRun
+              (default 10), the gate BLOCKS and names the count + cap. The caller does
+              NOT truncate -- the whole action is refused.
+
+        RequireWhatIfOnProd (plan req 1) is NOT enforced here: the bridge runs in a
+        background STA runspace (plan WPF note 3) with NO UI thread, so it cannot show
+        the confirmation MessageBox. That interactive prompt is owned by the SDK-11 UI
+        click-handlers (mirroring SP.MainWindow.psm1 Invoke-GuiTestRun, which prompts
+        on the UI thread BEFORE spawning the runspace). The bridge gate is the
+        enforcement of record; the MessageBox is advisory UX layered on top. See
+        round-03.md (Plan disagreement).
+
+        PRIVATE: not added to Export-ModuleMember.
+    .OUTPUTS
+        @{ Allowed=$bool; Error=$string }  (Error is $null when Allowed)
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Action,
+
+        [Parameter()] [int]$ItemCount = 1,
+        [Parameter()] [switch]$IsTerminal,
+        [Parameter()] [switch]$IsBulk,
+        [Parameter()] [string]$CorrelationID
+    )
+
+    # Defensive Safety-config read (idiom from SP.DeltaCertRunner.psm1:1052-1059):
+    # Get-SPConfig in a try; guard every hop; cast; fail safe to blocked defaults.
+    $allowComplete = $false
+    $maxPerRun = 10
+    try {
+        $config = Get-SPConfig
+        if ($null -ne $config -and
+            $null -ne $config.PSObject.Properties['Safety'] -and
+            $null -ne $config.Safety) {
+            if ($config.Safety.PSObject.Properties.Name -contains 'AllowCompleteCampaign') {
+                $allowComplete = [bool]$config.Safety.AllowCompleteCampaign
+            }
+            if ($config.Safety.PSObject.Properties.Name -contains 'MaxCampaignsPerRun') {
+                $maxPerRun = [int]$config.Safety.MaxCampaignsPerRun
+            }
+        }
+    }
+    catch {
+        # Fail safe: leave $allowComplete=$false (terminal verbs blocked) and keep the
+        # conservative default cap. Never throw out of the gate.
+        Write-SPLog -Message "Test-SPGuiSdkSafetyGate: config read failed, failing safe (blocked): $($_.Exception.Message)" `
+            -Severity WARN -Component 'SP.SdkBridge' -Action 'Test-SPGuiSdkSafetyGate' -CorrelationID $CorrelationID
+    }
+
+    # (b) Bulk cap -- never silently truncate. Refuse the whole action.
+    if ($IsBulk -and $ItemCount -gt $maxPerRun) {
+        return @{
+            Allowed = $false
+            Error   = "blocked by Safety: $ItemCount items exceeds Safety.MaxCampaignsPerRun ($maxPerRun)"
+        }
+    }
+
+    # (a) Terminal/destructive gate -- requires AllowCompleteCampaign.
+    if ($IsTerminal -and -not $allowComplete) {
+        return @{
+            Allowed = $false
+            Error   = "blocked by Safety: action '$Action' is terminal/destructive and Safety.AllowCompleteCampaign is false"
+        }
+    }
+
+    return @{ Allowed = $true; Error = $null }
+}
+
+#endregion
+
 #region Campaign Templates
 
 function Get-SPGuiSdkCampaignTemplates {
@@ -703,7 +795,9 @@ function Invoke-SPGuiSdkTemplateAction {
     }
 
     try {
-        # SDK-03 inserts the Safety / What-If gate (RequireWhatIfOnProd, bulk caps) here.
+        # SDK-03 Safety / What-If gate: Template Delete and RemoveSchedule are
+        # terminal/destructive (gated by Safety.AllowCompleteCampaign). Create /
+        # Update / SetSchedule are non-terminal and pass through ungated.
 
         switch ($Action) {
             'Create' {
@@ -725,6 +819,8 @@ function Invoke-SPGuiSdkTemplateAction {
                 if ([string]::IsNullOrWhiteSpace($TemplateId)) {
                     return @{ Success = $false; Data = @(); Error = 'Action Delete requires -TemplateId' }
                 }
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -ItemCount 1 -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $result = Remove-SPSdkCampaignTemplate -TemplateId $TemplateId -CorrelationID $CorrelationID
             }
             'SetSchedule' {
@@ -740,6 +836,8 @@ function Invoke-SPGuiSdkTemplateAction {
                 if ([string]::IsNullOrWhiteSpace($TemplateId)) {
                     return @{ Success = $false; Data = @(); Error = 'Action RemoveSchedule requires -TemplateId' }
                 }
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -ItemCount 1 -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $result = Remove-SPSdkTemplateSchedule -TemplateId $TemplateId -CorrelationID $CorrelationID
             }
             default {
@@ -800,7 +898,12 @@ function Invoke-SPGuiSdkApprovalAction {
     }
 
     try {
-        # SDK-03 inserts the Safety / What-If gate here.
+        # SDK-03 Safety / What-If gate: approval verbs (Approve/Deny/Forward) are
+        # routing-only here. Per the SDK-03 Accept they are NOT AllowCompleteCampaign-
+        # gated (the gate fires for the work-item/template/filter terminal verbs).
+        # The interactive RequireWhatIfOnProd confirmation for Deny/Forward is owned by
+        # the SDK-11 UI click-handlers (no UI thread in this background runspace). See
+        # round-03.md (Plan disagreement).
 
         switch ($Action) {
             'Approve' {
@@ -884,10 +987,14 @@ function Invoke-SPGuiSdkWorkItemAction {
     }
 
     try {
-        # SDK-03 inserts the Safety / What-If gate here.
+        # SDK-03 Safety / What-If gate: Complete / BulkApprove / BulkReject are
+        # terminal/destructive (gated by Safety.AllowCompleteCampaign). Forward is a
+        # non-terminal hand-off and passes through ungated.
 
         switch ($Action) {
             'Complete' {
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -ItemCount 1 -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $params = @{ WorkItemId = $WorkItemId; CorrelationID = $CorrelationID }
                 if (-not [string]::IsNullOrWhiteSpace($Body)) { $params['Body'] = $Body }
                 $result = Complete-SPSdkWorkItem @params
@@ -909,9 +1016,13 @@ function Invoke-SPGuiSdkWorkItemAction {
                 $result = Forward-SPSdkWorkItem @params
             }
             'BulkApprove' {
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -ItemCount 1 -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $result = Invoke-SPSdkBulkApproveWorkItem -WorkItemId $WorkItemId -CorrelationID $CorrelationID
             }
             'BulkReject' {
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -ItemCount 1 -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $result = Invoke-SPSdkBulkRejectWorkItem -WorkItemId $WorkItemId -CorrelationID $CorrelationID
             }
             default {
@@ -980,7 +1091,12 @@ function Invoke-SPGuiSdkWorkflowAction {
     }
 
     try {
-        # SDK-03 inserts the Safety / What-If gate here.
+        # SDK-03 Safety / What-If gate: workflow verbs (Toggle/Test/CreateOOO) are
+        # routing-only here. Per the SDK-03 Accept they are NOT AllowCompleteCampaign-
+        # gated (the gate fires for the work-item/template/filter terminal verbs). The
+        # interactive RequireWhatIfOnProd confirmation for disable/Test/CreateOOO is
+        # owned by the SDK-11 UI click-handlers (no UI thread in this background
+        # runspace). See round-03.md (Plan disagreement).
 
         switch ($Action) {
             'Toggle' {
@@ -1076,7 +1192,9 @@ function Invoke-SPGuiSdkFilterAction {
     }
 
     try {
-        # SDK-03 inserts the Safety / What-If gate here.
+        # SDK-03 Safety / What-If gate: Delete is terminal/destructive AND bulk-capable
+        # -- gated by Safety.AllowCompleteCampaign AND Safety.MaxCampaignsPerRun (never
+        # silently truncates). Create / Update are non-terminal and pass through ungated.
 
         switch ($Action) {
             'Create' {
@@ -1098,6 +1216,8 @@ function Invoke-SPGuiSdkFilterAction {
                 if ($null -eq $FilterId -or @($FilterId).Count -eq 0 -or [string]::IsNullOrWhiteSpace(@($FilterId)[0])) {
                     return @{ Success = $false; Data = @(); Error = 'Action Delete requires -FilterId' }
                 }
+                $gate = Test-SPGuiSdkSafetyGate -Action $Action -IsTerminal -IsBulk -ItemCount @($FilterId).Count -CorrelationID $CorrelationID
+                if (-not $gate.Allowed) { return @{ Success = $false; Data = @(); Error = $gate.Error } }
                 $result = Remove-SPSdkCampaignFilter -FilterId $FilterId -CorrelationID $CorrelationID
             }
             default {
