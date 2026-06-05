@@ -31,7 +31,7 @@ the loop only authors it.
 | SDK-02 | CRITICAL | SP.SdkBridge.psm1 -- write dispatchers (5) | M | SDK-01 | DONE |
 | SDK-03 | CRITICAL | Safety/What-If integration in write dispatchers | M | SDK-02 | DONE |
 | SDK-04 | HIGH | SP.Gui.psd1 -- register SP.SdkBridge + exports | S | SDK-01 | DONE |
-| SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | TODO |
+| SDK-05 | HIGH | Import-TestModules.ps1 -- load bridge for tests | S | SDK-01 | DONE |
 | SDK-06 | HIGH | Tests/SP.SdkBridge.Tests.ps1 (SDK-BR-001..007 + Safety) | M | SDK-02,03,05 | TODO |
 | SDK-07 | HIGH | SdkTab.xaml -- nested 6 sub-tabs + controls + tooltips | L | none | TODO |
 | SDK-08 | HIGH | MainWindow.xaml -- add SDK Features TabItem (before Settings) | M | SDK-07 | TODO |
@@ -132,7 +132,7 @@ names to `FunctionsToExport` in `Modules/SP.Gui/SP.Gui.psd1`.
 
 ## SDK-05: Import-TestModules.ps1 -- bridge loadable in tests
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-01
 - **Size:** S
 
