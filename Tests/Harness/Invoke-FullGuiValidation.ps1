@@ -22,6 +22,8 @@
         W-05    Tests\Harness\Test-W05-CliScripts.ps1            (Scripts/* against mock)
         W-06    Tests\Harness\Test-W06-Playwright.ps1            (visual capture; requires Python)
         W-07    Tests\Harness\Test-W07-ReportContent.ps1         (HTML content; consumes W-03b output)
+        W-08    Tests\Harness\Test-W08-SdkTabStructure.ps1       (SDK tab headless structure; STA, no mock)
+        W-08b   Tests\Harness\Test-W08b-SdkTabInteractive.ps1    (SDK tab interactive FlaUI; DEFERRED -- SKIPs until SDK-19 authors it)
 
 .PARAMETER MockServerPath
     Directory containing Start-MockServer.ps1. Defaults to
@@ -40,7 +42,7 @@
 
 .PARAMETER HarnessFilter
     Subset of phases to run, by short name (smoke, W-02b, W-03b, W-04, W-05,
-    W-06, W-07). If omitted, all 7 phases run.
+    W-06, W-07, W-08, W-08b). If omitted, all phases run.
 
 .PARAMETER ResultsDir
     Directory to write per-phase results into. Defaults to
@@ -156,6 +158,20 @@ $allPhases = [ordered]@{
         NeedsSta  = $false
         NeedsConfigPath = $false
         Description = 'HTML report deep content validation'
+    }
+    'W-08' = @{
+        Script    = 'Test-W08-SdkTabStructure.ps1'
+        NeedsMock = $false  # pure XAML parse; harness self-guards for STA, never touches the mock
+        NeedsSta  = $true   # WPF note 1: harness exits 2 if not STA
+        NeedsConfigPath = $true
+        Description = 'SDK Features tab headless structure (XAML parse + control presence)'
+    }
+    'W-08b' = @{
+        Script    = 'Test-W08b-SdkTabInteractive.ps1'  # authored by SDK-19; absent until then -> auto-SKIP
+        NeedsMock = $true
+        NeedsSta  = $true
+        NeedsConfigPath = $true
+        Description = 'SDK Features tab interactive (FlaUI; DEFERRED until live Windows GUI session)'
     }
 }
 
@@ -380,6 +396,16 @@ function Invoke-Harness {
         'W-05'   { $psArgs += @('-JsonlPath', $jsonl, '-LogDir', $phaseDir,    '-MockBaseUrl', $MockBaseUrl) }
         'W-06'   { $psArgs += @('-JsonlPath', $jsonl, '-ScreenshotDir', $shots) }
         'W-07'   { $psArgs += @('-JsonlPath', $jsonl) }
+        # W-08 (Test-W08-SdkTabStructure.ps1) accepts ONLY -ConfigPath and emits
+        # its JSONL to STDOUT (one line per WG-08-NN + a final {summary} line),
+        # NOT to a -JsonlPath file like every other phase. Do NOT pass
+        # -JsonlPath/-ScreenshotDir here -- the harness has no such params and runs
+        # with ErrorActionPreference=Stop, so it would reject them. Instead, bridge
+        # the captured stdout into $jsonl after the run (see below) so the existing
+        # JSONL parser tallies real WG-08-01..10 counts rather than 0/0.
+        'W-08'   { $psArgs += @('-ConfigPath', $settingsLocalPath) }
+        # W-08b needs NO case: its harness is absent (SDK-19) so Invoke-Harness
+        # returns SKIP before reaching here; psArgs simply gets no extra mapping.
     }
 
     Log "  $Name : starting ($($Spec.Description))" 'Cyan'
@@ -407,6 +433,14 @@ function Invoke-Harness {
     [System.IO.File]::WriteAllText($stdout, $outTask.Result)
     [System.IO.File]::WriteAllText($stderr, $errTask.Result)
     $exit = $proc.ExitCode
+
+    # W-08 bridge: Test-W08-SdkTabStructure.ps1 writes its JSONL to stdout (it has
+    # no -JsonlPath param). Copy the captured stdout into $jsonl so the shared
+    # parser below tallies the WG-08-01..10 + summary lines -- otherwise W-08 would
+    # report 0 pass / 0 fail (result still correct via exit code, but counts lost).
+    if ($Name -eq 'W-08') {
+        [System.IO.File]::WriteAllText($jsonl, $outTask.Result)
+    }
 
     # Parse JSONL for pass/fail summary
     $pass = 0; $fail = 0; $total = 0

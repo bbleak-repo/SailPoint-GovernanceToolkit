@@ -42,7 +42,7 @@ the loop only authors it.
 | SDK-13 | HIGH | Show-SPDashboard.ps1 -- add SP.Sdk + Initialize-SdkTab call | S | SDK-10 | DONE |
 | SDK-14 | MEDIUM | Mock parity audit: every bridge read has seed/handler | M | SDK-01 | DONE |
 | SDK-15 | MEDIUM | Test-W08-SdkTabStructure.ps1 (headless, WG-08-01..10) | M | SDK-08,09 | DONE |
-| SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | TODO |
+| SDK-16 | MEDIUM | Invoke-FullGuiValidation.ps1 -- register W-08 + W-08b | S | SDK-15 | DONE |
 | SDK-17 | MEDIUM | OutputMode/Both consistency: CampaignSearch (or relax test) | S | none | TODO |
 | SDK-18 | LOW | Cert Summaries sub-tab (SCOPE DECISION -- may defer to phase 2) | M | SDK-11 | TODO |
 | SDK-19 | DEFERRED | Test-W08b-SdkTabInteractive.ps1 -- AUTHOR only; run live | L | SDK-15,16 | TODO |
@@ -330,7 +330,7 @@ OS. Pattern: `Test-W03-AuditTabStructure.ps1`.
 
 ## SDK-16: Register W-08 with the orchestrator
 
-- **Status:** `TODO`
+- **Status:** `DONE`
 - **Depends On:** SDK-15
 - **Size:** S
 
