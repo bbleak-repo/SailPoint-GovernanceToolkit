@@ -3962,6 +3962,169 @@ function Set-SdkSubTabStatus {
     }
 }
 
+function Invoke-SdkGridRefresh {
+    <#
+    .SYNOPSIS
+        Shared background-runspace data loader for the SDK sub-tab grids (SDK-11).
+    .DESCRIPTION
+        DRY engine behind the 5 data-loading refresh helpers (Templates,
+        Approvals, Work Items, Workflows, Filters). Mirrors the runspace skeleton
+        of Invoke-GuiAuditRun (WPF note 3): spins a background STA runspace,
+        re-imports the modules the runspace needs (it starts empty -- SP.Core,
+        SP.Api, SP.Sdk, SP.Gui; SP.Gui brings SP.SdkBridge as a nested module so
+        Get-SPGuiSdk* resolve here), calls the named bridge read function, then
+        marshals the @{Success;Data;...} result back to the UI thread via
+        $MainWindow.Dispatcher.
+
+        NEVER touches a control or ObservableCollection from the runspace thread:
+        the .Clear()/.Add() and all label/badge writes happen inside the
+        Dispatcher.Invoke([System.Action]{...}) block, and the completion timer
+        Tick re-enters module scope via `& $module {...}.GetNewClosure()` (WPF
+        note 2) so private helpers and $script:* resolve at fire-time.
+
+        Re-entrancy is guarded by $script:IsSdkRunning the way Invoke-GuiAuditRun
+        uses $script:IsAuditRunning.
+    .PARAMETER OnLoaded
+        Optional scriptblock run INSIDE the Dispatcher block AFTER rows are
+        marshalled. Receives ($result, $TabContent) and is invoked with module
+        scope re-entered (& $module {...}) so it can update badges / summary
+        panels / apply the work-item open-only filter via module-private helpers.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$BridgeFunction,
+        [hashtable]$BridgeArgs = @{},
+        [Parameter(Mandatory)][System.Collections.ObjectModel.ObservableCollection[PSObject]]$DataSource,
+        [Parameter(Mandatory)][string]$StatusLabelName,
+        [string]$LoadingMessage,
+        [scriptblock]$OnLoaded
+    )
+
+    if ($script:IsSdkRunning) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message 'An SDK data load is already in progress. Please wait...'
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($LoadingMessage)) {
+        $LoadingMessage = 'Loading...'
+    }
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $LoadingMessage
+
+    $script:IsSdkRunning = $true
+
+    # Create background runspace (STA) -- mirror Invoke-GuiAuditRun.
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    # Share inputs explicitly (PS 5.1: no closures across runspace boundaries).
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('BridgeFunction', $BridgeFunction)
+    $runspace.SessionStateProxy.SetVariable('BridgeArgs',     $BridgeArgs)
+    $runspace.SessionStateProxy.SetVariable('DataSource',     $DataSource)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # The runspace starts empty (WPF note 3): re-import every module the
+        # bridge call needs. SP.Sdk is imported explicitly because it is not yet
+        # in the dashboard module chain (that wiring is SDK-13). SP.Gui brings
+        # SP.SdkBridge as a nested module so Get-SPGuiSdk* resolve here.
+        $coreModule = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule  = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $sdkModule  = Join-Path $ToolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
+        $guiModule  = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $sdkModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        # Call the bridge read function (returns @{Success;Data;...}).
+        $bridgeResult = & $BridgeFunction @BridgeArgs
+
+        # Marshal back to the UI thread -- this is the ONLY place the bound
+        # ObservableCollection and any control are touched.
+        $dispatcher       = $MainWindow.Dispatcher
+        $capturedResult   = $bridgeResult
+        $capturedSource   = $DataSource
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedResult -and $capturedResult.Success) {
+                $capturedSource.Clear()
+                foreach ($row in @($capturedResult.Data)) {
+                    $capturedSource.Add($row)
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $bridgeResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms), mirror Invoke-GuiAuditRun.
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedStatus   = $StatusLabelName
+    $capturedOnLoaded = $OnLoaded
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $statusName, $onLoaded)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $result = $null
+                try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $errMsg"
+                    Set-StatusMessage -Message "SDK load failed: $errMsg" -IsError
+                }
+                elseif ($null -ne $result -and -not $result.Success) {
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $($result.Error)"
+                    Set-StatusMessage -Message "SDK load failed: $($result.Error)" -IsError
+                }
+                else {
+                    $count = if ($null -ne $result) { @($result.Data).Count } else { 0 }
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "$count item(s) loaded."
+
+                    # Post-marshal hook (badges / summary panel / row filter).
+                    if ($null -ne $onLoaded -and $null -ne $result -and $result.Success) {
+                        & $onLoaded $result $tab
+                    }
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsSdkRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnLoaded
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
 function Invoke-SdkSubTabLoad {
     <#
     .SYNOPSIS
@@ -3984,8 +4147,14 @@ function Invoke-SdkSubTabLoad {
 
 # --- Templates -------------------------------------------------------------
 function Invoke-SdkTemplateRefresh {
+    # SDK-11: background-runspace load of campaign templates into the grid.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCampaignTemplates' `
+        -DataSource      $script:SdkTemplateDataSource `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -LoadingMessage  'Loading templates...'
 }
 function Invoke-SdkTemplateNew {
     [CmdletBinding()] param($TabContent)
@@ -4006,14 +4175,56 @@ function Invoke-SdkTemplateDelete {
 
 # --- Cert Summaries --------------------------------------------------------
 function Invoke-SdkCertSummaryRefresh {
+    # Cert Summaries is NOT one of SDK-11's 5 data sub-tabs -- it is scope-gated
+    # to SDK-18 (ship-vs-defer). Left as a stub on purpose.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Cert Summaries are deferred to SDK-18.'
 }
 
 # --- Approvals -------------------------------------------------------------
 function Invoke-SdkApprovalRefresh {
+    # SDK-11: load pending/completed approvals; rebuild the summary badges.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+
+    # Read the Pending/Completed radio on the UI thread BEFORE the runspace.
+    $rbCompleted = Find-Control -Parent $TabContent -Name 'RbSdkCompleted'
+    $state = if ($null -ne $rbCompleted -and $rbCompleted.IsChecked -eq $true) { 'Completed' } else { 'Pending' }
+
+    $onLoaded = {
+        param($result, $tab)
+
+        # Derive counts: when Completed is shown the rows carry a State field
+        # (APPROVED/REJECTED/...); when Pending is shown all rows are pending.
+        $pending  = 0
+        $approved = 0
+        $rejected = 0
+
+        foreach ($row in @($result.Data)) {
+            $rowState = if ($null -ne $row.State) { ([string]$row.State).ToUpperInvariant() } else { '' }
+            switch -Wildcard ($rowState) {
+                '*APPROV*' { $approved++ }
+                '*REJECT*' { $rejected++ }
+                '*DENI*'   { $rejected++ }
+                default    { $pending++ }
+            }
+        }
+
+        $badgePending  = Find-Control -Parent $tab -Name 'SdkApprovalBadgePending'
+        $badgeApproved = Find-Control -Parent $tab -Name 'SdkApprovalBadgeApproved'
+        $badgeRejected = Find-Control -Parent $tab -Name 'SdkApprovalBadgeRejected'
+        if ($null -ne $badgePending)  { $badgePending.Text  = [string]$pending }
+        if ($null -ne $badgeApproved) { $badgeApproved.Text = [string]$approved }
+        if ($null -ne $badgeRejected) { $badgeRejected.Text = [string]$rejected }
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkApprovals' `
+        -BridgeArgs      @{ State = $state } `
+        -DataSource      $script:SdkApprovalDataSource `
+        -StatusLabelName 'SdkApprovalStatusLabel' `
+        -LoadingMessage  "Loading $state approvals..." `
+        -OnLoaded        $onLoaded
 }
 function Invoke-SdkApprovalApprove {
     [CmdletBinding()] param($TabContent)
@@ -4030,8 +4241,50 @@ function Invoke-SdkApprovalForward {
 
 # --- Work Items ------------------------------------------------------------
 function Invoke-SdkWorkItemRefresh {
+    # SDK-11: load work items + open/completed/total badges; open-only filter
+    # is applied from the full Data set in OnLoaded so the toggle never re-hits
+    # the API.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+
+    # OnLoaded runs in module scope (the timer Tick re-enters via
+    # & $capturedModule), so $script:SdkWorkItemDataSource resolves and the
+    # checkbox can be re-read on the UI thread without another API call.
+    $onLoaded = {
+        param($result, $tab)
+
+        # Badges from the bridge Summary (open/completed/total).
+        $summary = $result.Summary
+        $badgeOpen      = Find-Control -Parent $tab -Name 'SdkWiBadgeOpen'
+        $badgeCompleted = Find-Control -Parent $tab -Name 'SdkWiBadgeCompleted'
+        $badgeTotal     = Find-Control -Parent $tab -Name 'SdkWiBadgeTotal'
+        if ($null -ne $summary) {
+            if ($null -ne $badgeOpen)      { $badgeOpen.Text      = [string]$summary.Open }
+            if ($null -ne $badgeCompleted) { $badgeCompleted.Text = [string]$summary.Completed }
+            if ($null -ne $badgeTotal)     { $badgeTotal.Text     = [string]$summary.Total }
+        }
+
+        # Apply the open-only filter from the full Data set when Show Completed
+        # is unchecked. Re-read the toggle here (module scope, UI thread) so the
+        # display matches the current checkbox without another API call.
+        $chk = Find-Control -Parent $tab -Name 'ChkSdkShowCompleted'
+        $showCompleted = ($null -ne $chk -and $chk.IsChecked -eq $true)
+        if (-not $showCompleted) {
+            $ds = $script:SdkWorkItemDataSource
+            $openRows = @($result.Data | Where-Object {
+                ([string]$_.State).ToUpperInvariant() -notlike '*COMPLET*'
+            })
+            $ds.Clear()
+            foreach ($row in $openRows) { $ds.Add($row) }
+        }
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkItems' `
+        -DataSource      $script:SdkWorkItemDataSource `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -LoadingMessage  'Loading work items...' `
+        -OnLoaded        $onLoaded
 }
 function Invoke-SdkWorkItemComplete {
     [CmdletBinding()] param($TabContent)
@@ -4048,8 +4301,15 @@ function Invoke-SdkWorkItemBulkApprove {
 
 # --- Workflows -------------------------------------------------------------
 function Invoke-SdkWorkflowRefresh {
+    # SDK-11: load workflows into the grid. Executions are loaded by the
+    # "View Executions" action button (SDK-12), not auto-loaded here.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkflows' `
+        -DataSource      $script:SdkWorkflowDataSource `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -LoadingMessage  'Loading workflows...'
 }
 function Invoke-SdkWorkflowToggleEnabled {
     [CmdletBinding()] param($TabContent)
@@ -4070,8 +4330,23 @@ function Invoke-SdkWorkflowCreateOOO {
 
 # --- Filters ---------------------------------------------------------------
 function Invoke-SdkFilterRefresh {
+    # SDK-11: load campaign filters. NOTE: ChkSdkIncludeSystem is presently a
+    # no-op at the bridge layer (Get-SPGuiSdkCampaignFilters defaults to
+    # include-all -- see SP.SdkBridge round-01 disagreement). The checkbox is
+    # still read and forwarded so real narrowing is a single bridge follow-up.
     [CmdletBinding()] param($TabContent)
-    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Loading deferred to SDK-11 (runspace data load not yet wired).'
+
+    # Read Include-System on the UI thread BEFORE the runspace.
+    $chkIncludeSystem = Find-Control -Parent $TabContent -Name 'ChkSdkIncludeSystem'
+    $includeSystem    = ($null -ne $chkIncludeSystem -and $chkIncludeSystem.IsChecked -eq $true)
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCampaignFilters' `
+        -BridgeArgs      @{ IncludeSystem = $includeSystem } `
+        -DataSource      $script:SdkFilterDataSource `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -LoadingMessage  'Loading filters...'
 }
 function Invoke-SdkFilterNew {
     [CmdletBinding()] param($TabContent)
