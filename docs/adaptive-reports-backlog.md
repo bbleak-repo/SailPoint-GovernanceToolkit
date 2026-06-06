@@ -46,7 +46,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
 | AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | DONE |
-| AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | TODO |
+| AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | DONE |
 
 Exit criteria: AR-01..AR-18 + AR-20 `DONE`; AR-19 `AUTHORED`. Full Pester suite
 green (current baseline **1068**, plus new adapter/component/report/CLI tests);
@@ -324,7 +324,7 @@ emails sent); upper-leadership exec rollup + per-band reports generated; existin
 `Invoke-SPReportDistribution.ps1` untouched.
 
 ## AR-22: Leadership-distribution mode tests
-- **Status:** `TODO` · **Depends:** AR-21 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-21 · **Size:** M
 **Goal:** Pester/AST: the mode is WhatIf-by-default (mock `Send-SPReport`, assert
 Action='Logged'/no send unless -SendReports + Smtp.Enabled); `-PreviewOnly` calls
 the preview and exits without sending; CLI-005 (read-only, no SupportsShouldProcess)
