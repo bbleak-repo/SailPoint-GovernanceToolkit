@@ -81,7 +81,9 @@ EXIT=0
 Pass criteria met: step 1 = PARSE-OK; step 3 = Failed 0 (LA-01..LA-04 band/attribution/rollup/orphan all green); step 4 = Failed 0 (no regression in LR-01/LR-02/LR-03/OC-06 etc.). No dashboard/FlaUI/W-08b interactive gate launched. Full suite deferred to Finalize.
 
 **Commit**
-- `9c7dd15` -- test(audit): add leadership band attribution + org-chain rollup correctness tests (T-03)
+- `5e8d8ac` -- test(audit): add leadership band attribution + org-chain rollup correctness tests (T-03)
+  (Round-05 doc-accuracy fix: corrected the recorded hash from the pre-amend `9c7dd15` to the actual
+  `5e8d8ac` reported by `git log -- round-03-t-03.md`.)
 
 **Status**
 - DONE

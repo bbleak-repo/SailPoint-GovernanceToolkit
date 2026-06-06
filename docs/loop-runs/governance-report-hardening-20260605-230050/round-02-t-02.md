@@ -83,9 +83,11 @@ PARSE OK (no errors)
 Did NOT launch the dashboard / FlaUI / W-08b (human-run gates).
 
 ## Commit
-`6e0c10c` -- test(reports): governance content-correctness for B03/B04/B05/B06/B10 on synthetic truth
+`c608f78` -- test(reports): governance content-correctness for B03/B04/B05/B06/B10 on synthetic truth
 (Note: this record was committed in the same commit; an --amend updated the recorded hash, so the
-final SHA of THIS commit as resolved by `git log -1` supersedes the literal value above if they differ.)
+final SHA of THIS commit as resolved by `git log -1` supersedes the literal value above if they differ.
+Round-05 doc-accuracy fix: corrected the recorded hash from the pre-amend `6e0c10c` to the actual
+`c608f78` reported by `git log -- round-02-t-02.md`.)
 
 ## Status
 DONE

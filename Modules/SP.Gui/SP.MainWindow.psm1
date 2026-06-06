@@ -70,6 +70,12 @@ $script:SdkFilterDataSource         = [System.Collections.ObjectModel.Observable
 $script:SdkCertCascadeBusy           = $false
 $script:SdkCertLoadedCampaign        = $null
 $script:IsSdkRunning                 = $false
+# Round-05 T-01 fix: identity-keyed snapshot of each SDK sub-tab button's
+# IsEnabled at the moment Set-SdkSubTabButtonsEnabled disables it for a load, so
+# the matching re-enable restores the prior state instead of unconditionally
+# forcing IsEnabled=$true (which would wrongly enable design-disabled controls
+# such as BtnSdkRefreshSummaries, IsEnabled="False" in SdkTab.xaml per SDK-18).
+$script:SdkButtonEnabledSnapshot     = $null
 # Cached checkbox reference set by Initialize-SdkTab so OnLoaded closures can
 # read IsChecked without a FindName call (avoids namescope resolution issues
 # when the dashboard is driven by a cross-process automation tool).
@@ -4469,6 +4475,21 @@ function Set-SdkSubTabButtonsEnabled {
         UI thread (mirrors Set-SdkSubTabStatus): the initial disable runs
         synchronously in the button-click handler, and the re-enable runs inside the
         DispatcherTimer Add_Tick body -- both on the dispatcher (UI) thread.
+
+        ADDITIVE / behaviour-preserving (round-05 fix): the re-enable pass MUST NOT
+        flip a control that was already disabled BEFORE the load to clickable. Some
+        controls are intentionally disabled by design (e.g. BtnSdkRefreshSummaries +
+        the Cert-Summaries combos are IsEnabled="False" in SdkTab.xaml per SDK-18,
+        because that deferred sub-tab is still collapsed). Unconditionally setting
+        IsEnabled=$true on re-enable would silently enable that deferred button while
+        its driving combos stay disabled -- a regression and an inconsistent state.
+
+        To avoid that we SNAPSHOT each button's IsEnabled at the moment of disable
+        (-Enabled $false) into $script:SdkButtonEnabledSnapshot, keyed by the control
+        instance, and on re-enable (-Enabled $true) restore ONLY the prior value
+        (default $true when no snapshot exists, preserving legacy behaviour for any
+        control that was enabled going in). A control that was disabled going in
+        stays disabled coming out.
     #>
     [CmdletBinding()]
     param(
@@ -4477,6 +4498,15 @@ function Set-SdkSubTabButtonsEnabled {
     )
 
     if ($null -eq $TabContent) { return }
+
+    if ($null -eq $script:SdkButtonEnabledSnapshot) {
+        # Identity-keyed snapshot map. PS 5.1 / .NET Framework 4.8 has no
+        # ReferenceEqualityComparer, so we key by the object's identity hash
+        # (RuntimeHelpers.GetHashCode -- stable for the object's lifetime,
+        # independent of any overridden GetHashCode/Equals) and store the live
+        # reference alongside the remembered bool to verify identity on read.
+        $script:SdkButtonEnabledSnapshot = @{}
+    }
 
     $names = @(
         'BtnSdkRefreshTemplates','BtnSdkNewTemplate','BtnSdkEditSchedule','BtnSdkRemoveSchedule','BtnSdkDeleteTemplate',
@@ -4488,7 +4518,38 @@ function Set-SdkSubTabButtonsEnabled {
     )
     foreach ($n in $names) {
         $btn = Find-Control -Parent $TabContent -Name $n
-        if ($null -ne $btn) { $btn.IsEnabled = $Enabled }
+        if ($null -eq $btn) { continue }
+
+        $key = [System.Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($btn)
+
+        if (-not $Enabled) {
+            # Disabling for a load -- remember the control's current state so the
+            # matching re-enable restores it exactly (a default-disabled control
+            # is recorded as $false and therefore stays disabled afterwards).
+            # Re-entrancy-safe: a NESTED disable (e.g. an action whose success
+            # chains a grid refresh that disables again before the action's finally
+            # runs) must NOT overwrite an existing snapshot with the already-forced
+            # $false state -- keep the ORIGINAL pre-disable value.
+            $existing = $script:SdkButtonEnabledSnapshot[$key]
+            if ($null -eq $existing -or -not [object]::ReferenceEquals($existing.Control, $btn)) {
+                $script:SdkButtonEnabledSnapshot[$key] = `
+                    [pscustomobject]@{ Control = $btn; Prior = [bool]$btn.IsEnabled }
+            }
+            $btn.IsEnabled = $false
+        }
+        else {
+            # Re-enabling after a load -- restore the snapshotted prior value.
+            # Default to $true (legacy behaviour) when no snapshot was taken, so a
+            # control we never disabled is never wrongly forced off. Verify object
+            # identity (ReferenceEquals) to be safe against any hash collision.
+            $prior = $true
+            $snap  = $script:SdkButtonEnabledSnapshot[$key]
+            if ($null -ne $snap -and [object]::ReferenceEquals($snap.Control, $btn)) {
+                $prior = $snap.Prior
+                [void]$script:SdkButtonEnabledSnapshot.Remove($key)
+            }
+            $btn.IsEnabled = $prior
+        }
     }
 }
 
@@ -4820,6 +4881,15 @@ function Invoke-SdkActionRun {
 
             $t.Stop()
 
+            # Round-05 T-01 fix: tracks whether the success-path $onSuccess started
+            # a CHAINED refresh (Invoke-SdkGridRefresh) that re-took the single-load
+            # guard + re-disabled the buttons for its OWN background load. When it
+            # has, this action's finally must NOT re-enable the buttons or clear the
+            # guard -- doing so would clobber the chained refresh (a disable->enable
+            # ->enable flicker and a window where SDK buttons are clickable mid-load).
+            # The chained refresh owns and will release that state in its own Tick.
+            $chainedRefreshOwnsState = $false
+
             try {
                 $result = $null
                 try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
@@ -4843,7 +4913,13 @@ function Invoke-SdkActionRun {
                     # module scope so $script:* and private helpers resolve, and
                     # the IsSdkRunning guard is cleared first so the refresh runs).
                     $script:IsSdkRunning = $false
-                    if ($null -ne $onSuccess) { & $onSuccess $tab }
+                    if ($null -ne $onSuccess) {
+                        & $onSuccess $tab
+                        # If the chained refresh successfully started, it set the
+                        # guard back to $true and re-disabled the buttons. Detect
+                        # that and hand ownership over to it.
+                        if ($script:IsSdkRunning) { $chainedRefreshOwnsState = $true }
+                    }
                 }
 
                 try {
@@ -4852,8 +4928,12 @@ function Invoke-SdkActionRun {
                 } catch { }
             }
             finally {
-                $script:IsSdkRunning = $false
-                Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
+                # Skip the re-enable / guard-clear when a chained refresh has taken
+                # ownership -- it will release them in its own completion Tick.
+                if (-not $chainedRefreshOwnsState) {
+                    $script:IsSdkRunning = $false
+                    Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
+                }
             }
         } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnSuccess
     }.GetNewClosure())
