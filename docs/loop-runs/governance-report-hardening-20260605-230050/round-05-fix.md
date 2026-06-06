@@ -121,7 +121,8 @@ Passed: 1158  Failed: 0  Skipped: 0  Total: 1158
 Did NOT launch the dashboard / FlaUI / W-08b (human-run gates).
 
 ## Commit
-`<filled after commit>` -- fix(sdk-gui): preserve design-disabled state + chained-refresh ownership in SDK load-wait UX
+`6fd1dfb` -- fix(sdk-gui): preserve design-disabled state + chained-refresh ownership in SDK load-wait UX
+(This record was updated post-commit with the real SHA from `git rev-parse --short HEAD`.)
 
 ## Status
 DONE
