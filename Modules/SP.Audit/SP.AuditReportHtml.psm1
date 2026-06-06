@@ -10582,6 +10582,460 @@ ${changesSectionHtml}
 
 #endregion
 
+#region Rolling 7/30-day Trend HTML (T-06)
+
+function Export-SPRollingTrendHtml {
+    <#
+    .SYNOPSIS
+        Renders a rolling 7-day / 30-day manager-cert trend HTML view.
+    .DESCRIPTION
+        Additive companion to Export-SPCampaignTrendHtml (which aggregates by
+        Week/Month/Quarter period). This function renders ROLLING, per-CALENDAR-DAY
+        trend sections for one or more day-windows (default 7 and 30) from the
+        daily privileged-role attestation campaigns + the membership changelog.
+
+        Each window section carries three day-by-day series:
+          1. Manager accountability -- attested / overdue / missed counts (and a
+             decisionsMade / decisionsTotal rollup) summed across the daily
+             campaign's managerAttestation array on that calendar day.
+          2. Privileged-role membership change -- Added / Removed counts from the
+             membership changelog, scoped to the tracked privileged-role groupIds
+             (falls back to ALL groups, and notes the scope, when -TrackedRoles is
+             empty).
+          3. Decision Decided / Pending -- decisionsMade vs (decisionsTotal -
+             decisionsMade). The seed carries no explicit approve/revoke split, so
+             this series is labelled honestly as Decided / Pending and does NOT
+             fabricate an approve/revoke ratio (unless attestation objects expose
+             explicit approvals/revocations fields).
+
+        Self-contained, inline-CSS HTML (Word-paste friendly), UTF-8 no-BOM. The
+        window math mirrors Measure-SPCampaignTrends' InvariantCulture +
+        RoundtripKind date parse and the mock membership-changelog endpoint's
+        [datetime]$_.date >= cutoff window semantics. Anchor date defaults to the
+        MAX parseable date across campaigns + changelog so static datasets are
+        deterministic (NOT Get-Date).
+
+        DOES NOT alter Measure-SPCampaignTrends, Export-SPCampaignTrendHtml, or the
+        weekly digest. SP.ReportComponents reuse is OPTIONAL and Get-Command
+        guarded -- the function is fully correct without it.
+    .PARAMETER DailyCampaigns
+        Daily privileged campaigns. Each carries: id, name, type, created (ISO8601)
+        and a managerAttestation array of objects
+        { managerId, managerName, status (attested|overdue|missed),
+          decisionsMade [int], decisionsTotal [int] }.
+    .PARAMETER Changelog
+        Membership changelog events: { date (ISO8601), groupId, groupName,
+        identityId, operation (ADD|REMOVE) }.
+    .PARAMETER TrackedRoles
+        Tracked privileged roles: { id, name, ... }. Scopes the changelog
+        Added/Removed series to the privileged-role groupIds. Empty = all groups.
+    .PARAMETER OutputPath
+        DIRECTORY for the HTML output file (mirrors Export-SPCampaignTrendHtml).
+    .PARAMETER AnchorDate
+        Fixed reference date for window math. Default = max(campaign.created,
+        changelog.date); Get-Date only as last resort when no data carries a date.
+    .PARAMETER WindowDays
+        Windows to render (days). Default @(7, 30). Each becomes one section.
+    .PARAMETER CorrelationID
+        Correlation ID for logging + the report footer.
+    .OUTPUTS
+        [hashtable] @{ Success; Data = @{ Path; Windows; AnchorDate }; Error }
+    .EXAMPLE
+        $r = Export-SPRollingTrendHtml -DailyCampaigns $daily -Changelog $cl `
+                 -TrackedRoles $tracked -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$DailyCampaigns,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$Changelog = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$TrackedRoles = @(),
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [datetime]$AnchorDate,
+
+        [Parameter()]
+        [int[]]$WindowDays = @(7, 30),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Export-SPRollingTrendHtml: start -- $(@($DailyCampaigns).Count) daily campaign(s), $(@($Changelog).Count) changelog event(s), windows=$($WindowDays -join ',')" `
+        -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRollingTrendHtml' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # --- Helper: parse a date string to DateTime (UTC). Mirrors
+        #     Measure-SPCampaignTrends._ParseDateUtc (InvariantCulture + RoundtripKind). ---
+        function _RtParseDateUtc([string]$dateStr) {
+            if ([string]::IsNullOrWhiteSpace($dateStr)) { return $null }
+            $dt = [datetime]::MinValue
+            if ([datetime]::TryParse($dateStr, [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$dt)) {
+                return $dt.ToUniversalTime()
+            }
+            return $null
+        }
+
+        # --- Helper: safe PSObject / hashtable property accessor (data is
+        #     PSCustomObject from ConvertFrom-Json, but tolerate hashtables too). ---
+        function _RtProp($obj, [string]$name) {
+            if ($null -eq $obj) { return $null }
+            if ($obj -is [System.Collections.IDictionary]) {
+                if ($obj.Contains($name)) { return $obj[$name] }
+                return $null
+            }
+            $p = $obj.PSObject.Properties[$name]
+            if ($null -ne $p) { return $p.Value }
+            return $null
+        }
+
+        function _RtInt($value) {
+            if ($null -eq $value) { return 0 }
+            $n = 0
+            if ([int]::TryParse([string]$value, [ref]$n)) { return $n }
+            return 0
+        }
+
+        $campaigns = @($DailyCampaigns | Where-Object { $null -ne $_ })
+        $events    = @($Changelog | Where-Object { $null -ne $_ })
+
+        # --- Tracked privileged-role groupId set (for changelog scoping). ---
+        $trackedIds = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($tr in @($TrackedRoles | Where-Object { $null -ne $_ })) {
+            $tid = [string](_RtProp $tr 'id')
+            if (-not [string]::IsNullOrWhiteSpace($tid)) { [void]$trackedIds.Add($tid) }
+        }
+        $scopeNote = if ($trackedIds.Count -gt 0) {
+            "Privileged-role membership change scoped to $($trackedIds.Count) tracked role group(s)."
+        } else {
+            'No tracked roles supplied -- privileged-role membership change reflects ALL groups.'
+        }
+
+        # --- Pre-parse campaign created dates + per-day attestation rollups. ---
+        $campRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($c in $campaigns) {
+            $created = _RtParseDateUtc ([string](_RtProp $c 'created'))
+            if ($null -eq $created) { continue }
+            $att = @(_RtProp $c 'managerAttestation')
+            $attested = 0; $overdue = 0; $missed = 0
+            $dMade = 0; $dTotal = 0; $approved = 0; $revoked = 0
+            foreach ($a in @($att | Where-Object { $null -ne $_ })) {
+                $st = [string](_RtProp $a 'status')
+                switch -regex ($st.ToLowerInvariant()) {
+                    '^attested' { $attested++ }
+                    '^overdue'  { $overdue++ }
+                    '^missed'   { $missed++ }
+                }
+                $dMade  += _RtInt (_RtProp $a 'decisionsMade')
+                $dTotal += _RtInt (_RtProp $a 'decisionsTotal')
+                # Honest approve/revoke ONLY if explicitly present.
+                $apv = _RtProp $a 'approvals'; if ($null -eq $apv) { $apv = _RtProp $a 'approved' }
+                $rvk = _RtProp $a 'revocations'; if ($null -eq $rvk) { $rvk = _RtProp $a 'revoked' }
+                if ($null -ne $apv) { $approved += _RtInt $apv }
+                if ($null -ne $rvk) { $revoked  += _RtInt $rvk }
+            }
+            $campRows.Add([pscustomobject]@{
+                Day           = $created.Date
+                Attested      = $attested
+                Overdue       = $overdue
+                Missed        = $missed
+                DecisionsMade = $dMade
+                DecisionsTotal= $dTotal
+                Approved      = $approved
+                Revoked       = $revoked
+                HasExplicit   = (($approved + $revoked) -gt 0)
+            })
+        }
+
+        # --- Pre-parse changelog events (priv-scoped Added/Removed). ---
+        $clRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($e in $events) {
+            $ed = _RtParseDateUtc ([string](_RtProp $e 'date'))
+            if ($null -eq $ed) { continue }
+            $gid = [string](_RtProp $e 'groupId')
+            $inScope = $true
+            if ($trackedIds.Count -gt 0) { $inScope = $trackedIds.Contains($gid) }
+            if (-not $inScope) { continue }
+            $op = ([string](_RtProp $e 'operation')).ToUpperInvariant()
+            $clRows.Add([pscustomobject]@{
+                Day = $ed.Date
+                Op  = $op
+            })
+        }
+
+        # --- Anchor date (deterministic for static data). ---
+        $anchor = $null
+        if ($PSBoundParameters.ContainsKey('AnchorDate')) {
+            $anchor = $AnchorDate.ToUniversalTime()
+        }
+        else {
+            $maxDate = $null
+            foreach ($r in $campRows) { if ($null -eq $maxDate -or $r.Day -gt $maxDate) { $maxDate = $r.Day } }
+            foreach ($e in $events) {
+                $ed = _RtParseDateUtc ([string](_RtProp $e 'date'))
+                if ($null -ne $ed -and ($null -eq $maxDate -or $ed -gt $maxDate)) { $maxDate = $ed }
+            }
+            if ($null -ne $maxDate) { $anchor = $maxDate } else { $anchor = (Get-Date).ToUniversalTime() }
+        }
+        $anchorDay = $anchor.Date
+
+        # --- Build per-window day buckets. ---
+        $windowsData = @{}
+        $windowSections = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($W in ($WindowDays | Sort-Object)) {
+            $cutoffDay = $anchorDay.AddDays(-$W).Date
+            # Contiguous calendar range cutoffDay..anchorDay inclusive.
+            $buckets = [ordered]@{}
+            $cursor = $cutoffDay
+            while ($cursor -le $anchorDay) {
+                $key = $cursor.ToString('yyyy-MM-dd')
+                $buckets[$key] = [pscustomobject]@{
+                    Date           = $key
+                    Attested       = 0
+                    Overdue        = 0
+                    Missed         = 0
+                    DecisionsMade  = 0
+                    DecisionsTotal = 0
+                    Decided        = 0
+                    Pending        = 0
+                    Approved       = 0
+                    Revoked        = 0
+                    HasExplicit    = $false
+                    Added          = 0
+                    Removed        = 0
+                    CampaignCount  = 0
+                }
+                $cursor = $cursor.AddDays(1)
+            }
+
+            # Fold campaign rows in window.
+            foreach ($r in $campRows) {
+                if ($r.Day -ge $cutoffDay -and $r.Day -le $anchorDay) {
+                    $key = $r.Day.ToString('yyyy-MM-dd')
+                    if ($buckets.Contains($key)) {
+                        $b = $buckets[$key]
+                        $b.Attested       += $r.Attested
+                        $b.Overdue        += $r.Overdue
+                        $b.Missed         += $r.Missed
+                        $b.DecisionsMade  += $r.DecisionsMade
+                        $b.DecisionsTotal += $r.DecisionsTotal
+                        $b.Approved       += $r.Approved
+                        $b.Revoked        += $r.Revoked
+                        if ($r.HasExplicit) { $b.HasExplicit = $true }
+                        $b.CampaignCount  += 1
+                    }
+                }
+            }
+            # Fold changelog rows in window.
+            foreach ($e in $clRows) {
+                if ($e.Day -ge $cutoffDay -and $e.Day -le $anchorDay) {
+                    $key = $e.Day.ToString('yyyy-MM-dd')
+                    if ($buckets.Contains($key)) {
+                        $b = $buckets[$key]
+                        if ($e.Op -eq 'ADD') { $b.Added++ }
+                        elseif ($e.Op -eq 'REMOVE') { $b.Removed++ }
+                    }
+                }
+            }
+            # Derive Decided / Pending per day.
+            foreach ($key in @($buckets.Keys)) {
+                $b = $buckets[$key]
+                $b.Decided = $b.DecisionsMade
+                $pending = $b.DecisionsTotal - $b.DecisionsMade
+                if ($pending -lt 0) { $pending = 0 }
+                $b.Pending = $pending
+            }
+
+            $dayList = @($buckets.Values)
+            # Window totals.
+            $tAtt = 0; $tOvr = 0; $tMis = 0; $tMade = 0; $tTot = 0; $tAdd = 0; $tRem = 0; $tCamp = 0; $tApv = 0; $tRvk = 0
+            $daysWithData = 0
+            foreach ($b in $dayList) {
+                $tAtt += $b.Attested; $tOvr += $b.Overdue; $tMis += $b.Missed
+                $tMade += $b.DecisionsMade; $tTot += $b.DecisionsTotal
+                $tAdd += $b.Added; $tRem += $b.Removed; $tCamp += $b.CampaignCount
+                $tApv += $b.Approved; $tRvk += $b.Revoked
+                if (($b.Attested + $b.Overdue + $b.Missed + $b.Added + $b.Removed) -gt 0) { $daysWithData++ }
+            }
+            $tDecided = $tMade
+            $tPending = $tTot - $tMade; if ($tPending -lt 0) { $tPending = 0 }
+
+            $windowsData["$W"] = [pscustomobject]@{
+                WindowDays    = $W
+                CutoffDate    = $cutoffDay.ToString('yyyy-MM-dd')
+                AnchorDate    = $anchorDay.ToString('yyyy-MM-dd')
+                Days          = $dayList
+                DayCount      = $dayList.Count
+                DaysWithData  = $daysWithData
+                CampaignCount = $tCamp
+                Attested      = $tAtt
+                Overdue       = $tOvr
+                Missed        = $tMis
+                Added         = $tAdd
+                Removed       = $tRem
+                Decided       = $tDecided
+                Pending       = $tPending
+                Approved      = $tApv
+                Revoked       = $tRvk
+            }
+
+            # --- Build HTML section for this window. ---
+            $decisionLabel = if (($tApv + $tRvk) -gt 0) { 'Approved / Revoked' } else { 'Decided / Pending' }
+            $kpi = @"
+<table style="border-collapse:collapse; font-size:13px; margin-bottom:14px;">
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:6px 12px; border:1px solid #dddddd;">Daily campaigns</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Days w/ data</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Attested</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Overdue</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Missed</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Added</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Removed</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Decided</th>
+<th style="padding:6px 12px; border:1px solid #dddddd;">Pending</th>
+</tr>
+<tr style="background:#f8f9fa;">
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$tCamp</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$daysWithData</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#27ae60; font-weight:bold;">$tAtt</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e67e22; font-weight:bold;">$tOvr</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e74c3c; font-weight:bold;">$tMis</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#27ae60;">+$tAdd</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e74c3c;">-$tRem</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$tDecided</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$tPending</td>
+</tr>
+</table>
+"@
+
+            $dayRowsHtml = [System.Collections.Generic.List[string]]::new()
+            $idx = 0
+            foreach ($b in $dayList) {
+                $bg = if (($idx % 2) -eq 0) { '#ffffff' } else { '#f8f9fa' }
+                $decCell = if ($b.HasExplicit) { "A:$($b.Approved) / R:$($b.Revoked)" } else { "$($b.Decided) / $($b.Pending)" }
+                $dayRowsHtml.Add(@"
+<tr style="background:${bg};">
+<td style="padding:6px 12px; border:1px solid #dddddd; font-weight:bold;">$(ConvertTo-SafeHtml $b.Date)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$($b.CampaignCount)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#27ae60;">$($b.Attested)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e67e22;">$($b.Overdue)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e74c3c;">$($b.Missed)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#27ae60;">+$($b.Added)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center; color:#e74c3c;">-$($b.Removed)</td>
+<td style="padding:6px 12px; border:1px solid #dddddd; text-align:center;">$decCell</td>
+</tr>
+"@)
+                $idx++
+            }
+
+            $section = @"
+<h2 style="font-size:16px; color:#336699; margin-top:28px; margin-bottom:6px;">Rolling ${W}-day window</h2>
+<p style="font-size:12px; color:#777777; margin-top:0; margin-bottom:10px;">Window: $($cutoffDay.ToString('yyyy-MM-dd')) to $($anchorDay.ToString('yyyy-MM-dd')) ($($dayList.Count) calendar days). Decision series: ${decisionLabel}.</p>
+${kpi}
+<table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:8px;">
+<tr style="background:#336699; color:#ffffff;">
+<th style="padding:6px 12px; text-align:left; border:1px solid #dddddd;">Day</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Campaigns</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Attested</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Overdue</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Missed</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Added</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">Removed</th>
+<th style="padding:6px 12px; text-align:center; border:1px solid #dddddd;">${decisionLabel}</th>
+</tr>
+$($dayRowsHtml -join "`n")
+</table>
+"@
+            $windowSections.Add($section)
+        }
+
+        # --- Optional SP.ReportComponents reuse (Get-Command guarded; NEVER required). ---
+        $rcNote = ''
+        if (Get-Command -Name New-ComposableReport -ErrorAction SilentlyContinue) {
+            $rcNote = '<p style="font-size:11px; color:#aaaaaa;">SP.ReportComponents detected in session (RC reuse available).</p>'
+        }
+
+        # --- Empty-input notice (still a valid, successful HTML file). ---
+        $emptyNotice = ''
+        if ($campaigns.Count -eq 0 -and $events.Count -eq 0) {
+            $emptyNotice = '<p style="font-size:14px; color:#e67e22; font-weight:bold;">No daily-campaign or changelog data supplied -- each window below shows a zeroed calendar.</p>'
+        }
+
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $htmlFile    = Join-Path $OutputPath "RollingTrend-${timestamp}.html"
+
+        $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Rolling 7/30-day Manager-Cert Trend</title>
+</head>
+<body style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; margin:24px; color:#2c3e50; background:#ffffff;">
+
+<h1 style="font-size:22px; color:#2c3e50; border-bottom:3px solid #336699; padding-bottom:8px; margin-bottom:4px;">Rolling Manager-Cert Trend</h1>
+<p style="font-size:13px; color:#777777; margin-top:0; margin-bottom:6px;">Anchor: $($anchorDay.ToString('yyyy-MM-dd')) | Windows: $($WindowDays -join ', ')-day | $($campaigns.Count) daily campaign(s), $($events.Count) changelog event(s) in scope</p>
+<p style="font-size:12px; color:#777777; margin-top:0; margin-bottom:16px;">$(ConvertTo-SafeHtml $scopeNote)</p>
+${emptyNotice}
+${rcNote}
+$($windowSections -join "`n")
+
+<hr style="border:none; border-top:1px solid #dddddd; margin:20px 0;" />
+<p style="font-size:11px; color:#aaaaaa;">Generated: ${generatedAt} | Correlation: ${CorrelationID} | SailPoint Governance Toolkit</p>
+
+</body>
+</html>
+"@
+
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+
+        Write-SPLog -Message "Export-SPRollingTrendHtml: rolling trend HTML written: $htmlFile" `
+            -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRollingTrendHtml' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                Path       = $htmlFile
+                Windows    = $windowsData
+                AnchorDate = $anchorDay
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $msg = "Export-SPRollingTrendHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $msg -Severity ERROR -Component 'SP.AuditReport' `
+            -Action 'Export-SPRollingTrendHtml' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $msg }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Export-SPAuditHtml',
     'Export-SPAuditText',
@@ -10614,5 +11068,6 @@ Export-ModuleMember -Function @(
     'Export-SPCampaignCompletionForecastHtml',
     'Export-SPReviewerDelegationHtml',
     'Export-SPPolicyComplianceHtml',
-    'Export-SPConfigDriftHtml'
+    'Export-SPConfigDriftHtml',
+    'Export-SPRollingTrendHtml'
 )

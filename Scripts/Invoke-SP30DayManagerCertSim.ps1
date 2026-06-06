@@ -636,6 +636,94 @@ else {
 
 #endregion
 
+#region Step E: Rolling 7/30-day trend HTML (T-06)
+
+# Additive, best-effort rolling-trend view. Sources the daily privileged campaigns
+# (with managerAttestation) and the membership changelog from the LIVE mock, then
+# calls Export-SPRollingTrendHtml. Fully guarded: any failure downgrades to a WARN
+# (worstExitCode -> max(1)) and writes a rolling-trend-skipped.json note -- it MUST
+# NEVER make the whole sim FAIL. The authoritative verification of the function is
+# the unit suite Tests/SP.RollingTrendHtml.Tests.ps1 (frozen-fixture based).
+
+if (-not $SkipReports) {
+    Write-Host '  Step E: Rolling 7/30-day trend HTML' -ForegroundColor Cyan
+    $rtOut = Join-Path $OutputPath 'rolling-trend'
+    try {
+        if (-not (Test-Path $rtOut)) { New-Item -ItemType Directory -Path $rtOut -Force | Out-Null }
+
+        # Acquire daily campaigns (camp-daily-priv-*) from the mock.
+        $dailyCampaigns = @()
+        try {
+            $campsUri = "$($mockBaseUrl.TrimEnd('/'))/v3/campaigns?limit=250"
+            $campResp = Invoke-RestMethod -Uri $campsUri -Method GET -TimeoutSec 30 -ErrorAction Stop
+            $dailyCampaigns = @($campResp | Where-Object { $null -ne $_ -and ([string]$_.id) -like 'camp-daily-priv-*' })
+        }
+        catch {
+            Write-Host "      WARN: could not fetch daily campaigns: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+
+        # Acquire the membership changelog from the mock.
+        $changelog = @()
+        try {
+            $clUri = "$($mockBaseUrl.TrimEnd('/'))/v3/membership-changelog?limit=10000"
+            $clResp = Invoke-RestMethod -Uri $clUri -Method GET -TimeoutSec 60 -ErrorAction Stop
+            $changelog = @($clResp | Where-Object { $null -ne $_ })
+        }
+        catch {
+            Write-Host "      WARN: could not fetch membership changelog: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+
+        # Tracked roles for changelog scoping (driver's fixed list -> { id; name }).
+        $rtTracked = @($trackedRoles | ForEach-Object { @{ id = $_.Id; name = $_.Name } })
+
+        $rtResult = Export-SPRollingTrendHtml -DailyCampaigns @($dailyCampaigns) `
+            -Changelog @($changelog) -TrackedRoles @($rtTracked) `
+            -OutputPath $rtOut -WindowDays @(7, 30) -CorrelationID $correlationID
+
+        if ($null -ne $rtResult -and $rtResult.Success -and $null -ne $rtResult.Data) {
+            $rtPath = [string]$rtResult.Data.Path
+            $reportPaths.Add($rtPath)
+            Write-Host "      report: $rtPath" -ForegroundColor DarkGray
+            $rem30 = 0; $mis30 = 0
+            if ($null -ne $rtResult.Data.Windows -and $rtResult.Data.Windows.Contains('30')) {
+                $rem30 = [int]$rtResult.Data.Windows['30'].Removed
+                $mis30 = [int]$rtResult.Data.Windows['30'].Missed
+            }
+            Write-Host "    Rolling trend: $($dailyCampaigns.Count) daily campaign(s), $($changelog.Count) changelog event(s); 30d priv-removes=$rem30, missed=$mis30" -ForegroundColor Green
+            Write-SimAudit -Step 'E-RollingTrend' -Status 'Done' -Detail @{
+                HtmlPath = $rtPath; DailyCampaigns = $dailyCampaigns.Count
+                ChangelogEvents = $changelog.Count; Removed30d = $rem30; Missed30d = $mis30
+            }
+        }
+        else {
+            $errTxt = if ($null -ne $rtResult) { $rtResult.Error } else { 'null result' }
+            Write-Host "    WARN: rolling trend not generated: $errTxt" -ForegroundColor Yellow
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+            $skipNote = Join-Path $rtOut 'rolling-trend-skipped.json'
+            [System.IO.File]::WriteAllText($skipNote, (@{ Reason = $errTxt; CorrelationID = $correlationID } | ConvertTo-Json), $utf8NoBom)
+            Write-SimAudit -Step 'E-RollingTrend' -Status 'Warn' -Detail @{ Reason = $errTxt }
+        }
+    }
+    catch {
+        Write-Host "    WARN: Step E exception (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+        try {
+            $skipNote = Join-Path $rtOut 'rolling-trend-skipped.json'
+            [System.IO.File]::WriteAllText($skipNote, (@{ Reason = $_.Exception.Message; CorrelationID = $correlationID } | ConvertTo-Json), $utf8NoBom)
+        }
+        catch { }
+        Write-SimAudit -Step 'E-RollingTrend' -Status 'Warn' -Detail @{ Reason = $_.Exception.Message }
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Step E: Rolling 7/30-day trend HTML [SKIPPED]' -ForegroundColor DarkGray
+    Write-SimAudit -Step 'E-RollingTrend' -Status 'Skipped' -Detail $null
+    Write-Host ''
+}
+
+#endregion
+
 #region Step D: capture artifacts + summary
 
 $endTime = Get-Date
