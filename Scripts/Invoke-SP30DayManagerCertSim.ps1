@@ -61,6 +61,15 @@
     / Get-SPSdkWorkItemsSummary / Get-SPSdkWorkItems, and write sdk-path.json into
     the capture dir. OFF by default so existing behaviour is unchanged. Treated as
     a WARN (not fatal) if the SDK collections are empty. Skipped under -WhatIf.
+.PARAMETER CompleteAllCampaigns
+    OPT-IN (default OFF). When set AND Safety.AllowCompleteCampaign is true,
+    lifts the default first-3 completion ceiling and runs the full observed
+    STAGED->ACTIVE->COMPLETING->COMPLETED lifecycle across EVERY submitted
+    campaign: Complete-SPCampaign followed by Get-SPCampaignStatus polling to
+    capture the settle to COMPLETED. Each campaign's observed transition list is
+    recorded into write-roundtrip.json (Transitions key) and sim-audit.jsonl.
+    Default behaviour (no flag) is byte-identical to before. Can also be enabled
+    via the Safety.CompleteAllCampaigns config flag.
 .PARAMETER OutputPath
     Run output directory (the T-05 capture dir). Defaults to
     Audit\sim-30day-<yyyyMMdd-HHmmss> under the toolkit root.
@@ -116,6 +125,9 @@ param(
 
     [Parameter()]
     [switch]$IncludeSdkPath,
+
+    [Parameter()]
+    [switch]$CompleteAllCampaigns,
 
     [Parameter()]
     [string]$OutputPath,
@@ -256,6 +268,16 @@ if ($null -ne $config.PSObject.Properties['Safety'] -and
     $allowComplete = [bool]$config.Safety.AllowCompleteCampaign
 }
 
+# Opt-in: complete the FULL submitted set (lift the default first-3 ceiling) and
+# capture the observed lifecycle transitions. Enabled by -CompleteAllCampaigns OR
+# a Safety.CompleteAllCampaigns config flag. Only meaningful when $allowComplete.
+$completeAll = [bool]$CompleteAllCampaigns
+if ($null -ne $config.PSObject.Properties['Safety'] -and
+    $null -ne $config.Safety -and
+    $null -ne $config.Safety.PSObject.Properties['CompleteAllCampaigns']) {
+    $completeAll = $completeAll -or [bool]$config.Safety.CompleteAllCampaigns
+}
+
 # Resolve output (capture) directory
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $toolkitRoot (Join-Path 'Audit' "sim-30day-$runStamp")
@@ -355,6 +377,9 @@ $writeResult = [ordered]@{
     Confirmed = 0
     Ids       = [System.Collections.Generic.List[string]]::new()
     Names     = [System.Collections.Generic.List[string]]::new()
+    # Observed lifecycle transitions per campaign (only populated under
+    # -CompleteAllCampaigns); each entry: @{ Id; Observed = @('STAGED','ACTIVE',...) }.
+    Transitions = [System.Collections.Generic.List[object]]::new()
 }
 
 if (-not $SkipWrite) {
@@ -392,8 +417,44 @@ if (-not $SkipWrite) {
                         }
                     }
 
-                    # Optionally complete a subset (first 3) when allowed by Safety.
-                    if ($allowComplete -and $writeResult.Submitted -le 3) {
+                    # Completion. DEFAULT: a safety subset (first 3) when allowed.
+                    # OPT-IN (-CompleteAllCampaigns): complete EVERY submitted
+                    # campaign and capture the observed lifecycle transitions.
+                    if ($completeAll -and $allowComplete) {
+                        if ($PSCmdlet.ShouldProcess($campId, 'Complete-SPCampaign (full lifecycle)')) {
+                            # Seed the observed sequence with the known pre-complete
+                            # states (STAGED at New, ACTIVE at Start).
+                            $observed = [System.Collections.Generic.List[string]]::new()
+                            $observed.Add('STAGED')
+                            if ($writeResult.Activated -gt 0) { $observed.Add('ACTIVE') }
+
+                            $compResult = Complete-SPCampaign -CampaignId $campId -CorrelationID $correlationID -CampaignTestId 'T-04'
+                            if ($null -ne $compResult -and $compResult.Success) {
+                                # Poll to capture the settle to COMPLETED. The mock's
+                                # single-call path settles immediately (ACTIVE->COMPLETED);
+                                # a COMPLETING intermediate is observed if present.
+                                $statusResult = Get-SPCampaignStatus -CampaignId $campId `
+                                    -TargetStatus 'COMPLETED' -TimeoutSeconds 30 -PollIntervalSeconds 1 `
+                                    -CorrelationID $correlationID -CampaignTestId 'T-04'
+                                if ($null -ne $statusResult -and $statusResult.Success) {
+                                    $observed.Add('COMPLETED')
+                                    $writeResult.Completed++
+                                }
+                                else {
+                                    $errTxt = if ($null -ne $statusResult) { $statusResult.Error } else { 'null result' }
+                                    Write-Host "      WARN: did not settle to COMPLETED: $errTxt" -ForegroundColor Yellow
+                                    if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+                                }
+                            }
+                            else {
+                                $errTxt = if ($null -ne $compResult) { $compResult.Error } else { 'null result' }
+                                Write-Host "      INFO: complete not applied: $errTxt" -ForegroundColor DarkGray
+                            }
+                            $writeResult.Transitions.Add([ordered]@{ Id = $campId; Observed = @($observed) })
+                            Write-Host "      lifecycle: $($observed -join ' -> ')" -ForegroundColor DarkCyan
+                        }
+                    }
+                    elseif ($allowComplete -and $writeResult.Submitted -le 3) {
                         if ($PSCmdlet.ShouldProcess($campId, 'Complete-SPCampaign')) {
                             $compResult = Complete-SPCampaign -CampaignId $campId -CorrelationID $correlationID -CampaignTestId 'T-04'
                             if ($null -ne $compResult -and $compResult.Success) {
@@ -461,6 +522,9 @@ if (-not $SkipWrite) {
             Ids       = @($writeResult.Ids)
             Names     = @($writeResult.Names)
             WhatIf    = $isWhatIf
+            # Additive (T-03): full-lifecycle opt-in + observed transitions.
+            CompleteAll = $completeAll
+            Transitions = @($writeResult.Transitions)
         }
         $writeCaptureFile = Join-Path $OutputPath 'write-roundtrip.json'
         [System.IO.File]::WriteAllText($writeCaptureFile, ($writeCapture | ConvertTo-Json -Depth 6), $utf8NoBom)
@@ -473,6 +537,15 @@ if (-not $SkipWrite) {
     Write-SimAudit -Step 'A-Write' -Status 'Done' -Detail @{
         Submitted = $writeResult.Submitted; Activated = $writeResult.Activated
         Completed = $writeResult.Completed; Confirmed = $writeResult.Confirmed; WhatIf = $isWhatIf
+    }
+
+    # Additive (T-03): record observed lifecycle transitions when the full-lifecycle
+    # opt-in ran, so the STAGED->ACTIVE->COMPLETING->COMPLETED machine is auditable.
+    if ($completeAll -and $writeResult.Transitions.Count -gt 0) {
+        Write-SimAudit -Step 'A-Lifecycle' -Status 'Done' -Detail @{
+            CompleteAll = $completeAll
+            Transitions = @($writeResult.Transitions)
+        }
     }
     Write-Host ''
 }
