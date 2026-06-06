@@ -41,7 +41,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | DONE |
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | DONE |
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | DONE |
-| AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | TODO |
+| AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | DONE |
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
@@ -267,7 +267,7 @@ Settings).
 **Accept:** launcher parses; chain loads the new modules; manifest OK.
 
 ## AR-17: Headless structure test (W-09)
-- **Status:** `TODO` · **Depends:** AR-14 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-14 · **Size:** M
 **Goal:** `Tests/Harness/Test-W09-AdaptiveTabStructure.ps1` (WG-09-01..): load
 MainWindow.xaml without showing, assert the Adaptive Reports tab + its controls +
 that every `Btn*`/`Chk*` has a ToolTip. Pattern: `Test-W08-SdkTabStructure.ps1`.
