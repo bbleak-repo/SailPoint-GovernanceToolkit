@@ -159,6 +159,11 @@ function Build-SPRCDataset {
 
         $groupResults = New-Object System.Collections.Generic.List[hashtable]
         $disabled = New-Object System.Collections.Generic.List[hashtable]
+        # De-dup the at-risk (disabled) list by IdentityId: a disabled identity is
+        # added once PER decision record (per entitlement held / per Approved/
+        # Revoked/Pending appearance), so without this guard the StaleResults.Disabled
+        # KPI ('At-Risk Members') over-counts. Members per group are already deduped.
+        $disabledSeen = @{}
 
         if ($Anchor -eq 'Entitlement') {
             # Key by AccessName + SourceName (same entitlement name can exist per source).
@@ -170,7 +175,10 @@ function Build-SPRCDataset {
                 $key = $access + [char]0 + $src
                 if (-not $buckets.Contains($key)) { $buckets[$key] = @{ Access = $access; Source = $src; Recs = (New-Object System.Collections.Generic.List[hashtable]) } }
                 $buckets[$key].Recs.Add($r)
-                if (-not $r['Enabled']) { $disabled.Add(@{ SamAccountName = $r['IdentityId']; DisplayName = $r['IdentityName'] }) }
+                if (-not $r['Enabled'] -and -not $disabledSeen.ContainsKey([string]$r['IdentityId'])) {
+                    $disabledSeen[[string]$r['IdentityId']] = $true
+                    $disabled.Add(@{ SamAccountName = $r['IdentityId']; DisplayName = $r['IdentityName'] })
+                }
             }
             foreach ($k in $buckets.Keys) {
                 $b = $buckets[$k]
@@ -184,7 +192,10 @@ function Build-SPRCDataset {
                 $camp = [string]$r['CampaignName']; if ([string]::IsNullOrWhiteSpace($camp)) { $camp = '(unnamed campaign)' }
                 if (-not $buckets.Contains($camp)) { $buckets[$camp] = (New-Object System.Collections.Generic.List[hashtable]) }
                 $buckets[$camp].Add($r)
-                if (-not $r['Enabled']) { $disabled.Add(@{ SamAccountName = $r['IdentityId']; DisplayName = $r['IdentityName'] }) }
+                if (-not $r['Enabled'] -and -not $disabledSeen.ContainsKey([string]$r['IdentityId'])) {
+                    $disabledSeen[[string]$r['IdentityId']] = $true
+                    $disabled.Add(@{ SamAccountName = $r['IdentityId']; DisplayName = $r['IdentityName'] })
+                }
             }
             foreach ($camp in $buckets.Keys) {
                 $groupResults.Add((script:New-RCDGroup -Domain 'ISC Campaigns' -GroupName $camp -Records (@($buckets[$camp])) -IsNested:$false))

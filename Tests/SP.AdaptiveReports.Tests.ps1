@@ -68,6 +68,29 @@ Describe 'SP.AdaptiveReports — entitlement anchor (AR-04)' {
         ($script:E.Data.StaleResults.Disabled.SamAccountName) | Should -Contain 'id-bob'
     }
 
+    It 'AR-004b: StaleResults.Disabled is deduped by IdentityId (no per-record over-count)' {
+        # A single disabled identity 'u1' holding TWO entitlements must appear ONCE
+        # in StaleResults.Disabled, not once per entitlement record (round-10 bug).
+        $audits = @(
+            @{ CampaignName = 'Dup Review'; CampaignId = 'camp-dup'; Decisions = @{
+                Approved = @(
+                    @{ IdentityId = 'u1'; IdentityName = 'User One'; SourceName = 'AD'; AccessName = 'Ent-A'; Decision = 'APPROVE'; RiskFlags = @('DISABLED') },
+                    @{ IdentityId = 'u1'; IdentityName = 'User One'; SourceName = 'AD'; AccessName = 'Ent-B'; Decision = 'APPROVE'; RiskFlags = @('DISABLED') })
+                Revoked = @(); Pending = @() } }
+        )
+        $r = Build-SPRCDataset -CampaignAudits $audits -Anchor Entitlement
+        @($r.Data.StaleResults.Disabled).Count | Should -Be 1
+        ($r.Data.StaleResults.Disabled.SamAccountName | Sort-Object -Unique) | Should -Be @('u1')
+
+        # Campaign anchor: same identity disabled across two campaigns -> still once.
+        $auditsC = @(
+            @{ CampaignName = 'C1'; CampaignId = 'c1'; Decisions = @{ Approved = @( @{ IdentityId = 'u1'; IdentityName = 'User One'; SourceName = 'AD'; AccessName = 'Ent-A'; Decision = 'APPROVE'; RiskFlags = @('DISABLED') } ); Revoked = @(); Pending = @() } },
+            @{ CampaignName = 'C2'; CampaignId = 'c2'; Decisions = @{ Approved = @( @{ IdentityId = 'u1'; IdentityName = 'User One'; SourceName = 'AD'; AccessName = 'Ent-B'; Decision = 'APPROVE'; RiskFlags = @('DISABLED') } ); Revoked = @(); Pending = @() } }
+        )
+        $rc = Build-SPRCDataset -CampaignAudits $auditsC -Anchor Campaign
+        @($rc.Data.StaleResults.Disabled).Count | Should -Be 1
+    }
+
     It 'AR-005: empty audits -> Success with 0 groups (no throw)' {
         $empty = Build-SPRCDataset -CampaignAudits @() -Anchor Entitlement
         $empty.Success | Should -BeTrue
