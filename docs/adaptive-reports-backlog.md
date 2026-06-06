@@ -36,7 +36,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | DONE |
 | AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | DONE |
 | AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | DONE |
-| AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme) | L | AR-03,05,08 | TODO |
+| AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme + date period) | L | AR-03,05,08 | DONE |
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | TODO |
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | TODO |
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | TODO |
@@ -45,6 +45,8 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
+| AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | TODO |
+| AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | TODO |
 
 Exit criteria: AR-01..AR-18 + AR-20 `DONE`; AR-19 `AUTHORED`. Full Pester suite
 green (current baseline **1068**, plus new adapter/component/report/CLI tests);
@@ -198,7 +200,12 @@ dump) from adapted mock data.
 **Accept:** tests pass.
 
 ## AR-12: CLI `Invoke-SPAdaptiveReport.ps1`
-- **Status:** `TODO` · **Depends:** AR-03,05,08 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-03,05,08 · **Size:** L
+> **Date period:** select the campaign window with `-Status` + `-DaysBack` (and
+> `-CreatedAfter`/`-CreatedBefore`, reusing `Get-SPAuditCampaigns`). The
+> leadership-distribution mode (bands, WhatIf-SMTP preview, upper-leadership rollup)
+> is split into **AR-21** (so the base CLI stays focused and the distribution mode
+> is reviewed separately). Read-only -> no SupportsShouldProcess (CLI-005).
 **Goal:** Additive script. `[CmdletBinding()]` (read-only — **no**
 SupportsShouldProcess), standard `-ConfigPath`/`-Token`/`-TokenExpiryMinutes`/
 `-Help`, `[ValidateSet('Console','JSON','HTML','Both')]$OutputMode`, plus
@@ -278,3 +285,37 @@ Foundations mention; regenerate `docs/USER-GUIDE.html` via
 `docs/playbook/build-userguide.py`. Note both anchors and the component/baseline
 catalog.
 **Accept:** HTML regenerates clean; new sections present; no stale claims.
+
+## AR-21: Adaptive -> Leadership distribution (bands + WhatIf SMTP + upper rollup)
+- **Status:** `TODO` · **Depends:** AR-12 · **Size:** L
+**Goal:** Add a `-DistributeToLeadership` mode to `Invoke-SPAdaptiveReport.ps1`
+(additive switch; off by default) that **reuses the existing** tiered leadership
+machinery — no edits to existing files, no rebuild:
+- Build the org tree + bands from the reviewed identities for the selected date
+  window: `Build-SPOrgTree` -> (optional `Import-SPOrgChartSupplement` +
+  `Merge-SPOrgTreeWithSupplement`) -> `Resolve-SPIdentityBand` ->
+  `Group-SPAuditByLeadership`.
+- **Upper-leadership main report** with director/VP chains broken down:
+  `Export-SPLeadershipExecutiveHtml` (+ `Export-SPLeadershipDirectorHtml`).
+- **Per-band** reports filtered by `-TargetBands`: `Export-SPLeadershipBandHtml`.
+- Bundle the generated **adaptive** reports (estate-wide + the exec summary) into
+  the distribution.
+- **WhatIf SMTP by default:** `-PreviewOnly` -> `Show-SPReportDistributionPreview`
+  (who-gets-what, no send). Otherwise simulate delivery via `Send-SPReport` with
+  `Audit.Smtp.Enabled=$false` -> logs "would send to <leader>" (Action='Logged')
+  WITHOUT sending. Only `-SendReports` + `Audit.Smtp.Enabled=$true` actually sends.
+- Params mirror the existing distribution CLI: `-TargetBands`, `-LeadershipDepth`,
+  `-OrgSupplementPath`, `-PreviewOnly`, `-SendReports`, `-DetailLevel`.
+**Files:** `Scripts/Invoke-SPAdaptiveReport.ps1` (extend, additive).
+**Accept:** against the mock, `-DistributeToLeadership -PreviewOnly` shows the plan;
+the default (no -SendReports) simulates per-leader delivery (Action='Logged', zero
+emails sent); upper-leadership exec rollup + per-band reports generated; existing
+`Invoke-SPReportDistribution.ps1` untouched.
+
+## AR-22: Leadership-distribution mode tests
+- **Status:** `TODO` · **Depends:** AR-21 · **Size:** M
+**Goal:** Pester/AST: the mode is WhatIf-by-default (mock `Send-SPReport`, assert
+Action='Logged'/no send unless -SendReports + Smtp.Enabled); `-PreviewOnly` calls
+the preview and exits without sending; CLI-005 (read-only, no SupportsShouldProcess)
+holds for the script.
+**Accept:** tests green; no real email path exercised.
