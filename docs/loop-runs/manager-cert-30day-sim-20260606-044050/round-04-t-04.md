@@ -87,8 +87,9 @@ RESULT Passed=75 Failed=0 Skipped=0
 ```
 
 ## Commit
-`43cc47c` -- feat(sim): add 30-day manager-cert simulation CLI driver (T-04)
-(Commit section back-filled; the final commit amends in this record so the hash is real.)
+`b58f64f` -- feat(sim): add 30-day manager-cert simulation CLI driver (T-04)
+(The script + this record were committed together; this hash line is corrected in a
+small doc-only follow-up commit so the recorded hash is the real one for the script.)
 
 ## Status
 DONE
