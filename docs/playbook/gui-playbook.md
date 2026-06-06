@@ -12,8 +12,8 @@
 .\Scripts\Show-SPDashboard.ps1                               # default config
 .\Scripts\Show-SPDashboard.ps1 -ConfigPath .\Config\settings-mock.json
 ```
-The dashboard opens as a WPF window with **7 tabs**: Campaigns · Evidence · Audit ·
-Delta Cert · Governance · **SDK Features** · Settings. A status line at the bottom
+The dashboard opens as a WPF window with **8 tabs**: Campaigns · Evidence · Audit ·
+Delta Cert · Governance · SDK Features · **Adaptive Reports** · Settings. A status line at the bottom
 shows the result of the last action; long operations run in the background so the
 window stays responsive.
 
@@ -29,7 +29,8 @@ window stays responsive.
 ## Contents
 1. [Campaigns](#1-campaigns-tab) · 2. [Evidence](#2-evidence-tab) · 3. [Audit](#3-audit-tab) ·
 4. [Delta Cert](#4-delta-cert-tab) · 5. [Governance](#5-governance-tab) ·
-6. [SDK Features](#6-sdk-features-tab) · 7. [Settings](#7-settings-tab)
+6. [SDK Features](#6-sdk-features-tab) · 7. [Adaptive Reports](#7-adaptive-reports-tab) ·
+8. [Settings](#8-settings-tab)
 
 ---
 
@@ -214,7 +215,63 @@ access summaries by type.
 
 ---
 
-## 7. Settings tab
+## 7. Adaptive Reports tab
+**Purpose:** generate **adaptive / composable HTML reports** plus a **baseline report
+library** over your governance data — presentation-ready dashboards (KPI cards, heatmap,
+drill-down tree, top-N bars, grouped tables) and a catalog of named baseline reports.
+**When to use:** richer, presentation-ready governance views; ad-hoc analysis of
+entitlement assignment or campaign coverage (the GUI equivalent of
+`Invoke-SPAdaptiveReport.ps1`).
+
+**Report Options**
+| Control | What it does |
+|---|---|
+| **Anchor** (`AdaptiveReportsAnchorCombo`) | Pivot the report around an **Entitlement** (default — group = entitlement/role/access profile, members = the identities holding it) or a **Campaign** (group = a certification campaign, members = the identities under it). |
+| **Theme** (`AdaptiveReportsThemeCombo`) | Visual theme for the generated HTML (`light` default / `dark`). |
+| **Days Back** (`AdaptiveReportsDaysBackBox`) | Look-back window in days for audit/event data (default `90`). |
+
+**Components** (composable report)
+| Control | Component key | What it does |
+|---|---|---|
+| **KPI Cards** (`ChkArCompKpiCards`, default on) | `kpi-cards` | KPI summary-cards component. |
+| **Heatmap** (`ChkArCompHeatmap`) | `heatmap` | Source × risk heatmap component. |
+| **Tree** (`ChkArCompTree`) | `tree` | Hierarchical drill-down tree component. |
+| **Top-N** (`ChkArCompTopN`, default on) | `top-n` | Top-N ranked-items bar component. |
+| **Group Table** (`ChkArCompGroupTable`, default on) | `group-table` | Grouped detail-table component. |
+
+**Baseline Reports** (named report library)
+| Control | Baseline key | What it does |
+|---|---|---|
+| **Inventory** (`ChkArBaseInventory`) | `inventory` | Access inventory baseline report. |
+| **Privileged** (`ChkArBasePrivileged`) | `privileged` | Privileged-access review baseline report. |
+| **Orphaned** (`ChkArBaseOrphaned`) | `orphaned` | Orphaned / disabled-account access baseline report. |
+| **Exec Summary** (`ChkArBaseExecSummary`) | `exec-summary` | Governance executive-summary baseline report. |
+| **Roster** (`ChkArBaseRoster`) | `roster` | Certification roster baseline report. |
+| **Access Cert** (`ChkArBaseAccessCert`) | `access-cert` | Access-certification attestation baseline report. |
+| **SoD** (`ChkArBaseSod`) | `sod` | Separation-of-Duties toxic-combination baseline report. |
+
+**Actions**
+| Control | What it does |
+|---|---|
+| **Generate** (`BtnArGenerate`) | Generate the adaptive report(s) from the selected anchor, components and baselines. Runs in the background; the progress bar (`AdaptiveReportsProgressBar`) and status label (`AdaptiveReportsStatusLabel`) update while it runs. |
+| **Open Folder** (`BtnArOpenFolder`) | Open the output folder containing the generated reports (default `Audit\adaptive`). |
+| **Open Report** (`BtnArOpenReport`) | Open the most recently generated adaptive report in the browser. |
+
+**Workflow:** pick **Anchor** → set **Theme** / **Days Back** → tick **Components** and/or
+**Baseline Reports** → **Generate** (runs in the background; progress bar + status label
+update) → **Open Report** / **Open Folder**. The default output folder is `Audit\adaptive`
+(matches the CLI `-OutputPath` default).
+
+> **Leadership distribution is CLI-only.** This tab generates reports; it does **not**
+> distribute them. Tiered leadership distribution (org-tree bands + a WhatIf-SMTP preview
+> by default) is run from the CLI via
+> `Invoke-SPAdaptiveReport.ps1 -DistributeToLeadership`.
+
+**Related CLI:** `Invoke-SPAdaptiveReport.ps1`.
+
+---
+
+## 8. Settings tab
 **Purpose:** view/edit configuration, manage authentication, and run a connectivity test —
 without hand-editing `settings.json`.
 **When to use:** initial setup, switching environments, applying a browser token, toggling

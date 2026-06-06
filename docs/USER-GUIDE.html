@@ -757,7 +757,8 @@ body {
 <a href="javascript:void(0)" onclick="showSection('gui-delta-cert-tab'); return false;">4. Delta Cert tab</a>
 <a href="javascript:void(0)" onclick="showSection('gui-governance-tab'); return false;">5. Governance tab</a>
 <a href="javascript:void(0)" onclick="showSection('gui-sdk-features-tab'); return false;">6. SDK Features tab</a>
-<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;">7. Settings tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-adaptive-reports-tab'); return false;">7. Adaptive Reports ta</a>
+<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;">8. Settings tab</a>
 
   </div>
 </div>
@@ -801,7 +802,8 @@ body {
 <a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-4-work-items');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.4</span><span>Work Items</span></a>
 <a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-5-workflows');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.5</span><span>Workflows</span></a>
 <a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-6-filters');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.6</span><span>Filters</span></a>
-<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;"><span class="sidebar-num">27</span><span>7. Settings tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-adaptive-reports-tab'); return false;"><span class="sidebar-num">27</span><span>7. Adaptive Reports tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;"><span class="sidebar-num">28</span><span>8. Settings tab</span></a>
 
     </div>
   </div>
@@ -1915,7 +1917,7 @@ body {
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
 # Campaign view, dark theme, an explicit window
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31</code></pre>
-<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> <em>(Adaptive Reports tab — forthcoming.)</em></p>
+<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> Adaptive Reports tab (see the GUI Playbook).</p>
 </div>
 <div id="section-cli-sdk-features" class="report-section" style="display:none">
 <h2>6. SDK features</h2>
@@ -2080,11 +2082,11 @@ body {
 <h3 id="launching">Launching</h3>
 <pre><code>.\Scripts\Show-SPDashboard.ps1                               # default config
 .\Scripts\Show-SPDashboard.ps1 -ConfigPath .\Config\settings-mock.json</code></pre>
-<p>The dashboard opens as a WPF window with <strong>7 tabs</strong>: Campaigns · Evidence · Audit · Delta Cert · Governance · <strong>SDK Features</strong> · Settings. A status line at the bottom shows the result of the last action; long operations run in the background so the window stays responsive.</p>
+<p>The dashboard opens as a WPF window with <strong>8 tabs</strong>: Campaigns · Evidence · Audit · Delta Cert · Governance · SDK Features · <strong>Adaptive Reports</strong> · Settings. A status line at the bottom shows the result of the last action; long operations run in the background so the window stays responsive.</p>
 <p><strong>Universal conventions</strong></p>
 <ul><li><strong>Refresh</strong> buttons (re)load data from ISC into a grid.</li><li><strong>Checkbox columns</strong> select rows for an action.</li><li><strong>Destructive actions</strong> (delete, deny, complete, disable) pop a Yes/No confirm showing the affected count; on a production environment with <code>Safety.RequireWhatIfOnProd = true</code> they require confirmation, and actions gated by <code>Safety.AllowCompleteCampaign</code> are refused with a "blocked by Safety…" status rather than failing silently (see Foundations §7).</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-campaigns-tab">Campaigns</a> · 2. <a href="#2-evidence-tab">Evidence</a> · 3. <a href="#3-audit-tab">Audit</a> ·</li><li><a href="#4-delta-cert-tab">Delta Cert</a> · 5. <a href="#5-governance-tab">Governance</a> ·</li><li><a href="#6-sdk-features-tab">SDK Features</a> · 7. <a href="#7-settings-tab">Settings</a></li></ol>
+<ol><li><a href="#1-campaigns-tab">Campaigns</a> · 2. <a href="#2-evidence-tab">Evidence</a> · 3. <a href="#3-audit-tab">Audit</a> ·</li><li><a href="#4-delta-cert-tab">Delta Cert</a> · 5. <a href="#5-governance-tab">Governance</a> ·</li><li><a href="#6-sdk-features-tab">SDK Features</a> · 7. <a href="#7-adaptive-reports-tab">Adaptive Reports</a> ·</li><li><a href="#8-settings-tab">Settings</a></li></ol>
 </div>
 <div id="section-gui-campaigns-tab" class="report-section" style="display:none">
 <h2>1. Campaigns tab</h2>
@@ -2435,8 +2437,129 @@ body {
 </tbody></table>
 <p><strong>Related CLI:</strong> <code>Invoke-SPSdkCampaignTemplates.ps1</code> (templates/schedules).</p>
 </div>
+<div id="section-gui-adaptive-reports-tab" class="report-section" style="display:none">
+<h2>7. Adaptive Reports tab</h2>
+<p><strong>Purpose:</strong> generate <strong>adaptive / composable HTML reports</strong> plus a <strong>baseline report library</strong> over your governance data — presentation-ready dashboards (KPI cards, heatmap, drill-down tree, top-N bars, grouped tables) and a catalog of named baseline reports. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage (the GUI equivalent of <code>Invoke-SPAdaptiveReport.ps1</code>).</p>
+<p><strong>Report Options</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Anchor</strong> (<code>AdaptiveReportsAnchorCombo</code>)</td>
+<td>Pivot the report around an <strong>Entitlement</strong> (default — group = entitlement/role/access profile, members = the identities holding it) or a <strong>Campaign</strong> (group = a certification campaign, members = the identities under it).</td>
+</tr>
+<tr>
+<td><strong>Theme</strong> (<code>AdaptiveReportsThemeCombo</code>)</td>
+<td>Visual theme for the generated HTML (<code>light</code> default / <code>dark</code>).</td>
+</tr>
+<tr>
+<td><strong>Days Back</strong> (<code>AdaptiveReportsDaysBackBox</code>)</td>
+<td>Look-back window in days for audit/event data (default <code>90</code>).</td>
+</tr>
+</tbody></table>
+<p><strong>Components</strong> (composable report)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>Component key</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>KPI Cards</strong> (<code>ChkArCompKpiCards</code>, default on)</td>
+<td><code>kpi-cards</code></td>
+<td>KPI summary-cards component.</td>
+</tr>
+<tr>
+<td><strong>Heatmap</strong> (<code>ChkArCompHeatmap</code>)</td>
+<td><code>heatmap</code></td>
+<td>Source × risk heatmap component.</td>
+</tr>
+<tr>
+<td><strong>Tree</strong> (<code>ChkArCompTree</code>)</td>
+<td><code>tree</code></td>
+<td>Hierarchical drill-down tree component.</td>
+</tr>
+<tr>
+<td><strong>Top-N</strong> (<code>ChkArCompTopN</code>, default on)</td>
+<td><code>top-n</code></td>
+<td>Top-N ranked-items bar component.</td>
+</tr>
+<tr>
+<td><strong>Group Table</strong> (<code>ChkArCompGroupTable</code>, default on)</td>
+<td><code>group-table</code></td>
+<td>Grouped detail-table component.</td>
+</tr>
+</tbody></table>
+<p><strong>Baseline Reports</strong> (named report library)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>Baseline key</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Inventory</strong> (<code>ChkArBaseInventory</code>)</td>
+<td><code>inventory</code></td>
+<td>Access inventory baseline report.</td>
+</tr>
+<tr>
+<td><strong>Privileged</strong> (<code>ChkArBasePrivileged</code>)</td>
+<td><code>privileged</code></td>
+<td>Privileged-access review baseline report.</td>
+</tr>
+<tr>
+<td><strong>Orphaned</strong> (<code>ChkArBaseOrphaned</code>)</td>
+<td><code>orphaned</code></td>
+<td>Orphaned / disabled-account access baseline report.</td>
+</tr>
+<tr>
+<td><strong>Exec Summary</strong> (<code>ChkArBaseExecSummary</code>)</td>
+<td><code>exec-summary</code></td>
+<td>Governance executive-summary baseline report.</td>
+</tr>
+<tr>
+<td><strong>Roster</strong> (<code>ChkArBaseRoster</code>)</td>
+<td><code>roster</code></td>
+<td>Certification roster baseline report.</td>
+</tr>
+<tr>
+<td><strong>Access Cert</strong> (<code>ChkArBaseAccessCert</code>)</td>
+<td><code>access-cert</code></td>
+<td>Access-certification attestation baseline report.</td>
+</tr>
+<tr>
+<td><strong>SoD</strong> (<code>ChkArBaseSod</code>)</td>
+<td><code>sod</code></td>
+<td>Separation-of-Duties toxic-combination baseline report.</td>
+</tr>
+</tbody></table>
+<p><strong>Actions</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Generate</strong> (<code>BtnArGenerate</code>)</td>
+<td>Generate the adaptive report(s) from the selected anchor, components and baselines. Runs in the background; the progress bar (<code>AdaptiveReportsProgressBar</code>) and status label (<code>AdaptiveReportsStatusLabel</code>) update while it runs.</td>
+</tr>
+<tr>
+<td><strong>Open Folder</strong> (<code>BtnArOpenFolder</code>)</td>
+<td>Open the output folder containing the generated reports (default <code>Audit\adaptive</code>).</td>
+</tr>
+<tr>
+<td><strong>Open Report</strong> (<code>BtnArOpenReport</code>)</td>
+<td>Open the most recently generated adaptive report in the browser.</td>
+</tr>
+</tbody></table>
+<p><strong>Workflow:</strong> pick <strong>Anchor</strong> → set <strong>Theme</strong> / <strong>Days Back</strong> → tick <strong>Components</strong> and/or <strong>Baseline Reports</strong> → <strong>Generate</strong> (runs in the background; progress bar + status label update) → <strong>Open Report</strong> / <strong>Open Folder</strong>. The default output folder is <code>Audit\adaptive</code> (matches the CLI <code>-OutputPath</code> default).</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Leadership distribution is CLI-only.</strong> This tab generates reports; it does <strong>not</strong> distribute them. Tiered leadership distribution (org-tree bands + a WhatIf-SMTP preview by default) is run from the CLI via <code>Invoke-SPAdaptiveReport.ps1 -DistributeToLeadership</code>.</p></div>
+<p><strong>Related CLI:</strong> <code>Invoke-SPAdaptiveReport.ps1</code>.</p>
+</div>
 <div id="section-gui-settings-tab" class="report-section" style="display:none">
-<h2>7. Settings tab</h2>
+<h2>8. Settings tab</h2>
 <p><strong>Purpose:</strong> view/edit configuration, manage authentication, and run a connectivity test — without hand-editing <code>settings.json</code>. <strong>When to use:</strong> initial setup, switching environments, applying a browser token, toggling Safety flags.</p>
 <table>
 <thead><tr>
@@ -2490,7 +2613,7 @@ body {
 
 <script>
 
-var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-settings-tab"];
+var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab"];
 function showSection(id) {
     sections.forEach(function(s) {
         var el = document.getElementById('section-' + s);

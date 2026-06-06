@@ -44,7 +44,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | DONE |
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | DONE |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | AUTHORED |
-| AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
+| AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | DONE |
 | AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | DONE |
 | AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | DONE |
 
@@ -310,7 +310,15 @@ the final gate.
 deferred.
 
 ## AR-20: Docs
-- **Status:** `TODO` · **Depends:** AR-12,15 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-12,15 · **Size:** M
+> Completed in two passes: the CLI Adaptive section (`cli-playbook.md` 435-474) and
+> Foundations mention landed earlier; this pass added the **GUI** "## 7. Adaptive
+> Reports tab" section to `gui-playbook.md` (Report Options / Components / Baseline
+> Reports / Actions control tables + workflow + a CLI-only leadership-distribution
+> callout), bumped the intro to "8 tabs", renumbered Settings 7→8, removed the stale
+> "forthcoming" GUI claim from `cli-playbook.md`, and regenerated `USER-GUIDE.html`
+> (GUI sections 8→9; new `gui-adaptive-reports-tab` id). Additive only — no existing
+> sections rewritten.
 **Goal:** Add an Adaptive Reports section to `docs/playbook/cli-playbook.md`
 (the new script) and `docs/playbook/gui-playbook.md` (the new tab), plus a
 Foundations mention; regenerate `docs/USER-GUIDE.html` via

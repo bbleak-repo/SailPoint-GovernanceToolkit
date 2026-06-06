@@ -471,7 +471,7 @@ campaign/certification endpoints (no extra scopes).
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31
 ```
 *Exit codes:* 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config.
-**Related GUI:** *(Adaptive Reports tab — forthcoming.)*
+**Related GUI:** Adaptive Reports tab (see the GUI Playbook).
 
 ---
 
