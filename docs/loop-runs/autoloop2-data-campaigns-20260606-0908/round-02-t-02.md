@@ -95,7 +95,7 @@ git check-ignore Config/settings.local.json -> ignored (never staged)
 ```
 
 ## Commit
-- COMMIT_PLACEHOLDER (subject: `test(campaign): T-02 regular campaign upload (MANAGER/SOURCE_OWNER/SEARCH) -> audit HTML e2e against mock`)
+- `3a3081d` -- `test(campaign): T-02 regular campaign upload (MANAGER/SOURCE_OWNER/SEARCH) -> audit HTML e2e against mock`
 
 ## Status
 DONE
