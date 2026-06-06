@@ -26,7 +26,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | # | Priority | Item | Size | Depends | Status |
 |---|----------|------|------|---------|--------|
 | AR-01 | CRITICAL | `SP.ReportComponents` module — copy RC00–RC06 verbatim + manifest | M | none | DONE |
-| AR-02 | HIGH | Pester: each RC component renders a valid HTML fragment | M | AR-01 | TODO |
+| AR-02 | HIGH | Pester: each RC component renders a valid HTML fragment | M | AR-01 | DONE |
 | AR-03 | CRITICAL | `Build-SPRCDataset` — entitlement anchor (entitlement→group, identity→member) | L | AR-01 | TODO |
 | AR-04 | HIGH | Pester: entitlement adapter → correct `GroupResults` shape (mock + synthetic) | M | AR-03 | TODO |
 | AR-05 | CRITICAL | `Build-SPRCDataset` — campaign anchor (cert→group, identity→member) | M | AR-03 | TODO |
@@ -69,7 +69,7 @@ passes; `New-ComposableReport` resolves; a smoke call with a 2-group synthetic
 Context emits non-empty `<html>…</html>`.
 
 ## AR-02: RC component render tests
-- **Status:** `TODO` · **Depends:** AR-01 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-01 · **Size:** M
 **Goal:** `Tests/SP.ReportComponents.Tests.ps1` (RC-001..) — build a synthetic
 `GroupResults`/Context and assert each of KPI/heatmap/tree/topN/table returns an
 HTML `<section>` with the expected counts/labels; assert `New-ComposableReport`
