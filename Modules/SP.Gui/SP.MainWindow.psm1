@@ -5976,6 +5976,12 @@ function Show-SPDashboard {
             Initialize-SdkTab -TabContent $sdkTab
         }
 
+        # Adaptive Reports tab
+        $adaptiveTab = Find-Control -Parent $window -Name 'AdaptiveReportsTabContent'
+        if ($null -ne $adaptiveTab) {
+            Initialize-SPAdaptiveTab -TabContent $adaptiveTab
+        }
+
         # Settings tab
         $settingsTab = Find-Control -Parent $window -Name 'SettingsTabContent'
         if ($null -ne $settingsTab) {

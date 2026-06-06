@@ -185,11 +185,17 @@ $apiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1'
 $auditModulePath = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
 $sdkModulePath   = Join-Path $toolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
 $guiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+$deltaCertModulePath        = Join-Path $toolkitRoot 'Modules\SP.DeltaCert\SP.DeltaCert.psd1'
+$reportComponentsModulePath = Join-Path $toolkitRoot 'Modules\SP.ReportComponents\SP.ReportComponents.psd1'
+$adaptiveReportsModulePath  = Join-Path $toolkitRoot 'Modules\SP.AdaptiveReports\SP.AdaptiveReports.psd1'
 
 foreach ($moduleDef in @(
     @{ Path = $coreModulePath;  Name = 'SP.Core';  Required = $true },
     @{ Path = $apiModulePath;   Name = 'SP.Api';   Required = $true },
     @{ Path = $auditModulePath; Name = 'SP.Audit'; Required = $true },
+    @{ Path = $deltaCertModulePath;        Name = 'SP.DeltaCert';        Required = $true },
+    @{ Path = $reportComponentsModulePath; Name = 'SP.ReportComponents'; Required = $true },
+    @{ Path = $adaptiveReportsModulePath;  Name = 'SP.AdaptiveReports';  Required = $true },
     @{ Path = $sdkModulePath;   Name = 'SP.Sdk';   Required = $true },
     @{ Path = $guiModulePath;   Name = 'SP.Gui';   Required = $true }
 )) {

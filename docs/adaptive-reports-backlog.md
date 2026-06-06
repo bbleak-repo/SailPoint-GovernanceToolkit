@@ -40,7 +40,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | DONE |
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | DONE |
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | DONE |
-| AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | TODO |
+| AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | DONE |
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | TODO |
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
@@ -260,7 +260,7 @@ there); marshal status via `Invoke-OnDispatcher`. On success, open the HTML with
 it; headless logic paths covered where possible (full proof deferred to AR-19).
 
 ## AR-16: Show-SPDashboard wiring
-- **Status:** `TODO` · **Depends:** AR-15 · **Size:** S
+- **Status:** `DONE` · **Depends:** AR-15 · **Size:** S
 **Goal:** Add `SP.ReportComponents` + `SP.AdaptiveReports` to the module-load
 chain and call `Initialize-SPAdaptiveTab` in the tab-init sequence (before
 Settings).
