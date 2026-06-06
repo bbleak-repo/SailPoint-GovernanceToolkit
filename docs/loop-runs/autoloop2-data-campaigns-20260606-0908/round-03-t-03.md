@@ -112,7 +112,7 @@ git status --short
 ```
 
 ## Commit
-COMMIT_HASH_PLACEHOLDER -- test(disconnected): T-03 disconnected upload -> snapshots/register/cert/harvest -> validated HTML e2e
+cf83d74 -- test(disconnected): T-03 disconnected upload -> snapshots/register/cert/harvest -> validated HTML e2e
 
 ## Status
 DONE
