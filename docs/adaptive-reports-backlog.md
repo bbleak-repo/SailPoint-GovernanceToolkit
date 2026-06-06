@@ -42,7 +42,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | DONE |
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | DONE |
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | DONE |
-| AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
+| AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | DONE |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
 | AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | DONE |
@@ -275,7 +275,7 @@ Runs on any OS.
 **Accept:** green headless.
 
 ## AR-18: Register W-09 in full-GUI validation
-- **Status:** `TODO` · **Depends:** AR-17 · **Size:** S
+- **Status:** `DONE` · **Depends:** AR-17 · **Size:** S
 **Goal:** Add W-09 (headless) + a W-09b deferred entry to
 `Tests/Harness/Invoke-FullGuiValidation.ps1` (mirror the W-08/W-08b wiring,
 including the JSONL/ConfigPath param mapping so it runs correctly when authored).
