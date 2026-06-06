@@ -17,7 +17,10 @@ $here = $PSScriptRoot
 $bdir = Join-Path $here 'BaselineReports'
 
 foreach ($b in @(
+    'B01-membership-snapshot-roster.ps1',
+    'B02-access-certification-attestation.ps1',
     'B03-privileged-group-review.ps1',
+    'B04-sod-toxic-comembership.ps1',
     'B05-orphaned-disabled-members.ps1',
     'B06-group-inventory-catalog.ps1',
     'B10-governance-executive-summary.ps1'
@@ -26,8 +29,11 @@ foreach ($b in @(
 }
 
 Export-ModuleMember -Function @(
-    'Export-PrivilegedGroupReviewReport',       # B03
-    'Export-OrphanedDisabledMembersReport',     # B05
-    'Export-GroupInventoryCatalogReport',       # B06
-    'Export-GovernanceExecutiveSummaryReport'   # B10
+    'Export-MembershipSnapshotRosterReport',        # B01
+    'Export-AccessCertificationAttestationReport',  # B02
+    'Export-PrivilegedGroupReviewReport',           # B03
+    'Export-SodToxicComembershipReport',            # B04
+    'Export-OrphanedDisabledMembersReport',         # B05
+    'Export-GroupInventoryCatalogReport',           # B06
+    'Export-GovernanceExecutiveSummaryReport'       # B10
 )

@@ -33,8 +33,8 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-06 | HIGH | Pester: campaign adapter shape | S | AR-05 | DONE |
 | AR-07 | MEDIUM | Mock-parity: serve the endpoints both adapters read (the `/v3/entitlements` 405) | M | AR-03,05 | DONE |
 | AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | DONE |
-| AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | TODO |
-| AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | TODO |
+| AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | DONE |
+| AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | DONE |
 | AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | TODO |
 | AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme) | L | AR-03,05,08 | TODO |
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | TODO |
@@ -169,13 +169,22 @@ privileged-pattern list), `Export-SPRCOrphanedDisabledReport` (B05),
 **Accept:** each emits valid HTML from a synthetic `GroupResults`.
 
 ## AR-09: Port roster + access-cert attestation
-- **Status:** `TODO` · **Depends:** AR-08 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-08 · **Size:** M
+> B01 (`Export-MembershipSnapshotRosterReport`) + B02
+> (`Export-AccessCertificationAttestationReport`) ported **verbatim** (standard
+> `-GroupResults -OutputPath -Title -Theme` signature; attestation cover sheet is
+> internal). Added to the loader + manifest. Both render valid HTML.
 **Goal:** `Export-SPRCRosterReport` (B01), `Export-SPRCAccessCertAttestationReport`
 (B02 — attestation cover sheet + reviewer-decision columns).
 **Accept:** valid HTML; print-safe styling preserved.
 
 ## AR-10: Port SoD with ISC rule-set
-- **Status:** `TODO` · **Depends:** AR-08 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-08 · **Size:** M
+> B04 (`Export-SodToxicComembershipReport`) — engine ported verbatim; the one
+> ADAPT: replaced the AD-lab rule-set (`GG_Scale_000x`) with a **SailPoint ISC SoD
+> Starter** (entitlement-name role aliases + the classic toxic pairs +
+> risk tiers), clearly marked EDIT-for-your-tenant (rule-set is data, not logic).
+> Renders the full SoD register (17.9 KB).
 **Goal:** `Export-SPRCSodReport` (B04). Replace the GE rule-set block with an
 ISC-appropriate **entitlement-conflict rule-set** (declarative: role aliases +
 toxic pairs + risk tiers); keep the detection engine.

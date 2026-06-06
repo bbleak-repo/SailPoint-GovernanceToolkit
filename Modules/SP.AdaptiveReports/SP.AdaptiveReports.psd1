@@ -11,10 +11,13 @@
     RequiredModules      = @()
     FunctionsToExport    = @(
         'Build-SPRCDataset',
-        'Export-PrivilegedGroupReviewReport',
-        'Export-OrphanedDisabledMembersReport',
-        'Export-GroupInventoryCatalogReport',
-        'Export-GovernanceExecutiveSummaryReport'
+        'Export-MembershipSnapshotRosterReport',        # B01
+        'Export-AccessCertificationAttestationReport',  # B02
+        'Export-PrivilegedGroupReviewReport',           # B03
+        'Export-SodToxicComembershipReport',            # B04
+        'Export-OrphanedDisabledMembersReport',         # B05
+        'Export-GroupInventoryCatalogReport',           # B06
+        'Export-GovernanceExecutiveSummaryReport'       # B10
     )
     CmdletsToExport      = @()
     VariablesToExport    = @()
