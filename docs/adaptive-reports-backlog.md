@@ -27,9 +27,9 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 |---|----------|------|------|---------|--------|
 | AR-01 | CRITICAL | `SP.ReportComponents` module — copy RC00–RC06 verbatim + manifest | M | none | DONE |
 | AR-02 | HIGH | Pester: each RC component renders a valid HTML fragment | M | AR-01 | DONE |
-| AR-03 | CRITICAL | `Build-SPRCDataset` — entitlement anchor (entitlement→group, identity→member) | L | AR-01 | TODO |
+| AR-03 | CRITICAL | `Build-SPRCDataset` — entitlement anchor (entitlement→group, identity→member) | L | AR-01 | DONE |
 | AR-04 | HIGH | Pester: entitlement adapter → correct `GroupResults` shape (mock + synthetic) | M | AR-03 | TODO |
-| AR-05 | CRITICAL | `Build-SPRCDataset` — campaign anchor (cert→group, identity→member) | M | AR-03 | TODO |
+| AR-05 | CRITICAL | `Build-SPRCDataset` — campaign anchor (cert→group, identity→member) | M | AR-03 | DONE |
 | AR-06 | HIGH | Pester: campaign adapter shape | S | AR-05 | TODO |
 | AR-07 | MEDIUM | Mock-parity: serve the endpoints both adapters read (the `/v3/entitlements` 405) | M | AR-03,05 | TODO |
 | AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | TODO |
@@ -78,7 +78,14 @@ minimal `Changes[]` fixture (no live changelog).
 **Accept:** all new tests pass; included in the suite.
 
 ## AR-03: Entitlement adapter — `Build-SPRCDataset -Anchor Entitlement`
-- **Status:** `TODO` · **Depends:** AR-01 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-01 · **Size:** L
+> **Design note:** implemented as a PURE transform over pre-built campaign-audit
+> data (the `Get-SPIdentityAccessSpread` shape: `.Decisions` items carrying
+> IdentityId/IdentityName/SourceName/AccessName/RiskFlags) rather than pulling the
+> API itself — fully unit-testable and uses only mock-proven campaign/cert/ARI
+> endpoints. The CLI/GUI build the audits via the existing pipeline and pass them
+> in. A live `/v3/entitlements` *catalog* enrichment is deferred to AR-07. Both
+> anchors live in `SP.AdaptiveReports/SP.RCDataset.psm1` (AR-05 = campaign anchor).
 **Goal:** New `Modules/SP.AdaptiveReports/SP.RCDataset.psm1`. `Build-SPRCDataset`
 maps ISC entitlements → RC `GroupResults`: group = entitlement/access-profile/role
 (`GroupName`,`Domain`=source), members = identities holding it
@@ -101,7 +108,11 @@ to prove end-to-end shape compatibility.
 **Accept:** tests pass; shape verified against the RC contract.
 
 ## AR-05: Campaign adapter — `Build-SPRCDataset -Anchor Campaign`
-- **Status:** `TODO` · **Depends:** AR-03 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-03 · **Size:** M
+> Implemented in the same `SP.RCDataset.psm1` write as AR-03 (one module, two
+> anchors): `-Anchor Campaign` groups records by campaign (single synthetic
+> 'ISC Campaigns' domain), members = distinct identities under each campaign.
+> Smoke-verified rendering through the RC engine. Test = AR-06.
 **Goal:** Second anchor in `SP.RCDataset.psm1`: group = certification (or
 campaign), members = identities/ARIs under it; `Enabled` = identity active. Reuse
 SP.Audit campaign/cert/ARI reads (endpoints proven by W-03b/W-05). Same
