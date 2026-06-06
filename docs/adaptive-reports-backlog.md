@@ -43,7 +43,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | DONE |
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | DONE |
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | DONE |
-| AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
+| AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | AUTHORED |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
 | AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | DONE |
 | AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | DONE |
@@ -282,7 +282,25 @@ including the JSONL/ConfigPath param mapping so it runs correctly when authored)
 **Accept:** full validation lists W-09; W-09b shows deferred until run live.
 
 ## AR-19: Interactive FlaUI W-09b (AUTHOR only)
-- **Status:** `TODO` (→ `AUTHORED`) · **Depends:** AR-17 · **Size:** L
+- **Status:** `AUTHORED` · **Depends:** AR-17 · **Size:** L
+> Authored `Tests/Harness/Test-W09b-AdaptiveTabInteractive.ps1` by mirroring
+> `Test-W08b-SdkTabInteractive.ps1`, retargeted to the FLAT Adaptive Reports tab
+> (no nested TabControl / sub-tabs). Verbatim W-08b param signature
+> (-ConfigPath/-JsonlPath/-ScreenshotDir/-MockBaseUrl/-RefreshTimeoutMs) -- the
+> signature Invoke-FullGuiValidation.ps1 already wires (AR-18) -- STA guard,
+> /health probe -> BLOCK the 4 live steps (WG-09-11..14) if the mock is down,
+> try/finally Stop-SPDashboardForTest. Live walk: navigate + resolve the anchor
+> combo; assert anchor/theme/days-back + >=1 component (ChkArCompKpiCards On,
+> opt-in ChkArBaseInventory); **core** = snapshot $outDir *.html BEFORE clicking
+> BtnArGenerate, poll AdaptiveReportsStatusLabel up to 90s for
+> '^Generated \d+ report' (or 'failed'), then poll $outDir up to 10s for a NEW
+> *.html, PASS only if BOTH appear; Open Report round-trip asserts the global
+> StatusBarText does not flip to 'No report generated yet.' (+ soft-note Open
+> Folder). $outDir re-derived exactly as Resolve-AdaptiveOutputPath does. Headless
+> verify: AST 0 errors; every -AutomationId cross-checks against the W-09-verified
+> Adaptive control set (StatusBarText = the global status bar at MainWindow.xaml
+> 2249); W-09 structure harness green (pass=7 fail=0). NOT executed -- a human runs
+> it as the final acceptance gate.
 **Goal:** Author `Tests/Harness/Test-W09b-AdaptiveTabInteractive.ps1` (mirror
 W-08b): navigate the tab, pick components/baseline + anchor, Generate against the
 mock, assert a report file appears + opens, screenshots. STA guard, mock `/health`
