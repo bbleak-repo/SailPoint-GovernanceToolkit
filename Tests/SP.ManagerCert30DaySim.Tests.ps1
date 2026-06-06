@@ -680,6 +680,160 @@ Describe "MC-06: Privileged-role reports -- fixed roles, current members, day-ov
 }
 #endregion
 
+# ---------------------------------------------------------------------------
+#region MC-08: SP.Sdk path (T-07)
+# ---------------------------------------------------------------------------
+# Proves the SAME daily privileged-attestation / manager-accountability business
+# outcome validated through the custom New-SPCampaign/Start-SPCampaign path
+# (MC-04) is ALSO reachable through the PSSailpoint SDK surface:
+#   Layer A -- data-truth on the frozen fixture: the new campaignTemplates /
+#              campaignTemplateSchedules / workItems collections exist, encode the
+#              DAILY cadence + MANAGER cert type, and cross-link to the SAME
+#              tracked-role responsible-manager population.
+#   Layer B -- the REAL SP.Sdk functions (Get-SPSdkCampaignTemplates /
+#              Get-SPSdkTemplateSchedule / Get-SPSdkWorkItemsSummary /
+#              Get-SPSdkWorkItems) over a MOCKED transport return the fixture's
+#              SDK collections and hit the correct endpoints.
+Describe "MC-08: SP.Sdk path yields the same privileged-attestation / manager-accountability outcome" {
+
+    BeforeAll {
+        . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+        Import-SPTestModules -Core -Api -Sdk
+
+        function Get-MC30FixturePath {
+            return (Join-Path $PSScriptRoot (Join-Path 'TestData' 'ManagerCert30DaySim.State.json'))
+        }
+        $json = Get-Content -Path (Get-MC30FixturePath) -Raw | ConvertFrom-Json
+
+        $script:mc08Templates = @($json.campaignTemplates)
+        $script:mc08Schedules = $json.campaignTemplateSchedules
+        $script:mc08WorkItems = @($json.workItems)
+        $script:mc08Tracked   = @($json.trackedPrivilegedRoles)
+        $script:mc08TrackedMgrs = @($script:mc08Tracked | ForEach-Object { $_.responsibleManagerId } | Sort-Object -Unique)
+
+        # ---- Layer-B fixture-backed mocks (mirror SP.SdkCampaignTemplates.Tests.ps1 /
+        #      SP.SdkWorkItems.Tests.ps1). Get-SPConfig lives in SP.SdkCommon. ----
+        $script:mc08TemplatesB = $script:mc08Templates
+        $script:mc08SchedB     = $script:mc08Schedules.'tmpl-priv-01'
+        $script:mc08WorkItemsB = $script:mc08WorkItems
+
+        Mock Write-SPLog  -ModuleName SP.SdkCampaignTemplates { }
+        Mock Write-SPLog  -ModuleName SP.SdkWorkItems { }
+        Mock Get-SPConfig -ModuleName SP.SdkCommon {
+            [PSCustomObject]@{ Api = [PSCustomObject]@{ BaseUrl = 'https://test/v3'; MaxPaginationPages = 200 } }
+        }
+
+        Mock Invoke-SPApiRequest -ModuleName SP.SdkCampaignTemplates {
+            if ($Endpoint -eq '/campaign-templates') {
+                # Return an items-wrapper to exercise the function's unwrap path.
+                return @{ Success = $true; StatusCode = 200; Data = [PSCustomObject]@{ items = $script:mc08TemplatesB }; Error = $null }
+            }
+            if ($Endpoint -match '/campaign-templates/([^/]+)/schedule$') {
+                return @{ Success = $true; StatusCode = 200; Data = $script:mc08SchedB; Error = $null }
+            }
+            return @{ Success = $false; StatusCode = 400; Data = $null; Error = "Unhandled $Endpoint" }
+        }
+
+        Mock Invoke-SPApiRequest -ModuleName SP.SdkWorkItems {
+            if ($Endpoint -eq '/work-items/summary') {
+                $open = @($script:mc08WorkItemsB | Where-Object { $_.state -ne 'Finished' -and $_.state -ne 'Completed' }).Count
+                $done = @($script:mc08WorkItemsB | Where-Object { $_.state -eq 'Finished' -or $_.state -eq 'Completed' }).Count
+                return @{ Success = $true; StatusCode = 200; Data = [PSCustomObject]@{ open = $open; completed = $done; total = $script:mc08WorkItemsB.Count }; Error = $null }
+            }
+            if ($Endpoint -eq '/work-items') {
+                $open = @($script:mc08WorkItemsB | Where-Object { $_.state -ne 'Finished' -and $_.state -ne 'Completed' })
+                return @{ Success = $true; StatusCode = 200; Data = $open; Error = $null }
+            }
+            return @{ Success = $false; StatusCode = 400; Data = $null; Error = "Unhandled $Endpoint" }
+        }
+    }
+
+    Context "Layer A: data-truth on the frozen fixture" {
+
+        It "Should contain at least 10 campaign templates, each of type MANAGER" {
+            $script:mc08Templates.Count | Should -BeGreaterOrEqual 10
+            foreach ($t in $script:mc08Templates) { $t.type | Should -Be 'MANAGER' }
+        }
+
+        It "Should point every template's ownerRef at a tracked-role responsible manager" {
+            foreach ($t in $script:mc08Templates) {
+                $t.ownerRef | Should -Not -BeNullOrEmpty
+                $script:mc08TrackedMgrs | Should -Contain $t.ownerRef.id
+            }
+        }
+
+        It "Should have a DAILY-cadence schedule for those templates (the daily cadence)" {
+            foreach ($t in $script:mc08Templates) {
+                $sched = $script:mc08Schedules.($t.id)
+                $sched | Should -Not -BeNullOrEmpty
+                $sched.type | Should -Be 'DAILY'
+            }
+        }
+
+        It "Should contain work-items with BOTH open and completed states" {
+            $open = @($script:mc08WorkItems | Where-Object { $_.state -ne 'Finished' -and $_.state -ne 'Completed' })
+            $done = @($script:mc08WorkItems | Where-Object { $_.state -eq 'Finished' -or $_.state -eq 'Completed' })
+            $open.Count | Should -BeGreaterThan 0
+            $done.Count | Should -BeGreaterThan 0
+        }
+
+        It "Should have every work-item owned by a tracked-role responsible manager (same accountability population)" {
+            $owners = @($script:mc08WorkItems | ForEach-Object { $_.ownerId } | Sort-Object -Unique)
+            $owners.Count | Should -BeGreaterThan 0
+            foreach ($o in $owners) { $script:mc08TrackedMgrs | Should -Contain $o }
+        }
+
+        It "Should represent the SAME manager population as the custom managerAttestation path (work-item owners subset of tracked managers)" {
+            $owners = @($script:mc08WorkItems | ForEach-Object { $_.ownerId } | Sort-Object -Unique)
+            $outside = @($owners | Where-Object { $script:mc08TrackedMgrs -notcontains $_ })
+            $outside.Count | Should -Be 0
+        }
+    }
+
+    Context "Layer B: real SP.Sdk functions over mocked transport" {
+
+        It "Get-SPSdkCampaignTemplates returns Success with >=10 templates and hits /campaign-templates" {
+            $res = Get-SPSdkCampaignTemplates -CorrelationID 'mc08-tmpl'
+            $res.Success | Should -Be $true
+            @($res.Data).Count | Should -BeGreaterOrEqual 10
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.SdkCampaignTemplates -ParameterFilter {
+                $Endpoint -eq '/campaign-templates'
+            }
+        }
+
+        It "Get-SPSdkTemplateSchedule returns the DAILY cadence and hits /campaign-templates/{id}/schedule" {
+            $res = Get-SPSdkTemplateSchedule -TemplateId 'tmpl-priv-01' -CorrelationID 'mc08-sched'
+            $res.Success | Should -Be $true
+            $res.Data.type | Should -Be 'DAILY'
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.SdkCampaignTemplates -ParameterFilter {
+                $Endpoint -eq '/campaign-templates/tmpl-priv-01/schedule'
+            }
+        }
+
+        It "Get-SPSdkWorkItemsSummary returns non-zero open + completed and hits /work-items/summary" {
+            $res = Get-SPSdkWorkItemsSummary -CorrelationID 'mc08-wisum'
+            $res.Success | Should -Be $true
+            $res.Data.open      | Should -BeGreaterThan 0
+            $res.Data.completed | Should -BeGreaterThan 0
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.SdkWorkItems -ParameterFilter {
+                $Endpoint -eq '/work-items/summary'
+            }
+        }
+
+        It "Get-SPSdkWorkItems returns per-manager open work-items and hits /work-items" {
+            $res = Get-SPSdkWorkItems -CorrelationID 'mc08-wi'
+            $res.Success | Should -Be $true
+            @($res.Data).Count | Should -BeGreaterThan 0
+            $owners = @($res.Data | ForEach-Object { $_.ownerId } | Sort-Object -Unique)
+            foreach ($o in $owners) { $script:mc08TrackedMgrs | Should -Contain $o }
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.SdkWorkItems -ParameterFilter {
+                $Endpoint -eq '/work-items'
+            }
+        }
+    }
+}
+#endregion
+
 # ===========================================================================
 #region MC-07 (Layer A) -- Manager accountability: per-day status + window rollup
 # ===========================================================================

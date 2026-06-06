@@ -54,6 +54,13 @@
     Passthrough to the SMTP-WhatIf gating. OFF by default so Send-SPReport logs
     ('WOULD send' / Action='Logged') instead of sending. Only set this if SMTP is
     actually configured and you intend to send.
+.PARAMETER IncludeSdkPath
+    Additionally exercise the SP.Sdk path (T-07): query the mock's
+    /campaign-templates, /campaign-templates/{id}/schedule, /work-items and
+    /work-items/summary via Get-SPSdkCampaignTemplates / Get-SPSdkTemplateSchedule
+    / Get-SPSdkWorkItemsSummary / Get-SPSdkWorkItems, and write sdk-path.json into
+    the capture dir. OFF by default so existing behaviour is unchanged. Treated as
+    a WARN (not fatal) if the SDK collections are empty. Skipped under -WhatIf.
 .PARAMETER OutputPath
     Run output directory (the T-05 capture dir). Defaults to
     Audit\sim-30day-<yyyyMMdd-HHmmss> under the toolkit root.
@@ -108,6 +115,9 @@ param(
     [switch]$SendReports,
 
     [Parameter()]
+    [switch]$IncludeSdkPath,
+
+    [Parameter()]
     [string]$OutputPath,
 
     [Parameter()]
@@ -146,6 +156,7 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 $moduleChain = @(
     'SP.Core\SP.Core.psd1'
     'SP.Api\SP.Api.psd1'
+    'SP.Sdk\SP.Sdk.psd1'
     'SP.Audit\SP.Audit.psd1'
     'SP.DeltaCert\SP.DeltaCert.psd1'
     'SP.ReportComponents\SP.ReportComponents.psd1'
@@ -719,6 +730,108 @@ if (-not $SkipReports) {
 else {
     Write-Host '  Step E: Rolling 7/30-day trend HTML [SKIPPED]' -ForegroundColor DarkGray
     Write-SimAudit -Step 'E-RollingTrend' -Status 'Skipped' -Detail $null
+    Write-Host ''
+}
+
+#endregion
+
+#region Step F: SP.Sdk path (T-07) -- campaign templates / schedules / work-items
+
+# Additive, opt-in (-IncludeSdkPath), and best-effort: proves the SAME daily
+# privileged-attestation business outcome (per-manager accountability + tracked
+# privileged roles) is reachable through the PSSailpoint SDK surface, via the
+# already-served /campaign-templates, /campaign-templates/{id}/schedule, and
+# /work-items[/summary] endpoints. Empty collections downgrade to a WARN (never
+# fatal), matching the $worstExitCode pattern. Skipped under -WhatIf.
+
+if ($IncludeSdkPath -and -not $isWhatIf) {
+    Write-Host '  Step F: SP.Sdk path (campaign templates / schedules / work-items)' -ForegroundColor Cyan
+    $sdkOut = Join-Path $OutputPath 'sdk-path'
+    try {
+        if (-not (Test-Path $sdkOut)) { New-Item -ItemType Directory -Path $sdkOut -Force -WhatIf:$false | Out-Null }
+
+        $sdkResult = [ordered]@{
+            Templates           = @()
+            SchedulesSampled    = @()
+            WorkItemsSummary    = $null
+            OpenWorkItems       = 0
+            CompletedWorkItems  = 0
+        }
+
+        # (1) Campaign templates (daily privileged-role attestation templates).
+        $tmplRes = Get-SPSdkCampaignTemplates -CorrelationID $correlationID
+        $templates = @()
+        if ($null -ne $tmplRes -and $tmplRes.Success) {
+            $templates = @($tmplRes.Data)
+        }
+        $sdkResult.Templates = @($templates | ForEach-Object {
+            $ownerId = $null; $ownerName = $null
+            if ($null -ne $_.ownerRef) { $ownerId = $_.ownerRef.id; $ownerName = $_.ownerRef.name }
+            [ordered]@{ id = [string]$_.id; name = [string]$_.name; type = [string]$_.type; ownerId = $ownerId; ownerName = $ownerName }
+        })
+        Write-Host "    Templates: $($templates.Count)" -ForegroundColor $(if ($templates.Count -gt 0) { 'Green' } else { 'Yellow' })
+
+        # (2) Schedules (sample the first few templates -- proves DAILY cadence).
+        $sampleN = [math]::Min(3, @($templates).Count)
+        for ($s = 0; $s -lt $sampleN; $s++) {
+            $tid = [string]$templates[$s].id
+            $schRes = Get-SPSdkTemplateSchedule -TemplateId $tid -CorrelationID $correlationID
+            if ($null -ne $schRes -and $schRes.Success -and $null -ne $schRes.Data) {
+                $sdkResult.SchedulesSampled += [ordered]@{
+                    templateId = $tid
+                    type       = [string]$schRes.Data.type
+                    timeZoneId = [string]$schRes.Data.timeZoneId
+                }
+            }
+        }
+
+        # (3) Work-items summary + open items (manager attestation tasks).
+        $wiSumRes = Get-SPSdkWorkItemsSummary -CorrelationID $correlationID
+        if ($null -ne $wiSumRes -and $wiSumRes.Success -and $null -ne $wiSumRes.Data) {
+            $sdkResult.WorkItemsSummary = [ordered]@{
+                open      = [int]$wiSumRes.Data.open
+                completed = [int]$wiSumRes.Data.completed
+                total     = [int]$wiSumRes.Data.total
+            }
+        }
+        $wiOpenRes = Get-SPSdkWorkItems -CorrelationID $correlationID
+        if ($null -ne $wiOpenRes -and $wiOpenRes.Success) {
+            $sdkResult.OpenWorkItems = @($wiOpenRes.Data).Count
+        }
+        $wiDoneRes = Get-SPSdkCompletedWorkItems -CorrelationID $correlationID
+        if ($null -ne $wiDoneRes -and $wiDoneRes.Success) {
+            $sdkResult.CompletedWorkItems = @($wiDoneRes.Data).Count
+        }
+        Write-Host "    Work-items: open=$($sdkResult.OpenWorkItems) completed=$($sdkResult.CompletedWorkItems)" -ForegroundColor $(if ($sdkResult.OpenWorkItems -gt 0) { 'Green' } else { 'Yellow' })
+
+        $sdkFile = Join-Path $sdkOut 'sdk-path.json'
+        [System.IO.File]::WriteAllText($sdkFile, ($sdkResult | ConvertTo-Json -Depth 8), $utf8NoBom)
+        $reportPaths.Add($sdkFile)
+        Write-Host "    capture: $sdkFile" -ForegroundColor DarkGray
+
+        # Empty SDK collections are a WARN, not fatal.
+        if (@($templates).Count -eq 0 -or $sdkResult.OpenWorkItems -eq 0) {
+            Write-Host '    WARN: SDK path returned empty templates or no open work-items.' -ForegroundColor Yellow
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+            Write-SimAudit -Step 'F-SdkPath' -Status 'Warn' -Detail @{ Templates = @($templates).Count; OpenWorkItems = $sdkResult.OpenWorkItems }
+        }
+        else {
+            Write-SimAudit -Step 'F-SdkPath' -Status 'Done' -Detail @{
+                Templates = @($templates).Count; SchedulesSampled = @($sdkResult.SchedulesSampled).Count
+                OpenWorkItems = $sdkResult.OpenWorkItems; CompletedWorkItems = $sdkResult.CompletedWorkItems
+            }
+        }
+    }
+    catch {
+        Write-Host "    WARN: Step F exception (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+        Write-SimAudit -Step 'F-SdkPath' -Status 'Warn' -Detail @{ Reason = $_.Exception.Message }
+    }
+    Write-Host ''
+}
+elseif ($IncludeSdkPath -and $isWhatIf) {
+    Write-Host '  Step F: SP.Sdk path [SKIPPED -- WhatIf]' -ForegroundColor DarkGray
+    Write-SimAudit -Step 'F-SdkPath' -Status 'Skipped' -Detail @{ Reason = 'WhatIf' }
     Write-Host ''
 }
 
