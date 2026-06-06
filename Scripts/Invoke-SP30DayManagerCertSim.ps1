@@ -404,11 +404,15 @@ if (-not $SkipWrite) {
                     $writeResult.Names.Add($campName)
                     Write-Host "    + Submitted: $campName (id=$campId)" -ForegroundColor Green
 
-                    # Activate
+                    # Activate. Track THIS campaign's own activation outcome so the
+                    # per-campaign lifecycle audit reflects this campaign only (not the
+                    # cumulative $writeResult.Activated counter across all campaigns).
+                    $thisCampaignActivated = $false
                     if ($PSCmdlet.ShouldProcess($campId, 'Start-SPCampaign (activate)')) {
                         $startResult = Start-SPCampaign -CampaignId $campId -CorrelationID $correlationID -CampaignTestId 'T-04'
                         if ($null -ne $startResult -and $startResult.Success) {
                             $writeResult.Activated++
+                            $thisCampaignActivated = $true
                         }
                         else {
                             $errTxt = if ($null -ne $startResult) { $startResult.Error } else { 'null result' }
@@ -426,7 +430,7 @@ if (-not $SkipWrite) {
                             # states (STAGED at New, ACTIVE at Start).
                             $observed = [System.Collections.Generic.List[string]]::new()
                             $observed.Add('STAGED')
-                            if ($writeResult.Activated -gt 0) { $observed.Add('ACTIVE') }
+                            if ($thisCampaignActivated) { $observed.Add('ACTIVE') }
 
                             $compResult = Complete-SPCampaign -CampaignId $campId -CorrelationID $correlationID -CampaignTestId 'T-04'
                             if ($null -ne $compResult -and $compResult.Success) {
