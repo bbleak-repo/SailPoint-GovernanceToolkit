@@ -37,7 +37,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | DONE |
 | AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | DONE |
 | AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme + date period) | L | AR-03,05,08 | DONE |
-| AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | TODO |
+| AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | DONE |
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | TODO |
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | TODO |
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | TODO |
@@ -217,7 +217,7 @@ the adapter, renders via `New-ComposableReport` / `Export-SPRC*`. Exit codes
 works; exits per contract.
 
 ## AR-13: CLI tests + convention compliance
-- **Status:** `TODO` · **Depends:** AR-12 · **Size:** S
+- **Status:** `DONE` · **Depends:** AR-12 · **Size:** S
 **Goal:** Add the script to the read-only set in `Tests/SP.CliScripts.Tests.ps1`
 (CLI-005: no SupportsShouldProcess) and assert OutputMode ValidateSet + `-Help` +
 AST-clean (CLI-001..004 stay green).

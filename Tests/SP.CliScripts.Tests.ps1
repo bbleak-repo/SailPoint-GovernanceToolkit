@@ -19,6 +19,7 @@ BeforeAll {
 
     # All entry-point scripts
     $script:AllScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-GovernanceTest.ps1'
         'Invoke-SPADDeltaCert.ps1'
         'Invoke-SPCampaignAudit.ps1'
@@ -55,6 +56,7 @@ BeforeAll {
 
     # Scripts that are read-only (no SupportsShouldProcess expected)
     $script:ReadOnlyScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-SPDeltaReport.ps1'
         'Invoke-SPDisconnectedAppRegistry.ps1'
         'Show-SPDashboard.ps1'
@@ -103,6 +105,7 @@ BeforeDiscovery {
     $script:ScriptsRoot = Join-Path $PSScriptRoot '..\Scripts'
 
     $script:AllScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-GovernanceTest.ps1'
         'Invoke-SPADDeltaCert.ps1'
         'Invoke-SPCampaignAudit.ps1'
@@ -137,6 +140,7 @@ BeforeDiscovery {
     )
 
     $script:ReadOnlyScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-SPDeltaReport.ps1'
         'Invoke-SPDisconnectedAppRegistry.ps1'
         'Show-SPDashboard.ps1'
