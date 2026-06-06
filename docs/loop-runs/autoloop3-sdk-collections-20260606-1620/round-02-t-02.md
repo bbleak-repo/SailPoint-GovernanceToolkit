@@ -87,7 +87,8 @@ Helper defined (210); token POST (250) + Authorization Bearer header (252); `$ex
 DID NOT run Invoke-Pester on this harness; DID NOT launch the dashboard / FlaUI / W-08b.
 
 ## Commit
-<filled in after commit>
+`94c4e36` -- test(gui): make W-08b SDK interactive test data-adaptive (T-02)
+(record file's own Commit line amended into the same commit body in a follow-up touch is unnecessary; the hash above is the committed change.)
 
 ## Status
 AUTHORED -- the file is an AUTHOR-ONLY live FlaUI harness (deferred human-run gate). The refactor is complete and statically verified headlessly (parse 0 errors, all AutomationIds present, no surviving hard-coded literals, probe helper + $mockUp-guarded call site confirmed); the live run is intentionally NOT executed here.
