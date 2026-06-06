@@ -3221,13 +3221,27 @@ function Invoke-GuiAdaptiveReport {
         if ($null -ne $chk -and $chk.IsChecked -eq $true) { $baselines.Add($baselineMap[$name]) }
     }
 
-    if ($components.Count -eq 0 -and $baselines.Count -eq 0) {
-        Set-StatusMessage -Message 'Select at least one component or baseline report.' -IsError
+    # Map enriched-report checkboxes to the enriched-exporter keys (T-05)
+    $enrichedMap = [ordered]@{
+        'ChkArEnrichedPrivilegedAttestation' = 'privileged-attestation'
+        'ChkArEnrichedAccountability'        = 'accountability'
+        'ChkArEnrichedTrend'                 = 'trend'
+        'ChkArEnrichedDisconnected'          = 'disconnected'
+    }
+    $enriched = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $enrichedMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $enriched.Add($enrichedMap[$name]) }
+    }
+
+    if ($components.Count -eq 0 -and $baselines.Count -eq 0 -and $enriched.Count -eq 0) {
+        Set-StatusMessage -Message 'Select at least one component, baseline or enriched report.' -IsError
         return
     }
 
     $componentArr = $components.ToArray()
     $baselineArr  = $baselines.ToArray()
+    $enrichedArr  = $enriched.ToArray()
 
     $outputPath = Resolve-AdaptiveOutputPath
 
@@ -3257,6 +3271,7 @@ function Invoke-GuiAdaptiveReport {
     $runspace.SessionStateProxy.SetVariable('DaysBack',      $daysBack)
     $runspace.SessionStateProxy.SetVariable('Components',    $componentArr)
     $runspace.SessionStateProxy.SetVariable('Baselines',     $baselineArr)
+    $runspace.SessionStateProxy.SetVariable('Enriched',      $enrichedArr)
 
     $psInstance = [System.Management.Automation.PowerShell]::Create()
     $psInstance.Runspace = $runspace
@@ -3269,6 +3284,7 @@ function Invoke-GuiAdaptiveReport {
                 'SP.DeltaCert\SP.DeltaCert.psd1',
                 'SP.ReportComponents\SP.ReportComponents.psd1',
                 'SP.AdaptiveReports\SP.AdaptiveReports.psd1',
+                'SP.DisconnectedApps\SP.DisconnectedApps.psd1',
                 'SP.Gui\SP.Gui.psd1')) {
             $mod = Join-Path $ToolkitRoot "Modules\$rel"
             if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
@@ -3334,6 +3350,49 @@ function Invoke-GuiAdaptiveReport {
                 $outFile = Join-Path $OutputPath "$key-$stamp.html"
                 & $fn -GroupResults $gr -OutputPath $outFile -Theme $Theme | Out-Null
                 $generated.Add($outFile)
+            }
+
+            # Enriched reports (T-05). Their exporter inputs differ from the
+            # baseline GroupResults shape and may not be derivable from the
+            # in-runspace audits/gr/ds chain, so each branch is a SOFT-SKIP on
+            # failure (status note appended) rather than a crash. The headless
+            # additive gate only requires that the controls/map/wiring exist.
+            $enrichedNotes = New-Object System.Collections.Generic.List[string]
+            foreach ($key in @($Enriched)) {
+                try {
+                    switch ($key) {
+                        'privileged-attestation' {
+                            # Privileged-attestation sections live in Export-SPAuditHtml,
+                            # which consumes the CampaignAudits hashtable array built above.
+                            $paths = Export-SPAuditHtml -CampaignAudits $audits.ToArray() -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            foreach ($p in @($paths)) { if ($p) { $generated.Add([string]$p) } }
+                        }
+                        'accountability' {
+                            # Reviewer-accountability sections also render via Export-SPAuditHtml.
+                            $paths = Export-SPAuditHtml -CampaignAudits $audits.ToArray() -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            foreach ($p in @($paths)) { if ($p) { $generated.Add([string]$p) } }
+                        }
+                        'trend' {
+                            # Campaign-trend takes TrendData from Measure-SPCampaignTrends, not GroupResults.
+                            $metrics = @($audits | ForEach-Object {
+                                @{ CampaignName = [string]$_.CampaignName; CampaignId = [string]$_.CampaignId }
+                            })
+                            $trend = Measure-SPCampaignTrends -CampaignMetrics $metrics
+                            $trendData = if ($trend -is [hashtable] -and $trend.ContainsKey('Data')) { $trend.Data } else { $trend }
+                            $outFile = Export-SPCampaignTrendHtml -TrendData $trendData -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            if ($outFile) { $generated.Add([string]$outFile) }
+                        }
+                        'disconnected' {
+                            # The disconnected-app report needs CSV/delta inputs that are not
+                            # part of the campaign gr/ds chain -- soft-skip in the GUI runspace.
+                            throw 'disconnected-app report requires CSV/delta inputs not available in the adaptive runspace'
+                        }
+                        default { throw "unknown enriched key '$key'" }
+                    }
+                }
+                catch {
+                    $enrichedNotes.Add("$key skipped: $($_.Exception.Message)")
+                }
             }
 
             if ($generated.Count -eq 0) { throw 'No reports were produced.' }
