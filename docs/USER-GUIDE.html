@@ -1251,7 +1251,7 @@ body {
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, weekly digest, <strong>adaptive reports</strong></li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, weekly digest, <strong>adaptive reports</strong></li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -1316,6 +1316,39 @@ body {
 </div>
 <div id="section-cli-campaign-testing-audit" class="report-section" style="display:none">
 <h2>2. Campaign testing &amp; audit</h2>
+<h3 id="creating-activating-a-campaign-the-write-path">Creating &amp; activating a campaign (the write path)</h3>
+<p><strong>Purpose:</strong> the toolkit doesn't just <em>audit</em> campaigns — it can <strong>create, activate, and complete</strong> them. The lifecycle building blocks live in <code>SP.Api\SP.Campaigns.psm1</code> and follow the ISC state machine <code>STAGED → ACTIVATING → ACTIVE → COMPLETING → COMPLETED</code>:</p>
+<table>
+<thead><tr>
+<th>Function</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><code>New-SPCampaign</code></td>
+<td>POSTs <code>/campaigns</code> and returns the <strong>STAGED</strong> campaign. <code>-Type</code> is one of <code>MANAGER</code>, <code>SOURCE_OWNER</code>, <code>SEARCH</code>, <code>ROLE_COMPOSITION</code>; supply only the fields that type needs (<code>-CertifierIdentityId</code> for MANAGER/SEARCH/ROLE_COMPOSITION, <code>-SourceId</code> for SOURCE_OWNER, <code>-SearchFilter</code> for SEARCH, <code>-RoleId</code> for ROLE_COMPOSITION). Optional <code>-Description</code>, <code>-Deadline</code> (ISO 8601).</td>
+</tr>
+<tr>
+<td><code>Start-SPCampaign</code></td>
+<td>POSTs <code>/campaigns/{id}/activate</code> — transitions <strong>STAGED → ACTIVATING → ACTIVE</strong> (a campaign does nothing until activated).</td>
+</tr>
+<tr>
+<td><code>Get-SPCampaignStatus</code></td>
+<td>Blocking poller — waits until the campaign reaches <code>-TargetStatus</code> (default <code>ACTIVE</code>) so a script can create → activate → confirm in one flow.</td>
+</tr>
+<tr>
+<td><code>Complete-SPCampaign</code></td>
+<td>POSTs <code>/campaigns/{id}/complete</code> to close a <strong>past-due</strong> campaign. Gated by <code>Safety.AllowCompleteCampaign</code> (returns an error, makes no API call, when false).</td>
+</tr>
+</tbody></table>
+<p>These are module functions (not standalone scripts), so run them after importing the module chain. The minimal <strong>create → activate</strong> flow for a <strong>MANAGER</strong> campaign:</p>
+<pre><code>Import-Module .\Modules\SP.Api\SP.Api.psd1   # pulls SP.Core -&gt; SP.Api
+$c = New-SPCampaign -Name 'Q3 Manager Review' -Type MANAGER `
+        -CertifierIdentityId 'idn-mgr-001' -Deadline '2026-09-30T23:59:59Z'
+if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
+<p>For the <strong>driven</strong> (no-hand-rolling) paths that create <em>and</em> activate campaigns for you:</p>
+<ul><li><strong><code>Invoke-SPDeltaCertRun</code></strong> (in <code>SP.DeltaCert\SP.DeltaCertRunner.psm1</code>) — finds newly-granted access, groups affected identities by manager, then <strong>creates and activates one campaign per manager</strong> in a single call (<code>ReviewerMode Manager</code> → one SEARCH campaign per manager; <code>SourceOwner</code> → one SOURCE_OWNER campaign per source). It is the engine behind the <code>Invoke-SPADDeltaCert.ps1</code> script (§3) and <code>Invoke-SPScheduledCampaign.ps1</code> (§7). Honors <code>-WhatIf</code> and the <code>MaxCampaignsPerRun</code> ceiling.</li><li><strong><code>Invoke-SPADDeltaCert.ps1</code></strong> (§3) and <strong><code>Invoke-SPScheduledCampaign.ps1</code></strong> (§7) — the scheduled, script-level wrappers that call the runner.</li></ul>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Scope:</strong> creating/activating/completing campaigns needs the <strong>Full-toolkit</strong> PAT scope set (<code>idn:campaign:manage</code>, …) — see Foundations §5.1.</p></div>
+<p><strong>Related GUI:</strong> the SDK Features → Templates sub-tab (New Template / Edit Schedule) creates <em>scheduled</em> campaign templates; ad-hoc create/activate is a CLI/module operation.</p>
 <h3 id="invoke-governancetest-ps1"><code>Invoke-GovernanceTest.ps1</code></h3>
 <p><strong>Purpose:</strong> the primary test entry point — loads campaign test definitions from CSV, executes certification campaigns against ISC, and writes structured evidence. <strong>When to use:</strong> to validate governance flows (smoke/regression suites), in CI, or to exercise the toolkit against the mock.</p>
 <table>
@@ -1882,7 +1915,7 @@ body {
 </tr>
 <tr>
 <td><code>-Components &lt;keys&gt;</code></td>
-<td>Composable component list: <code>kpi-cards</code>, <code>heatmap</code>, <code>tree</code>, <code>top-n</code>, <code>group-table</code> (append <code>:half</code> for side-by-side). Default <code>kpi-cards,top-n,group-table</code>; pass <code>@()</code> to skip the composable report.</td>
+<td>Composable component list: <code>kpi-cards</code>, <code>heatmap</code>, <code>tree</code>, <code>top-n</code>, <code>group-table</code>, <strong><code>diff</code></strong> (append <code>:half</code> for side-by-side). Default <code>kpi-cards,top-n,group-table</code>; pass <code>@()</code> to skip the composable report. The <strong><code>diff</code></strong> component renders the per-group <strong>Added/Removed</strong> membership changelog (RC04) — see <em>Delta / removal detection</em> below.</td>
 </tr>
 <tr>
 <td><code>-BaselineReport &lt;names&gt;</code></td>
@@ -1913,11 +1946,50 @@ body {
 <td><code>Console</code> (default) / <code>JSON</code> / <code>HTML</code> / <code>Both</code> — controls the run summary; the HTML report files are always written.</td>
 </tr>
 </tbody></table>
+<p><strong>Leadership distribution</strong> <em>(additive; off by default)</em> — <code>-DistributeToLeadership</code> turns the same run into tiered, per-leader reports and (optionally) sends them. It reuses the org-tree / band machinery from <code>Invoke-SPReportDistribution</code> (<code>SP.DeltaCert</code>): it builds the org tree, resolves each identity's <strong>band A–E</strong>, generates an upper-leadership executive HTML rollup plus <strong>per-band leader reports</strong> (via <code>Export-SPLeadershipExecutiveHtml</code> / <code>Export-SPLeadershipBandHtml</code>), then distributes them.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-DistributeToLeadership</code></td>
+<td>Enable the leadership pass (per-band reports + distribution).</td>
+</tr>
+<tr>
+<td><code>-TargetBands &lt;letters&gt;</code></td>
+<td>Limit to specific bands (e.g. <code>B,C</code>). Default: all bands present.</td>
+</tr>
+<tr>
+<td><code>-LeadershipDepth &lt;n&gt;</code></td>
+<td>Org-tree levels above reviewed identities (default 4).</td>
+</tr>
+<tr>
+<td><code>-OrgSupplementPath &lt;csv&gt;</code></td>
+<td>Org-chart supplement overriding/filling ISC manager gaps.</td>
+</tr>
+<tr>
+<td><code>-PreviewOnly</code></td>
+<td>Show who-gets-what without generating or sending.</td>
+</tr>
+<tr>
+<td><code>-SendReports</code></td>
+<td>Actually email each report.</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>SMTP-off = "would-send" simulation.</strong> Distribution <strong>simulates by default</strong> (WhatIf): for each band leader it logs <code>WOULD send -&gt; email (name) : file</code> and <strong>sends nothing</strong>. Email is only attempted when you pass <code>-SendReports</code>, and even then <code>Send-SPReport</code> only truly sends when <code>Audit.Smtp.Enabled = true</code> — otherwise it falls back to a logged "would-send" entry. The run summary reports <code>Leaders / Sent / Simulated / Skipped</code> counts.</p></div>
+<p><strong>Delta / removal detection (<code>diff</code> component).</strong> Add <code>diff</code> to <code>-Components</code> to render the <strong>Added/Removed membership changelog</strong> (RC04) — a per-group <code>+adds / -removes</code> delta over the window, so <em>removed-from-entitlement</em> changes are surfaced alongside grants. It reads the membership changelog (JSONL of <code>Added</code>/<code>Removed</code> events); component options <code>Days</code> (last-N-days window) and <code>MaxGroups</code> (busiest first) tune the view. This complements <code>Invoke-SPADDeltaCert</code> / <code>Invoke-SPDeltaCertRun</code> (§3), which re-certify <em>newly granted</em> access; the <code>diff</code> component is the read-side view of <em>both</em> directions of change.</p>
 <pre><code># Entitlement view: composable dashboard + three baseline reports, last 180 days
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
+# Add the Added/Removed change diff alongside the dashboard
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,top-n,diff -DaysBack 30
 # Campaign view, dark theme, an explicit window
-.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31</code></pre>
-<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> Adaptive Reports tab (see the GUI Playbook).</p>
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31
+# Generate + distribute to leadership, bands B &amp; C, simulate only (no email)
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport exec-summary -DistributeToLeadership -TargetBands B,C
+# Same, but actually email (requires Audit.Smtp.Enabled = true)
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport exec-summary -DistributeToLeadership -SendReports</code></pre>
+<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> Adaptive Reports tab (see the GUI Playbook). The GUI generates reports only; leadership distribution is CLI-only (<code>-DistributeToLeadership</code>).</p>
 </div>
 <div id="section-cli-sdk-features" class="report-section" style="display:none">
 <h2>6. SDK features</h2>
@@ -2271,6 +2343,7 @@ body {
 <h2>6. SDK Features tab</h2>
 <p><strong>Purpose:</strong> operate the vendor-SDK governance features. Contains six sub-tabs. Every grid loads via <strong>Refresh</strong>; write actions honor the Safety model. <strong>When to use:</strong> managing campaign templates/schedules, approvals, work items, workflows, and campaign filters interactively.</p>
 <div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>All write actions are live.</strong> Every button below — including New Template, New Filter, Edit Filter, Create OOO, and Forward Work Item — opens its input dialog, validates the entered values, applies the Safety gate (<code>RequireWhatIfOnProd</code>), and calls the SDK bridge. There are no placeholder/"coming soon" actions on this tab.</p></div>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Load-wait behaviour (one load at a time).</strong> All SDK sub-tab data loads are <strong>serialized behind a single guard</strong> — only one Refresh/load runs at a time across the whole tab. <strong>While a load is running, the per-sub-tab Refresh and action buttons are disabled</strong>, and the sub-tab status label shows <code>Loading…</code>; they <strong>re-enable automatically when the load completes</strong> (success or failure). So a click during a load is an obvious no-op (a greyed-out button) rather than a silent "already in progress" no-op. Buttons that are disabled <em>by design</em> (e.g. the Cert Summaries <strong>Refresh</strong> until you pick a campaign/certification) stay disabled afterwards — the re-enable restores each button's prior state, it doesn't force everything on.</p></div>
 <h3 id="6-1-templates">6.1 Templates</h3>
 <table>
 <thead><tr>
