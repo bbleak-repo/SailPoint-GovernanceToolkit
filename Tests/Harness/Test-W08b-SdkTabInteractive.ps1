@@ -462,21 +462,40 @@ try {
                 $wiTab = Find-SPUiTab -Window $ui.Window -Header 'Work Items'
                 $wiTab.Select() | Out-Null
                 $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshWorkItems' -ControlType 'Button' -TimeoutMs $RefreshTimeoutMs
-                Invoke-SPUiButton -Button $btn
-                $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
-                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
-
-                # Poll the badges for their final values.
-                $badgeOpen = ''; $badgeCompleted = ''; $badgeTotal = ''
-                $deadline = (Get-Date).AddMilliseconds($RefreshTimeoutMs)
-                while ((Get-Date) -lt $deadline) {
-                    try {
-                        $badgeOpen      = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeOpen'      -TimeoutMs 500).Name
-                        $badgeCompleted = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeCompleted' -TimeoutMs 500).Name
-                        $badgeTotal     = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeTotal'     -TimeoutMs 500).Name
-                    } catch { }
-                    if ($badgeOpen -eq '4' -and $badgeCompleted -eq '2' -and $badgeTotal -eq '6') { break }
-                    Start-Sleep -Milliseconds 200
+                # The dashboard serializes ALL SDK sub-tab loads behind a single
+                # global guard ($script:IsSdkRunning in SP.MainWindow.psm1). If a
+                # prior sub-tab's load (e.g. Approvals) is still running, the first
+                # Refresh click is a no-op with "...an SDK data load is already in
+                # progress...". Re-click Refresh until the guard frees and our load
+                # actually runs + populates, or we hit the overall deadline.
+                $rows = @()
+                $badgeOpen = '-'; $badgeCompleted = '-'; $badgeTotal = '-'
+                $populated = $false
+                $overall = (Get-Date).AddMilliseconds(40000)
+                while ((Get-Date) -lt $overall -and -not $populated) {
+                    Invoke-SPUiButton -Button $btn
+                    Start-Sleep -Milliseconds 400
+                    $status = ''
+                    try { $status = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemStatusLabel' -TimeoutMs 800).Name } catch { }
+                    if ($status -match '(?i)in progress') {
+                        Start-Sleep -Milliseconds 800   # guard held by another sub-tab; wait, then re-click
+                        continue
+                    }
+                    # Our refresh was accepted -- wait for the load to finish, then read.
+                    $null = Wait-SPUiSdkIdle -Root $ui.Window -StatusName 'SdkWorkItemStatusLabel' -TimeoutMs 20000
+                    $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
+                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
+                    $bDeadline = (Get-Date).AddMilliseconds($RefreshTimeoutMs)
+                    while ((Get-Date) -lt $bDeadline) {
+                        try {
+                            $badgeOpen      = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeOpen'      -TimeoutMs 500).Name
+                            $badgeCompleted = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeCompleted' -TimeoutMs 500).Name
+                            $badgeTotal     = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeTotal'     -TimeoutMs 500).Name
+                        } catch { }
+                        if ($badgeOpen -eq '4' -and $badgeCompleted -eq '2' -and $badgeTotal -eq '6') { break }
+                        Start-Sleep -Milliseconds 200
+                    }
+                    if ($rows.Count -ge 1 -or $badgeOpen -eq '4') { $populated = $true }
                 }
                 Save-SPUiScreenshot -Element $ui.Window -Path (Join-Path $ScreenshotDir 'WG-08b-16-workitems.png') | Out-Null
 
