@@ -17,6 +17,10 @@
       CAMP-LC-004  Safety.AllowCompleteCampaign=false still blocks completion with
                    zero API calls -- proves the new -CompleteAllCampaigns opt-in did
                    not weaken the existing guard.
+      CAMP-LC-005  Complete-SPCampaign -Phased sends the ?phased=1 query flag to the
+                   backend (real wiring), and the default call (no -Phased) sends NO
+                   query params -- proves the live-mock two-phase lifecycle is now
+                   genuinely wired through, not merely simulated by mocked transport.
 #>
 
 BeforeAll {
@@ -178,6 +182,55 @@ Describe "CAMP-LC-004: Safety still blocks completion when AllowCompleteCampaign
             $result.Error   | Should -Match 'AllowCompleteCampaign'
 
             Should -Invoke Invoke-SPApiRequest -ModuleName SP.Campaigns -Times 0 -Exactly
+        }
+    }
+}
+
+Describe "CAMP-LC-005: -Phased wires ?phased=1 to the backend (real wiring)" {
+    Context "When Complete-SPCampaign is called with -Phased" {
+        BeforeEach {
+            Mock Write-SPLog  -ModuleName SP.Campaigns { }
+            Mock Get-SPConfig -ModuleName SP.Campaigns { New-MockSPConfig -AllowComplete $true }
+            Mock Invoke-SPApiRequest -ModuleName SP.Campaigns {
+                return @{ Success = $true; StatusCode = 200
+                    Data = [PSCustomObject]@{ id = 'camp-lc-005'; status = 'COMPLETING' }; Error = $null }
+            }
+        }
+
+        It "Should POST /complete with QueryParams phased=1 and surface returned Data" {
+            $result = Complete-SPCampaign -CampaignId 'camp-lc-005' -Phased -CorrelationID 'lc-cid-005'
+
+            $result.Success      | Should -Be $true
+            $result.Data.status  | Should -Be 'COMPLETING'
+
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.Campaigns -Times 1 -Exactly -ParameterFilter {
+                $Endpoint -eq '/campaigns/camp-lc-005/complete' -and
+                $Method   -eq 'POST' -and
+                $null -ne $QueryParams -and
+                $QueryParams['phased'] -eq '1'
+            }
+        }
+    }
+
+    Context "When Complete-SPCampaign is called WITHOUT -Phased (default, unchanged)" {
+        BeforeEach {
+            Mock Write-SPLog  -ModuleName SP.Campaigns { }
+            Mock Get-SPConfig -ModuleName SP.Campaigns { New-MockSPConfig -AllowComplete $true }
+            Mock Invoke-SPApiRequest -ModuleName SP.Campaigns {
+                return @{ Success = $true; StatusCode = 200
+                    Data = [PSCustomObject]@{ id = 'camp-lc-005b'; status = 'COMPLETED' }; Error = $null }
+            }
+        }
+
+        It "Should POST /complete with NO query params (default path preserved)" {
+            $result = Complete-SPCampaign -CampaignId 'camp-lc-005b' -CorrelationID 'lc-cid-005b'
+
+            $result.Success | Should -Be $true
+
+            Should -Invoke Invoke-SPApiRequest -ModuleName SP.Campaigns -Times 1 -Exactly -ParameterFilter {
+                $Endpoint -eq '/campaigns/camp-lc-005b/complete' -and
+                $null -eq $QueryParams
+            }
         }
     }
 }

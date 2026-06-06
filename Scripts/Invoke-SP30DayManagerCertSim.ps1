@@ -432,11 +432,39 @@ if (-not $SkipWrite) {
                             $observed.Add('STAGED')
                             if ($thisCampaignActivated) { $observed.Add('ACTIVE') }
 
-                            $compResult = Complete-SPCampaign -CampaignId $campId -CorrelationID $correlationID -CampaignTestId 'T-04'
+                            # PHASED two-phase complete (-Phased -> ?phased=1): the
+                            # first call transitions ACTIVE->COMPLETING and a second
+                            # call settles COMPLETING->COMPLETED, so the COMPLETING
+                            # intermediate is genuinely observed against the LIVE mock.
+                            $compResult = Complete-SPCampaign -CampaignId $campId -Phased -CorrelationID $correlationID -CampaignTestId 'T-04'
                             if ($null -ne $compResult -and $compResult.Success) {
+                                # Confirm the campaign entered COMPLETING after the
+                                # first phased call (live-mock proof of the intermediate).
+                                $completingSeen = $false
+                                if ($null -ne $compResult.Data -and
+                                    $null -ne $compResult.Data.PSObject.Properties['status'] -and
+                                    $compResult.Data.status -eq 'COMPLETING') {
+                                    $completingSeen = $true
+                                }
+                                else {
+                                    $midResult = Get-SPCampaign -CampaignId $campId `
+                                        -CorrelationID $correlationID -CampaignTestId 'T-04'
+                                    if ($null -ne $midResult -and $midResult.Success -and
+                                        $null -ne $midResult.Data -and $midResult.Data.status -eq 'COMPLETING') {
+                                        $completingSeen = $true
+                                    }
+                                }
+                                if ($completingSeen) { $observed.Add('COMPLETING') }
+
+                                # Issue the settling phased call (COMPLETING->COMPLETED).
+                                # Tolerant: if the backend already single-jumped to
+                                # COMPLETED, this is a harmless no-op / 400 we ignore.
+                                $null = Complete-SPCampaign -CampaignId $campId -Phased `
+                                    -CorrelationID $correlationID -CampaignTestId 'T-04'
+
                                 # Poll to capture the settle to COMPLETED. The mock's
                                 # single-call path settles immediately (ACTIVE->COMPLETED);
-                                # a COMPLETING intermediate is observed if present.
+                                # the phased path settles after the second call.
                                 $statusResult = Get-SPCampaignStatus -CampaignId $campId `
                                     -TargetStatus 'COMPLETED' -TimeoutSeconds 30 -PollIntervalSeconds 1 `
                                     -CorrelationID $correlationID -CampaignTestId 'T-04'
