@@ -2145,7 +2145,9 @@ function Get-SPGovernanceMetricsTrend {
             $periodKey = _GetPeriodKey -Dt $ts -Gran $Granularity
 
             $value = $null
-            if ($null -ne $rec.metrics -and $rec.metrics.ContainsKey($metricName)) {
+            # $rec.metrics is an [ordered] dictionary (exposes .Contains(), not
+            # .ContainsKey()); .Contains() also works for plain hashtables.
+            if ($null -ne $rec.metrics -and $rec.metrics.Contains($metricName)) {
                 $value = $rec.metrics[$metricName]
             }
             if ($null -eq $value) { continue }

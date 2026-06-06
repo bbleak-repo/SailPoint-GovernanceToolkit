@@ -1,0 +1,2645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SailPoint ISC Governance Toolkit — User Guide</title>
+<style>
+/* ====================================================
+   TABBED REPORT FRAMEWORK -- LIGHT THEME
+   SailPoint color scheme
+   ==================================================== */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:      #336699;
+    --primary-dark:  #264d73;
+    --primary-light: #4a7fb5;
+    --success:      #339933;
+    --success-bg:   #edf6ef;
+    --danger:       #CC3333;
+    --danger-bg:    #fdf0ef;
+    --warning:      #FF8800;
+    --warning-bg:   #fff8ec;
+    --sidebar-bg:   #1e2a3a;
+    --sidebar-hover: rgba(255,255,255,0.05);
+    --sidebar-active-bg: rgba(91,155,213,0.10);
+    --header-bg:    #2c3e50;
+    --accent:       #5B9BD5;
+    --text:         #2c3e50;
+    --text-muted:   #555e70;
+    --bg:           #f7f8fa;
+    --surface:      #ffffff;
+    --border:       #e0e4ea;
+    --border-light: #eaecf0;
+    --code-bg:      #f5f6f8;
+    --table-header: #34495e;
+    --table-alt:    #f9f9f9;
+    --sidebar-w:    220px;
+}
+
+html { font-size: 15px; }
+
+body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+}
+
+/* ---- STICKY TOP BAND ---- */
+#top-band {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---- REPORT HEADER ---- */
+#report-header {
+    background: var(--header-bg);
+    color: #ffffff;
+    padding: 14px 24px;
+    border-bottom: 3px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.title-block {}
+
+.report-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.01em;
+}
+
+.report-sub {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.65);
+    margin-top: 2px;
+}
+
+.meta-items {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.meta-item {
+    font-size: 0.68rem;
+    color: rgba(255,255,255,0.60);
+    line-height: 1.4;
+}
+
+.meta-item strong {
+    display: block;
+    color: rgba(255,255,255,0.85);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* ---- MOBILE TAB BAR (hidden on desktop) ---- */
+#mobile-nav {
+    display: none;
+    background: var(--sidebar-bg);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+    border-bottom: 2px solid var(--accent);
+    scrollbar-width: none;
+}
+
+#mobile-nav::-webkit-scrollbar { display: none; }
+
+#mobile-nav a {
+    display: inline-block;
+    padding: 10px 14px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    border-bottom: 3px solid transparent;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+#mobile-nav a.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+/* ---- LAYOUT: SIDEBAR + CONTENT ---- */
+#app-layout {
+    display: flex;
+    min-height: calc(100vh - 80px);
+}
+
+/* ---- SIDEBAR ---- */
+#sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+    align-self: flex-start;
+}
+
+#sidebar-inner {
+    padding: 20px 0;
+}
+
+.sidebar-label {
+    font-size: 0.60rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+    padding: 0 16px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 8px;
+}
+
+#sidebar a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    font-size: 0.80rem;
+    font-weight: 500;
+    color: #8892a8;
+    text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    line-height: 1.3;
+}
+
+#sidebar a:hover {
+    color: #c8d0e0;
+    background: var(--sidebar-hover);
+}
+
+#sidebar a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--sidebar-active-bg);
+    font-weight: 600;
+}
+
+.sidebar-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.10);
+    font-size: 0.60rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: rgba(255,255,255,0.50);
+}
+
+#sidebar a.active .sidebar-num {
+    background: var(--accent);
+    color: var(--sidebar-bg);
+}
+
+/* ---- MAIN CONTENT AREA ---- */
+#content-area {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.report-section {
+    min-height: calc(100vh - 80px);
+    padding: 28px 36px 52px;
+    max-width: 960px;
+}
+
+/* ---- SECTION CONTENT TYPOGRAPHY ---- */
+.report-section h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--primary);
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+    letter-spacing: -0.01em;
+}
+
+.report-section h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--header-bg);
+    margin: 28px 0 10px 0;
+}
+
+.report-section h4 {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 20px 0 8px 0;
+}
+
+.report-section p {
+    font-size: 0.875rem;
+    margin-bottom: 12px;
+    color: var(--text);
+    line-height: 1.65;
+}
+
+.report-section p:last-child { margin-bottom: 0; }
+
+/* ---- LISTS ---- */
+.report-section ul,
+.report-section ol {
+    padding-left: 22px;
+    margin: 8px 0 14px 0;
+}
+
+.report-section li {
+    font-size: 0.875rem;
+    padding: 3px 0;
+    line-height: 1.55;
+    color: var(--text);
+}
+
+.report-section li + li {
+    margin-top: 2px;
+}
+
+/* ---- TABLES ---- */
+.report-section table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    margin: 14px 0 18px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.report-section thead tr {
+    background: var(--table-header);
+    color: #ffffff;
+}
+
+.report-section thead th {
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 0.70rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.report-section thead th:first-child {
+    color: var(--accent);
+}
+
+.report-section tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.report-section tbody tr:nth-child(odd) {
+    background: var(--surface);
+}
+
+.report-section tbody tr:hover {
+    background: #eef3fb;
+}
+
+.report-section td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+    line-height: 1.45;
+}
+
+.report-section td:first-child {
+    font-weight: 600;
+    color: var(--primary-dark);
+}
+
+/* ---- CODE BLOCKS ---- */
+.report-section pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    margin: 12px 0 16px 0;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.report-section code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
+    font-size: 0.84em;
+}
+
+.report-section p code,
+.report-section li code,
+.report-section td code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.82em;
+    color: var(--danger);
+}
+
+.report-section pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 1em;
+}
+
+/* ---- CALLOUT BOXES ---- */
+.callout {
+    border-radius: 6px;
+    padding: 13px 16px;
+    margin: 14px 0;
+    font-size: 0.84rem;
+}
+
+.callout-label {
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    margin-bottom: 6px;
+}
+
+.callout p {
+    font-size: 0.84rem;
+    margin-bottom: 0;
+}
+
+.callout-info {
+    background: #eef3fb;
+    border: 1px solid #b8d0ee;
+    border-left: 4px solid var(--primary);
+}
+
+.callout-info .callout-label { color: var(--primary); }
+
+.callout-warning {
+    background: var(--warning-bg);
+    border: 1px solid #f0d080;
+    border-left: 4px solid var(--warning);
+}
+
+.callout-warning .callout-label { color: var(--warning); }
+
+.callout-success {
+    background: var(--success-bg);
+    border: 1px solid #b0d8ba;
+    border-left: 4px solid var(--success);
+}
+
+.callout-success .callout-label { color: var(--success); }
+
+.callout-danger {
+    background: var(--danger-bg);
+    border: 1px solid #f0b8b4;
+    border-left: 4px solid var(--danger);
+}
+
+.callout-danger .callout-label { color: var(--danger); }
+
+/* ---- CONTENT CARDS ---- */
+.content-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.content-card .card-header {
+    background: var(--sidebar-bg);
+    color: #ffffff;
+    padding: 11px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.content-card .card-badge {
+    width: 26px;
+    height: 26px;
+    background: var(--accent);
+    color: var(--sidebar-bg);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.content-card .card-header h3 {
+    font-size: 0.88rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #ffffff;
+    margin: 0;
+    border: none;
+}
+
+.content-card .card-body {
+    padding: 18px 22px;
+}
+
+/* ---- PARAMETER TABLE (for CLI docs) ---- */
+.param-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin: 10px 0 16px 0;
+}
+
+.param-table thead tr {
+    background: var(--primary);
+    color: #ffffff;
+}
+
+.param-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.param-table tbody tr:nth-child(even) {
+    background: var(--table-alt);
+}
+
+.param-table tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+}
+
+.param-table tbody td:first-child {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-weight: 600;
+    color: var(--primary-dark);
+    white-space: nowrap;
+}
+
+/* ---- STAT CARDS ---- */
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+}
+
+.stat-card {
+    background: var(--header-bg);
+    color: #ffffff;
+    border-radius: 7px;
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 6px;
+}
+
+.stat-label {
+    font-size: 0.67rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.3;
+}
+
+/* ---- DETAILS/SUMMARY (collapsible) ---- */
+.report-section details {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 10px 0;
+    overflow: hidden;
+}
+
+.report-section summary {
+    padding: 10px 16px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--primary);
+    cursor: pointer;
+    background: var(--code-bg);
+    border-bottom: 1px solid var(--border);
+    list-style: none;
+}
+
+.report-section summary::-webkit-details-marker { display: none; }
+
+.report-section summary::before {
+    content: '+ ';
+    font-weight: 800;
+    color: var(--primary);
+}
+
+.report-section details[open] summary::before {
+    content: '- ';
+}
+
+.report-section details .detail-body {
+    padding: 14px 18px;
+}
+
+/* ---- STATUS BADGES ---- */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.badge-required {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+
+.badge-optional {
+    background: #eef3fb;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+}
+
+.badge-default {
+    background: var(--code-bg);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+/* ---- PRINT STYLES ---- */
+@media print {
+    #top-band, #sidebar, #mobile-nav { display: none !important; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        display: block !important;
+        max-width: 100%;
+        padding: 12pt 0;
+    }
+    .report-section + .report-section {
+        page-break-before: always;
+    }
+    body {
+        background: #ffffff;
+        color: #000000;
+        font-size: 10pt;
+    }
+    .report-section h2 {
+        color: #000000;
+        border-bottom-color: #cccccc;
+    }
+    .report-section pre {
+        border-color: #cccccc;
+        background: #f5f5f5;
+    }
+    .report-section table {
+        border-color: #cccccc;
+    }
+    .report-section thead tr {
+        background: #333333 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .callout {
+        border-left-width: 3px;
+    }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ---- MOBILE LAYOUT ---- */
+@media (max-width: 767px) {
+    #sidebar { display: none !important; }
+    #mobile-nav { display: block; }
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #app-layout { display: block; }
+    #content-area { width: 100%; }
+    .report-section {
+        padding: 20px 16px 36px;
+    }
+    .meta-items { display: none; }
+    .stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 768px) {
+    #top-band { position: sticky; top: 0; z-index: 1000; }
+    #sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+    }
+}
+
+/* ─── SIDEBAR GROUP LABELS ─────────────────────────────────────── */
+.sidebar-group-label {
+    font-size: 0.59rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(91,155,213,0.75);
+    padding: 14px 16px 5px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    margin-top: 6px;
+}
+.sidebar-group-label:first-of-type { border-top: none; margin-top: 0; }
+
+/* Sub-tab links within SDK Features */
+.sidebar-sub {
+    padding-left: 28px !important;
+    font-size: 0.74rem !important;
+    color: #5a6478 !important;
+    border-left-color: transparent !important;
+}
+.sidebar-sub:hover { color: #9aaac0 !important; }
+.sidebar-sub.active { color: var(--accent) !important; border-left-color: var(--accent) !important; }
+
+/* Dark code blocks (override framework's light code-bg) */
+.report-section pre {
+    background: #1e2738 !important;
+    border-color: #2d3a50 !important;
+}
+.report-section pre code {
+    color: #c9d7f0 !important;
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+/* Wider sidebar to fit grouped labels */
+:root { --sidebar-w: 238px; }
+
+/* Section max reading width */
+.report-section { max-width: 820px; }
+
+</style>
+</head>
+<body>
+
+<!-- ═══ Sticky header ═══════════════════════════════════════════════════════ -->
+<div id="top-band">
+  <div id="report-header">
+    <div class="title-block">
+      <div class="report-title">SailPoint ISC Governance Toolkit — User Guide</div>
+      <div class="report-sub">Comprehensive reference: Foundations · CLI Playbook · GUI Playbook</div>
+    </div>
+    <div class="meta-items">
+      <div class="meta-item"><strong>Version</strong>1.0.0</div>
+      <div class="meta-item"><strong>Date</strong>2026-06-05</div>
+      <div class="meta-item"><strong>Platform</strong>PowerShell 5.1 &middot; WPF GUI</div>
+    </div>
+  </div>
+  <!-- Mobile tab bar (hidden on desktop) -->
+  <div id="mobile-nav">
+<a href="javascript:void(0)" onclick="showSection('found-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('found-what-the-toolkit-is'); return false;">1. What the toolkit is</a>
+<a href="javascript:void(0)" onclick="showSection('found-prerequisites'); return false;">2. Prerequisites</a>
+<a href="javascript:void(0)" onclick="showSection('found-installation'); return false;">3. Installation</a>
+<a href="javascript:void(0)" onclick="showSection('found-configuration'); return false;">4. Configuration</a>
+<a href="javascript:void(0)" onclick="showSection('found-authentication'); return false;">5. Authentication</a>
+<a href="javascript:void(0)" onclick="showSection('found-environments-mock-vs-real'); return false;">6. Environments: mock </a>
+<a href="javascript:void(0)" onclick="showSection('found-the-safety-model-read-before-mutating-anything'); return false;">7. The Safety model (r</a>
+<a href="javascript:void(0)" onclick="showSection('found-output-reports-and-logs'); return false;">8. Output, reports, an</a>
+<a href="javascript:void(0)" onclick="showSection('found-glossary-isc-terms'); return false;">9. Glossary (ISC terms</a>
+<a href="javascript:void(0)" onclick="showSection('found-getting-help-exit-codes'); return false;">10. Getting help &amp; exi</a>
+<a href="javascript:void(0)" onclick="showSection('cli-overview'); return false;">Overview &amp; Conventions</a>
+<a href="javascript:void(0)" onclick="showSection('cli-setup-diagnostics'); return false;">1. Setup &amp; diagnostics</a>
+<a href="javascript:void(0)" onclick="showSection('cli-campaign-testing-audit'); return false;">2. Campaign testing &amp; </a>
+<a href="javascript:void(0)" onclick="showSection('cli-delta-certification'); return false;">3. Delta certification</a>
+<a href="javascript:void(0)" onclick="showSection('cli-disconnected-applications'); return false;">4. Disconnected applic</a>
+<a href="javascript:void(0)" onclick="showSection('cli-governance-reporting'); return false;">5. Governance &amp; report</a>
+<a href="javascript:void(0)" onclick="showSection('cli-sdk-features'); return false;">6. SDK features</a>
+<a href="javascript:void(0)" onclick="showSection('cli-operations-scheduling'); return false;">7. Operations &amp; schedu</a>
+<a href="javascript:void(0)" onclick="showSection('gui-overview'); return false;">Launching &amp; Convention</a>
+<a href="javascript:void(0)" onclick="showSection('gui-campaigns-tab'); return false;">1. Campaigns tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-evidence-tab'); return false;">2. Evidence tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-audit-tab'); return false;">3. Audit tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-delta-cert-tab'); return false;">4. Delta Cert tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-governance-tab'); return false;">5. Governance tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-sdk-features-tab'); return false;">6. SDK Features tab</a>
+<a href="javascript:void(0)" onclick="showSection('gui-adaptive-reports-tab'); return false;">7. Adaptive Reports ta</a>
+<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;">8. Settings tab</a>
+
+  </div>
+</div>
+
+<!-- ═══ Layout: sidebar + content ══════════════════════════════════════════ -->
+<div id="app-layout">
+  <div id="sidebar">
+    <div id="sidebar-inner">
+<div class="sidebar-group-label">Foundations</div>
+<a href="javascript:void(0)" onclick="showSection('found-overview'); return false;"><span class="sidebar-num">1</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-what-the-toolkit-is'); return false;"><span class="sidebar-num">2</span><span>1. What the toolkit is</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-prerequisites'); return false;"><span class="sidebar-num">3</span><span>2. Prerequisites</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-installation'); return false;"><span class="sidebar-num">4</span><span>3. Installation</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-configuration'); return false;"><span class="sidebar-num">5</span><span>4. Configuration</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-authentication'); return false;"><span class="sidebar-num">6</span><span>5. Authentication</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-environments-mock-vs-real'); return false;"><span class="sidebar-num">7</span><span>6. Environments: mock vs. real</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-the-safety-model-read-before-mutating-anything'); return false;"><span class="sidebar-num">8</span><span>7. The Safety model (read before mutating anything)</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-output-reports-and-logs'); return false;"><span class="sidebar-num">9</span><span>8. Output, reports, and logs</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-glossary-isc-terms'); return false;"><span class="sidebar-num">10</span><span>9. Glossary (ISC terms)</span></a>
+<a href="javascript:void(0)" onclick="showSection('found-getting-help-exit-codes'); return false;"><span class="sidebar-num">11</span><span>10. Getting help &amp; exit codes</span></a>
+<div class="sidebar-group-label">CLI Reference</div>
+<a href="javascript:void(0)" onclick="showSection('cli-overview'); return false;"><span class="sidebar-num">12</span><span>Overview &amp; Conventions</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-setup-diagnostics'); return false;"><span class="sidebar-num">13</span><span>1. Setup &amp; diagnostics</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-campaign-testing-audit'); return false;"><span class="sidebar-num">14</span><span>2. Campaign testing &amp; audit</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-delta-certification'); return false;"><span class="sidebar-num">15</span><span>3. Delta certification</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-disconnected-applications'); return false;"><span class="sidebar-num">16</span><span>4. Disconnected applications</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-governance-reporting'); return false;"><span class="sidebar-num">17</span><span>5. Governance &amp; reporting</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-sdk-features'); return false;"><span class="sidebar-num">18</span><span>6. SDK features</span></a>
+<a href="javascript:void(0)" onclick="showSection('cli-operations-scheduling'); return false;"><span class="sidebar-num">19</span><span>7. Operations &amp; scheduling</span></a>
+<div class="sidebar-group-label">GUI Reference</div>
+<a href="javascript:void(0)" onclick="showSection('gui-overview'); return false;"><span class="sidebar-num">20</span><span>Launching &amp; Conventions</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-campaigns-tab'); return false;"><span class="sidebar-num">21</span><span>1. Campaigns tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-evidence-tab'); return false;"><span class="sidebar-num">22</span><span>2. Evidence tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-audit-tab'); return false;"><span class="sidebar-num">23</span><span>3. Audit tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-delta-cert-tab'); return false;"><span class="sidebar-num">24</span><span>4. Delta Cert tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-governance-tab'); return false;"><span class="sidebar-num">25</span><span>5. Governance tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-sdk-features-tab'); return false;"><span class="sidebar-num">26</span><span>6. SDK Features tab</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-1-templates');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.1</span><span>Templates</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-2-cert-summaries');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.2</span><span>Cert Summaries</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-3-approvals');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.3</span><span>Approvals</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-4-work-items');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.4</span><span>Work Items</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-5-workflows');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.5</span><span>Workflows</span></a>
+<a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-6-filters');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.6</span><span>Filters</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-adaptive-reports-tab'); return false;"><span class="sidebar-num">27</span><span>7. Adaptive Reports tab</span></a>
+<a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;"><span class="sidebar-num">28</span><span>8. Settings tab</span></a>
+
+    </div>
+  </div>
+  <div id="content-area">
+<div id="section-found-overview" class="report-section" style="display:none">
+<h2>Overview &amp; Audience</h2>
+<h2 id="sailpoint-isc-governance-toolkit-foundations">SailPoint ISC Governance Toolkit — Foundations</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Source of truth.</strong> This Markdown file is the canonical reference. The HTML user guides are generated from it; edit the Markdown, never the HTML. This document is shared by both the <strong>CLI Playbook</strong> and the <strong>GUI Playbook</strong> — every concept here (setup, authentication, configuration, safety, outputs, glossary) is written once and referenced by both.</p></div>
+<p><strong>Audience:</strong> anyone setting up or operating the toolkit. Read this first; then go to the CLI Playbook (operators / automation) or the GUI Playbook (interactive analysts / reviewers).</p>
+</div>
+<div id="section-found-what-the-toolkit-is" class="report-section" style="display:none">
+<h2>1. What the toolkit is</h2>
+<p>The SailPoint ISC Governance Toolkit is a PowerShell 5.1 toolkit for operating identity governance against a SailPoint Identity Security Cloud (ISC) tenant. It covers:</p>
+<ul><li><strong>Campaign certification</strong> — create, run, monitor, and audit access-review campaigns.</li><li><strong>Delta certification</strong> — targeted re-certification of recently-changed access (e.g. new AD grants).</li><li><strong>Disconnected applications</strong> — certify access for apps that don't integrate directly with ISC.</li><li><strong>Governance reporting</strong> — health checks, KPI metrics, leadership rollups, data-quality scoring.</li><li><strong>Adaptive reports</strong> — composable, themeable HTML reports (KPI cards, heatmaps, top-N bars, drill-down trees) plus a baseline report library (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-certification attestation, governance executive summary), rendered over an <strong>entitlement-</strong> or <strong>campaign-centric</strong> view of your campaign data (<code>Invoke-SPAdaptiveReport</code>). Additive — alongside the existing reports.</li><li><strong>Vendor SDK features</strong> — campaign templates/scheduling, approvals, work items, workflows, campaign filters (the <strong>SDK Features</strong> GUI tab and the <code>Invoke-SPSdk*</code> scripts).</li><li><strong>Operations</strong> — report distribution, retention/archival, scheduling, connectivity checks.</li></ul>
+<p>Everything is available two ways: a <strong>CLI</strong> (headless, automatable) and a <strong>WPF GUI dashboard</strong> (interactive). They share the same modules, configuration, and safety rules.</p>
+</div>
+<div id="section-found-prerequisites" class="report-section" style="display:none">
+<h2>2. Prerequisites</h2>
+<table>
+<thead><tr>
+<th>Requirement</th>
+<th>Detail</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>OS</strong></td>
+<td>Windows 10/11 or Windows Server.</td>
+</tr>
+<tr>
+<td><strong>PowerShell</strong></td>
+<td><strong>Windows PowerShell 5.1 (Desktop edition).</strong> Not PowerShell 7/Core — the modules rely on 5.1 behavior and the GUI requires .NET Framework WPF.</td>
+</tr>
+<tr>
+<td><strong>.NET Framework</strong></td>
+<td><strong>4.8+</strong> (only for the GUI dashboard / WPF). Pre-installed on Windows 10 1903+ and all Windows 11 machines — no action needed on modern Windows. <code>Show-SPDashboard.ps1</code> checks this at launch and exits with a clear error and download link if needed.</td>
+</tr>
+<tr>
+<td><strong>Network / TLS</strong></td>
+<td>Outbound HTTPS to your ISC tenant. The toolkit forces <strong>TLS 1.2 (and 1.3 where available)</strong> automatically.</td>
+</tr>
+<tr>
+<td><strong>ISC credentials</strong></td>
+<td>An ISC <strong>Personal Access Token (PAT)</strong> — a <code>client_credentials</code> OAuth client that yields a <code>ClientId</code> + <code>ClientSecret</code> pair — or a short-lived <strong>bearer token</strong> copied from the browser. The PAT must be created by an identity with the <strong><code>CERT_ADMIN</code></strong> or <strong><code>ORG_ADMIN</code></strong> role and granted the scopes for what you intend to do (read-only audit vs. campaign creation vs. delta cert). See §5 for the scope matrix and <code>docs/SANDBOX-API-SETUP.md</code> for the click-by-click setup.</td>
+</tr>
+<tr>
+<td><strong>Pester</strong> (optional)</td>
+<td>5.x — only needed to run the test suite.</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-found-installation" class="report-section" style="display:none">
+<h2>3. Installation</h2>
+<ol><li>Extract the toolkit zip (or clone the repo) to a local directory, e.g. <code>C:\Toolkit\</code>.</li><li>Confirm the structure: - <code>Modules\</code> — the PowerShell modules (don't edit). - <code>Scripts\</code> — the CLI entry points (what you run). - <code>Gui\</code> — the WPF dashboard XAML. - <code>Config\</code> — your configuration files (you edit these). - <code>Tests\</code> — Pester + GUI test harness (dev only). - Runtime output folders (<code>Logs\</code>, <code>Audit\</code>, <code>Reports\</code>, etc.) are created on demand.</li><li>From the toolkit root, every script supports <code>-Help</code>: ``<code>powershell .\Scripts\Invoke-SPCampaignAudit.ps1 -Help </code>``</li></ol>
+</div>
+<div id="section-found-configuration" class="report-section" style="display:none">
+<h2>4. Configuration</h2>
+<h3 id="4-1-how-config-files-work">4.1 How config files work</h3>
+<p>Configuration is JSON. Resolution order (highest precedence last):</p>
+<ol><li><strong><code>Config\settings.json</code></strong> — the base config (committed/shared; safe defaults with <code>CHANGE_ME</code> placeholders).</li><li><strong><code>Config\settings.local.json</code></strong> — your machine-local overrides (gitignored; <strong>put real credentials here</strong>, never in <code>settings.json</code>).</li><li><strong><code>-ConfigPath &lt;file&gt;</code></strong> — an explicit file passed to any script/the GUI (wins over the above).</li></ol>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Never commit real credentials.</strong> <code>settings.local.json</code> and any <code>*-real.local.json</code> are gitignored on purpose, as is the encrypted vault (<code>*.enc</code>) and all runtime output (<code>Logs/</code>, <code>Audit/</code>, <code>Reports/</code>, <code>Data/</code>).</p></div>
+<h3 id="4-2-generating-a-config">4.2 Generating a config</h3>
+<ul><li>First run of <code>Invoke-GovernanceTest.ps1</code> (or any script) with no config creates a template <code>settings.json</code> full of <code>CHANGE_ME</code> placeholders and prints first-run guidance.</li><li>Replace every <code>CHANGE_ME</code> with your tenant values (or supply them via the vault — §5).</li><li>A <code>CHANGE_ME</code> value is treated as "first run not complete" and the toolkit will refuse to run against a real tenant until it's replaced.</li></ul>
+<h3 id="4-3-settings-json-reference">4.3 <code>settings.json</code> reference</h3>
+<p>Top-level sections and the keys that matter most:</p>
+<table>
+<thead><tr>
+<th>Section</th>
+<th>Key</th>
+<th>Purpose</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Global</strong></td>
+<td><code>EnvironmentName</code></td>
+<td>A label for this environment (shown in logs, used by Safety).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>DebugMode</code></td>
+<td>Verbose diagnostics when <code>true</code>.</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong></td>
+<td><code>Mode</code></td>
+<td><code>ConfigFile</code>, <code>Vault</code>, or <code>Token</code> — see §5.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ConfigFile.TenantUrl</code> / <code>OAuthTokenUrl</code></td>
+<td>Your ISC tenant base + OAuth token endpoint.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ConfigFile.ClientId</code> / <code>ClientSecret</code></td>
+<td>OAuth client credentials (use the vault for real secrets).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Vault.VaultPath</code></td>
+<td>Encrypted vault location (<code>.\Data\sp-vault.enc</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Vault.Pbkdf2Iterations</code></td>
+<td>Key-derivation iterations (default 600000).</td>
+</tr>
+<tr>
+<td><strong>Api</strong></td>
+<td><code>BaseUrl</code></td>
+<td><code>https://&lt;tenant&gt;.api.identitynow.com/v3</code>.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>TimeoutSeconds</code>, <code>RetryCount</code>, <code>RetryDelaySeconds</code>, <code>MaxRetryDelaySeconds</code></td>
+<td>HTTP timeout + exponential-backoff retry tuning.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>RateLimitRequestsPerWindow</code>, <code>RateLimitWindowSeconds</code></td>
+<td>Client-side rate limiting to respect ISC limits.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>MaxPaginationPages</code></td>
+<td>Safety ceiling on auto-pagination (prevents runaway loops).</td>
+</tr>
+<tr>
+<td><strong>Logging</strong></td>
+<td><code>Path</code>, <code>FilePrefix</code>, <code>MinimumSeverity</code></td>
+<td>Log folder, file prefix, and minimum level (<code>DEBUG</code>/<code>INFO</code>/<code>WARN</code>/<code>ERROR</code>).</td>
+</tr>
+<tr>
+<td><strong>Safety</strong></td>
+<td><code>MaxCampaignsPerRun</code></td>
+<td>Hard cap on campaigns created/processed per run.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>RequireWhatIfOnProd</code></td>
+<td>When <code>true</code>, mutating actions on a non-mock environment require confirmation / WhatIf.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>AllowCompleteCampaign</code></td>
+<td>Gate for the terminal "complete campaign" action (default <code>false</code>).</td>
+</tr>
+<tr>
+<td><strong>Audit</strong></td>
+<td><code>OutputPath</code>, <code>DefaultDaysBack</code>, <code>DefaultStatuses</code></td>
+<td>Where audit reports go; default look-back window and campaign statuses.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>IncludeCampaignReports</code>, <code>IncludeIdentityEvents</code>, <code>IncludeLeadershipRollup</code>, <code>LeadershipDepth</code></td>
+<td>Which sections to include in an audit.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>RiskIndicators.*</code></td>
+<td>Stale-access threshold, privileged/service-account name patterns.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Smtp.*</code></td>
+<td>Email delivery for audit reports (disabled by default).</td>
+</tr>
+<tr>
+<td><strong>DeltaCert</strong></td>
+<td><code>SourceIds</code>, <code>DefaultHoursBack</code>, <code>DefaultDeadlineDays</code></td>
+<td>Sources to watch, look-back, and reviewer deadline.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>CampaignNamePrefix</code>, <code>DefaultReviewerMode</code>, <code>ExcludeLifecycleStates</code></td>
+<td>Naming, reviewer assignment, and exclusions.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Escalation.*</code></td>
+<td>Stale-reviewer escalation thresholds.</td>
+</tr>
+<tr>
+<td><strong>DisconnectedApps</strong></td>
+<td><code>ImportBasePath</code>, <code>SnapshotPath</code>, <code>ReportPath</code></td>
+<td>File locations for the disconnected-app pipeline.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>CorrelationAttribute</code>, <code>AccountDeletionThresholdPct</code>, <code>RequiredAccountColumns</code></td>
+<td>Correlation key, delete-safety threshold, CSV schema.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ISC.UploadMethod</code>, <code>Applications</code></td>
+<td>How accounts reach ISC; per-app definitions.</td>
+</tr>
+<tr>
+<td><strong>Sdk</strong></td>
+<td><code>OutputPath</code>, <code>CampaignTemplates.*</code>, <code>Approvals.*</code>, <code>WorkItems.*</code>, <code>Workflows.*</code></td>
+<td>Defaults for the SDK Features (templates, approvals, work items, workflows incl. OOO fallback).</td>
+</tr>
+<tr>
+<td><strong>Metrics / Governance / Leadership</strong></td>
+<td>various</td>
+<td>KPI persistence, governance report depth, leadership band mapping.</td>
+</tr>
+<tr>
+<td><strong>Retention</strong></td>
+<td><code>Enabled</code>, <code>ArchiveDays</code>, <code>DeleteDays</code>, <code>ArchivePath</code>, <code>Paths</code></td>
+<td>Log/report archival + deletion windows.</td>
+</tr>
+<tr>
+<td><strong>Notification</strong></td>
+<td><code>Backends</code>, <code>Smtp</code>, <code>Webhook</code></td>
+<td>Where notifications go (log, email, webhook).</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Source of Truth</div><p>For the exact defaults of every key, see <code>Get-SPConfigDefaults</code> in <code>Modules\SP.Core\SP.Config.psm1</code> (the runtime source of truth).</p></div>
+</div>
+<div id="section-found-authentication" class="report-section" style="display:none">
+<h2>5. Authentication</h2>
+<p>The toolkit authenticates to ISC three ways, selected by <code>Authentication.Mode</code>: <strong><code>ConfigFile</code></strong> and <strong><code>Vault</code></strong> both use an OAuth <strong>Personal Access Token (PAT)</strong>; <strong><code>Token</code></strong> uses a short-lived browser bearer token. Read §5.1 first to create the credential, then pick a storage mode (§5.2–§5.4).</p>
+<h3 id="5-1-the-isc-credential-a-personal-access-token-pat">5.1 The ISC credential: a Personal Access Token (PAT)</h3>
+<p>For anything beyond a quick browser-token run, the toolkit uses the OAuth 2.0 <strong><code>client_credentials</code></strong> grant. In the ISC admin console this is created as a <strong>Personal Access Token</strong> — despite the name, it issues a <strong><code>ClientId</code> + <code>ClientSecret</code></strong> pair and is the standard non-interactive service credential. Create it under <strong>Admin → Preferences → Personal Access Tokens</strong> (or <strong>Security Settings → API Management</strong> with <code>ORG_ADMIN</code>).</p>
+<p>A PAT <strong>inherits the permissions of the identity that creates it</strong>, then the selected <strong>scopes</strong> further restrict it. Create it as a <strong><code>CERT_ADMIN</code></strong> (campaigns + certifications — all the toolkit needs) or <strong><code>ORG_ADMIN</code></strong>, and grant the scopes that match your intended use:</p>
+<table>
+<thead><tr>
+<th>Use case</th>
+<th>Scopes to grant</th>
+<th>Covers</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Read-only audit</strong> (query + audit existing campaigns, reports)</td>
+<td><code>idn:campaign:read</code>, <code>idn:campaign-report:read</code>, <code>sp:report:read</code>, <code>sp:search:read</code>, <code>idn:sources:read</code>, <code>idn:accounts:read</code></td>
+<td>Audit, search, governance/data-quality reporting, leadership rollups.</td>
+</tr>
+<tr>
+<td><strong>Full toolkit</strong> (also create/activate/decide campaigns)</td>
+<td><code>idn:campaign:manage</code>, <code>idn:campaign-report:manage</code>, <code>sp:report:manage</code>, <code>sp:search:read</code>, <code>idn:sources:read</code>, <code>idn:accounts:read</code></td>
+<td>Everything above <strong>plus</strong> campaign creation, delta-cert/disconnected-app campaign creation, decisions, sign-off. <code>…:manage</code> is a superset of <code>…:read</code>.</td>
+</tr>
+<tr>
+<td><strong>Delta cert / orchestrator</strong> (account-activities)</td>
+<td>the Full-toolkit set <strong>plus</strong> <code>sp:scopes:all</code> <em>(or a browser token)</em></td>
+<td><code>GET /v3/account-activities</code> has <strong>no</strong> granular scope — it requires <code>sp:scopes:all</code>. Affects <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaReport</code>, and the daily orchestrator steps 2–5.</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Why <code>sp:search:read</code> for a "read-only" PAT?</strong> Delta cert and disconnected-app correlation resolve identities (and their managers) via <code>GET /v3/search/identities/{id}</code> and <code>POST /v3/search</code>. The plain <code>idn:campaign:read</code> set is <strong>not</strong> sufficient for those. For the full endpoint-to-scope mapping and a click-by-click walkthrough, see <strong><code>docs/SANDBOX-API-SETUP.md</code></strong> (sandbox-framed but the steps apply to any tenant).</p></div>
+<h3 id="5-2-configfile">5.2 ConfigFile</h3>
+<p><code>ClientId</code> + <code>ClientSecret</code> are read directly from config. Simplest, but the secret sits in a file in plain text — only use with <code>settings.local.json</code> (gitignored) or the mock, never in the committed <code>settings.json</code>.</p>
+<h3 id="5-3-vault-recommended-for-real-tenants">5.3 Vault (recommended for real tenants)</h3>
+<p>Credentials live in an <strong>encrypted vault file</strong> unlocked by a passphrase — the secret is never stored in plain text on disk, and the passphrase is never written to disk at all. Set up once:</p>
+<pre><code>.\Scripts\New-SPVault.ps1            # interactive: prompts for passphrase + ClientId/Secret
+.\Scripts\New-SPVault.ps1 -ClientId 'abc123'   # pre-supply the id, prompt for the rest
+.\Scripts\New-SPVault.ps1 -VaultPath 'D:\Secure\team.enc'   # custom location</code></pre>
+<p>Then set <code>Authentication.Mode = "Vault"</code>. The vault is created at <code>Authentication.Vault.VaultPath</code> (default <code>.\Data\sp-vault.enc</code>); at runtime the toolkit prompts for (or is given) the passphrase to unlock it.</p>
+<p><strong>How the encryption works.</strong> The vault is authenticated encryption — <strong>AES-256-CBC for confidentiality plus HMAC-SHA256 for integrity</strong> (encrypt-then-MAC, so tampering is detected before decryption). The passphrase is stretched with <strong>PBKDF2 (<code>Rfc2898DeriveBytes</code>, 600,000 iterations</strong> — tunable via <code>Vault.Pbkdf2Iterations</code>) into a 64-byte key that is split into a separate 32-byte AES key and 32-byte HMAC key. Each save uses a fresh random 32-byte salt and 16-byte IV, so the on-disk blob is <code>[salt][IV][HMAC][ciphertext]</code>. <strong>What it supports:</strong> storing the ISC <code>ClientId</code> + <code>ClientSecret</code> under a named key (<code>Vault.CredentialKey</code>, default <code>sailpoint-isc</code>), rotation/re-keying by re-running <code>New-SPVault.ps1</code> (it warns before overwriting), and a custom vault path for shared/team locations. The <code>*.enc</code> file is gitignored.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Store the passphrase in a password manager.</strong> It is never logged and cannot be recovered — lose it and you must recreate the vault (and rotate the PAT secret).</p></div>
+<h3 id="5-4-token">5.4 Token</h3>
+<p>Paste a short-lived <strong>bearer token</strong> (copied from an active ISC web session: F12 → Network → copy the <code>Authorization</code> value) via the <code>-Token</code> parameter on most scripts, or the GUI's Settings-tab token field. No PAT or scopes setup needed — it carries your browser session's full permissions — but it expires in ~10–12 minutes, so it's for quick ad-hoc/<code>account-activities</code> runs, not automation.</p>
+<div class="callout callout-warning"><div class="callout-label">TLS / Security</div><p><strong>TLS:</strong> the toolkit enforces TLS 1.2 (and 1.3 if the OS supports it) on every HTTPS call automatically — no configuration needed. This is the #1 fix for "connection closed" errors against ISC.</p></div>
+</div>
+<div id="section-found-environments-mock-vs-real" class="report-section" style="display:none">
+<h2>6. Environments: mock vs. real</h2>
+<ul><li><strong>Mock</strong> — point the toolkit at the local <strong>API-MockServer</strong> (<code>http://localhost:8080</code>) using <code>Config\settings-mock.json</code>. Safe for testing, demos, and the GUI test harness; no real tenant calls. The mock serves the SailPoint-ISC profile with realistic seed data.</li><li><strong>Real</strong> — your ISC tenant via <code>settings.local.json</code> with real credentials (vault recommended).</li></ul>
+<p><code>Global.EnvironmentName</code> feeds the <strong>Safety</strong> model: a non-mock environment with <code>RequireWhatIfOnProd = true</code> will demand confirmation before mutating actions.</p>
+</div>
+<div id="section-found-the-safety-model-read-before-mutating-anything" class="report-section" style="display:none">
+<h2>7. The Safety model (read before mutating anything)</h2>
+<p>Mutating operations (creating/completing campaigns, deleting templates/filters, deciding work items, etc.) are governed by <code>Safety</code>:</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>Effect</th>
+</tr></thead><tbody>
+<tr>
+<td><code>RequireWhatIfOnProd</code></td>
+<td>On a real environment, mutating actions require explicit confirmation (CLI <code>-WhatIf</code> preview, GUI Yes/No prompt) before they execute.</td>
+</tr>
+<tr>
+<td><code>MaxCampaignsPerRun</code></td>
+<td>Hard cap — a run that would exceed it is refused (no partial silent truncation; you're told the count vs. the cap).</td>
+</tr>
+<tr>
+<td><code>AllowCompleteCampaign</code></td>
+<td>The terminal "complete campaign" / bulk-approve style actions are <strong>blocked unless this is explicitly <code>true</code>.</strong></td>
+</tr>
+</tbody></table>
+<ul><li><strong>CLI:</strong> mutating scripts support <code>-WhatIf</code> (preview without executing). Honor it on production until you've reviewed the plan.</li><li><strong>GUI:</strong> destructive buttons show a confirmation dialog with the affected count; the SDK Features tab routes write actions through the same Safety gates and surfaces a "blocked by Safety…" status rather than failing silently.</li></ul>
+</div>
+<div id="section-found-output-reports-and-logs" class="report-section" style="display:none">
+<h2>8. Output, reports, and logs</h2>
+<table>
+<thead><tr>
+<th>Location</th>
+<th>Contents</th>
+</tr></thead><tbody>
+<tr>
+<td><code>Logs\</code></td>
+<td>Structured run logs (<code>&lt;FilePrefix&gt;-*.log</code>), severity-filtered.</td>
+</tr>
+<tr>
+<td><code>Audit\</code></td>
+<td>Campaign audit reports (HTML / text / JSONL); <strong>adaptive reports</strong> under <code>Audit\adaptive\</code>, leadership reports under <code>Audit\leadership\</code>.</td>
+</tr>
+<tr>
+<td><code>DeltaCert\</code></td>
+<td>Delta-certification run output + history.</td>
+</tr>
+<tr>
+<td><code>Reports\</code></td>
+<td>Governance reports, metrics, health checks.</td>
+</tr>
+<tr>
+<td><code>Evidence\</code></td>
+<td>Test/campaign evidence bundles.</td>
+</tr>
+<tr>
+<td><code>DisconnectedApps\</code></td>
+<td>Imports, snapshots, and disconnected-app reports.</td>
+</tr>
+<tr>
+<td><code>Data\</code></td>
+<td>The encrypted vault (<code>sp-vault.enc</code>).</td>
+</tr>
+</tbody></table>
+<h3 id="output-modes-cli">Output modes (CLI)</h3>
+<p>Most reporting scripts take <code>-OutputMode</code>:</p>
+<table>
+<thead><tr>
+<th>Mode</th>
+<th>Meaning</th>
+</tr></thead><tbody>
+<tr>
+<td><code>Console</code></td>
+<td>Human-readable to the terminal.</td>
+</tr>
+<tr>
+<td><code>JSON</code></td>
+<td>Machine-readable JSON to stdout (for piping/automation).</td>
+</tr>
+<tr>
+<td><code>Both</code></td>
+<td>Console <strong>and</strong> a JSON file.</td>
+</tr>
+<tr>
+<td><code>CSV</code> / <code>HTML</code></td>
+<td>Where supported (search, data-quality, governance, weekly digest), a CSV or HTML artifact.</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-found-glossary-isc-terms" class="report-section" style="display:none">
+<h2>9. Glossary (ISC terms)</h2>
+<table>
+<thead><tr>
+<th>Term</th>
+<th>Meaning</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Campaign</strong></td>
+<td>A certification campaign — a scheduled review of access. Types: <code>MANAGER</code>, <code>SOURCE_OWNER</code>, <code>SEARCH</code>, <code>ROLE_COMPOSITION</code>.</td>
+</tr>
+<tr>
+<td><strong>Certification</strong></td>
+<td>One reviewer's slice of a campaign (their queue of items to decide).</td>
+</tr>
+<tr>
+<td><strong>Access Review Item (ARI)</strong></td>
+<td>A single access (entitlement/role/access-profile) on one identity awaiting a decision.</td>
+</tr>
+<tr>
+<td><strong>Decision</strong></td>
+<td>The reviewer's verdict: <code>APPROVE</code> (keep) or <code>REVOKE</code> (remove); undecided = pending.</td>
+</tr>
+<tr>
+<td><strong>Sign-off</strong></td>
+<td>A reviewer finalizing their certification once all items are decided.</td>
+</tr>
+<tr>
+<td><strong>Reassign</strong></td>
+<td>Moving review items from one reviewer to another (sync ≤50, async ≤500).</td>
+</tr>
+<tr>
+<td><strong>Entitlement / Access Profile / Role</strong></td>
+<td>Units of access, increasing in aggregation (entitlement → access profile → role).</td>
+</tr>
+<tr>
+<td><strong>Source</strong></td>
+<td>A connected system (AD, Okta, etc.) that ISC aggregates accounts/entitlements from.</td>
+</tr>
+<tr>
+<td><strong>Identity</strong></td>
+<td>A person/account in ISC, with attributes and a lifecycle state.</td>
+</tr>
+<tr>
+<td><strong>Lifecycle state</strong></td>
+<td><code>active</code>, <code>inactive</code>, <code>terminated</code>, <code>leaver</code>, <code>prehire</code>, etc.</td>
+</tr>
+<tr>
+<td><strong>Delta certification</strong></td>
+<td>Re-certifying only recently-<em>changed</em> access (e.g. new grants in the last 24h) rather than everything.</td>
+</tr>
+<tr>
+<td><strong>Disconnected application</strong></td>
+<td>An app not directly integrated with ISC; access is imported via CSV and certified through a generated campaign.</td>
+</tr>
+<tr>
+<td><strong>Campaign template</strong></td>
+<td>A reusable campaign definition (SDK feature) that can be scheduled.</td>
+</tr>
+<tr>
+<td><strong>Campaign filter</strong></td>
+<td>A reusable include/exclude rule set for campaigns (SDK feature).</td>
+</tr>
+<tr>
+<td><strong>Work item</strong></td>
+<td>A task assigned to a user (certification, approval, remediation, manual action).</td>
+</tr>
+<tr>
+<td><strong>Workflow</strong></td>
+<td>An ISC automation definition (event/scheduled/external trigger).</td>
+</tr>
+<tr>
+<td><strong>OOO fallback</strong></td>
+<td>An out-of-office fallback-reviewer workflow (SDK feature).</td>
+</tr>
+<tr>
+<td><strong>Adaptive report</strong></td>
+<td>A composable HTML report assembled from independent components (KPI cards, heatmap, top-N, drill-down tree, group table) over a generic "groups containing members" view of governance data, plus a baseline report library (inventory, privileged review, orphaned/disabled, SoD, roster, access-cert, exec summary). See <code>Invoke-SPAdaptiveReport</code>.</td>
+</tr>
+<tr>
+<td><strong>Anchor (adaptive reports)</strong></td>
+<td>How SailPoint data maps into the adaptive report engine: <strong>entitlement-centric</strong> (entitlement → group, identity → member) or <strong>campaign-centric</strong> (campaign → group).</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-found-getting-help-exit-codes" class="report-section" style="display:none">
+<h2>10. Getting help &amp; exit codes</h2>
+<ul><li><strong>Per-command help:</strong> <code>.\Scripts\&lt;Script&gt;.ps1 -Help</code> prints full usage for any CLI script.</li><li><strong>Exit codes:</strong> CLI scripts return <code>0</code> on success and non-zero on failure (the specific codes are documented per script in the CLI Playbook). Automation should check the exit code, not just stdout.</li><li><strong>Connectivity:</strong> <code>Test-SPConnectivity.ps1</code> verifies auth + tenant reachability before a real run.</li></ul>
+<p><em>Next: the CLI Playbook (operators / automation) and the GUI Playbook (interactive analysts / reviewers).</em></p>
+</div>
+<div id="section-cli-overview" class="report-section" style="display:none">
+<h2>CLI Playbook &mdash; Overview &amp; Conventions</h2>
+<h2 id="sailpoint-isc-governance-toolkit-cli-playbook">SailPoint ISC Governance Toolkit — CLI Playbook</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Source of truth.</strong> Edit this Markdown, not the generated HTML. Read Foundations first — it covers setup, authentication, the <code>settings.json</code> reference, the Safety model, output modes, and the glossary that every script below relies on.</p></div>
+<p><strong>Audience:</strong> operators, automation engineers, and anyone running the toolkit headlessly (scheduled tasks, pipelines, ad-hoc admin).</p>
+<p><strong>Conventions used in every entry below</strong></p>
+<ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
+<h3 id="contents">Contents</h3>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, weekly digest, <strong>adaptive reports</strong></li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+</div>
+<div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
+<h2>1. Setup &amp; diagnostics</h2>
+<h3 id="new-spvault-ps1"><code>New-SPVault.ps1</code></h3>
+<p><strong>Purpose:</strong> one-time interactive setup of the encrypted credential vault (AES-256-CBC + PBKDF2, 600k iterations). Stores the ISC OAuth client credentials so the secret is never on disk in plain text. <strong>When to use:</strong> once, before running anything with <code>Authentication.Mode = Vault</code>. Re-run only to re-key or rotate credentials (it will warn before overwriting).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-VaultPath &lt;file&gt;</code></td>
+<td>Override the vault path from <code>settings.json</code> (default <code>.\Data\sp-vault.enc</code>).</td>
+</tr>
+<tr>
+<td><code>-ClientId &lt;id&gt;</code></td>
+<td>OAuth client ID. Prompted interactively if omitted.</td>
+</tr>
+<tr>
+<td><code>-ClientSecret &lt;secret&gt;</code></td>
+<td>OAuth client secret. Prompted as a SecureString if omitted.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\New-SPVault.ps1                      # fully interactive
+.\Scripts\New-SPVault.ps1 -ClientId 'abc123'   # pre-supply id, prompt for the rest</code></pre>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p>Store the passphrase in a password manager — it is never logged or recoverable.</p></div>
+<p><strong>Related GUI:</strong> Settings tab (auth configuration).</p>
+<h3 id="test-spconnectivity-ps1"><code>Test-SPConnectivity.ps1</code></h3>
+<p><strong>Purpose:</strong> quick smoke test of the whole connectivity stack — (1) load+validate config, (2) acquire an OAuth token, (3) make a minimal live call (<code>GET /v3/campaigns?limit=1</code>). Each step reports success/failure + elapsed time. <strong>When to use:</strong> before any real run, after changing credentials/tenant, or to debug auth/TLS issues.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-ConfigPath &lt;file&gt;</code></td>
+<td>Settings file to test against (e.g. point at <code>settings-mock.json</code> or <code>settings.local.json</code>).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Test-SPConnectivity.ps1
+.\Scripts\Test-SPConnectivity.ps1 -ConfigPath .\Config\settings.local.json</code></pre>
+<p><strong>Related GUI:</strong> Settings tab → "Test Connection".</p>
+<h3 id="show-spdashboard-ps1"><code>Show-SPDashboard.ps1</code></h3>
+<p><strong>Purpose:</strong> launches the WPF dashboard (the entire GUI — see the GUI Playbook). <strong>When to use:</strong> for interactive analysis/review instead of the CLI.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-ConfigPath &lt;file&gt;</code></td>
+<td>Settings file the GUI uses.</td>
+</tr>
+<tr>
+<td><code>-NoIsolation</code></td>
+<td><strong>Internal</strong> — the launcher re-spawns itself in an STA child process; end users never pass this.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Show-SPDashboard.ps1
+.\Scripts\Show-SPDashboard.ps1 -ConfigPath .\Config\settings-mock.json</code></pre>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p>WPF requires STA; the script relaunches itself in a clean STA child automatically.</p></div>
+</div>
+<div id="section-cli-campaign-testing-audit" class="report-section" style="display:none">
+<h2>2. Campaign testing &amp; audit</h2>
+<h3 id="invoke-governancetest-ps1"><code>Invoke-GovernanceTest.ps1</code></h3>
+<p><strong>Purpose:</strong> the primary test entry point — loads campaign test definitions from CSV, executes certification campaigns against ISC, and writes structured evidence. <strong>When to use:</strong> to validate governance flows (smoke/regression suites), in CI, or to exercise the toolkit against the mock.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Tags &lt;names&gt;</code></td>
+<td>Run only campaigns whose <code>Tags</code> column matches one of these (e.g. <code>smoke</code>, <code>regression</code>, <code>full</code>).</td>
+</tr>
+<tr>
+<td><code>-TestId &lt;id&gt;</code></td>
+<td>Run a single test by ID (e.g. <code>TC-001</code>). Mutually exclusive with <code>-Tags</code>.</td>
+</tr>
+<tr>
+<td><code>-StopOnFirstFailure</code></td>
+<td>Halt the suite at the first failure.</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code> / <code>JSON</code> / <code>Both</code>.</td>
+</tr>
+<tr>
+<td><code>-WhatIf</code></td>
+<td>Preview without executing (honor on production).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-GovernanceTest.ps1 -Tags smoke
+.\Scripts\Invoke-GovernanceTest.ps1 -TestId TC-001 -OutputMode JSON</code></pre>
+<p><strong>Related GUI:</strong> Campaigns tab.</p>
+<h3 id="invoke-spcampaignaudit-ps1"><code>Invoke-SPCampaignAudit.ps1</code></h3>
+<p><strong>Purpose:</strong> generates post-campaign <strong>audit reports</strong> — pulls completed/active campaigns, all certifications + review items, decisions and reviewer actions, identity lifecycle events for revoked identities, and writes per-campaign HTML/text + a combined summary + a JSONL audit trail. <strong>When to use:</strong> after campaigns complete, for compliance evidence and leadership rollups. <strong>Requires at least one campaign filter</strong> (<code>-CampaignName</code>, <code>-CampaignNameStartsWith</code>, <code>-CampaignNameContains</code>, or <code>-Status</code>).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignName &lt;name&gt;</code></td>
+<td>Exact (case-insensitive) campaign name.</td>
+</tr>
+<tr>
+<td><code>-CampaignNameStartsWith &lt;prefix&gt;</code></td>
+<td>Name begins with prefix.</td>
+</tr>
+<tr>
+<td><code>-CampaignNameContains &lt;kw&gt;</code></td>
+<td>Name contains keyword (ISC <code>co</code> filter; best for fuzzy search).</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code></td>
+<td><code>STAGED</code>/<code>ACTIVE</code>/<code>COMPLETING</code>/<code>COMPLETED</code>. Defaults to <code>Audit.DefaultStatuses</code>.</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Only campaigns created in the last <em>n</em> days (default 30 / <code>Audit.DefaultDaysBack</code>).</td>
+</tr>
+<tr>
+<td><code>-IdentityEventDays &lt;n&gt;</code></td>
+<td>Days before campaign end to search lifecycle events for revoked identities (default 2).</td>
+</tr>
+<tr>
+<td><code>-CampaignReportCsvPath &lt;file&gt;</code></td>
+<td>Read decisions from a locally-exported report CSV instead of live API calls.</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Override <code>Audit.OutputPath</code> (default <code>.\Audit</code>).</td>
+</tr>
+<tr>
+<td><code>-IncludeLeadershipRollup</code></td>
+<td>Also build per-leader rollup reports by walking the org tree (identity → manager → director → VP).</td>
+</tr>
+<tr>
+<td><code>-LeadershipDepth &lt;n&gt;</code> / <code>-LeadershipStartLevel &lt;n&gt;</code></td>
+<td>Control rollup depth / starting band.</td>
+</tr>
+<tr>
+<td><code>-DetailLevel &lt;level&gt;</code></td>
+<td>Verbosity of the report content.</td>
+</tr>
+</tbody></table>
+<pre><code># Everything completed in the last 7 days
+.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DaysBack 7
+# One campaign by name, with leadership rollups
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignName 'Q2 Manager Review' -IncludeLeadershipRollup
+# Fuzzy search + JSON output
+.\Scripts\Invoke-SPCampaignAudit.ps1 -CampaignNameContains 'manager' -OutputMode JSON</code></pre>
+<p><strong>Related GUI:</strong> Audit tab.</p>
+<h3 id="invoke-spcampaignsearch-ps1"><code>Invoke-SPCampaignSearch.ps1</code></h3>
+<p><strong>Purpose:</strong> unified campaign <strong>search + analysis</strong> — find campaigns and run analytics without producing a full audit. At least one filter/analysis parameter is required (no filter → exit code 2). <strong>When to use:</strong> to locate campaigns, triage deadlines, compare campaigns, check reviewer workload, or find source coverage gaps.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Keyword &lt;kw&gt;</code></td>
+<td>Substring search on campaign name (ISC <code>co</code> filter).</td>
+</tr>
+<tr>
+<td><code>-Type &lt;type&gt;</code></td>
+<td><code>MANAGER</code> / <code>SOURCE_OWNER</code> / <code>SEARCH</code> / <code>ROLE_COMPOSITION</code> (server-side filter).</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code></td>
+<td>Default <code>COMPLETED, ACTIVE</code>.</td>
+</tr>
+<tr>
+<td><code>-CreatedAfter</code> / <code>-CreatedBefore &lt;date&gt;</code></td>
+<td>Creation-date bounds (take precedence over <code>-DaysBack</code>).</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Look-back window (default 90).</td>
+</tr>
+<tr>
+<td><code>-ShowDeadlines</code></td>
+<td>Add deadline urgency (Overdue/Critical/Warning/OnTrack) per campaign.</td>
+</tr>
+<tr>
+<td><code>-ShowMetrics</code></td>
+<td>Add per-campaign KPIs (approval/completion rate, reviewer count, response times).</td>
+</tr>
+<tr>
+<td><code>-ReviewerIdentityId &lt;id&gt;</code></td>
+<td>Find all campaigns/certs for a reviewer with workload counts.</td>
+</tr>
+<tr>
+<td><code>-IdentityId &lt;id&gt;</code></td>
+<td>Show all decisions made about one identity across campaigns.</td>
+</tr>
+<tr>
+<td><code>-SourceCoverage</code></td>
+<td>Which sources have/haven't been audited by campaigns.</td>
+</tr>
+<tr>
+<td><code>-CompareIds &lt;ids&gt;</code></td>
+<td>Two+ campaign IDs for side-by-side metric comparison (standalone mode).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>JSON</code>/<code>Both</code>/<strong><code>CSV</code></strong>/<strong><code>HTML</code></strong>.</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Destination for CSV/HTML artifacts.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPCampaignSearch.ps1 -Keyword 'access' -ShowDeadlines -ShowMetrics
+.\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -OutputMode HTML
+.\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode CSV</code></pre>
+<p><strong>Related GUI:</strong> Audit tab (campaign query dialog).</p>
+</div>
+<div id="section-cli-delta-certification" class="report-section" style="display:none">
+<h2>3. Delta certification</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Scope:</strong> all three read <code>/v3/account-activities</code>, which requires <code>sp:scopes:all</code> or a browser <code>-Token</code>.</p></div>
+<h3 id="invoke-spaddeltacert-ps1"><code>Invoke-SPADDeltaCert.ps1</code></h3>
+<p><strong>Purpose:</strong> creates <strong>daily AD delta-cert campaigns</strong> — finds <code>GRANT_ACCESS</code> events on the specified AD sources in the look-back window, resolves each affected active identity's manager, and creates one targeted campaign per manager (scoped to just their reports who got new access). <strong>When to use:</strong> scheduled daily, to re-certify <em>newly granted</em> AD access without a full campaign. Exits with code 1 (nothing to do) if no grants are found.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SourceId &lt;ids&gt;</code> <em>(required)</em></td>
+<td>ISC source ID(s) to monitor (ISC Admin → Sources → ID in URL).</td>
+</tr>
+<tr>
+<td><code>-HoursBack &lt;n&gt;</code></td>
+<td>Look-back window (default 24; raise to 48+ to catch up a missed run).</td>
+</tr>
+<tr>
+<td><code>-DeadlineDays &lt;n&gt;</code></td>
+<td>Days managers have to review (default 2).</td>
+</tr>
+<tr>
+<td><code>-FallbackReviewerIdentityId &lt;id&gt;</code></td>
+<td>Reviewer for identities with no manager (else skipped + logged).</td>
+</tr>
+<tr>
+<td><code>-CampaignNamePrefix &lt;s&gt;</code></td>
+<td>Name prefix (default <code>DeltaCert.CampaignNamePrefix</code> / <code>AD Delta Cert</code>). Full: <code>"{Prefix} {YYYY-MM-DD} - {Manager}"</code>.</td>
+</tr>
+<tr>
+<td><code>-MaxCampaignsPerRun &lt;n&gt;</code></td>
+<td>Abort before creating anything if manager groups exceed this (default 50).</td>
+</tr>
+<tr>
+<td><code>-ReviewerMode &lt;mode&gt;</code></td>
+<td><code>Manager</code> (one SEARCH campaign per manager) or <code>SourceOwner</code> (one SOURCE_OWNER campaign per source). Default <code>Manager</code>.</td>
+</tr>
+<tr>
+<td><code>-RunCleanup</code></td>
+<td>First complete past-due delta campaigns (needs <code>Safety.AllowCompleteCampaign = true</code>).</td>
+</tr>
+<tr>
+<td><code>-WhatIf</code></td>
+<td>Preview the campaigns that would be created.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-ad-001' -Token $jwt
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-ad-001' -HoursBack 48 -RunCleanup -WhatIf</code></pre>
+<p><strong>Related GUI:</strong> Delta Cert tab → Run.</p>
+<h3 id="invoke-spdeltacertescalate-ps1"><code>Invoke-SPDeltaCertEscalate.ps1</code></h3>
+<p><strong>Purpose:</strong> escalates <strong>stale</strong> delta-cert certifications — finds active delta certs with no reviewer action past a threshold and reassigns each up the org tree to the reviewer's manager (ISC emails the new reviewer automatically). Escalations are logged to JSONL for evidence. <strong>When to use:</strong> on a separate schedule from the main delta-cert job (e.g. every few hours) to keep reviews moving.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignNamePrefix &lt;s&gt;</code></td>
+<td>Prefix used to find delta-cert campaigns (default <code>DeltaCert.Escalation.CampaignNamePrefix</code>).</td>
+</tr>
+<tr>
+<td><code>-StaleHours &lt;n&gt;</code></td>
+<td>Hours of inactivity before a cert is "stale" (default 24).</td>
+</tr>
+<tr>
+<td><code>-MaxEscalationLevels &lt;n&gt;</code></td>
+<td>Max hops up the org tree from the original reviewer (default 2).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt</code></pre>
+<p><strong>Related GUI:</strong> Delta Cert tab → Escalate.</p>
+<h3 id="invoke-spdeltareport-ps1"><code>Invoke-SPDeltaReport.ps1</code></h3>
+<p><strong>Purpose:</strong> a lightweight <strong>daily change report</strong> (1–2 page HTML + JSONL for SIEM) — grants, revocations, recently-created delta campaigns, pending certs, and anomalies in the window. Not a full audit — just "what changed today." <strong>When to use:</strong> quick daily operations review / SIEM feed.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SourceId &lt;ids&gt;</code> <em>(required)</em></td>
+<td>Source ID(s) to monitor.</td>
+</tr>
+<tr>
+<td><code>-HoursBack &lt;n&gt;</code></td>
+<td>Look-back window (default 24).</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Output dir for HTML+JSONL (default <code>DeltaCert\reports\</code>).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -Token $jwt</code></pre>
+<p><strong>Related GUI:</strong> Delta Cert tab (history/reports).</p>
+</div>
+<div id="section-cli-disconnected-applications" class="report-section" style="display:none">
+<h2>4. Disconnected applications</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p>For apps with no native ISC connector. Teams deliver daily CSV exports; the toolkit snapshots, diffs, correlates to identities, and certifies the <em>changes</em>. <strong>Scope:</strong> identity resolution needs <code>sp:search:read</code>; campaign creation needs <code>idn:campaign:read</code> + <code>idn:campaign:manage</code> (or a browser <code>-Token</code>).</p></div>
+<h3 id="invoke-spdisconnectedappregistry-ps1"><code>Invoke-SPDisconnectedAppRegistry.ps1</code></h3>
+<p><strong>Purpose:</strong> manage the <code>DisconnectedApps.Applications</code> registry in <code>settings.json</code>. <strong>When to use:</strong> to onboard/offboard an app or validate its setup before batch runs.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Action &lt;op&gt;</code> <em>(required)</em></td>
+<td><code>Register</code>, <code>Unregister</code>, <code>List</code>, or <code>Test</code>.</td>
+</tr>
+<tr>
+<td><code>-AppName &lt;name&gt;</code></td>
+<td>App name (required for Register/Unregister/Test).</td>
+</tr>
+<tr>
+<td><code>-AccountFilePath &lt;file&gt;</code></td>
+<td>Account CSV (required for Register).</td>
+</tr>
+<tr>
+<td><code>-EntitlementFilePath &lt;file&gt;</code></td>
+<td>Entitlement CSV (optional).</td>
+</tr>
+<tr>
+<td><code>-ISCSourceId</code>, <code>-CorrelationAttribute</code>, <code>-CampaignNamePrefix</code>, <code>-DeadlineDays</code>, <code>-SlaDays</code></td>
+<td>Per-app overrides of the global defaults.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action List
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Register -AppName 'PEP-Plus' -AccountFilePath .\imports\pep.csv
+.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName 'PEP-Plus'</code></pre>
+<p><em>Exit codes:</em> 0 success · 1 none found / warnings · 2 parameter · 4 config · 5 validation.</p>
+<h3 id="invoke-spdisconnectedappcert-ps1"><code>Invoke-SPDisconnectedAppCert.ps1</code></h3>
+<p><strong>Purpose:</strong> the full single-app pipeline — validate CSV → snapshot → diff vs. previous → resolve changed accounts to identities → create one SEARCH campaign per manager (adds/grants only) → HTML delta report + JSONL audit. <strong>When to use:</strong> to certify one app's newly-changed access. Exits code 1 (not an error) if nothing changed since the last snapshot.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-AppName &lt;name&gt;</code> <em>(required)</em></td>
+<td>App name (paths, campaign naming, titles).</td>
+</tr>
+<tr>
+<td><code>-AccountFilePath &lt;file&gt;</code> <em>(required)</em></td>
+<td>Today's account CSV.</td>
+</tr>
+<tr>
+<td><code>-EntitlementFilePath &lt;file&gt;</code></td>
+<td>Entitlement CSV; enables cross-reference validation.</td>
+</tr>
+<tr>
+<td><code>-CampaignNamePrefix &lt;s&gt;</code></td>
+<td>Default <code>DisconnectedApps.DefaultCampaignNamePrefix</code>.</td>
+</tr>
+<tr>
+<td><code>-DeadlineDays &lt;n&gt;</code></td>
+<td>Reviewer deadline (default 2).</td>
+</tr>
+<tr>
+<td><code>-FallbackReviewerIdentityId &lt;id&gt;</code></td>
+<td>Reviewer for manager-less identities (else skipped).</td>
+</tr>
+<tr>
+<td><code>-MaxCampaignsPerRun &lt;n&gt;</code></td>
+<td>Abort if manager groups exceed this (default 20).</td>
+</tr>
+<tr>
+<td><code>-SnapshotDir</code> / <code>-OutputPath &lt;dir&gt;</code></td>
+<td>Snapshot and report/JSONL locations.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppCert.ps1 -AppName 'PEP-Plus' -AccountFilePath .\imports\pep-2026-06-05.csv -Token $jwt</code></pre>
+<p><strong>Related GUI:</strong> <em>(CLI-only pipeline)</em>.</p>
+<h3 id="invoke-spdisconnectedappbatch-ps1"><code>Invoke-SPDisconnectedAppBatch.ps1</code></h3>
+<p><strong>Purpose:</strong> runs the per-app pipeline for <strong>all (or named) registered apps</strong> in sequence, isolating errors so one bad app doesn't stop the batch. Each app → <code>Success</code>, <code>NoChanges</code>, <code>ThresholdBlocked</code>, or <code>Error</code>. <strong>When to use:</strong> the daily disconnected-app run (often via the orchestrator).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-AppNames &lt;list&gt;</code></td>
+<td>Only process these apps (default: all enabled).</td>
+</tr>
+<tr>
+<td><code>-Force</code></td>
+<td>Bypass the duplicate-campaign guard on every app.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -Token $jwt
+.\Scripts\Invoke-SPDisconnectedAppBatch.ps1 -AppNames 'PEP-Plus','IPAY' -OutputMode Both</code></pre>
+<p><em>Exit codes:</em> 0 all ok/no-changes · 1 partial · 2 all failed.</p>
+</div>
+<div id="section-cli-governance-reporting" class="report-section" style="display:none">
+<h2>5. Governance &amp; reporting</h2>
+<h3 id="invoke-spgovernancehealthcheck-ps1"><code>Invoke-SPGovernanceHealthCheck.ps1</code></h3>
+<p><strong>Purpose:</strong> one consolidated health report across six dimensions — source aggregation, data quality, policy compliance, config drift, orphan accounts, campaign coverage gaps — with a pass/fail/warn per check and an overall grade. <strong>When to use:</strong> routine governance posture checks; before audits.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SourceId &lt;ids&gt;</code></td>
+<td>Sources to assess (default: configured/all enabled).</td>
+</tr>
+<tr>
+<td><code>-MaxStalenessHours &lt;n&gt;</code></td>
+<td>Source-stale threshold (default 48).</td>
+</tr>
+<tr>
+<td><code>-IdentityLimit &lt;n&gt;</code></td>
+<td>Cap for data-quality scoring (default 500).</td>
+</tr>
+<tr>
+<td><code>-SnapshotPath &lt;dir&gt;</code></td>
+<td>Config snapshots for drift comparison.</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Coverage-gap look-back (default 90).</td>
+</tr>
+<tr>
+<td><code>-Skip*</code> switches</td>
+<td>Skip any individual check (<code>-SkipDataQuality</code>, <code>-SkipConfigDrift</code>, …).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPGovernanceHealthCheck.ps1 -OutputMode HTML</code></pre>
+<p><strong>Related GUI:</strong> Governance tab → Health Check.</p>
+<h3 id="invoke-spgovernancemetrics-ps1"><code>Invoke-SPGovernanceMetrics.ps1</code></h3>
+<p><strong>Purpose:</strong> captures governance <strong>KPIs to a JSONL time-series store</strong>, generates trend reports, and optionally forecasts active-campaign completion. Preserves long-term trends even after raw audit data is archived. <strong>When to use:</strong> scheduled (after the daily orchestrator) to build history.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CaptureOnly</code> / <code>-TrendOnly</code></td>
+<td>Capture without reporting / report without recomputing.</td>
+</tr>
+<tr>
+<td><code>-IncludeCompletionForecast</code></td>
+<td>Add per-campaign completion forecasts.</td>
+</tr>
+<tr>
+<td><code>-TrendDaysBack &lt;n&gt;</code></td>
+<td>History window for trends (default 180).</td>
+</tr>
+<tr>
+<td><code>-TrendGranularity &lt;p&gt;</code></td>
+<td><code>Daily</code>/<code>Weekly</code>/<code>Monthly</code> (default Weekly).</td>
+</tr>
+<tr>
+<td><code>-AlertOnDecline</code> / <code>-AlertRecipients &lt;emails&gt;</code></td>
+<td>Notify when KPIs decline &gt;5% over 4 periods.</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeCompletionForecast -OutputMode Both</code></pre>
+<p><strong>Related GUI:</strong> Governance tab → Metrics.</p>
+<h3 id="invoke-spgovernancereport-ps1"><code>Invoke-SPGovernanceReport.ps1</code></h3>
+<p><strong>Purpose:</strong> the "one report to rule them all" — assembles audit, leadership rollup, policy compliance, and data quality into one output directory with a manifest. What an auditor/ governance lead runs for a complete posture snapshot.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Status</code>, <code>-DaysBack</code>, <code>-CampaignName*</code></td>
+<td>Campaign selection (same semantics as audit).</td>
+</tr>
+<tr>
+<td><code>-IncludeLeadershipRollup</code> / <code>-LeadershipDepth &lt;n&gt;</code></td>
+<td>Add per-leader rollups (depth default 3).</td>
+</tr>
+<tr>
+<td><code>-IncludePolicyCheck</code> / <code>-IncludeDataQuality</code></td>
+<td>Add those dimensions.</td>
+</tr>
+<tr>
+<td><code>-IdentityLimit</code>, <code>-MaxStalenessHours</code></td>
+<td>Data-quality tuning.</td>
+</tr>
+<tr>
+<td><code>-SkipDashboardExport</code></td>
+<td>Skip the dashboard data export.</td>
+</tr>
+<tr>
+<td><code>-DetailLevel &lt;l&gt;</code></td>
+<td><code>Summary</code>/<code>Detailed</code>/<code>Verbose</code> (default Verbose).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality</code></pre>
+<p><strong>Related GUI:</strong> Governance tab → Report.</p>
+<h3 id="invoke-spdataqualityreport-ps1"><code>Invoke-SPDataQualityReport.ps1</code></h3>
+<p><strong>Purpose:</strong> focused <strong>data-quality</strong> assessment — orphan accounts + identity-attribute quality + source-aggregation health → a composite weighted score and grade. <strong>When to use:</strong> scheduled or on-demand data hygiene checks.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SkipOrphanAccounts</code> / <code>-SkipIdentityQuality</code> / <code>-SkipAggregationHealth</code></td>
+<td>Drop a section.</td>
+</tr>
+<tr>
+<td><code>-IdentityLimit &lt;n&gt;</code> (500) / <code>-MaxStalenessHours &lt;n&gt;</code> (48)</td>
+<td>Tuning.</td>
+</tr>
+<tr>
+<td><code>-SendNotification</code> / <code>-NotifyRecipients</code></td>
+<td>Notify when grade is D/F.</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDataQualityReport.ps1 -OutputMode HTML</code></pre>
+<p><em>Exit codes:</em> 0 grade A/B · 1 grade C · 5 grade D/F (critical) · 2/3/4 param/auth/config. <strong>Related GUI:</strong> Governance tab → Data Quality.</p>
+<h3 id="invoke-spreportdistribution-ps1"><code>Invoke-SPReportDistribution.ps1</code></h3>
+<p><strong>Purpose:</strong> generates <strong>per-leader / per-band leadership reports</strong> and (optionally) emails each to the right leader via SMTP. Builds the org tree (optionally merging a supplement CSV), resolves bands, groups decisions by level. Generate-only by default. <strong>When to use:</strong> distributing campaign results up the management chain.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Status &lt;list&gt;</code> <em>(required)</em></td>
+<td>Campaign statuses to include.</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Look-back (default 30).</td>
+</tr>
+<tr>
+<td><code>-LeadershipDepth &lt;n&gt;</code></td>
+<td>Org-tree levels above reviewed identities (default 4).</td>
+</tr>
+<tr>
+<td><code>-TargetBands &lt;letters&gt;</code></td>
+<td>Limit to specific bands (e.g. <code>@('B','C')</code>).</td>
+</tr>
+<tr>
+<td><code>-SendReports</code></td>
+<td>Actually email each report (needs <code>Audit.Smtp.Enabled = true</code>).</td>
+</tr>
+<tr>
+<td><code>-PreviewOnly</code></td>
+<td>Show who-gets-what without generating or sending.</td>
+</tr>
+<tr>
+<td><code>-OrgSupplementPath &lt;csv&gt;</code></td>
+<td>Org-chart supplement overriding/filling ISC manager gaps.</td>
+</tr>
+<tr>
+<td><code>-DetailLevel &lt;l&gt;</code></td>
+<td><code>Summary</code>/<code>Detailed</code>/<code>Verbose</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -PreviewOnly
+.\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -SendReports -TargetBands B,C</code></pre>
+<p><strong>Related GUI:</strong> Governance tab (report generation).</p>
+<h3 id="invoke-spweeklydigest-ps1"><code>Invoke-SPWeeklyDigest.ps1</code></h3>
+<p><strong>Purpose:</strong> a consolidated <strong>weekly digest</strong> — campaign activity, campaign health, identity risk, reviewer performance, remediation tracking, and orchestrator reliability in one report. <strong>When to use:</strong> weekly distribution to governance leadership.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Window (default 7).</td>
+</tr>
+<tr>
+<td><code>-Skip*</code> switches</td>
+<td>Drop any section (<code>-SkipIdentityRisk</code>, <code>-SkipReviewerAnalysis</code>, …).</td>
+</tr>
+<tr>
+<td><code>-SendNotification</code> / <code>-NotifyRecipients</code></td>
+<td>Deliver via configured backends.</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML</code></pre>
+<p><strong>Related GUI:</strong> Governance tab.</p>
+<h3 id="invoke-spadaptivereport-ps1"><code>Invoke-SPAdaptiveReport.ps1</code></h3>
+<p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>
+<p><strong>Anchor — what becomes a "group" and its "members":</strong></p>
+<ul><li><code>Entitlement</code> (default) — group = an entitlement / access profile / role; members = the identities holding it. Drives inventory, top-N most-assigned, privileged- entitlement review, disabled-still-has-access, and SoD toxic combinations.</li><li><code>Campaign</code> — group = a certification campaign; members = the identities under it.</li></ul>
+<p>Both anchors pivot the same campaign access-review data, so they need only the campaign/certification endpoints (no extra scopes).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Anchor &lt;a&gt;</code></td>
+<td><code>Entitlement</code> (default) or <code>Campaign</code>.</td>
+</tr>
+<tr>
+<td><code>-Components &lt;keys&gt;</code></td>
+<td>Composable component list: <code>kpi-cards</code>, <code>heatmap</code>, <code>tree</code>, <code>top-n</code>, <code>group-table</code> (append <code>:half</code> for side-by-side). Default <code>kpi-cards,top-n,group-table</code>; pass <code>@()</code> to skip the composable report.</td>
+</tr>
+<tr>
+<td><code>-BaselineReport &lt;names&gt;</code></td>
+<td>One or more of <code>inventory</code>, <code>privileged</code>, <code>orphaned</code>, <code>exec-summary</code>, <code>roster</code>, <code>access-cert</code>, <code>sod</code>, or <code>all</code>.</td>
+</tr>
+<tr>
+<td><code>-Theme &lt;t&gt;</code></td>
+<td><code>light</code> (default) or <code>dark</code>.</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code></td>
+<td>Campaign status filter (default <code>COMPLETED, ACTIVE</code>).</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Campaign window in days (default 90).</td>
+</tr>
+<tr>
+<td><code>-CreatedAfter</code> / <code>-CreatedBefore &lt;date&gt;</code></td>
+<td>Explicit creation-date bounds (take precedence over <code>-DaysBack</code>).</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Destination (default <code>Audit\adaptive</code>).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code> (default) / <code>JSON</code> / <code>HTML</code> / <code>Both</code> — controls the run summary; the HTML report files are always written.</td>
+</tr>
+</tbody></table>
+<pre><code># Entitlement view: composable dashboard + three baseline reports, last 180 days
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
+# Campaign view, dark theme, an explicit window
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31</code></pre>
+<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> Adaptive Reports tab (see the GUI Playbook).</p>
+</div>
+<div id="section-cli-sdk-features" class="report-section" style="display:none">
+<h2>6. SDK features</h2>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>Thin CLI wrappers over the vendor SDK functions (module chain SP.Core → SP.Api → SP.Sdk). These are <strong>read/inspect</strong> CLIs; the full create/edit/schedule/act surface lives in the <strong>SDK Features GUI tab</strong>. Common exit codes: 0 ok · 1 no results · 2 param · 3 auth · 4 config.</p></div>
+<h3 id="invoke-spsdkcampaigntemplates-ps1"><code>Invoke-SPSdkCampaignTemplates.ps1</code></h3>
+<p><strong>Purpose:</strong> list/inspect campaign templates and their schedules.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Action &lt;op&gt;</code></td>
+<td><code>List</code> (default), <code>Get</code>, <code>Schedule</code>.</td>
+</tr>
+<tr>
+<td><code>-TemplateId &lt;id&gt;</code></td>
+<td>Required for <code>Get</code>/<code>Schedule</code>.</td>
+</tr>
+<tr>
+<td><code>-Filters &lt;expr&gt;</code></td>
+<td>ISC filter for <code>List</code> (e.g. <code>name co "quarterly"</code>).</td>
+</tr>
+<tr>
+<td><code>-Sorters &lt;expr&gt;</code></td>
+<td>Sort by <code>name</code>/<code>created</code>/<code>modified</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPSdkCampaignTemplates.ps1 -Action List -Filters 'name co "quarterly"'
+.\Scripts\Invoke-SPSdkCampaignTemplates.ps1 -Action Schedule -TemplateId tmpl-001</code></pre>
+<h3 id="invoke-spsdkworkitems-ps1"><code>Invoke-SPSdkWorkItems.ps1</code></h3>
+<p><strong>Purpose:</strong> list work items with a summary; open by default.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-OwnerId &lt;id&gt;</code></td>
+<td>Filter by owner identity (default: all visible).</td>
+</tr>
+<tr>
+<td><code>-ShowCompleted</code></td>
+<td>Show completed instead of open items.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPSdkWorkItems.ps1
+.\Scripts\Invoke-SPSdkWorkItems.ps1 -ShowCompleted -OutputMode JSON</code></pre>
+<h3 id="invoke-spsdkworkflows-ps1"><code>Invoke-SPSdkWorkflows.ps1</code></h3>
+<p><strong>Purpose:</strong> list/inspect workflows and their execution history.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Action &lt;op&gt;</code></td>
+<td><code>List</code> (default), <code>Get</code>, <code>Executions</code>.</td>
+</tr>
+<tr>
+<td><code>-WorkflowId &lt;id&gt;</code></td>
+<td>Required for <code>Get</code>/<code>Executions</code>.</td>
+</tr>
+<tr>
+<td><code>-Filters &lt;expr&gt;</code></td>
+<td><code>List</code>: <code>enabled</code>, <code>connectorInstanceId</code>, <code>triggerId</code>; <code>Executions</code>: <code>start_time</code>, <code>status</code>.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPSdkWorkflows.ps1 -Action List -Filters 'enabled eq true'
+.\Scripts\Invoke-SPSdkWorkflows.ps1 -Action Executions -WorkflowId wf-001</code></pre>
+<p><strong>Related GUI:</strong> SDK Features tab (full read/write surface).</p>
+</div>
+<div id="section-cli-operations-scheduling" class="report-section" style="display:none">
+<h2>7. Operations &amp; scheduling</h2>
+<h3 id="invoke-spdailyorchestrator-ps1"><code>Invoke-SPDailyOrchestrator.ps1</code></h3>
+<p><strong>Purpose:</strong> the <strong>single daily run</strong> — chains 11 steps (config validate → cleanup → delta cert → delta report → escalation → health check → disconnected-app batch → decision collect → remediation check → log retention → daily summary + JSONL). Each step is isolated; the exit code reflects the worst outcome. <strong>When to use:</strong> the primary scheduled task (Task Scheduler/cron), once daily. <strong>Scope:</strong> steps 2–5 need <code>sp:scopes:all</code> or a browser <code>-Token</code>.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SourceId &lt;ids&gt;</code></td>
+<td>Sources for the delta-cert steps.</td>
+</tr>
+<tr>
+<td><code>-Skip*</code> switches</td>
+<td>Skip any step (<code>-SkipValidation</code>, <code>-SkipCleanup</code>, <code>-SkipDeltaCert</code>, <code>-SkipDeltaReport</code>, <code>-SkipEscalation</code>, <code>-SkipHealthCheck</code>, …).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt</code></pre>
+<p><strong>Related GUI:</strong> <em>(operational — typically scheduled, not interactive)</em>.</p>
+<h3 id="invoke-spscheduledcampaign-ps1"><code>Invoke-SPScheduledCampaign.ps1</code></h3>
+<p><strong>Purpose:</strong> runs campaigns from <strong>saved JSON templates</strong> on a cadence — loads templates from <code>Config/campaign-templates/</code>, checks last-run state (<code>.schedule-state.json</code>), and creates campaigns for those that are due. <strong>When to use:</strong> scheduled, alongside the orchestrator, for recurring (e.g. quarterly) campaigns.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-TemplateName &lt;name&gt;</code></td>
+<td>Run one template (else all, filtered by cadence).</td>
+</tr>
+<tr>
+<td><code>-Cadence &lt;c&gt;</code></td>
+<td>Cadence filter (default <code>Quarterly</code>).</td>
+</tr>
+<tr>
+<td><code>-MinDaysSinceLastRun &lt;n&gt;</code></td>
+<td>Due threshold (default 80).</td>
+</tr>
+<tr>
+<td><code>-ExcludeExceptions</code></td>
+<td>Exclude identities with active governance exceptions.</td>
+</tr>
+<tr>
+<td><code>-WhatIf</code></td>
+<td>Show which templates are due without creating campaigns.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPScheduledCampaign.ps1 -Cadence Quarterly -WhatIf</code></pre>
+<p><em>Exit codes:</em> 0 ok/none due · 1 warnings · 2 parameter.</p>
+<h3 id="invoke-spretention-ps1"><code>Invoke-SPRetention.ps1</code></h3>
+<p><strong>Purpose:</strong> archive + delete old toolkit output — zips files older than <code>ArchiveDays</code> into monthly archives, then deletes archive zips older than <code>DeleteDays</code>. Only touches known toolkit file types. <strong>When to use:</strong> scheduled housekeeping (also runs as orchestrator step 10).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-ArchiveDays &lt;n&gt;</code></td>
+<td>Archive files older than this (min 7; overrides <code>Retention.ArchiveDays</code>).</td>
+</tr>
+<tr>
+<td><code>-DeleteDays &lt;n&gt;</code></td>
+<td>Delete archives older than this (min 30, &gt; ArchiveDays).</td>
+</tr>
+<tr>
+<td><code>-ArchivePath &lt;dir&gt;</code></td>
+<td>Where archives go.</td>
+</tr>
+<tr>
+<td><code>-Paths &lt;dirs&gt;</code></td>
+<td>Directories to process (default <code>Audit</code>, <code>DeltaCert</code>, <code>Logs</code>).</td>
+</tr>
+<tr>
+<td><code>-WhatIf</code></td>
+<td>Preview without changing anything.</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPRetention.ps1 -WhatIf
+.\Scripts\Invoke-SPRetention.ps1 -ArchiveDays 30 -DeleteDays 90</code></pre>
+<p><em>Exit codes:</em> 0 success · 1 retention disabled (no action) · 2 param · 4 config.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p>Requires <code>Retention.Enabled = true</code> <strong>or</strong> explicit <code>-ArchiveDays</code>/<code>-DeleteDays</code>.</p></div>
+<p><em>See also the GUI Playbook for the interactive equivalents, and Foundations for setup, auth, config, and the Safety model.</em></p>
+</div>
+<div id="section-gui-overview" class="report-section" style="display:none">
+<h2>GUI Playbook &mdash; Launching &amp; Conventions</h2>
+<h2 id="sailpoint-isc-governance-toolkit-gui-playbook">SailPoint ISC Governance Toolkit — GUI Playbook</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Source of truth.</strong> Edit this Markdown, not the generated HTML. Read Foundations first (setup, authentication, the <code>settings.json</code> reference, the Safety model, output locations, glossary). Every CLI equivalent referenced below is documented in the CLI Playbook.</p></div>
+<p><strong>Audience:</strong> analysts and reviewers using the interactive dashboard.</p>
+<h3 id="launching">Launching</h3>
+<pre><code>.\Scripts\Show-SPDashboard.ps1                               # default config
+.\Scripts\Show-SPDashboard.ps1 -ConfigPath .\Config\settings-mock.json</code></pre>
+<p>The dashboard opens as a WPF window with <strong>8 tabs</strong>: Campaigns · Evidence · Audit · Delta Cert · Governance · SDK Features · <strong>Adaptive Reports</strong> · Settings. A status line at the bottom shows the result of the last action; long operations run in the background so the window stays responsive.</p>
+<p><strong>Universal conventions</strong></p>
+<ul><li><strong>Refresh</strong> buttons (re)load data from ISC into a grid.</li><li><strong>Checkbox columns</strong> select rows for an action.</li><li><strong>Destructive actions</strong> (delete, deny, complete, disable) pop a Yes/No confirm showing the affected count; on a production environment with <code>Safety.RequireWhatIfOnProd = true</code> they require confirmation, and actions gated by <code>Safety.AllowCompleteCampaign</code> are refused with a "blocked by Safety…" status rather than failing silently (see Foundations §7).</li></ul>
+<h3 id="contents">Contents</h3>
+<ol><li><a href="#1-campaigns-tab">Campaigns</a> · 2. <a href="#2-evidence-tab">Evidence</a> · 3. <a href="#3-audit-tab">Audit</a> ·</li><li><a href="#4-delta-cert-tab">Delta Cert</a> · 5. <a href="#5-governance-tab">Governance</a> ·</li><li><a href="#6-sdk-features-tab">SDK Features</a> · 7. <a href="#7-adaptive-reports-tab">Adaptive Reports</a> ·</li><li><a href="#8-settings-tab">Settings</a></li></ol>
+</div>
+<div id="section-gui-campaigns-tab" class="report-section" style="display:none">
+<h2>1. Campaigns tab</h2>
+<p><strong>Purpose:</strong> load the test-campaign catalog and run certification test campaigns. <strong>When to use:</strong> to exercise/validate governance flows interactively (the GUI equivalent of <code>Invoke-GovernanceTest.ps1</code>).</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td>Campaign grid + tag filter</td>
+<td>Lists campaign test cases; the tag combo filters by tag (smoke/regression/full). Checkbox column selects rows.</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnRefreshCampaigns</code>)</td>
+<td>Reload the campaign catalog.</td>
+</tr>
+<tr>
+<td><strong>Run Selected</strong> (<code>BtnRunSelected</code>)</td>
+<td>Run the checked campaigns.</td>
+</tr>
+<tr>
+<td><strong>Run All</strong> (<code>BtnRunAll</code>)</td>
+<td>Run every loaded campaign.</td>
+</tr>
+<tr>
+<td><strong>Run Smoke</strong> (<code>BtnRunSmoke</code>)</td>
+<td>Run only the smoke-tagged subset.</td>
+</tr>
+</tbody></table>
+<p><strong>Workflow:</strong> Refresh → (optionally filter by tag, tick rows) → Run Selected/All/Smoke → watch the progress bar and result summary. <strong>Related CLI:</strong> <code>Invoke-GovernanceTest.ps1</code>.</p>
+</div>
+<div id="section-gui-evidence-tab" class="report-section" style="display:none">
+<h2>2. Evidence tab</h2>
+<p><strong>Purpose:</strong> review and export the evidence bundles produced by campaign runs. <strong>When to use:</strong> after running campaigns, to inspect or hand off evidence.</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td>Evidence grid</td>
+<td>Lists generated evidence artifacts.</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnRefreshEvidence</code>)</td>
+<td>Reload the evidence list.</td>
+</tr>
+<tr>
+<td><strong>Open in Browser</strong> (<code>BtnOpenInBrowser</code>)</td>
+<td>Open the selected evidence/report in the default browser.</td>
+</tr>
+<tr>
+<td><strong>Export All</strong> (<code>BtnExportAll</code>)</td>
+<td>Export/copy all evidence to a chosen location.</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> evidence is produced by <code>Invoke-GovernanceTest.ps1</code> (under <code>Evidence\</code>).</p>
+</div>
+<div id="section-gui-audit-tab" class="report-section" style="display:none">
+<h2>3. Audit tab</h2>
+<p><strong>Purpose:</strong> run post-campaign audits and browse the resulting reports. <strong>When to use:</strong> after campaigns complete, for compliance reports and leadership rollups (the GUI equivalent of <code>Invoke-SPCampaignAudit.ps1</code>).</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Configure Audit</strong> (<code>BtnConfigureAudit</code>)</td>
+<td>Opens a dialog to set the campaign filter, status, look-back window, and options (persisted for the session).</td>
+</tr>
+<tr>
+<td><code>ChkCampaignReports</code> / <code>ChkIdentityEvents</code> / <code>ChkLeadershipRollup</code></td>
+<td>Toggle inclusion of campaign reports, identity lifecycle events, and the leadership rollup.</td>
+</tr>
+<tr>
+<td><strong>Query Campaigns</strong> (<code>BtnQueryCampaigns</code>)</td>
+<td>Search/list campaigns matching the configured filter.</td>
+</tr>
+<tr>
+<td><strong>Run Audit</strong> (<code>BtnRunAudit</code>)</td>
+<td>Generate the audit reports (HTML/text/JSONL) for the selection.</td>
+</tr>
+<tr>
+<td><strong>Open Audit Folder</strong> (<code>BtnOpenAuditFolder</code>)</td>
+<td>Open the <code>Audit\</code> output folder.</td>
+</tr>
+<tr>
+<td><strong>Refresh Reports</strong> (<code>BtnRefreshAuditReports</code>)</td>
+<td>Reload the list of existing audit reports.</td>
+</tr>
+</tbody></table>
+<p><strong>Workflow:</strong> Configure Audit (set filters) → Query Campaigns → Run Audit → Open Audit Folder / Refresh Reports to view output. <strong>Reading results:</strong> reports include decision breakdowns (Approved/Revoked/Pending), reviewer actions, and — with the rollup — per-leader summaries up the org tree. <strong>Related CLI:</strong> <code>Invoke-SPCampaignAudit.ps1</code>, <code>Invoke-SPCampaignSearch.ps1</code>.</p>
+</div>
+<div id="section-gui-delta-cert-tab" class="report-section" style="display:none">
+<h2>4. Delta Cert tab</h2>
+<p><strong>Purpose:</strong> run targeted delta certifications (re-certify recently-changed access) and manage the <strong>disconnected-app</strong> pipeline. <strong>When to use:</strong> daily delta-cert operations and disconnected-app certification.</p>
+<p><strong>Delta certification</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Configure Delta Cert</strong> (<code>BtnConfigureDeltaCert</code>)</td>
+<td>Dialog for source IDs, look-back, deadline, reviewer mode, prefix (session-persisted).</td>
+</tr>
+<tr>
+<td><strong>Run Delta Cert</strong> (<code>BtnRunDeltaCert</code>)</td>
+<td>Create delta-cert campaigns for newly-granted access.</td>
+</tr>
+<tr>
+<td><strong>Cleanup</strong> (<code>BtnCleanupDeltaCert</code>)</td>
+<td>Complete past-due delta campaigns (gated by <code>Safety.AllowCompleteCampaign</code>).</td>
+</tr>
+<tr>
+<td><strong>Escalate</strong> (<code>BtnEscalateDeltaCert</code>)</td>
+<td>Reassign stale certifications up the org tree.</td>
+</tr>
+<tr>
+<td><strong>Generate Delta Report</strong> (<code>BtnGenerateDeltaReport</code>)</td>
+<td>Produce the lightweight daily change report (HTML+JSONL).</td>
+</tr>
+<tr>
+<td><strong>Open Folder</strong> / <strong>Refresh History</strong></td>
+<td>Open <code>DeltaCert\</code> / reload the run history list.</td>
+</tr>
+</tbody></table>
+<p><strong>Disconnected apps</strong> (panel within this tab)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Run Disconnected Batch</strong> (<code>BtnRunDisconnectedBatch</code>)</td>
+<td>Run the certification pipeline for all registered disconnected apps.</td>
+</tr>
+<tr>
+<td><strong>Check Delivery</strong> (<code>BtnCheckDelivery</code>)</td>
+<td>Verify expected CSV files arrived.</td>
+</tr>
+<tr>
+<td><strong>View SLA</strong> (<code>BtnViewSla</code>)</td>
+<td>Show file-delivery SLA status per app.</td>
+</tr>
+<tr>
+<td><strong>Refresh Status</strong> (<code>BtnRefreshDcAppStatus</code>)</td>
+<td>Reload disconnected-app status.</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <code>Invoke-SPADDeltaCert.ps1</code>, <code>Invoke-SPDeltaCertEscalate.ps1</code>, <code>Invoke-SPDeltaReport.ps1</code>, <code>Invoke-SPDisconnectedAppBatch.ps1</code>.</p>
+</div>
+<div id="section-gui-governance-tab" class="report-section" style="display:none">
+<h2>5. Governance tab</h2>
+<p><strong>Purpose:</strong> run governance health checks and generate governance reports/dashboards. <strong>When to use:</strong> posture checks, audit prep, KPI/dashboard generation.</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Run Health Check</strong> (<code>BtnRunHealthCheck</code>)</td>
+<td>Run the six-dimension health check and show pass/fail/warn + grade.</td>
+</tr>
+<tr>
+<td><strong>Generate Report</strong> (<code>BtnGenerateGovReport</code>)</td>
+<td>Build the full governance report package.</td>
+</tr>
+<tr>
+<td><strong>Export Dashboard Data</strong> (<code>BtnExportDashboardData</code>)</td>
+<td>Export the dashboard data set.</td>
+</tr>
+<tr>
+<td><strong>Open Folder</strong> / <strong>Refresh Reports</strong></td>
+<td>Open the <code>Reports\</code> folder / reload the report list.</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <code>Invoke-SPGovernanceHealthCheck.ps1</code>, <code>Invoke-SPGovernanceReport.ps1</code>, <code>Invoke-SPGovernanceMetrics.ps1</code>, <code>Invoke-SPDataQualityReport.ps1</code>.</p>
+</div>
+<div id="section-gui-sdk-features-tab" class="report-section" style="display:none">
+<h2>6. SDK Features tab</h2>
+<p><strong>Purpose:</strong> operate the vendor-SDK governance features. Contains six sub-tabs. Every grid loads via <strong>Refresh</strong>; write actions honor the Safety model. <strong>When to use:</strong> managing campaign templates/schedules, approvals, work items, workflows, and campaign filters interactively.</p>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>All write actions are live.</strong> Every button below — including New Template, New Filter, Edit Filter, Create OOO, and Forward Work Item — opens its input dialog, validates the entered values, applies the Safety gate (<code>RequireWhatIfOnProd</code>), and calls the SDK bridge. There are no placeholder/"coming soon" actions on this tab.</p></div>
+<h3 id="6-1-templates">6.1 Templates</h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshTemplates</code>)</td>
+<td>Load campaign templates + their schedule status.</td>
+</tr>
+<tr>
+<td><strong>New Template</strong> (<code>BtnSdkNewTemplate</code>)</td>
+<td>Create a campaign template (dialog: name, deadline duration, owner identity, reviewer type).</td>
+</tr>
+<tr>
+<td><strong>Edit Schedule</strong> (<code>BtnSdkEditSchedule</code>)</td>
+<td>Set a recurring schedule on the selected template (dialog).</td>
+</tr>
+<tr>
+<td><strong>Remove Schedule</strong> (<code>BtnSdkRemoveSchedule</code>)</td>
+<td>Remove the schedule (confirm).</td>
+</tr>
+<tr>
+<td><strong>Delete Template</strong> (<code>BtnSdkDeleteTemplate</code>)</td>
+<td>Delete the selected template (confirm).</td>
+</tr>
+</tbody></table>
+<h3 id="6-2-cert-summaries-shipped">6.2 Cert Summaries <em>(shipped)</em></h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Campaign</strong> (<code>CboSdkCertCampaign</code>)</td>
+<td>Pick a campaign; populates the certification list.</td>
+</tr>
+<tr>
+<td><strong>Certification</strong> (<code>CboSdkCertification</code>)</td>
+<td>Pick a certification; loads its summaries.</td>
+</tr>
+<tr>
+<td><strong>View</strong> (<code>CboSdkAccessType</code>)</td>
+<td><code>Identity</code> (default) shows per-identity decision counts; <code>Entitlement</code>/<code>Role</code>/<code>Access Profile</code> show access summaries of that type.</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshSummaries</code>)</td>
+<td>Reload summaries for the current selection.</td>
+</tr>
+</tbody></table>
+<p><strong>Workflow:</strong> pick Campaign → pick Certification → grid shows identity summaries (Identity Name, Completed, Total/Approved/Revoked/No-Decision); switch <strong>View</strong> to see access summaries by type.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>Against the <strong>mock</strong>, Identity and Decision summaries return data; ROLE/ACCESS_PROFILE access summaries are empty (no mock fixtures) but populate against a real tenant.</p></div>
+<p><strong>Related CLI:</strong> <em>(no direct CLI; SDK cert-summary reads are via the modules.)</em></p>
+<h3 id="6-3-approvals">6.3 Approvals</h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Pending / Completed</strong> (<code>RbSdkPending</code> / <code>RbSdkCompleted</code>)</td>
+<td>Toggle between pending and historical approvals (swaps the column set + counts).</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshApprovals</code>)</td>
+<td>Reload approvals; updates the Pending/Approved/Rejected badges.</td>
+</tr>
+<tr>
+<td><strong>Approve</strong> (<code>BtnSdkApprove</code>)</td>
+<td>Approve the selected access request.</td>
+</tr>
+<tr>
+<td><strong>Deny</strong> (<code>BtnSdkDeny</code>)</td>
+<td>Deny the selected request (comment dialog; confirm).</td>
+</tr>
+<tr>
+<td><strong>Forward</strong> (<code>BtnSdkForward</code>)</td>
+<td>Forward to another reviewer (dialog; confirm).</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <em>(approvals are operated via the GUI / SDK modules.)</em></p>
+<h3 id="6-4-work-items">6.4 Work Items</h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshWorkItems</code>)</td>
+<td>Load work items + the Open/Completed/Total badges.</td>
+</tr>
+<tr>
+<td><strong>Show Completed</strong> (<code>ChkSdkShowCompleted</code>)</td>
+<td>Include completed items in the list.</td>
+</tr>
+<tr>
+<td><strong>Complete</strong> (<code>BtnSdkCompleteWorkItem</code>)</td>
+<td>Mark the selected work item complete (confirm).</td>
+</tr>
+<tr>
+<td><strong>Bulk Approve</strong> (<code>BtnSdkBulkApprove</code>)</td>
+<td>Approve all approval items in the selected work item (confirm; Safety-gated).</td>
+</tr>
+<tr>
+<td><strong>Forward</strong> (<code>BtnSdkForwardWorkItem</code>)</td>
+<td>Forward the work item to another owner (dialog: target identity ID + comment; confirm).</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <code>Invoke-SPSdkWorkItems.ps1</code> (read/list).</p>
+<h3 id="6-5-workflows">6.5 Workflows</h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshWorkflows</code>)</td>
+<td>Load the workflow list (Enabled, trigger type, execution/failure counts).</td>
+</tr>
+<tr>
+<td><strong>Enable/Disable</strong> (<code>BtnSdkEnableWorkflow</code>)</td>
+<td>Toggle the selected workflow's enabled state (confirm on disable).</td>
+</tr>
+<tr>
+<td><strong>Test</strong> (<code>BtnSdkTestWorkflow</code>)</td>
+<td>Test the selected workflow with sample input (dialog; workflow must be disabled).</td>
+</tr>
+<tr>
+<td><strong>View Executions</strong> (<code>BtnSdkViewExecutions</code>)</td>
+<td>Load recent execution history into the executions grid.</td>
+</tr>
+<tr>
+<td><strong>Create OOO</strong> (<code>BtnSdkCreateOOO</code>)</td>
+<td>Create an out-of-office fallback workflow (dialog: primary + fallback reviewer IDs, fallback days).</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <code>Invoke-SPSdkWorkflows.ps1</code> (read/list/executions).</p>
+<h3 id="6-6-filters">6.6 Filters</h3>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Refresh</strong> (<code>BtnSdkRefreshFilters</code>)</td>
+<td>Load campaign filters.</td>
+</tr>
+<tr>
+<td><strong>Include System</strong> (<code>ChkSdkIncludeSystem</code>)</td>
+<td>Show system-created filters alongside custom ones.</td>
+</tr>
+<tr>
+<td><strong>New Filter</strong> (<code>BtnSdkNewFilter</code>)</td>
+<td>Create a campaign filter (dialog: name, mode <code>INCLUSION</code>/<code>EXCLUSION</code>, description).</td>
+</tr>
+<tr>
+<td><strong>Edit Filter</strong> (<code>BtnSdkEditFilter</code>)</td>
+<td>Edit the selected filter (dialog pre-populated with its current name/mode/description).</td>
+</tr>
+<tr>
+<td><strong>Delete Filter</strong> (<code>BtnSdkDeleteFilter</code>)</td>
+<td>Delete the selected filter(s) (confirm).</td>
+</tr>
+</tbody></table>
+<p><strong>Related CLI:</strong> <code>Invoke-SPSdkCampaignTemplates.ps1</code> (templates/schedules).</p>
+</div>
+<div id="section-gui-adaptive-reports-tab" class="report-section" style="display:none">
+<h2>7. Adaptive Reports tab</h2>
+<p><strong>Purpose:</strong> generate <strong>adaptive / composable HTML reports</strong> plus a <strong>baseline report library</strong> over your governance data — presentation-ready dashboards (KPI cards, heatmap, drill-down tree, top-N bars, grouped tables) and a catalog of named baseline reports. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage (the GUI equivalent of <code>Invoke-SPAdaptiveReport.ps1</code>).</p>
+<p><strong>Report Options</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Anchor</strong> (<code>AdaptiveReportsAnchorCombo</code>)</td>
+<td>Pivot the report around an <strong>Entitlement</strong> (default — group = entitlement/role/access profile, members = the identities holding it) or a <strong>Campaign</strong> (group = a certification campaign, members = the identities under it).</td>
+</tr>
+<tr>
+<td><strong>Theme</strong> (<code>AdaptiveReportsThemeCombo</code>)</td>
+<td>Visual theme for the generated HTML (<code>light</code> default / <code>dark</code>).</td>
+</tr>
+<tr>
+<td><strong>Days Back</strong> (<code>AdaptiveReportsDaysBackBox</code>)</td>
+<td>Look-back window in days for audit/event data (default <code>90</code>).</td>
+</tr>
+</tbody></table>
+<p><strong>Components</strong> (composable report)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>Component key</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>KPI Cards</strong> (<code>ChkArCompKpiCards</code>, default on)</td>
+<td><code>kpi-cards</code></td>
+<td>KPI summary-cards component.</td>
+</tr>
+<tr>
+<td><strong>Heatmap</strong> (<code>ChkArCompHeatmap</code>)</td>
+<td><code>heatmap</code></td>
+<td>Source × risk heatmap component.</td>
+</tr>
+<tr>
+<td><strong>Tree</strong> (<code>ChkArCompTree</code>)</td>
+<td><code>tree</code></td>
+<td>Hierarchical drill-down tree component.</td>
+</tr>
+<tr>
+<td><strong>Top-N</strong> (<code>ChkArCompTopN</code>, default on)</td>
+<td><code>top-n</code></td>
+<td>Top-N ranked-items bar component.</td>
+</tr>
+<tr>
+<td><strong>Group Table</strong> (<code>ChkArCompGroupTable</code>, default on)</td>
+<td><code>group-table</code></td>
+<td>Grouped detail-table component.</td>
+</tr>
+</tbody></table>
+<p><strong>Baseline Reports</strong> (named report library)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>Baseline key</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Inventory</strong> (<code>ChkArBaseInventory</code>)</td>
+<td><code>inventory</code></td>
+<td>Access inventory baseline report.</td>
+</tr>
+<tr>
+<td><strong>Privileged</strong> (<code>ChkArBasePrivileged</code>)</td>
+<td><code>privileged</code></td>
+<td>Privileged-access review baseline report.</td>
+</tr>
+<tr>
+<td><strong>Orphaned</strong> (<code>ChkArBaseOrphaned</code>)</td>
+<td><code>orphaned</code></td>
+<td>Orphaned / disabled-account access baseline report.</td>
+</tr>
+<tr>
+<td><strong>Exec Summary</strong> (<code>ChkArBaseExecSummary</code>)</td>
+<td><code>exec-summary</code></td>
+<td>Governance executive-summary baseline report.</td>
+</tr>
+<tr>
+<td><strong>Roster</strong> (<code>ChkArBaseRoster</code>)</td>
+<td><code>roster</code></td>
+<td>Certification roster baseline report.</td>
+</tr>
+<tr>
+<td><strong>Access Cert</strong> (<code>ChkArBaseAccessCert</code>)</td>
+<td><code>access-cert</code></td>
+<td>Access-certification attestation baseline report.</td>
+</tr>
+<tr>
+<td><strong>SoD</strong> (<code>ChkArBaseSod</code>)</td>
+<td><code>sod</code></td>
+<td>Separation-of-Duties toxic-combination baseline report.</td>
+</tr>
+</tbody></table>
+<p><strong>Actions</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Generate</strong> (<code>BtnArGenerate</code>)</td>
+<td>Generate the adaptive report(s) from the selected anchor, components and baselines. Runs in the background; the progress bar (<code>AdaptiveReportsProgressBar</code>) and status label (<code>AdaptiveReportsStatusLabel</code>) update while it runs.</td>
+</tr>
+<tr>
+<td><strong>Open Folder</strong> (<code>BtnArOpenFolder</code>)</td>
+<td>Open the output folder containing the generated reports (default <code>Audit\adaptive</code>).</td>
+</tr>
+<tr>
+<td><strong>Open Report</strong> (<code>BtnArOpenReport</code>)</td>
+<td>Open the most recently generated adaptive report in the browser.</td>
+</tr>
+</tbody></table>
+<p><strong>Workflow:</strong> pick <strong>Anchor</strong> → set <strong>Theme</strong> / <strong>Days Back</strong> → tick <strong>Components</strong> and/or <strong>Baseline Reports</strong> → <strong>Generate</strong> (runs in the background; progress bar + status label update) → <strong>Open Report</strong> / <strong>Open Folder</strong>. The default output folder is <code>Audit\adaptive</code> (matches the CLI <code>-OutputPath</code> default).</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Leadership distribution is CLI-only.</strong> This tab generates reports; it does <strong>not</strong> distribute them. Tiered leadership distribution (org-tree bands + a WhatIf-SMTP preview by default) is run from the CLI via <code>Invoke-SPAdaptiveReport.ps1 -DistributeToLeadership</code>.</p></div>
+<p><strong>Related CLI:</strong> <code>Invoke-SPAdaptiveReport.ps1</code>.</p>
+</div>
+<div id="section-gui-settings-tab" class="report-section" style="display:none">
+<h2>8. Settings tab</h2>
+<p><strong>Purpose:</strong> view/edit configuration, manage authentication, and run a connectivity test — without hand-editing <code>settings.json</code>. <strong>When to use:</strong> initial setup, switching environments, applying a browser token, toggling Safety flags.</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Debug Mode</strong> (<code>ChkDebugMode</code>)</td>
+<td>Toggle <code>Global.DebugMode</code> (verbose diagnostics).</td>
+</tr>
+<tr>
+<td><strong>Browse…</strong> (<code>BtnBrowseIdentities</code>/<code>Campaigns</code>/<code>Evidence</code>/<code>Reports</code>)</td>
+<td>Set the identities CSV, campaigns CSV, evidence path, and reports path.</td>
+</tr>
+<tr>
+<td><strong>Require WhatIf on Prod</strong> (<code>ChkRequireWhatIf</code>)</td>
+<td>Toggle <code>Safety.RequireWhatIfOnProd</code>.</td>
+</tr>
+<tr>
+<td><strong>Allow Complete Campaign</strong> (<code>ChkAllowComplete</code>)</td>
+<td>Toggle <code>Safety.AllowCompleteCampaign</code> (the terminal-action gate).</td>
+</tr>
+<tr>
+<td><strong>Health Check on Startup</strong> (<code>ChkGovHealthCheckOnStartup</code>)</td>
+<td>Run a governance health check when the dashboard launches.</td>
+</tr>
+<tr>
+<td><strong>Apply Token</strong> / <strong>Clear Token</strong> (<code>BtnApplyToken</code> / <code>BtnClearToken</code>)</td>
+<td>Paste a browser bearer token for the session / clear it.</td>
+</tr>
+<tr>
+<td><strong>Test Connectivity</strong> (<code>BtnTestConnectivity</code>)</td>
+<td>Run the connectivity smoke test (auth + a live API call).</td>
+</tr>
+<tr>
+<td><strong>Save Settings</strong> (<code>BtnSaveSettings</code>)</td>
+<td>Persist changes to the config file.</td>
+</tr>
+<tr>
+<td><strong>Reset Defaults</strong> (<code>BtnResetDefaults</code>)</td>
+<td>Restore default settings.</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>The Settings tab also includes a Delta Cert configuration section (source IDs, hours back, deadline, reviewer mode, prefix, output path) that preserves non-GUI fields on save.</p></div>
+<p><strong>Related CLI:</strong> <code>Test-SPConnectivity.ps1</code>, <code>New-SPVault.ps1</code> (vault setup is CLI-only).</p>
+<p><em>See also the CLI Playbook and Foundations. Screenshots of each tab will be embedded here after the live GUI validation pass.</em></p>
+</div>
+
+  </div>
+</div>
+
+<script>
+
+var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab"];
+function showSection(id) {
+    sections.forEach(function(s) {
+        var el = document.getElementById('section-' + s);
+        if (el) el.style.display = 'none';
+    });
+    var target = document.getElementById('section-' + id);
+    if (target) target.style.display = 'block';
+    document.querySelectorAll('#sidebar a, #mobile-nav a').forEach(function(a) {
+        a.classList.remove('active');
+    });
+    // Match links by onclick content containing the id
+    document.querySelectorAll('#sidebar a[onclick], #mobile-nav a[onclick]').forEach(function(a) {
+        if (a.getAttribute('onclick') && a.getAttribute('onclick').indexOf("'" + id + "'") !== -1
+                && !a.classList.contains('sidebar-sub')) {
+            a.classList.add('active');
+        }
+    });
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    window.scrollTo(0, 0);
+}
+window.showSection = showSection;
+document.addEventListener('DOMContentLoaded', function() {
+    var hash = location.hash.replace('#', '');
+    showSection(hash && sections.indexOf(hash) !== -1 ? hash : sections[0]);
+});
+
+</script>
+</body>
+</html>

@@ -77,7 +77,7 @@
         4 = Configuration error
         5 = Critical failure (cannot compute or save metrics)
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$ConfigPath,
@@ -801,7 +801,9 @@ $durationStr = '{0}m {1:00}s' -f [int][math]::Floor($totalDuration.TotalMinutes)
 function Get-DirectionStr {
     param([string]$MetricName, [hashtable]$TrendResult)
     if ($null -eq $TrendResult -or $null -eq $TrendResult.Trends) { return '' }
-    if (-not $TrendResult.Trends.ContainsKey($MetricName)) { return '' }
+    # $TrendResult.Trends is an [ordered] dictionary, which exposes .Contains()
+    # (key lookup) but not .ContainsKey(). .Contains() works for hashtables too.
+    if (-not $TrendResult.Trends.Contains($MetricName)) { return '' }
     $mt = $TrendResult.Trends[$MetricName]
     $periods = @($mt.Periods)
     if ($periods.Count -lt 2) { return '' }
@@ -1017,6 +1019,93 @@ $summaryObject = [ordered]@{
     DecliningMetrics = $decliningMetrics
     Steps           = $stepResults
     ExitCode        = $worstExitCode
+}
+
+# HTML output. -OutputMode HTML is in the ValidateSet but previously had no
+# implementation (only Console + JSON existed), so it silently produced nothing.
+# Render the captured KPIs (mirrors the Console block's data) plus a trend summary.
+if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
+    $enc = { param($v) if ($null -eq $v) { '' } else { [System.Net.WebUtility]::HtmlEncode([string]$v) } }
+    $addRow = {
+        param($label, $value, $dir)
+        $dirHtml = if ([string]::IsNullOrWhiteSpace($dir)) { '' } else { '<span style="color:#666;font-size:12px">' + (& $enc $dir) + '</span>' }
+        '<tr><td style="padding:8px 12px;border-bottom:1px solid #eee">' + (& $enc $label) +
+        '</td><td style="padding:8px 12px;border-bottom:1px solid #eee"><strong>' + (& $enc $value) +
+        '</strong></td><td style="padding:8px 12px;border-bottom:1px solid #eee">' + $dirHtml + '</td></tr>'
+    }
+
+    $rowsHtml = ''
+    if ($null -ne $governanceMaturityData) {
+        $matScore = if ($governanceMaturityData.ContainsKey('OverallScore')) { $governanceMaturityData['OverallScore'] } else { 'N/A' }
+        $matLevel = if ($governanceMaturityData.ContainsKey('OverallLevel')) { $governanceMaturityData['OverallLevel'] } else { 'N/A' }
+        $rowsHtml += & $addRow 'Maturity Score' "$matScore (Level $matLevel)" (Get-DirectionStr -MetricName 'maturity.overallScore' -TrendResult $trendData)
+    }
+    if ($null -ne $identityRiskData -and $null -ne $identityRiskData.Summary) {
+        $irs = $identityRiskData.Summary
+        $highCount = if ($irs.ContainsKey('HighRiskCount')) { $irs['HighRiskCount'] } else { 0 }
+        $avgScore  = if ($irs.ContainsKey('AvgRiskScore'))  { $irs['AvgRiskScore'] }  else { 'N/A' }
+        $rowsHtml += & $addRow 'Identity Risk' "$highCount High, $avgScore avg" (Get-DirectionStr -MetricName 'identityRisk.avgScore' -TrendResult $trendData)
+    }
+    if ($null -ne $sourceGovernanceData -and $null -ne $sourceGovernanceData.Summary) {
+        $sgs = $sourceGovernanceData.Summary
+        $covPct = if ($sgs.ContainsKey('OverallCoveragePct')) { "$($sgs['OverallCoveragePct'])%" } else { 'N/A' }
+        $rowsHtml += & $addRow 'Source Coverage' $covPct (Get-DirectionStr -MetricName 'sourceGovernance.coveragePct' -TrendResult $trendData)
+    }
+    if ($null -ne $campaignMetricsData -and $null -ne $campaignMetricsData.Data) {
+        $tA = 0; $tI = 0
+        foreach ($m in @($campaignMetricsData.Data)) { $tA += $m.ApprovedCount; $tI += $m.TotalItems }
+        $avgApproval = if ($tI -gt 0) { [math]::Round(($tA / $tI) * 100, 0) } else { 0 }
+        $rowsHtml += & $addRow 'Campaign Approval' "$avgApproval%" (Get-DirectionStr -MetricName 'campaigns.avgApprovalRate' -TrendResult $trendData)
+    }
+    if ($null -ne $reviewerReputationData -and $null -ne $reviewerReputationData.Summary) {
+        $rrs = $reviewerReputationData.Summary
+        $avgRep = if ($rrs.ContainsKey('AvgReputationScore')) { $rrs['AvgReputationScore'] } else { 'N/A' }
+        $rowsHtml += & $addRow 'Reviewer Avg' $avgRep (Get-DirectionStr -MetricName 'reviewers.avgScore' -TrendResult $trendData)
+    }
+    if ($null -ne $staleAccessData -and $null -ne $staleAccessData.Summary) {
+        $sas = $staleAccessData.Summary
+        $totalStale = if ($sas.ContainsKey('TotalStaleItems')) { $sas['TotalStaleItems'] } else { 0 }
+        $rowsHtml += & $addRow 'Stale Access' "$totalStale items" (Get-DirectionStr -MetricName 'staleAccess.totalItems' -TrendResult $trendData)
+    }
+    if ($null -ne $orchestratorData -and $null -ne $orchestratorData.Metrics) {
+        $orchMetrics = $orchestratorData.Metrics
+        $successRate = if ($orchMetrics.ContainsKey('SuccessRate')) { "$($orchMetrics['SuccessRate'])% success" } else { 'N/A' }
+        $rowsHtml += & $addRow 'Orchestrator' $successRate (Get-DirectionStr -MetricName 'orchestrator.successRate' -TrendResult $trendData)
+    }
+    if ([string]::IsNullOrEmpty($rowsHtml)) { $rowsHtml = '<tr><td colspan="3" style="padding:8px 12px;color:#999">No analytics captured for this run.</td></tr>' }
+
+    # Trend summary (defensive -- never let a trend-shape issue break the report).
+    $trendHtml = ''
+    try {
+        if ($null -ne $trendData -and $null -ne $trendData.Trends) {
+            $improving = @(); $declining = @(); $stable = 0
+            foreach ($mn in $trendData.Trends.Keys) {
+                $mt = $trendData.Trends[$mn]
+                if ($null -eq $mt) { continue }
+                $hasDir = if ($mt -is [System.Collections.IDictionary]) { $mt.Contains('OverallDirection') } else { $mt.PSObject.Properties.Name -contains 'OverallDirection' }
+                $dir = if ($hasDir) { $mt['OverallDirection'] } else { 'Stable' }
+                switch ($dir) { 'Improving' { $improving += $mn } 'Declining' { $declining += $mn } default { $stable++ } }
+            }
+            $trendHtml = '<div class="section"><h2>Trend Summary</h2><p style="font-size:13px">' +
+                '<strong style="color:#1b5e20">Improving:</strong> ' + (& $enc ($(if ($improving.Count) { $improving -join ', ' } else { 'none' }))) + '<br>' +
+                '<strong style="color:#e65100">Declining:</strong> ' + (& $enc ($(if ($declining.Count) { $declining -join ', ' } else { 'none' }))) + '<br>' +
+                '<strong>Stable:</strong> ' + (& $enc $stable) + ' metric(s)</p></div>'
+        }
+    } catch { $trendHtml = '' }
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">')
+    [void]$sb.AppendLine('<title>Governance Metrics - ' + (& $enc $startTime.ToString('yyyy-MM-dd')) + '</title>')
+    [void]$sb.AppendLine('<style>body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f9;color:#333;margin:0;padding:20px}.container{max-width:880px;margin:0 auto}.header{background:linear-gradient(135deg,#264d73,#336699);color:#fff;padding:22px 28px;border-radius:8px 8px 0 0}.header h1{margin:0 0 6px;font-size:20px}.header .meta{font-size:12px;opacity:.85}.section{background:#fff;border:1px solid #e0e0e0;border-top:none;padding:18px 28px}.section:last-of-type{border-radius:0 0 8px 8px}h2{color:#264d73;font-size:15px;border-bottom:2px solid #e8eef5;padding-bottom:6px;margin-top:0}table{border-collapse:collapse;width:100%;font-size:13px}th{background:#e8eef5;padding:8px 12px;text-align:left}.footer{text-align:center;color:#999;font-size:11px;padding:14px}</style></head><body><div class="container">')
+    [void]$sb.AppendLine('<div class="header"><h1>Governance Metrics Capture &amp; Trend</h1><div class="meta">Generated: ' + (& $enc $startTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) + ' | Period: ' + (& $enc $DaysBack) + ' days | Trend: ' + (& $enc $TrendDaysBack) + ' days (' + (& $enc $TrendGranularity) + ')</div></div>')
+    [void]$sb.AppendLine('<div class="section"><h2>Current KPIs</h2><table><thead><tr><th>Metric</th><th>Value</th><th>Trend</th></tr></thead><tbody>' + $rowsHtml + '</tbody></table></div>')
+    [void]$sb.AppendLine($trendHtml)
+    [void]$sb.AppendLine('<div class="footer">SailPoint ISC Governance Toolkit - Governance Metrics - ' + (& $enc $correlationID) + '</div></div></body></html>')
+
+    if (-not (Test-Path $effectiveOutputPath)) { New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null }
+    $metricsHtmlPath = Join-Path $effectiveOutputPath ('governance-metrics-{0}.html' -f $startTime.ToString('yyyyMMdd-HHmmss'))
+    [System.IO.File]::WriteAllText($metricsHtmlPath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "  HTML report: $metricsHtmlPath" -ForegroundColor Green
 }
 
 if ($OutputMode -eq 'JSON' -or $OutputMode -eq 'Both') {

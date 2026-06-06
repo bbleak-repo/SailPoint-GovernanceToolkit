@@ -49,6 +49,14 @@ function Import-SPTestModules {
         Imports SP.SdkCommon, SP.SdkPatch, SP.SdkCampaignTemplates,
         SP.SdkCertSummaries, SP.SdkApprovals, SP.SdkWorkItems, SP.SdkWorkflows,
         SP.SdkCampaignFilters.
+    .PARAMETER SdkBridge
+        Imports SP.SdkBridge flat (the .psm1 directly, NOT via SP.Gui.psd1) so
+        Pester's `Mock -ModuleName SP.SdkBridge` reaches the call sites under
+        Windows PowerShell 5.1 / Pester 5.x (Bug-1 flat-import rule). Intended to
+        be combined with -Core -Api -Sdk: the bridge calls Get-SPConfig (SP.Core)
+        and Get/Invoke/New/Set/Remove/Update/Test-SPSdk* (SP.Sdk family), which
+        must exist in-session for `Mock -ModuleName SP.SdkBridge` to resolve the
+        command name.
     #>
     [CmdletBinding()]
     param(
@@ -58,7 +66,8 @@ function Import-SPTestModules {
         [switch]$Testing,
         [switch]$DeltaCert,
         [switch]$DisconnectedApps,
-        [switch]$Sdk
+        [switch]$Sdk,
+        [switch]$SdkBridge
     )
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
@@ -110,5 +119,8 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkWorkItems.psm1')          -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkWorkflows.psm1')          -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Sdk\SP.SdkCampaignFilters.psm1')   -Force -DisableNameChecking
+    }
+    if ($SdkBridge) {
+        Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.SdkBridge.psm1') -Force -DisableNameChecking
     }
 }

@@ -126,11 +126,10 @@ param(
 
     [Parameter()]
     [Alias('?')]
-    [switch]$Help,
-
-    [Parameter()]
-    [switch]$WhatIf
+    [switch]$Help
 )
+# -WhatIf is provided automatically by [CmdletBinding(SupportsShouldProcess)]
+# and read below via $WhatIfPreference.
 
 Set-StrictMode -Version 1
 $ErrorActionPreference = 'Stop'
@@ -175,6 +174,22 @@ foreach ($mod in $moduleChain) {
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+# Local HTML-encode helper. The digest builds its HTML inline (rather than via
+# the SP.Audit report module), and SP.Audit's ConvertTo-SafeHtml is an internal,
+# non-exported helper -- so define a self-contained copy here. Without it the
+# HTML/Both output block threw "ConvertTo-SafeHtml is not recognized" and no
+# report file was written.
+# ---------------------------------------------------------------------------
+function ConvertTo-SafeHtml {
+    [OutputType([string])]
+    param([Parameter()]$Value)
+    if ($null -eq $Value) { return '' }
+    $str = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($str)) { return '' }
+    return [System.Net.WebUtility]::HtmlEncode($str)
+}
 
 #region Setup
 
@@ -258,7 +273,7 @@ if (-not (Test-Path $effectiveOutputPath)) {
 }
 
 # WhatIf detection
-$isWhatIf = ($WhatIfPreference -eq $true) -or $WhatIf
+$isWhatIf = ($WhatIfPreference -eq $true)
 
 #endregion
 

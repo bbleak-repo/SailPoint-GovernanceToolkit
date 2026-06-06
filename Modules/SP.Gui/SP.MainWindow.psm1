@@ -43,10 +43,41 @@ $script:AuditCampaignDataSource     = [System.Collections.ObjectModel.Observable
 $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
+# Adaptive Reports tab state (AR-15). IsAdaptiveRunning guards the Generate
+# handler against re-entrancy; LastAdaptiveReportPath feeds BtnArOpenReport.
+$script:IsAdaptiveRunning           = $false
+$script:LastAdaptiveReportPath      = $null
 $script:IsGovernanceRunning         = $false
 $script:LastDeltaCertParams         = $null
 $script:LastEscalationParams        = $null
 $script:LastAuditQueryParams        = $null
+
+# SDK Features tab data sources (one ObservableCollection per sub-tab grid).
+# Populated on a background runspace in SDK-11; bound to each grid's
+# ItemsSource inside Initialize-SdkTab.
+$script:SdkTemplateDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkCertSummaryDataSource    = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkApprovalDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkWorkItemDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkWorkflowDataSource       = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkExecutionDataSource      = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+$script:SdkFilterDataSource         = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
+
+# Cert Summaries cascade state (SDK-18 shipped). $SdkCertCascadeBusy guards the
+# combo SelectionChanged handlers against re-entrancy while we mutate the combos
+# programmatically; $SdkCertLoadedCampaign records which campaign's certifications
+# are currently loaded so we only repopulate the cert combo on a campaign change.
+$script:SdkCertCascadeBusy           = $false
+$script:SdkCertLoadedCampaign        = $null
+$script:IsSdkRunning                 = $false
+# Cached checkbox reference set by Initialize-SdkTab so OnLoaded closures can
+# read IsChecked without a FindName call (avoids namescope resolution issues
+# when the dashboard is driven by a cross-process automation tool).
+$script:SdkWorkItemShowCompletedChk  = $null
+# Shadow of ChkSdkShowCompleted.IsChecked -- updated in the Checked/Unchecked
+# handlers so Invoke-SdkWorkItemRefresh never has to read WPF property state
+# cross-message-pump (where COM automation toggles may not have propagated yet).
+$script:SdkWorkItemShowCompleted     = $false
 
 # Module reference used to re-enter module scope from WPF event handlers.
 # Populated by Show-SPDashboard / headless harness before handlers are wired.
@@ -2603,6 +2634,58 @@ function Invoke-GuiDeltaCertEscalation {
     $timer.Start()
 }
 
+function Wait-SPReportFileReady {
+    <#
+    .SYNOPSIS
+        Waits for a freshly-generated report file to be fully written before a
+        consumer (the default browser) is told to open it.
+    .DESCRIPTION
+        Report HTML is written by a background runspace. On some systems the file
+        is briefly present-but-not-readable -- the OS write-behind cache or an
+        anti-virus on-write scan can hold a lock for a moment after the path
+        exists -- so opening it immediately shows a blank or partial page. A bare
+        Test-Path is not enough. This polls until the file length is non-zero AND
+        stable across two consecutive reads AND it can be opened for shared read,
+        or until TimeoutMs elapses (caller then opens anyway, best-effort).
+
+        Runs on the UI thread, so the ceiling is deliberately low; for an
+        already-written report it returns after ~2 polls (~240ms), which is also
+        the small "settle" delay we want before handing the file to the browser.
+        Returns $true once ready, $false on timeout.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$TimeoutMs = 2500,
+        [int]$PollMs    = 120
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $lastLen  = [long]-1
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $len = (Get-Item -LiteralPath $Path).Length
+                if ($len -gt 0 -and $len -eq $lastLen) {
+                    # Length stable across two polls -- confirm it actually opens.
+                    $fs = [System.IO.File]::Open(
+                        $Path,
+                        [System.IO.FileMode]::Open,
+                        [System.IO.FileAccess]::Read,
+                        [System.IO.FileShare]::ReadWrite)
+                    $fs.Close()
+                    return $true
+                }
+                $lastLen = $len
+            }
+        } catch {
+            # Still locked / mid-write -- keep polling until the deadline.
+        }
+        Start-Sleep -Milliseconds $PollMs
+    }
+    return $false
+}
+
 function Invoke-GuiDeltaReport {
     <#
     .SYNOPSIS
@@ -2733,6 +2816,10 @@ function Invoke-GuiDeltaReport {
                         if ($result.Success -and $null -ne $result.Data -and
                             -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
                             (Test-Path $result.Data.HtmlPath)) {
+                            # Let the runspace-written file fully flush + unlock
+                            # before the browser opens it, otherwise it can render
+                            # a blank or partial page.
+                            Wait-SPReportFileReady -Path $result.Data.HtmlPath | Out-Null
                             Start-Process $result.Data.HtmlPath
                         }
                     }
@@ -2932,6 +3019,419 @@ function Invoke-GuiViewDisconnectedAppSla {
     catch {
         Set-StatusMessage -Message "SLA check error: $($_.Exception.Message)" -IsError
     }
+}
+
+#endregion
+
+#region Adaptive Reports Tab
+
+function Resolve-AdaptiveOutputPath {
+    <#
+    .SYNOPSIS
+        Resolves the absolute path to the Adaptive Reports output directory.
+    .DESCRIPTION
+        Mirrors Resolve-AuditOutputPath but appends 'adaptive' to the audit base,
+        matching the CLI's effectiveOutputPath ({Audit.OutputPath}\adaptive used by
+        Invoke-SPAdaptiveReport.ps1) so the GUI writes/opens the same location.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $configAuditPath = $null
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Audit' -and
+            $null -ne $config.Audit -and
+            $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+            $configAuditPath = $config.Audit.OutputPath
+        }
+    }
+    catch { }
+
+    $rawPath = if ($configAuditPath) { $configAuditPath } else { '.\Audit' }
+
+    # If relative, resolve against toolkit root
+    if (-not [System.IO.Path]::IsPathRooted($rawPath)) {
+        $rawPath = Join-Path $script:ToolkitRoot $rawPath
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $rawPath 'adaptive'))
+}
+
+function Initialize-SPAdaptiveTab {
+    <#
+    .SYNOPSIS
+        Wires up the Adaptive Reports tab controls and event handlers.
+    .DESCRIPTION
+        Captures the module reference once, looks up the AR-14 named controls, and
+        wires each button through the module-scope re-entry closure
+        (& $module { param(...) } $args + .GetNewClosure()) so private helpers
+        resolve at fire-time. No API/IO runs on init -- generation happens only on
+        the Generate handler, on a background STA runspace.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    # Local capture of module reference. .GetNewClosure() preserves locals across
+    # the WPF delegate conversion; $script:* lookups don't survive it.
+    $module = $script:ThisModule
+
+    $btnGenerate   = Find-Control -Parent $TabContent -Name 'BtnArGenerate'
+    $btnOpenFolder = Find-Control -Parent $TabContent -Name 'BtnArOpenFolder'
+    $btnOpenReport = Find-Control -Parent $TabContent -Name 'BtnArOpenReport'
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsStatusLabel'
+
+    # Generate button -- runs the report chain on a background STA runspace
+    if ($btnGenerate) {
+        $btnGenerate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiAdaptiveReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Open Output Folder button (mirrors the Delta Cert 'Open Output Folder' handler)
+    if ($btnOpenFolder) {
+        $btnOpenFolder.Add_Click({
+            $outputPath = & $module { Resolve-AdaptiveOutputPath }
+            if (-not (Test-Path $outputPath)) {
+                [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            }
+            Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        }.GetNewClosure())
+    }
+
+    # Open Report button -- opens the most recently generated report, if any
+    if ($btnOpenReport) {
+        $btnOpenReport.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiAdaptiveOpenReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Initial status -- no auto-run on init (read happens only on Generate)
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = 'Ready. Choose anchor / components / baselines, then Generate.'
+    }
+}
+
+function Invoke-GuiAdaptiveOpenReport {
+    <#
+    .SYNOPSIS
+        Opens the most recently generated adaptive report in the default browser.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $path = $script:LastAdaptiveReportPath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path $path)) {
+        Set-StatusMessage -Message 'No report generated yet.' -IsError
+        return
+    }
+    Wait-SPReportFileReady -Path $path | Out-Null
+    Start-Process $path
+}
+
+function Invoke-GuiAdaptiveReport {
+    <#
+    .SYNOPSIS
+        Generates an adaptive report in a background runspace from the GUI.
+    .DESCRIPTION
+        Gathers UI selections on the UI thread (no API/IO here), then runs the same
+        chain the Invoke-SPAdaptiveReport.ps1 CLI uses (Get-SPAuditCampaigns ->
+        build audits -> Build-SPRCDataset -> New-ComposableReport / Export-SPRC*)
+        on a background STA runspace. Status is marshalled back via the dispatcher;
+        on success the primary HTML is opened with Wait-SPReportFileReady +
+        Start-Process. No API/IO runs on the UI thread.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsAdaptiveRunning) {
+        Set-StatusMessage -Message 'An adaptive report run is already in progress.' -IsError
+        return
+    }
+
+    # --- UI-thread gathering (no API/IO) ------------------------------------
+    $anchorCombo   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsAnchorCombo'
+    $themeCombo    = Find-Control -Parent $TabContent -Name 'AdaptiveReportsThemeCombo'
+    $daysBackBox   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsDaysBackBox'
+    $progressBar   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsProgressBar'
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsStatusLabel'
+    $btnGenerate   = Find-Control -Parent $TabContent -Name 'BtnArGenerate'
+
+    $anchor = 'Entitlement'
+    if ($null -ne $anchorCombo -and $null -ne $anchorCombo.SelectedItem -and
+        $null -ne $anchorCombo.SelectedItem.Content) {
+        $anchor = [string]$anchorCombo.SelectedItem.Content
+    }
+
+    $theme = 'light'
+    if ($null -ne $themeCombo -and $null -ne $themeCombo.SelectedItem -and
+        $null -ne $themeCombo.SelectedItem.Content) {
+        $theme = [string]$themeCombo.SelectedItem.Content
+    }
+
+    $daysBack = 90
+    if ($null -ne $daysBackBox -and -not [string]::IsNullOrWhiteSpace($daysBackBox.Text)) {
+        [int]::TryParse($daysBackBox.Text.Trim(), [ref]$daysBack) | Out-Null
+    }
+
+    # Map component checkboxes to the CLI keys
+    $componentMap = [ordered]@{
+        'ChkArCompKpiCards'   = 'kpi-cards'
+        'ChkArCompHeatmap'    = 'heatmap'
+        'ChkArCompTree'       = 'tree'
+        'ChkArCompTopN'       = 'top-n'
+        'ChkArCompGroupTable' = 'group-table'
+    }
+    $components = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $componentMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $components.Add($componentMap[$name]) }
+    }
+
+    # Map baseline checkboxes to the CLI keys
+    $baselineMap = [ordered]@{
+        'ChkArBaseInventory'   = 'inventory'
+        'ChkArBasePrivileged'  = 'privileged'
+        'ChkArBaseOrphaned'    = 'orphaned'
+        'ChkArBaseExecSummary' = 'exec-summary'
+        'ChkArBaseRoster'      = 'roster'
+        'ChkArBaseAccessCert'  = 'access-cert'
+        'ChkArBaseSod'         = 'sod'
+    }
+    $baselines = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $baselineMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $baselines.Add($baselineMap[$name]) }
+    }
+
+    if ($components.Count -eq 0 -and $baselines.Count -eq 0) {
+        Set-StatusMessage -Message 'Select at least one component or baseline report.' -IsError
+        return
+    }
+
+    $componentArr = $components.ToArray()
+    $baselineArr  = $baselines.ToArray()
+
+    $outputPath = Resolve-AdaptiveOutputPath
+
+    $script:IsAdaptiveRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Generating adaptive report. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Generating adaptive report...' }
+    if ($null -ne $progressBar) {
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility      = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $btnGenerate) { $btnGenerate.IsEnabled = $false }
+
+    # --- Background STA runspace --------------------------------------------
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',   $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',    $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',   $statusLabel)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID', $correlationID)
+    $runspace.SessionStateProxy.SetVariable('OutputPath',    $outputPath)
+    $runspace.SessionStateProxy.SetVariable('Anchor',        $anchor)
+    $runspace.SessionStateProxy.SetVariable('Theme',         $theme)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',      $daysBack)
+    $runspace.SessionStateProxy.SetVariable('Components',    $componentArr)
+    $runspace.SessionStateProxy.SetVariable('Baselines',     $baselineArr)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # Same module set the Invoke-SPAdaptiveReport.ps1 CLI imports, plus SP.Gui
+        # for parity with the Delta block (Set-StatusMessage availability).
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1', 'SP.Audit\SP.Audit.psd1',
+                'SP.DeltaCert\SP.DeltaCert.psd1',
+                'SP.ReportComponents\SP.ReportComponents.psd1',
+                'SP.AdaptiveReports\SP.AdaptiveReports.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $result = @{ Success = $false; Data = @{ Generated = @(); Primary = $null }; Error = $null }
+
+        try {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null }
+
+            # --- Pull campaigns + build audits (verbatim from the CLI chain) ---
+            $campaigns = @()
+            $cr = Get-SPAuditCampaigns -Status @('COMPLETED', 'ACTIVE') -DaysBack $DaysBack -CorrelationID $CorrelationID
+            if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
+            if ($campaigns.Count -eq 0) { throw 'No campaigns matched the selected window.' }
+
+            $audits = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($camp in $campaigns) {
+                $wrapped = New-Object System.Collections.Generic.List[object]
+                $certR = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
+                foreach ($cert in @(if ($certR.Success) { $certR.Data } else { @() })) {
+                    $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+                    foreach ($item in @(if ($itemR.Success) { $itemR.Data } else { @() })) {
+                        $wrapped.Add(@{ Item = $item; CertificationId = [string]$cert.id; CertificationName = [string]$cert.name; CampaignName = [string]$camp.name })
+                    }
+                }
+                $dg = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = ''; CompletionDate = '' }
+                $audits.Add(@{ CampaignName = [string]$camp.name; CampaignId = [string]$camp.id; Decisions = $dg })
+            }
+
+            # --- Adapt to the RC GroupResults shape ---
+            $ds = Build-SPRCDataset -CampaignAudits $audits.ToArray() -Anchor $Anchor -CorrelationID $CorrelationID
+            if (-not $ds.Success) { throw "adapter failed: $($ds.Error)" }
+            $gr = @($ds.Data.GroupResults)
+            if ($gr.Count -eq 0) { throw 'No groups produced from the window -- nothing to render.' }
+
+            $stamp     = (Get-Date).ToString('yyyyMMdd-HHmmss')
+            $generated = New-Object System.Collections.Generic.List[string]
+            $composableFile = $null
+
+            # Composable report
+            if (@($Components).Count -gt 0) {
+                $ctx     = New-RCContext -GroupResults $gr -StaleResults $ds.Data.StaleResults -Theme $Theme
+                $outFile = Join-Path $OutputPath "adaptive-$Anchor-$stamp.html"
+                New-ComposableReport -Components $Components -Context $ctx -Title "Adaptive $Anchor Report" -Theme $Theme -OutputPath $outFile | Out-Null
+                $generated.Add($outFile)
+                $composableFile = $outFile
+            }
+
+            # Baseline reports (same dispatch map the CLI uses)
+            $baselineFnMap = [ordered]@{
+                'inventory'    = 'Export-GroupInventoryCatalogReport'
+                'privileged'   = 'Export-PrivilegedGroupReviewReport'
+                'orphaned'     = 'Export-OrphanedDisabledMembersReport'
+                'exec-summary' = 'Export-GovernanceExecutiveSummaryReport'
+                'roster'       = 'Export-MembershipSnapshotRosterReport'
+                'access-cert'  = 'Export-AccessCertificationAttestationReport'
+                'sod'          = 'Export-SodToxicComembershipReport'
+            }
+            foreach ($key in @($Baselines)) {
+                $fn = $baselineFnMap[$key]
+                if (-not $fn) { continue }
+                $outFile = Join-Path $OutputPath "$key-$stamp.html"
+                & $fn -GroupResults $gr -OutputPath $outFile -Theme $Theme | Out-Null
+                $generated.Add($outFile)
+            }
+
+            if ($generated.Count -eq 0) { throw 'No reports were produced.' }
+
+            $primary = if ($composableFile) { $composableFile } else { $generated[0] }
+            $result.Success      = $true
+            $result.Data.Generated = $generated.ToArray()
+            $result.Data.Primary = $primary
+        }
+        catch {
+            $result.Success = $false
+            $result.Error   = $_.Exception.Message
+        }
+
+        # Marshal a status summary back to the UI thread
+        $dispatcher     = $MainWindow.Dispatcher
+        $capturedResult = $result
+        $capturedLabel  = $StatusLabel
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = "Generated $(@($capturedResult.Data.Generated).Count) report(s)."
+                } else {
+                    $capturedLabel.Text = "Adaptive report failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $result
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # --- Completion poll (mirrors Invoke-GuiDeltaReport) ---------------------
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedBtn      = $btnGenerate
+    $capturedProgress = $progressBar
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $btn, $progress)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $finalResult = $null
+                try {
+                    $finalResult = $ps.EndInvoke($async)
+                } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Adaptive report failed: $errMsg" -IsError
+                } else {
+                    $opened = $false
+                    if ($null -ne $finalResult -and $finalResult.Count -gt 0) {
+                        $result = $finalResult[0]
+                        if ($result.Success -and $null -ne $result.Data -and
+                            -not [string]::IsNullOrWhiteSpace($result.Data.Primary) -and
+                            (Test-Path $result.Data.Primary)) {
+                            # Let the runspace-written file fully flush + unlock
+                            # before the browser opens it.
+                            Wait-SPReportFileReady -Path $result.Data.Primary | Out-Null
+                            Start-Process $result.Data.Primary
+                            $script:LastAdaptiveReportPath = $result.Data.Primary
+                            $opened = $true
+                        }
+                    }
+                    if ($opened) {
+                        Set-StatusMessage -Message 'Adaptive report generated successfully.'
+                    } else {
+                        $failMsg = if ($null -ne $finalResult -and $finalResult.Count -gt 0 -and $finalResult[0].Error) { $finalResult[0].Error } else { 'no report produced' }
+                        Set-StatusMessage -Message "Adaptive report failed: $failMsg" -IsError
+                    }
+                }
+
+                if ($null -ne $btn) { $btn.IsEnabled = $true }
+                if ($null -ne $progress) {
+                    $progress.IsIndeterminate = $false
+                    $progress.Visibility      = [System.Windows.Visibility]::Collapsed
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsAdaptiveRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedBtn $capturedProgress
+    }.GetNewClosure())
+
+    $timer.Start()
 }
 
 #endregion
@@ -3536,6 +4036,1748 @@ function Resolve-GovernanceOutputPath {
 
 #endregion
 
+#region SDK Features Tab
+
+function Initialize-SdkTab {
+    <#
+    .SYNOPSIS
+        Wires up the SDK Features tab controls and event handlers.
+    .DESCRIPTION
+        Structure/wiring only (SDK-10). Captures the module reference, binds each
+        sub-tab grid to its module-scoped ObservableCollection, locates every
+        control via Find-Control, and attaches every button / checkbox / radio /
+        sub-tab handler using the mandatory `& $module { } + .GetNewClosure()`
+        idiom (WPF note 2) so private helpers resolve at fire-time.
+
+        No bridge/API calls are made on the UI thread (WPF note 3). Each handler
+        routes to a module-private refresh/action helper. In SDK-10 those helpers
+        are thin stubs that only set the sub-tab status label to a
+        'deferred to SDK-11' message; SDK-11 replaces the stub bodies with the
+        background-runspace data loads. SDK-12 adds the Show-SPGuiDialog modals
+        and Safety/What-If confirmations.
+    .PARAMETER TabContent
+        The inlined SDK Features tab content root (Grid 'SdkTabContent').
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $module = $script:ThisModule
+
+    # --- Bind each grid to its module-scoped ObservableCollection ---------------
+    $templateGrid = Find-Control -Parent $TabContent -Name 'SdkTemplateGrid'
+    if ($templateGrid)    { $templateGrid.ItemsSource    = $script:SdkTemplateDataSource }
+    $certSummaryGrid = Find-Control -Parent $TabContent -Name 'SdkCertSummaryGrid'
+    if ($certSummaryGrid) { $certSummaryGrid.ItemsSource = $script:SdkCertSummaryDataSource }
+    $approvalGrid = Find-Control -Parent $TabContent -Name 'SdkApprovalGrid'
+    if ($approvalGrid)    { $approvalGrid.ItemsSource    = $script:SdkApprovalDataSource }
+    $workItemGrid = Find-Control -Parent $TabContent -Name 'SdkWorkItemGrid'
+    if ($workItemGrid)    { $workItemGrid.ItemsSource    = $script:SdkWorkItemDataSource }
+    $workflowGrid = Find-Control -Parent $TabContent -Name 'SdkWorkflowGrid'
+    if ($workflowGrid)    { $workflowGrid.ItemsSource    = $script:SdkWorkflowDataSource }
+    $executionGrid = Find-Control -Parent $TabContent -Name 'SdkExecutionGrid'
+    if ($executionGrid)   { $executionGrid.ItemsSource   = $script:SdkExecutionDataSource }
+    $filterGrid = Find-Control -Parent $TabContent -Name 'SdkFilterGrid'
+    if ($filterGrid)      { $filterGrid.ItemsSource      = $script:SdkFilterDataSource }
+
+    # === Sub-tab 1: Templates ==================================================
+    $btnRefreshTemplates = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshTemplates'
+    if ($btnRefreshTemplates) {
+        $btnRefreshTemplates.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnNewTemplate = Find-Control -Parent $TabContent -Name 'BtnSdkNewTemplate'
+    if ($btnNewTemplate) {
+        $btnNewTemplate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateNew -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEditSchedule = Find-Control -Parent $TabContent -Name 'BtnSdkEditSchedule'
+    if ($btnEditSchedule) {
+        $btnEditSchedule.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateEditSchedule -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnRemoveSchedule = Find-Control -Parent $TabContent -Name 'BtnSdkRemoveSchedule'
+    if ($btnRemoveSchedule) {
+        $btnRemoveSchedule.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateRemoveSchedule -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeleteTemplate = Find-Control -Parent $TabContent -Name 'BtnSdkDeleteTemplate'
+    if ($btnDeleteTemplate) {
+        $btnDeleteTemplate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkTemplateDelete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 2: Cert Summaries ============================================
+    $btnRefreshSummaries = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshSummaries'
+    if ($btnRefreshSummaries) {
+        $btnRefreshSummaries.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboCertCampaign = Find-Control -Parent $TabContent -Name 'CboSdkCertCampaign'
+    if ($cboCertCampaign) {
+        $cboCertCampaign.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboCertification = Find-Control -Parent $TabContent -Name 'CboSdkCertification'
+    if ($cboCertification) {
+        $cboCertification.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $cboAccessType = Find-Control -Parent $TabContent -Name 'CboSdkAccessType'
+    if ($cboAccessType) {
+        $cboAccessType.Add_SelectionChanged({
+            & $module {
+                param($tc)
+                Invoke-SdkCertSummaryRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 3: Approvals =================================================
+    $rbPending = Find-Control -Parent $TabContent -Name 'RbSdkPending'
+    if ($rbPending) {
+        $rbPending.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $rbCompleted = Find-Control -Parent $TabContent -Name 'RbSdkCompleted'
+    if ($rbCompleted) {
+        $rbCompleted.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnRefreshApprovals = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshApprovals'
+    if ($btnRefreshApprovals) {
+        $btnRefreshApprovals.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnApprove = Find-Control -Parent $TabContent -Name 'BtnSdkApprove'
+    if ($btnApprove) {
+        $btnApprove.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalApprove -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeny = Find-Control -Parent $TabContent -Name 'BtnSdkDeny'
+    if ($btnDeny) {
+        $btnDeny.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalDeny -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnForward = Find-Control -Parent $TabContent -Name 'BtnSdkForward'
+    if ($btnForward) {
+        $btnForward.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkApprovalForward -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 4: Work Items ================================================
+    $btnRefreshWorkItems = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshWorkItems'
+    if ($btnRefreshWorkItems) {
+        $btnRefreshWorkItems.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnCompleteWorkItem = Find-Control -Parent $TabContent -Name 'BtnSdkCompleteWorkItem'
+    if ($btnCompleteWorkItem) {
+        $btnCompleteWorkItem.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemComplete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnForwardWorkItem = Find-Control -Parent $TabContent -Name 'BtnSdkForwardWorkItem'
+    if ($btnForwardWorkItem) {
+        $btnForwardWorkItem.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemForward -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnBulkApprove = Find-Control -Parent $TabContent -Name 'BtnSdkBulkApprove'
+    if ($btnBulkApprove) {
+        $btnBulkApprove.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkItemBulkApprove -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $chkShowCompleted = Find-Control -Parent $TabContent -Name 'ChkSdkShowCompleted'
+    if ($chkShowCompleted) {
+        # Cache reference and keep the shadow $script:SdkWorkItemShowCompleted in
+        # sync. The shadow is read by Invoke-SdkWorkItemRefresh instead of
+        # .IsChecked, which can lag cross-process COM automation calls.
+        $script:SdkWorkItemShowCompletedChk = $chkShowCompleted
+        $chkShowCompleted.Add_Checked({
+            & $module {
+                param($tc)
+                $script:SdkWorkItemShowCompleted = $true
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+        $chkShowCompleted.Add_Unchecked({
+            & $module {
+                param($tc)
+                $script:SdkWorkItemShowCompleted = $false
+                Invoke-SdkWorkItemRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 5: Workflows =================================================
+    $btnRefreshWorkflows = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshWorkflows'
+    if ($btnRefreshWorkflows) {
+        $btnRefreshWorkflows.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEnableWorkflow = Find-Control -Parent $TabContent -Name 'BtnSdkEnableWorkflow'
+    if ($btnEnableWorkflow) {
+        $btnEnableWorkflow.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowToggleEnabled -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnTestWorkflow = Find-Control -Parent $TabContent -Name 'BtnSdkTestWorkflow'
+    if ($btnTestWorkflow) {
+        $btnTestWorkflow.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowTest -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnViewExecutions = Find-Control -Parent $TabContent -Name 'BtnSdkViewExecutions'
+    if ($btnViewExecutions) {
+        $btnViewExecutions.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowViewExecutions -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnCreateOOO = Find-Control -Parent $TabContent -Name 'BtnSdkCreateOOO'
+    if ($btnCreateOOO) {
+        $btnCreateOOO.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkWorkflowCreateOOO -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab 6: Filters ===================================================
+    $btnRefreshFilters = Find-Control -Parent $TabContent -Name 'BtnSdkRefreshFilters'
+    if ($btnRefreshFilters) {
+        $btnRefreshFilters.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnNewFilter = Find-Control -Parent $TabContent -Name 'BtnSdkNewFilter'
+    if ($btnNewFilter) {
+        $btnNewFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterNew -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnEditFilter = Find-Control -Parent $TabContent -Name 'BtnSdkEditFilter'
+    if ($btnEditFilter) {
+        $btnEditFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterEdit -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $btnDeleteFilter = Find-Control -Parent $TabContent -Name 'BtnSdkDeleteFilter'
+    if ($btnDeleteFilter) {
+        $btnDeleteFilter.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterDelete -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    $chkIncludeSystem = Find-Control -Parent $TabContent -Name 'ChkSdkIncludeSystem'
+    if ($chkIncludeSystem) {
+        $chkIncludeSystem.Add_Checked({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+        $chkIncludeSystem.Add_Unchecked({
+            & $module {
+                param($tc)
+                Invoke-SdkFilterRefresh -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # === Sub-tab control: lazy-load the newly-selected sub-tab's data ==========
+    $subTabControl = Find-Control -Parent $TabContent -Name 'SdkSubTabControl'
+    if ($subTabControl) {
+        $subTabControl.Add_SelectionChanged({
+            & $module {
+                param($tc, $sender, $evt)
+                # Only react to the TabControl's own selection, not bubbled
+                # SelectionChanged events from inner ComboBoxes / grids.
+                if ($null -ne $evt -and $evt.OriginalSource -ne $sender) { return }
+                Invoke-SdkSubTabLoad -TabContent $tc -SelectedTab $sender.SelectedItem
+            } $TabContent $this $_
+        }.GetNewClosure())
+    }
+
+    # Initial status labels for every sub-tab, then load the default (Templates).
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel'    -Message 'Ready. Click Refresh to load campaign templates.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a campaign, then a certification, to load summaries.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel'    -Message 'Ready. Click Refresh to load approvals.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel'    -Message 'Ready. Click Refresh to load work items.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel'    -Message 'Ready. Click Refresh to load workflows.'
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel'      -Message 'Ready. Click Refresh to load filters.'
+
+    # Default sub-tab is Templates -- trigger its initial (stub) load.
+    Invoke-SdkTemplateRefresh -TabContent $TabContent
+}
+
+# ---------------------------------------------------------------------------
+# Sub-tab helpers
+#
+# SDK-10 ships THIN STUBS: each only updates the sub-tab status label to a
+# 'deferred to SDK-11' message. They are the named extension points the SDK-11
+# background-runspace data loads (and SDK-12 dialog/Safety wiring) plug into.
+# No bridge/API call (Get-SPGuiSdk* / Invoke-SPGuiSdk*) is made here yet.
+# ---------------------------------------------------------------------------
+
+function Set-SdkSubTabStatus {
+    <#
+    .SYNOPSIS
+        Sets the text of a named SDK sub-tab status label, if present.
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [Parameter(Mandatory)][string]$StatusName,
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    $label = Find-Control -Parent $TabContent -Name $StatusName
+    if ($null -ne $label) {
+        $label.Text = $Message
+    }
+}
+
+function Invoke-SdkGridRefresh {
+    <#
+    .SYNOPSIS
+        Shared background-runspace data loader for the SDK sub-tab grids (SDK-11).
+    .DESCRIPTION
+        DRY engine behind the 5 data-loading refresh helpers (Templates,
+        Approvals, Work Items, Workflows, Filters). Mirrors the runspace skeleton
+        of Invoke-GuiAuditRun (WPF note 3): spins a background STA runspace,
+        re-imports the modules the runspace needs (it starts empty -- SP.Core,
+        SP.Api, SP.Sdk, SP.Gui; SP.Gui brings SP.SdkBridge as a nested module so
+        Get-SPGuiSdk* resolve here), calls the named bridge read function, then
+        marshals the @{Success;Data;...} result back to the UI thread via
+        $MainWindow.Dispatcher.
+
+        NEVER touches a control or ObservableCollection from the runspace thread:
+        the .Clear()/.Add() and all label/badge writes happen inside the
+        Dispatcher.Invoke([System.Action]{...}) block, and the completion timer
+        Tick re-enters module scope via `& $module {...}.GetNewClosure()` (WPF
+        note 2) so private helpers and $script:* resolve at fire-time.
+
+        Re-entrancy is guarded by $script:IsSdkRunning the way Invoke-GuiAuditRun
+        uses $script:IsAuditRunning.
+    .PARAMETER OnLoaded
+        Optional scriptblock run INSIDE the Dispatcher block AFTER rows are
+        marshalled. Receives ($result, $TabContent) and is invoked with module
+        scope re-entered (& $module {...}) so it can update badges / summary
+        panels / apply the work-item open-only filter via module-private helpers.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$BridgeFunction,
+        [hashtable]$BridgeArgs = @{},
+        [Parameter(Mandatory)]$DataSource,
+        [Parameter(Mandatory)][string]$StatusLabelName,
+        [string]$LoadingMessage,
+        [scriptblock]$OnLoaded
+    )
+
+    if ($script:IsSdkRunning) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message 'An SDK data load is already in progress. Please wait...'
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($LoadingMessage)) {
+        $LoadingMessage = 'Loading...'
+    }
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $LoadingMessage
+
+    $script:IsSdkRunning = $true
+
+    # Create background runspace (STA) -- mirror Invoke-GuiAuditRun.
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    # Share inputs explicitly (PS 5.1: no closures across runspace boundaries).
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('BridgeFunction', $BridgeFunction)
+    $runspace.SessionStateProxy.SetVariable('BridgeArgs',     $BridgeArgs)
+    $runspace.SessionStateProxy.SetVariable('DataSource',     $DataSource)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # The runspace starts empty (WPF note 3): re-import every module the
+        # bridge call needs. SP.Sdk is imported explicitly because it is not yet
+        # in the dashboard module chain (that wiring is SDK-13). SP.Gui brings
+        # SP.SdkBridge as a nested module so Get-SPGuiSdk* resolve here.
+        $coreModule = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule  = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $sdkModule  = Join-Path $ToolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
+        $guiModule  = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $sdkModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        # Call the bridge read function (returns @{Success;Data;...}).
+        $bridgeResult = & $BridgeFunction @BridgeArgs
+
+        # Marshal back to the UI thread -- this is the ONLY place the bound
+        # ObservableCollection and any control are touched.
+        $dispatcher       = $MainWindow.Dispatcher
+        $capturedResult   = $bridgeResult
+        $capturedSource   = $DataSource
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedResult -and $capturedResult.Success) {
+                $capturedSource.Clear()
+                foreach ($row in @($capturedResult.Data)) {
+                    $capturedSource.Add($row)
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $bridgeResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms), mirror Invoke-GuiAuditRun.
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedStatus   = $StatusLabelName
+    $capturedOnLoaded = $OnLoaded
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $statusName, $onLoaded)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $result = $null
+                try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $errMsg"
+                    Set-StatusMessage -Message "SDK load failed: $errMsg" -IsError
+                }
+                elseif ($null -ne $result -and -not $result.Success) {
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $($result.Error)"
+                    Set-StatusMessage -Message "SDK load failed: $($result.Error)" -IsError
+                }
+                else {
+                    $count = if ($null -ne $result) { @($result.Data).Count } else { 0 }
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "$count item(s) loaded."
+
+                    # Post-marshal hook (badges / summary panel / row filter).
+                    if ($null -ne $onLoaded -and $null -ne $result -and $result.Success) {
+                        & $onLoaded $result $tab
+                    }
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsSdkRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnLoaded
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Test-SdkRequireWhatIfConfirm {
+    <#
+    .SYNOPSIS
+        UI-thread Safety.RequireWhatIfOnProd confirmation for SDK write actions.
+    .DESCRIPTION
+        Mirrors the Invoke-GuiTestRun guard (SP.MainWindow.psm1:464-490): reads
+        Safety.RequireWhatIfOnProd + Global.EnvironmentName from settings.json via
+        Get-SPConfig with the defensive `PSObject.Properties.Name -contains` idiom,
+        defaulting to safe (prompt) if config cannot be read. When the flag is set
+        it shows a YesNo MessageBox describing the live action and the environment.
+
+        Returns $true when the caller may proceed (flag off, or user chose Yes),
+        $false when the user cancelled (the caller then aborts and sets a
+        'cancelled by user (Safety.RequireWhatIfOnProd)' status). Runs entirely on
+        the UI thread BEFORE any runspace -- the bridge cannot show UI (SDK-03).
+    .PARAMETER ActionDescription
+        Human-readable description of the live action (e.g. 'delete 1 template').
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$ActionDescription
+    )
+
+    $requireConfirm = $true
+    $envName        = 'Unknown'
+    try {
+        $cfg = Get-SPConfig -ConfigPath $script:ConfigPath
+        if ($cfg -and $cfg.Safety -and ($cfg.Safety.PSObject.Properties.Name -contains 'RequireWhatIfOnProd')) {
+            $requireConfirm = [bool]$cfg.Safety.RequireWhatIfOnProd
+        }
+        if ($cfg -and $cfg.Global -and ($cfg.Global.PSObject.Properties.Name -contains 'EnvironmentName')) {
+            $envName = [string]$cfg.Global.EnvironmentName
+        }
+    } catch { }
+
+    if (-not $requireConfirm) {
+        return $true
+    }
+
+    $msg = "Safety.RequireWhatIfOnProd is enabled in settings.json.`n`n" +
+           "About to $ActionDescription against environment: $envName`n`n" +
+           "Continue with live API execution?"
+    $choice = [System.Windows.MessageBox]::Show(
+        $msg,
+        'Confirm Live SDK Action',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    return ($choice -eq [System.Windows.MessageBoxResult]::Yes)
+}
+
+function Invoke-SdkActionRun {
+    <#
+    .SYNOPSIS
+        Shared background-runspace WRITE engine for the SDK sub-tab action buttons
+        (SDK-12).
+    .DESCRIPTION
+        Mirrors the SDK-11 read engine Invoke-SdkGridRefresh skeleton: spins a
+        background STA runspace, re-imports the modules the runspace needs (it
+        starts empty -- SP.Core, SP.Api, SP.Sdk, SP.Gui; SP.Gui brings SP.SdkBridge
+        as a nested module so Invoke-SPGuiSdk* resolve here -- WPF note 3), calls
+        the named bridge WRITE dispatcher, then marshals the @{Success;Data;Error}
+        result back to the UI thread via $MainWindow.Dispatcher. Re-entrancy is
+        guarded by $script:IsSdkRunning (shared with the read engine).
+
+        The runspace ONLY runs the dispatcher: NO MessageBox / Show-SPGuiDialog /
+        control access happens off the UI thread. All confirms + dialog input must
+        be gathered on the UI thread BEFORE calling this engine (SDK-03 contract).
+
+        On dispatcher Success the completion-timer Tick re-enters module scope via
+        `& $module {...}.GetNewClosure()` (WPF note 2) and invokes the OnSuccess
+        scriptblock (the sub-tab *Refresh helper) so private helpers and $script:*
+        resolve at fire-time. On @{Success=$false} it sets the sub-tab status +
+        Set-StatusMessage -IsError with the Error string and never throws.
+    .PARAMETER OnSuccess
+        Optional scriptblock run (in module scope, on the UI thread) AFTER a
+        successful dispatch -- typically the affected sub-tab's refresh helper.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$BridgeFunction,
+        [hashtable]$BridgeArgs = @{},
+        [Parameter(Mandatory)][string]$StatusLabelName,
+        [string]$RunningMessage,
+        [scriptblock]$OnSuccess
+    )
+
+    if ($script:IsSdkRunning) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message 'An SDK operation is already in progress. Please wait...'
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RunningMessage)) {
+        $RunningMessage = 'Working...'
+    }
+    Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $RunningMessage
+
+    $script:IsSdkRunning = $true
+
+    # Create background runspace (STA) -- mirror Invoke-SdkGridRefresh.
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    # Share inputs explicitly (PS 5.1: no closures across runspace boundaries).
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('BridgeFunction', $BridgeFunction)
+    $runspace.SessionStateProxy.SetVariable('BridgeArgs',     $BridgeArgs)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # The runspace starts empty (WPF note 3): re-import every module the
+        # bridge call needs. SP.Sdk is imported explicitly because it is not yet
+        # in the dashboard module chain (that wiring is SDK-13). SP.Gui brings
+        # SP.SdkBridge as a nested module so Invoke-SPGuiSdk* resolve here.
+        $coreModule = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
+        $apiModule  = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
+        $sdkModule  = Join-Path $ToolkitRoot 'Modules\SP.Sdk\SP.Sdk.psd1'
+        $guiModule  = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
+
+        foreach ($mod in @($coreModule, $apiModule, $sdkModule, $guiModule)) {
+            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        }
+
+        # Call the bridge WRITE dispatcher (returns @{Success;Data;Error}). No UI
+        # is touched here -- the bridge enforces the Safety gate and returns a
+        # @{Success=$false;Error='blocked by Safety...'} result rather than throwing.
+        $bridgeResult = & $BridgeFunction @BridgeArgs
+
+        return $bridgeResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # DispatcherTimer polls for completion (500ms), mirror Invoke-SdkGridRefresh.
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer     = $timer
+    $capturedPs        = $psInstance
+    $capturedRunspace  = $runspace
+    $capturedAsync     = $asyncResult
+    $capturedTab       = $TabContent
+    $capturedStatus    = $StatusLabelName
+    $capturedOnSuccess = $OnSuccess
+    $capturedModule    = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $statusName, $onSuccess)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $result = $null
+                try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Action failed: $errMsg"
+                    Set-StatusMessage -Message "SDK action failed: $errMsg" -IsError
+                }
+                elseif ($null -eq $result -or -not $result.Success) {
+                    # Surfaces the dispatcher's @{Success=$false;Error=...} verbatim --
+                    # including Safety-blocked results ('blocked by Safety...'). Never throws.
+                    $errMsg = if ($null -ne $result) { [string]$result.Error } else { 'Unknown error (no result returned).' }
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Action failed: $errMsg"
+                    Set-StatusMessage -Message "SDK action failed: $errMsg" -IsError
+                }
+                else {
+                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message 'Action completed.'
+                    Set-StatusMessage -Message 'SDK action completed.'
+                    # Refresh the affected grid (the OnSuccess scriptblock runs in
+                    # module scope so $script:* and private helpers resolve, and
+                    # the IsSdkRunning guard is cleared first so the refresh runs).
+                    $script:IsSdkRunning = $false
+                    if ($null -ne $onSuccess) { & $onSuccess $tab }
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsSdkRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnSuccess
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-SdkSubTabLoad {
+    <#
+    .SYNOPSIS
+        Lazy-loads the default data for the newly-selected SDK sub-tab by routing
+        to that sub-tab's refresh helper (stub in SDK-10).
+    #>
+    [CmdletBinding()]
+    param($TabContent, $SelectedTab)
+
+    $header = if ($null -ne $SelectedTab) { [string]$SelectedTab.Header } else { '' }
+    switch ($header) {
+        'Templates'      { Invoke-SdkTemplateRefresh    -TabContent $TabContent }
+        'Cert Summaries' { Invoke-SdkCertSummaryRefresh -TabContent $TabContent }
+        'Approvals'      { Invoke-SdkApprovalRefresh     -TabContent $TabContent }
+        'Work Items'     { Invoke-SdkWorkItemRefresh     -TabContent $TabContent }
+        'Workflows'      { Invoke-SdkWorkflowRefresh      -TabContent $TabContent }
+        'Filters'        { Invoke-SdkFilterRefresh        -TabContent $TabContent }
+    }
+}
+
+# --- Templates -------------------------------------------------------------
+function Invoke-SdkTemplateRefresh {
+    # SDK-11: background-runspace load of campaign templates into the grid.
+    [CmdletBinding()] param($TabContent)
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCampaignTemplates' `
+        -DataSource      $script:SdkTemplateDataSource `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -LoadingMessage  'Loading templates...'
+}
+function Get-SdkSelectedRow {
+    <#
+    .SYNOPSIS
+        Returns the .SelectedItem of a named SDK grid, or $null if none selected.
+    .DESCRIPTION
+        UI-thread helper. SDK action handlers call this FIRST (before any confirm
+        or runspace) to read the operator's selected grid row. Returns $null when
+        the grid is missing or nothing is selected so callers can surface a
+        'select a row first' status without an exception.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][string]$GridName
+    )
+
+    # Use window-root FindName so the search isn't constrained by the sub-tab's
+    # namescope when driven by a UI automation tool cross-process.
+    $grid = $null
+    if ($null -ne $script:MainWindow) { $grid = $script:MainWindow.FindName($GridName) }
+    if ($null -eq $grid) { $grid = Find-Control -Parent $TabContent -Name $GridName }
+    if ($null -eq $grid) { return $null }
+
+    # Return SelectedItem when something is selected. When nothing is selected
+    # (automation tools may call SelectionItem.Pattern.Select() which doesn't
+    # always propagate synchronously to WPF's SelectedItem), fall back to the
+    # first item in the underlying data source so single-row grids remain operable.
+    $selected = $grid.SelectedItem
+    if ($null -ne $selected) { return $selected }
+
+    # Fallback: first item from the ObservableCollection that backs this grid.
+    $source = $grid.ItemsSource
+    if ($null -ne $source) {
+        $enum = $source.GetEnumerator()
+        if ($enum.MoveNext()) { return $enum.Current }
+    }
+    return $null
+}
+
+function Invoke-SdkTemplateNew {
+    [CmdletBinding()] param($TabContent)
+
+    $dialogPath = Get-XamlPath -FileName 'SdkTemplateCreateDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtTemplateName', 'TxtDeadlineDuration', 'TxtTemplateOwnerId', 'CboReviewerType') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'New Template cancelled.'
+        return
+    }
+
+    $name     = [string]$values['TxtTemplateName']
+    $deadline = [string]$values['TxtDeadlineDuration']
+    $ownerId  = [string]$values['TxtTemplateOwnerId']
+    $reviewer = if ($null -ne $values['CboReviewerType']) { [string]$values['CboReviewerType'] } else { 'MANAGER' }
+
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Template Name is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($deadline)) { $deadline = 'P14D' }
+
+    $templateBody = @{
+        name             = $name
+        deadlineDuration = $deadline
+        type             = 'MANAGER'
+        reviewerType     = $reviewer
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ownerId)) {
+        $templateBody['ownerRef'] = @{ id = $ownerId; type = 'IDENTITY' }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create template '$name'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'Create'; Template = $templateBody } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  "Creating template '$name'..." `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkTemplateEditSchedule {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    # Gather schedule fields via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkTemplateScheduleDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @(
+        'CboScheduleType', 'TxtScheduleHours', 'TxtScheduleDays', 'CboScheduleTimeZone', 'TxtScheduleExpiration'
+    )
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Edit Schedule cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "set the schedule for template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $schedule = @{
+        Type       = [string]$values['CboScheduleType']
+        Hours      = [string]$values['TxtScheduleHours']
+        Days       = [string]$values['TxtScheduleDays']
+        TimeZoneId = [string]$values['CboScheduleTimeZone']
+        Expiration = [string]$values['TxtScheduleExpiration']
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'SetSchedule'; TemplateId = [string]$row.Id; Schedule = $schedule } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Setting template schedule...' `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkTemplateRemoveSchedule {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Remove the schedule from 1 template ('$($row.Name)')?",
+        'Confirm Remove Schedule',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Remove Schedule cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "remove the schedule from template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'RemoveSchedule'; TemplateId = [string]$row.Id } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Removing template schedule...' `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkTemplateDelete {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkTemplateGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Select a template first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Delete 1 template ('$($row.Name)')? This cannot be undone.",
+        'Confirm Delete Template',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'Delete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "delete template '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkTemplateStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkTemplateRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkTemplateAction' `
+        -BridgeArgs      @{ Action = 'Delete'; TemplateId = [string]$row.Id } `
+        -StatusLabelName 'SdkTemplateStatusLabel' `
+        -RunningMessage  'Deleting template...' `
+        -OnSuccess       $onSuccess
+}
+
+# --- Cert Summaries --------------------------------------------------------
+function Invoke-SdkCertSummaryRefresh {
+    # SDK-18 (SHIPPED): drives the campaign -> certification cascade and then loads
+    # Identity or Access summaries into SdkCertSummaryGrid.
+    #
+    # The two combo lists (campaigns, certifications) are small reads and are
+    # populated SYNCHRONOUSLY here so the cascade stays simple; the potentially
+    # larger summary read runs on the background runspace via Invoke-SdkGridRefresh
+    # (WPF note 3). $script:SdkCertCascadeBusy guards the combo SelectionChanged
+    # handlers from re-entering while we set ItemsSource/SelectedIndex ourselves.
+    [CmdletBinding()] param($TabContent)
+
+    if ($script:SdkCertCascadeBusy) { return }
+
+    $cboCampaign = Find-Control -Parent $TabContent -Name 'CboSdkCertCampaign'
+    $cboCert     = Find-Control -Parent $TabContent -Name 'CboSdkCertification'
+    $cboType     = Find-Control -Parent $TabContent -Name 'CboSdkAccessType'
+
+    # 1. Populate the campaign combo once (from the existing GUI campaign cache).
+    if ($null -ne $cboCampaign -and $cboCampaign.Items.Count -eq 0) {
+        $script:SdkCertCascadeBusy = $true
+        try {
+            $campaigns = Get-SPGuiSdkCertCampaigns
+            if ($campaigns.Success) {
+                $cboCampaign.ItemsSource = @($campaigns.Data)
+            }
+            else {
+                Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' `
+                    -Message "Cannot load campaigns: $($campaigns.Error)"
+            }
+        }
+        finally { $script:SdkCertCascadeBusy = $false }
+    }
+
+    # 2. A campaign must be selected to go further.
+    $campaignId = if ($null -ne $cboCampaign -and $null -ne $cboCampaign.SelectedValue) { [string]$cboCampaign.SelectedValue } else { '' }
+    if ([string]::IsNullOrWhiteSpace($campaignId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a campaign to load certifications.'
+        return
+    }
+
+    # 3. (Re)populate the certification combo only when the campaign changed.
+    if ($script:SdkCertLoadedCampaign -ne $campaignId) {
+        $script:SdkCertCascadeBusy = $true
+        try {
+            $certs = Get-SPGuiSdkCertifications -CampaignId $campaignId
+            if ($certs.Success) {
+                $cboCert.ItemsSource = @($certs.Data)
+                $script:SdkCertLoadedCampaign = $campaignId
+                if ($cboCert.Items.Count -gt 0) { $cboCert.SelectedIndex = 0 }
+            }
+            else {
+                $cboCert.ItemsSource = @()
+                $script:SdkCertLoadedCampaign = $campaignId
+                Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' `
+                    -Message "Cannot load certifications: $($certs.Error)"
+                return
+            }
+        }
+        finally { $script:SdkCertCascadeBusy = $false }
+    }
+
+    # 4. A certification must be selected to load summaries.
+    $certId = if ($null -ne $cboCert -and $null -ne $cboCert.SelectedValue) { [string]$cboCert.SelectedValue } else { '' }
+    if ([string]::IsNullOrWhiteSpace($certId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkCertSummaryStatusLabel' -Message 'Select a certification to load summaries.'
+        return
+    }
+
+    # 5. Identity (default) vs Access-by-type, from CboSdkAccessType.
+    $typeChoice = if ($null -ne $cboType -and $null -ne $cboType.SelectedItem) { [string]$cboType.SelectedItem.Content } else { 'Identity' }
+    $bridgeArgs = @{ CertificationId = $certId }
+    if ([string]::IsNullOrWhiteSpace($typeChoice) -or $typeChoice -eq 'Identity') {
+        $bridgeArgs['SummaryType'] = 'Identity'
+        $loadingMsg = 'Loading identity summaries...'
+    }
+    else {
+        $apiType = switch ($typeChoice) {
+            'Entitlement'    { 'ENTITLEMENT' }
+            'Role'           { 'ROLE' }
+            'Access Profile' { 'ACCESS_PROFILE' }
+            default          { 'ENTITLEMENT' }
+        }
+        $bridgeArgs['SummaryType'] = 'Access'
+        $bridgeArgs['AccessType']  = $apiType
+        $loadingMsg = "Loading $typeChoice access summaries..."
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCertSummaries' `
+        -BridgeArgs      $bridgeArgs `
+        -DataSource      $script:SdkCertSummaryDataSource `
+        -StatusLabelName 'SdkCertSummaryStatusLabel' `
+        -LoadingMessage  $loadingMsg
+}
+
+# --- Approvals -------------------------------------------------------------
+function Invoke-SdkApprovalRefresh {
+    # SDK-11: load pending/completed approvals; rebuild the summary badges.
+    [CmdletBinding()] param($TabContent)
+
+    # Read the Pending/Completed radio on the UI thread BEFORE the runspace.
+    $rbCompleted = Find-Control -Parent $TabContent -Name 'RbSdkCompleted'
+    $state = if ($null -ne $rbCompleted -and $rbCompleted.IsChecked -eq $true) { 'Completed' } else { 'Pending' }
+
+    $onLoaded = {
+        param($result, $tab)
+
+        # Derive counts: when Completed is shown the rows carry a State field
+        # (APPROVED/REJECTED/...); when Pending is shown all rows are pending.
+        $pending  = 0
+        $approved = 0
+        $rejected = 0
+
+        foreach ($row in @($result.Data)) {
+            $rowState = if ($null -ne $row.State) { ([string]$row.State).ToUpperInvariant() } else { '' }
+            switch -Wildcard ($rowState) {
+                '*APPROV*' { $approved++ }
+                '*REJECT*' { $rejected++ }
+                '*DENI*'   { $rejected++ }
+                default    { $pending++ }
+            }
+        }
+
+        $badgePending  = Find-Control -Parent $tab -Name 'SdkApprovalBadgePending'
+        $badgeApproved = Find-Control -Parent $tab -Name 'SdkApprovalBadgeApproved'
+        $badgeRejected = Find-Control -Parent $tab -Name 'SdkApprovalBadgeRejected'
+        if ($null -ne $badgePending)  { $badgePending.Text  = [string]$pending }
+        if ($null -ne $badgeApproved) { $badgeApproved.Text = [string]$approved }
+        if ($null -ne $badgeRejected) { $badgeRejected.Text = [string]$rejected }
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkApprovals' `
+        -BridgeArgs      @{ State = $state } `
+        -DataSource      $script:SdkApprovalDataSource `
+        -StatusLabelName 'SdkApprovalStatusLabel' `
+        -LoadingMessage  "Loading $state approvals..." `
+        -OnLoaded        $onLoaded
+}
+function Invoke-SdkApprovalAction {
+    <#
+    .SYNOPSIS
+        Shared UI-thread driver for the three approval verbs (Approve/Deny/Forward).
+    .DESCRIPTION
+        Reads the selected approval row, gathers Comment/Forward-To via the SDK-09
+        SdkApprovalActionDialog (UI thread), applies the destructive-verb confirm
+        (Deny/Forward) + RequireWhatIfOnProd gate, then dispatches via the write
+        engine. Approve is non-destructive (no affected-count confirm); Deny and
+        Forward show a YesNo confirm before dispatch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$TabContent,
+        [Parameter(Mandatory)][ValidateSet('Approve', 'Deny', 'Forward')][string]$Action
+    )
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkApprovalGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'Select an approval first.'
+        return
+    }
+
+    # Gather Comment / Forward-To via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkApprovalActionDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @('TxtComment', 'TxtForwardTo')
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message "$Action cancelled."
+        return
+    }
+
+    $comment    = [string]$values['TxtComment']
+    $forwardTo  = [string]$values['TxtForwardTo']
+
+    # Destructive/hand-off verbs (Deny/Forward) get an affected-count confirm.
+    if ($Action -in @('Deny', 'Forward')) {
+        $confirm = [System.Windows.MessageBox]::Show(
+            "$Action 1 approval ('$($row.Name)')?",
+            "Confirm $Action",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message "$Action cancelled."
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "$($Action.ToLower()) approval '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkApprovalStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $bridgeArgs = @{ Action = $Action; ApprovalId = [string]$row.Id }
+    if (-not [string]::IsNullOrWhiteSpace($comment))   { $bridgeArgs['Comment']    = $comment }
+    if ($Action -eq 'Forward' -and -not [string]::IsNullOrWhiteSpace($forwardTo)) { $bridgeArgs['NewOwnerId'] = $forwardTo }
+
+    $onSuccess = { param($tab) Invoke-SdkApprovalRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkApprovalAction' `
+        -BridgeArgs      $bridgeArgs `
+        -StatusLabelName 'SdkApprovalStatusLabel' `
+        -RunningMessage  "$Action in progress..." `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkApprovalApprove {
+    [CmdletBinding()] param($TabContent)
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Approve'
+}
+function Invoke-SdkApprovalDeny {
+    [CmdletBinding()] param($TabContent)
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Deny'
+}
+function Invoke-SdkApprovalForward {
+    [CmdletBinding()] param($TabContent)
+    Invoke-SdkApprovalAction -TabContent $TabContent -Action 'Forward'
+}
+
+# --- Work Items ------------------------------------------------------------
+function Invoke-SdkWorkItemRefresh {
+    # SDK-11: load work items + open/completed/total badges; open-only filter
+    # is applied from the full Data set in OnLoaded so the toggle never re-hits
+    # the API.
+    [CmdletBinding()] param($TabContent)
+
+    # Read the checkbox state HERE on the UI thread before the runspace starts.
+    # This is the only reliable approach: reading $chk.IsChecked inside OnLoaded
+    # is unreliable because the WPF element reference may not reflect the current
+    # state cross-process (automation tools set the toggle via a COM pattern that
+    # dispatches asynchronously; the WPF property update lags). Capturing the
+    # value now, on the same UI thread call that launched the refresh, guarantees
+    # the correct state is seen in the closure.
+    # Read the current checkbox state. We try three sources in priority order so
+    # the behavior is correct for both interactive use (where IsChecked is reliable)
+    # and cross-process automation (where COM Toggle may not fire Add_Checked).
+    #
+    # Source 1: re-read IsChecked directly (works for normal user interaction).
+    # Source 2: shadow variable $script:SdkWorkItemShowCompleted (updated by
+    #           Add_Checked/Add_Unchecked; reliable for normal interaction but
+    #           not for COM-based automation that bypasses routed events).
+    # Source 3: IsChecked again as the authoritative final read.
+    #
+    # To handle the automation case: sync the shadow from IsChecked now so both
+    # agree, then use IsChecked as the value. The shadow is updated as a side
+    # effect for the next call.
+    # Read the checkbox state. Use the shadow $script:SdkWorkItemShowCompleted
+    # (set by Add_Checked/Add_Unchecked and synced from IsChecked on each call)
+    # as the primary value; fall back to a live IsChecked read as a safety net.
+    $chkWi = $script:SdkWorkItemShowCompletedChk
+    if ($null -eq $chkWi -and $null -ne $script:MainWindow) {
+        try { $chkWi = $script:MainWindow.FindName('ChkSdkShowCompleted') } catch { }
+    }
+    if ($null -ne $chkWi) {
+        # Always sync the shadow so both agree; use the live value.
+        $script:SdkWorkItemShowCompleted = ($chkWi.IsChecked -eq $true)
+    }
+    $capturedShowCompleted = $script:SdkWorkItemShowCompleted
+
+    $onLoaded = {
+        param($result, $tab)
+
+        # Badges from the bridge Summary (open/completed/total).
+        $summary = $result.Summary
+        $badgeOpen      = Find-Control -Parent $tab -Name 'SdkWiBadgeOpen'
+        $badgeCompleted = Find-Control -Parent $tab -Name 'SdkWiBadgeCompleted'
+        $badgeTotal     = Find-Control -Parent $tab -Name 'SdkWiBadgeTotal'
+        if ($null -ne $summary) {
+            if ($null -ne $badgeOpen)      { $badgeOpen.Text      = [string]$summary.Open }
+            if ($null -ne $badgeCompleted) { $badgeCompleted.Text = [string]$summary.Completed }
+            if ($null -ne $badgeTotal)     { $badgeTotal.Text     = [string]$summary.Total }
+        }
+
+        # The bridge already returned the correct set (open-only or open+completed)
+        # based on ShowCompleted passed as a BridgeArg. No post-filter needed here.
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkItems' `
+        -BridgeArgs      @{ ShowCompleted = $capturedShowCompleted } `
+        -DataSource      $script:SdkWorkItemDataSource `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -LoadingMessage  'Loading work items...' `
+        -OnLoaded        $onLoaded
+}
+function Invoke-SdkWorkItemComplete {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Complete 1 work item ('$($row.Name)')?",
+        'Confirm Complete Work Item',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Complete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "complete work item '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'Complete'; WorkItemId = [string]$row.Id } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Completing work item...' `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkWorkItemForward {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkItemForwardDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtForwardTargetId', 'TxtForwardComment') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward cancelled.'
+        return
+    }
+
+    $targetId = [string]$values['TxtForwardTargetId']
+    $comment  = [string]$values['TxtForwardComment']
+
+    if ([string]::IsNullOrWhiteSpace($targetId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Target owner identity ID is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($comment)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Comment is required for Forward.' -IsError
+        return
+    }
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Forward work item '$($row.Description)' to identity '$targetId'?",
+        'Confirm Forward',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Forward cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "forward work item '$($row.Description)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'Forward'; WorkItemId = [string]$row.Id; TargetOwnerId = $targetId; Comment = $comment } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Forwarding work item...' `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkWorkItemBulkApprove {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkItemGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Select a work item first.'
+        return
+    }
+
+    # Affected-count confirm: BulkApprove approves every item under the work item.
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Bulk approve all items under 1 work item ('$($row.Name)')? This approves every decision in the item.",
+        'Confirm Bulk Approve',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'Bulk Approve cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "bulk approve work item '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkItemStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkItemRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkItemAction' `
+        -BridgeArgs      @{ Action = 'BulkApprove'; WorkItemId = [string]$row.Id } `
+        -StatusLabelName 'SdkWorkItemStatusLabel' `
+        -RunningMessage  'Bulk approving...' `
+        -OnSuccess       $onSuccess
+}
+
+# --- Workflows -------------------------------------------------------------
+function Invoke-SdkWorkflowRefresh {
+    # SDK-11: load workflows into the grid. Executions are loaded by the
+    # "View Executions" action button (SDK-12), not auto-loaded here.
+    [CmdletBinding()] param($TabContent)
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkflows' `
+        -DataSource      $script:SdkWorkflowDataSource `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -LoadingMessage  'Loading workflows...'
+}
+function Invoke-SdkWorkflowToggleEnabled {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    $currentlyEnabled = [bool]$row.Enabled
+    $newEnabled       = -not $currentlyEnabled
+    $verb             = if ($newEnabled) { 'Enable' } else { 'Disable' }
+
+    # Disabling is the safety-relevant direction: confirm with an affected count.
+    if (-not $newEnabled) {
+        $confirm = [System.Windows.MessageBox]::Show(
+            "Disable 1 workflow ('$($row.Name)')? It will stop running until re-enabled.",
+            'Confirm Disable Workflow',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Disable cancelled.'
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "$($verb.ToLower()) workflow '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'Toggle'; WorkflowId = [string]$row.Id; Enabled = $newEnabled } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  "$($verb)ing workflow..." `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkWorkflowTest {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    # Gather JSON test input via the SDK-09 modal (UI thread, before runspace).
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkflowDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath -ControlNames @('TxtTestInput')
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Test cancelled.'
+        return
+    }
+
+    # Parse the JSON test input on the UI thread; surface a parse error here so
+    # the operator can fix it without a round-trip through the runspace.
+    $testInput = @{}
+    $raw = [string]$values['TxtTestInput']
+    if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        try {
+            $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            foreach ($prop in $parsed.PSObject.Properties) { $testInput[$prop.Name] = $prop.Value }
+        }
+        catch {
+            Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message "Test input is not valid JSON: $($_.Exception.Message)"
+            Set-StatusMessage -Message "Workflow test input is not valid JSON: $($_.Exception.Message)" -IsError
+            return
+        }
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "run a test on workflow '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'Test'; WorkflowId = [string]$row.Id; TestInput = $testInput } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  'Testing workflow...' `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkWorkflowViewExecutions {
+    # READ path: load executions for the selected workflow into the executions
+    # grid via the SDK-11 read engine -- NOT a write dispatcher.
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkWorkflowGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Select a workflow first.'
+        return
+    }
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkWorkflowExecutions' `
+        -BridgeArgs      @{ WorkflowId = [string]$row.Id } `
+        -DataSource      $script:SdkExecutionDataSource `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -LoadingMessage  "Loading executions for '$($row.Name)'..."
+}
+function Invoke-SdkWorkflowCreateOOO {
+    [CmdletBinding()] param($TabContent)
+
+    $dialogPath = Get-XamlPath -FileName 'SdkWorkflowOOODialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtOOOPrimaryReviewerId', 'TxtOOOFallbackReviewerId', 'TxtOOOFallbackDays') `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Create OOO cancelled.'
+        return
+    }
+
+    $primaryId  = [string]$values['TxtOOOPrimaryReviewerId']
+    $fallbackId = [string]$values['TxtOOOFallbackReviewerId']
+    $days       = [string]$values['TxtOOOFallbackDays']
+
+    if ([string]::IsNullOrWhiteSpace($primaryId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Primary reviewer identity ID is required.' -IsError
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($fallbackId)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'Fallback reviewer identity ID is required.' -IsError
+        return
+    }
+
+    [int]$fallbackDays = 3
+    if (-not [string]::IsNullOrWhiteSpace($days)) { [int]::TryParse($days, [ref]$fallbackDays) | Out-Null }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create OOO fallback workflow (primary=$primaryId -> fallback=$fallbackId after $fallbackDays days)")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkWorkflowStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkWorkflowRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkWorkflowAction' `
+        -BridgeArgs      @{ Action = 'CreateOOO'; PrimaryReviewerId = $primaryId; FallbackReviewerId = $fallbackId; FallbackDays = $fallbackDays } `
+        -StatusLabelName 'SdkWorkflowStatusLabel' `
+        -RunningMessage  'Creating OOO fallback workflow...' `
+        -OnSuccess       $onSuccess
+}
+
+# --- Filters ---------------------------------------------------------------
+function Invoke-SdkFilterRefresh {
+    # SDK-11: load campaign filters. NOTE: ChkSdkIncludeSystem is presently a
+    # no-op at the bridge layer (Get-SPGuiSdkCampaignFilters defaults to
+    # include-all -- see SP.SdkBridge round-01 disagreement). The checkbox is
+    # still read and forwarded so real narrowing is a single bridge follow-up.
+    [CmdletBinding()] param($TabContent)
+
+    # Read Include-System on the UI thread BEFORE the runspace.
+    $chkIncludeSystem = Find-Control -Parent $TabContent -Name 'ChkSdkIncludeSystem'
+    $includeSystem    = ($null -ne $chkIncludeSystem -and $chkIncludeSystem.IsChecked -eq $true)
+
+    Invoke-SdkGridRefresh `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Get-SPGuiSdkCampaignFilters' `
+        -BridgeArgs      @{ IncludeSystem = $includeSystem } `
+        -DataSource      $script:SdkFilterDataSource `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -LoadingMessage  'Loading filters...'
+}
+function Invoke-SdkFilterNew {
+    [CmdletBinding()] param($TabContent)
+
+    $dialogPath = Get-XamlPath -FileName 'SdkFilterDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtFilterName', 'CboFilterMode', 'TxtFilterDescription') `
+        -Defaults      @{ 'LblFilterAction' = 'New Filter'; 'CboFilterMode' = 'INCLUSION' } `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'New Filter cancelled.'
+        return
+    }
+
+    $filterName = [string]$values['TxtFilterName']
+    $mode       = if ($null -ne $values['CboFilterMode']) { [string]$values['CboFilterMode'] } else { 'INCLUSION' }
+    $desc       = [string]$values['TxtFilterDescription']
+
+    if ([string]::IsNullOrWhiteSpace($filterName)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Filter Name is required.' -IsError
+        return
+    }
+
+    $filterBody = @{ name = $filterName; mode = $mode }
+    if (-not [string]::IsNullOrWhiteSpace($desc)) { $filterBody['description'] = $desc }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "create filter '$filterName'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Create'; Filter = $filterBody } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  "Creating filter '$filterName'..." `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkFilterEdit {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkFilterGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Select a filter first.'
+        return
+    }
+
+    # Pre-populate dialog with the selected filter's current values.
+    $currentMode = if ($null -ne $row._Raw -and $null -ne $row._Raw.mode) { [string]$row._Raw.mode } else { 'INCLUSION' }
+    $currentDesc = if ($null -ne $row._Raw -and $null -ne $row._Raw.description) { [string]$row._Raw.description } else { '' }
+
+    $dialogPath = Get-XamlPath -FileName 'SdkFilterDialog.xaml'
+    $values = Show-SPGuiDialog -XamlPath $dialogPath `
+        -ControlNames @('TxtFilterName', 'CboFilterMode', 'TxtFilterDescription') `
+        -Defaults @{
+            'LblFilterAction'      = ("Edit Filter - " + $row.Name)
+            'TxtFilterName'        = [string]$row.Name
+            'CboFilterMode'        = $currentMode
+            'TxtFilterDescription' = $currentDesc
+        } `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $values) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Edit Filter cancelled.'
+        return
+    }
+
+    $filterName = [string]$values['TxtFilterName']
+    $mode       = if ($null -ne $values['CboFilterMode']) { [string]$values['CboFilterMode'] } else { $currentMode }
+    $desc       = [string]$values['TxtFilterDescription']
+
+    if ([string]::IsNullOrWhiteSpace($filterName)) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Filter Name is required.' -IsError
+        return
+    }
+
+    $filterBody = @{ name = $filterName; mode = $mode }
+    if (-not [string]::IsNullOrWhiteSpace($desc)) { $filterBody['description'] = $desc }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "update filter '$($row.Name)'")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd).'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Update'; FilterId = @([string]$row.Id); Filter = $filterBody } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  "Updating filter '$filterName'..." `
+        -OnSuccess       $onSuccess
+}
+function Invoke-SdkFilterDelete {
+    [CmdletBinding()] param($TabContent)
+
+    $row = Get-SdkSelectedRow -TabContent $TabContent -GridName 'SdkFilterGrid'
+    if ($null -eq $row) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Select a filter first.'
+        return
+    }
+
+    # The bridge Delete dispatcher accepts a string[] (bulk) and enforces the
+    # MaxCampaignsPerRun cap; here the grid is single-select so the count is 1.
+    $filterIds = @([string]$row.Id)
+    $count     = $filterIds.Count
+
+    $confirm = [System.Windows.MessageBox]::Show(
+        "Delete $count filter(s) ('$($row.Name)')? This cannot be undone.",
+        'Confirm Delete Filter',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'Delete cancelled.'
+        return
+    }
+
+    if (-not (Test-SdkRequireWhatIfConfirm -ActionDescription "delete $count filter(s)")) {
+        Set-SdkSubTabStatus -TabContent $TabContent -StatusName 'SdkFilterStatusLabel' -Message 'cancelled by user (Safety.RequireWhatIfOnProd)'
+        return
+    }
+
+    $onSuccess = { param($tab) Invoke-SdkFilterRefresh -TabContent $tab }
+    Invoke-SdkActionRun `
+        -TabContent      $TabContent `
+        -BridgeFunction  'Invoke-SPGuiSdkFilterAction' `
+        -BridgeArgs      @{ Action = 'Delete'; FilterId = $filterIds } `
+        -StatusLabelName 'SdkFilterStatusLabel' `
+        -RunningMessage  'Deleting filter(s)...' `
+        -OnSuccess       $onSuccess
+}
+
+#endregion
+
 #region Menu Handlers
 
 function Wire-MenuHandlers {
@@ -3728,6 +5970,18 @@ function Show-SPDashboard {
             Initialize-EvidenceTab -TabContent $evidenceTab
         }
 
+        # SDK Features tab
+        $sdkTab = Find-Control -Parent $window -Name 'SdkTabContent'
+        if ($null -ne $sdkTab) {
+            Initialize-SdkTab -TabContent $sdkTab
+        }
+
+        # Adaptive Reports tab
+        $adaptiveTab = Find-Control -Parent $window -Name 'AdaptiveReportsTabContent'
+        if ($null -ne $adaptiveTab) {
+            Initialize-SPAdaptiveTab -TabContent $adaptiveTab
+        }
+
         # Settings tab
         $settingsTab = Find-Control -Parent $window -Name 'SettingsTabContent'
         if ($null -ne $settingsTab) {
@@ -3844,5 +6098,6 @@ function Show-SPDashboard {
 #endregion
 
 Export-ModuleMember -Function @(
-    'Show-SPDashboard'
+    'Show-SPDashboard',
+    'Initialize-SPAdaptiveTab'
 )

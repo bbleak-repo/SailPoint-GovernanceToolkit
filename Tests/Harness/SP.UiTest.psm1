@@ -292,9 +292,228 @@ function Save-SPUiScreenshot {
     return (Get-Item $Path).FullName
 }
 
+function Get-SPUiGridRows {
+    <#
+    .SYNOPSIS
+        Returns the data rows of a DataGrid, polling until the expected count
+        appears or TimeoutMs elapses.
+    .PARAMETER Grid      AutomationElement of the DataGrid. Throws if $null.
+    .PARAMETER TimeoutMs Poll deadline. Default 5000.
+    .PARAMETER Expected  Stop polling early when Count >= Expected.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Grid,
+        [int]$TimeoutMs = 5000,
+        [int]$Expected  = 1
+    )
+
+    # Explicit null guard -- a $null grid must FAIL the test, not silently
+    # return an empty array that a caller might misread as "no rows loaded yet."
+    if ($null -eq $Grid) {
+        throw "Get-SPUiGridRows: Grid parameter is null -- the DataGrid element was not found."
+    }
+
+    Initialize-SPUiAutomation
+
+    $cf       = $Grid.ConditionFactory
+    $rowType  = [FlaUI.Core.Definitions.ControlType]::DataItem
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    $rows     = @()
+    while ((Get-Date) -lt $deadline) {
+        $rows = @($Grid.FindAllDescendants($cf.ByControlType($rowType)))
+        if ($rows.Count -ge $Expected) { break }
+        Start-Sleep -Milliseconds 150
+    }
+    return $rows
+}
+
+function Select-SPUiRow {
+    <#
+    .SYNOPSIS
+        Selects a DataGrid row via the UIA SelectionItem pattern, which is the
+        mechanism WPF uses to set DataGrid.SelectedItem. Falls back to Click()
+        if the pattern is unavailable. Returns $true on success.
+    .NOTES
+        IMPORTANT: Do NOT use $Row.Click() as the primary strategy. A cross-
+        process FlaUI click lands on the visual element but does NOT reliably
+        set DataGrid.SelectedItem (the property read by SDK action handlers).
+        SelectionItem.Pattern.Select() is the correct approach.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Row)
+
+    if ($null -eq $Row) { return $false }
+
+    # Strategy 1: UIA SelectionItem pattern -- sets SelectedItem on the parent
+    # DataGrid, which is what WPF handlers read via .SelectedItem.
+    try {
+        $sel = $Row.Patterns.SelectionItem.Pattern
+        if ($null -ne $sel) {
+            $sel.Select()
+            Start-Sleep -Milliseconds 150   # let WPF dispatch SelectionChanged
+            return $true
+        }
+    }
+    catch { }
+
+    # Strategy 2: visual click fallback (less reliable for DataGrid selection).
+    try {
+        $Row.Click()
+        Start-Sleep -Milliseconds 150
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Invoke-SPUiButton {
+    <#
+    .SYNOPSIS
+        Invokes a Button element. Uses the UIA Invoke pattern first; falls back
+        to Click(). Throws if both strategies fail so callers' catch blocks fire.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] $Button)
+
+    if ($null -eq $Button) {
+        throw "Invoke-SPUiButton: Button parameter is null -- the button element was not found."
+    }
+
+    $invokeErr = $null
+    try {
+        $Button.Patterns.Invoke.Pattern.Invoke()
+        return
+    }
+    catch { $invokeErr = $_ }
+
+    try {
+        $Button.Click()
+    }
+    catch {
+        throw "Invoke-SPUiButton: both Invoke pattern ($invokeErr) and Click() failed: $($_.Exception.Message)"
+    }
+}
+
+function Set-SPUiCheckTo {
+    <#
+    .SYNOPSIS
+        Sets a CheckBox to the desired state ($true=checked, $false=unchecked).
+        Returns $true if the desired state was reached, $false on timeout.
+        Throws if CheckBox is $null so callers do not silently continue.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $CheckBox,
+        [Parameter(Mandatory)] [bool]$Desired,
+        [int]$TimeoutMs = 5000
+    )
+
+    if ($null -eq $CheckBox) {
+        throw "Set-SPUiCheckTo: CheckBox parameter is null -- the checkbox element was not found."
+    }
+
+    $wantOn  = $Desired
+    $current = $CheckBox.Patterns.Toggle.Pattern.ToggleState
+    $isOn    = ($current -eq [FlaUI.Core.Definitions.ToggleState]::On)
+
+    if ($isOn -ne $wantOn) {
+        $CheckBox.Click()
+        $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+        while ((Get-Date) -lt $deadline) {
+            $state = $CheckBox.Patterns.Toggle.Pattern.ToggleState
+            $isOn  = ($state -eq [FlaUI.Core.Definitions.ToggleState]::On)
+            if ($isOn -eq $wantOn) { break }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    $finalState = ($CheckBox.Patterns.Toggle.Pattern.ToggleState -eq [FlaUI.Core.Definitions.ToggleState]::On)
+    return $finalState
+}
+
+function Find-SPModalByTitle {
+    <#
+    .SYNOPSIS
+        Searches the automation tree for a window matching the given title,
+        polling up to TimeoutMs. Returns the window element or $null.
+        Returns $null (does NOT throw) so callers can distinguish "not found"
+        from errors -- a not-found modal is always a test FAIL, not an exception.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Automation,
+        [Parameter(Mandatory)] [string]$Title,
+        [int]$TimeoutMs = 5000
+    )
+
+    Initialize-SPUiAutomation
+
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $desktop = $Automation.GetDesktop()
+            $cf      = $desktop.ConditionFactory
+            $win     = $desktop.FindFirstDescendant($cf.ByName($Title))
+            if ($win) { return $win }
+        }
+        catch { }
+        Start-Sleep -Milliseconds 200
+    }
+    return $null
+}
+
+function Wait-SPUiSdkIdle {
+    <#
+    .SYNOPSIS
+        Polls a named status TextBlock until its text no longer matches a
+        "loading / in progress" pattern, indicating the background runspace
+        has completed and IsSdkRunning is now $false in the dashboard process.
+
+        This is the only safe cross-process way to wait for an SDK refresh:
+        reading $script:IsSdkRunning is impossible from the test process, but
+        the status label is observable via UIA.
+
+    .PARAMETER Root           AutomationElement to search within (usually the Window).
+    .PARAMETER StatusName     AutomationId / x:Name of the status TextBlock.
+    .PARAMETER TimeoutMs      Maximum wait (default 20000ms -- SDK imports are slow).
+    .RETURNS   $true when idle; $false on timeout.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Root,
+        [Parameter(Mandatory)] [string]$StatusName,
+        [int]$TimeoutMs = 20000
+    )
+
+    if ($null -eq $Root) { return $false }
+
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $lbl  = Find-SPUiElement -Root $Root -AutomationId $StatusName -TimeoutMs 600
+            $text = if ($null -ne $lbl) { $lbl.Name } else { '' }
+            # "Loading ...", "An SDK data load is already in progress" = still running.
+            if ($text -and $text -notmatch '(?i)loading|in progress|starting') {
+                return $true
+            }
+        }
+        catch { }
+        Start-Sleep -Milliseconds 300
+    }
+    return $false   # timed out -- caller should FAIL the test
+}
+
 Export-ModuleMember -Function Initialize-SPUiAutomation,
                               Start-SPDashboardForTest,
                               Stop-SPDashboardForTest,
                               Find-SPUiElement,
                               Find-SPUiTab,
-                              Save-SPUiScreenshot
+                              Save-SPUiScreenshot,
+                              Get-SPUiGridRows,
+                              Select-SPUiRow,
+                              Invoke-SPUiButton,
+                              Set-SPUiCheckTo,
+                              Find-SPModalByTitle,
+                              Wait-SPUiSdkIdle

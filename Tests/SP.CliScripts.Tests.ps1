@@ -19,6 +19,7 @@ BeforeAll {
 
     # All entry-point scripts
     $script:AllScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-GovernanceTest.ps1'
         'Invoke-SPADDeltaCert.ps1'
         'Invoke-SPCampaignAudit.ps1'
@@ -55,6 +56,7 @@ BeforeAll {
 
     # Scripts that are read-only (no SupportsShouldProcess expected)
     $script:ReadOnlyScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
         'Invoke-SPDeltaReport.ps1'
         'Invoke-SPDisconnectedAppRegistry.ps1'
         'Show-SPDashboard.ps1'
@@ -89,6 +91,61 @@ BeforeAll {
         }
         return $cbAttr
     }
+}
+
+# Pester 5 evaluates -ForEach/-TestCases expressions during DISCOVERY, which runs
+# before BeforeAll. The per-script matrices below (CLI-001..003, CLI-005) reference
+# $script:ScriptsRoot / $script:AllScripts / $script:MutatingScripts /
+# $script:ReadOnlyScripts, so those must exist at discovery time -- BeforeAll is too
+# late and leaves them $null, which made Join-Path throw and silently dropped the
+# entire parametrized matrix. Define the discovery-time copies here.
+# NOTE: keep these lists in sync with the BeforeAll copies above (BeforeAll's copies
+# are what the run-phase It bodies and the non-parametrized Its use).
+BeforeDiscovery {
+    $script:ScriptsRoot = Join-Path $PSScriptRoot '..\Scripts'
+
+    $script:AllScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
+        'Invoke-GovernanceTest.ps1'
+        'Invoke-SPADDeltaCert.ps1'
+        'Invoke-SPCampaignAudit.ps1'
+        'Invoke-SPCampaignSearch.ps1'
+        'Invoke-SPDailyOrchestrator.ps1'
+        'Invoke-SPDeltaCertEscalate.ps1'
+        'Invoke-SPDeltaReport.ps1'
+        'Invoke-SPDisconnectedAppBatch.ps1'
+        'Invoke-SPDisconnectedAppCert.ps1'
+        'Invoke-SPDisconnectedAppRegistry.ps1'
+        'Invoke-SPReportDistribution.ps1'
+        'Invoke-SPRetention.ps1'
+        'Invoke-SPWeeklyDigest.ps1'
+        'New-SPVault.ps1'
+        'Show-SPDashboard.ps1'
+        'Test-SPConnectivity.ps1'
+    )
+
+    $script:MutatingScripts = @(
+        'Invoke-GovernanceTest.ps1'
+        'Invoke-SPADDeltaCert.ps1'
+        'Invoke-SPCampaignAudit.ps1'
+        'Invoke-SPCampaignSearch.ps1'
+        'Invoke-SPDailyOrchestrator.ps1'
+        'Invoke-SPDeltaCertEscalate.ps1'
+        'Invoke-SPDisconnectedAppBatch.ps1'
+        'Invoke-SPDisconnectedAppCert.ps1'
+        'Invoke-SPReportDistribution.ps1'
+        'Invoke-SPRetention.ps1'
+        'Invoke-SPWeeklyDigest.ps1'
+        'New-SPVault.ps1'
+    )
+
+    $script:ReadOnlyScripts = @(
+        'Invoke-SPAdaptiveReport.ps1'
+        'Invoke-SPDeltaReport.ps1'
+        'Invoke-SPDisconnectedAppRegistry.ps1'
+        'Show-SPDashboard.ps1'
+        'Test-SPConnectivity.ps1'
+    )
 }
 
 Describe "CLI Script Entry Points" {

@@ -161,13 +161,10 @@ param(
 
     [Parameter()]
     [Alias('?')]
-    [switch]$Help,
-
-    # Note: -WhatIf is provided automatically by SupportsShouldProcess
-    # but we accept it explicitly so we can pass it through to sub-steps
-    [Parameter()]
-    [switch]$WhatIf
+    [switch]$Help
 )
+# -WhatIf is provided automatically by [CmdletBinding(SupportsShouldProcess)];
+# it sets $WhatIfPreference in this scope (read below) and propagates to sub-steps.
 
 Set-StrictMode -Version 1
 $ErrorActionPreference = 'Stop'
@@ -405,7 +402,7 @@ if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
 }
 
 # WhatIf detection
-$isWhatIf = ($WhatIfPreference -eq $true) -or $WhatIf
+$isWhatIf = ($WhatIfPreference -eq $true)
 
 #endregion
 

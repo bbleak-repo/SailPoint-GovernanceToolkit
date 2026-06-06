@@ -1,16 +1,31 @@
 # Phase 7: SDK Features GUI Tab -- Windows Handoff Plan
 
+> **Plan status (Opus 4.8 review, 2026-06-04, Windows box):** Foundation
+> verified against live code + mock. Reconciliation edits applied to the bridge
+> inventory, action naming, and safety integration. New sections added for the
+> Windows-only WPF framework conventions and the FlaUI GUI test harness (context
+> the authoring macOS session did not have). See **"Reviewer Notes"** at the
+> bottom for what was verified and what remains a scope decision.
+
 ## Context
 
-The SP.Sdk module (66 functions across 8 .psm1 files) is complete and tested:
-- 142 Pester tests passing
+The SP.Sdk module (8 .psm1 files + SP.Sdk.psd1) is implemented and tested:
+- ~53 exported functions (the earlier "66" count included internal helpers)
+- Pester tests for each SDK domain (SP.Sdk*.Tests.ps1) -- re-confirm the live
+  pass count on Windows via `Invoke-Pester .\Tests\`; do not trust the historical
+  "142 passing" figure until the Windows run reports it
 - 3 CLI scripts verified against mock API (localhost:8080)
-- 50 mock API handlers with realistic seed data
+- 50 mock API handlers; **seed-data counts verified to match the W-08b test
+  assertions exactly** (3 templates, 4 pending / 3 completed approvals,
+  6 work items [4 Pending + 2 Finished], 4 workflows with wf-004 disabled,
+  3 campaign filters) -- see `API-MockServer\Profiles\SailPoint-ISC`
 - All validation warnings resolved
 
-This plan adds a 7th GUI tab ("SDK Features") to the WPF dashboard with nested
+This plan adds an **SDK Features** GUI tab to the WPF dashboard with nested
 sub-tabs for each SDK feature domain. The tab isolates vendor SDK-derived
-functionality from the custom-built toolkit features.
+functionality from the custom-built toolkit features. With the 6 current
+top-level tabs (Campaigns, Evidence, Audit, Delta Cert, Governance, Settings),
+this becomes the **7th of 7**, inserted before Settings.
 
 ---
 
@@ -49,7 +64,9 @@ Tests/Harness/Invoke-FullGuiValidation.ps1 -- Add W-08 test invocations
 
 ### Top-level: TabItem Header="SDK Features"
 
-Position: Between "Governance" and "Settings" tabs (7th of 8).
+Position: Between "Governance" and "Settings" tabs (7th of 7 -- the 6 current
+top-level tabs are Campaigns, Evidence, Audit, Delta Cert, Governance, Settings;
+verified in `Gui/MainWindow.xaml`).
 Style: `{StaticResource ToolkitTabItem}` (matches existing tabs).
 
 ### Inner layout: Nested TabControl with 6 sub-tabs
@@ -87,6 +104,17 @@ progress bar, DataGrid.
 - Delete: Confirm -> `Invoke-SPGuiSdkDeleteTemplate`
 
 #### Sub-tab 2: "Cert Summaries" (Certification Summaries)
+
+> **SCOPE DECISION (Opus 4.8 review).** This is the least-baked sub-tab and a
+> **phase-2 candidate**. The backing SDK functions exist
+> (`Get-SPSdkIdentitySummaries`, `Get-SPSdkAccessSummaries`,
+> `Get-SPSdkDecisionSummary`), BUT: (a) the mock SailPoint-ISC seed data was NOT
+> verified to contain certification-summary fixtures (unlike templates/approvals/
+> work-items/workflows/filters, which were verified exact), and (b) the original
+> W-08b interactive test plan has **no test** for this sub-tab. Recommend either
+> de-scoping it to a follow-up phase, or, if kept, adding mock fixtures + a
+> W-08b interactive test as an explicit prerequisite. The other five sub-tabs
+> have no such gap.
 
 **Controls:**
 | x:Name | Type | Purpose | ToolTip |
@@ -252,40 +280,122 @@ progress bar, DataGrid.
 ## Bridge Functions (SP.SdkBridge.psm1)
 
 New file: `Modules/SP.Gui/SP.SdkBridge.psm1`
-All functions return `@{ Success; Data; Error }` matching existing bridge pattern.
+All functions return `@{ Success; Data; Error }` matching the existing
+`SP.GuiBridge.psm1` pattern (verified: that shape is used throughout the
+current bridge).
 
-### Templates Bridge (3 functions)
+> **NAMING CONVENTION (canonical -- supersedes the inline "Actions:" bullets in
+> the sub-tab specs above).** Each domain gets exactly one read function
+> (`Get-SPGuiSdk<Domain>`) and one dispatcher for writes
+> (`Invoke-SPGuiSdk<Domain>Action -Action <Verb>`). The granular names that
+> appear in the per-sub-tab "Actions" lists (e.g. `Invoke-SPGuiSdkCreateTemplate`,
+> `Invoke-SPGuiSdkSetSchedule`, `Invoke-SPGuiSdkOOOSetup`) are **logical
+> operations**, not separate functions -- they are `-Action` verbs on the
+> dispatcher below. When implementing, follow this table, not the inline bullets.
+
+### Templates Bridge (2 functions)
 ```
-Get-SPGuiSdkCampaignTemplates       -- loads templates + schedule status for grid
-Invoke-SPGuiSdkTemplateAction       -- create / delete / set-schedule / remove-schedule
+Get-SPGuiSdkCampaignTemplates   -- loads templates + schedule status for grid
+Invoke-SPGuiSdkTemplateAction   -- -Action Create | Update | Delete | SetSchedule | RemoveSchedule
 ```
 
-### Cert Summaries Bridge (2 functions)
+### Cert Summaries Bridge (3 functions)  [see SCOPE NOTE on sub-tab 2]
 ```
-Get-SPGuiSdkCertSummaries           -- loads identity or access summaries for selected cert
-Get-SPGuiSdkDecisionSummary         -- loads decision aggregate for summary panel
+Get-SPGuiSdkCertCampaigns       -- populates CboSdkCertCampaign + CboSdkCertification
+                                   (uses existing SP.Api/SP.Certifications, NOT SP.Sdk)
+Get-SPGuiSdkCertSummaries       -- -SummaryType Identity | Access for selected cert
+Get-SPGuiSdkDecisionSummary     -- decision aggregate for the summary panel
 ```
 
 ### Approvals Bridge (2 functions)
 ```
-Get-SPGuiSdkApprovals               -- loads pending or completed approvals
-Invoke-SPGuiSdkApprovalAction       -- approve / deny / forward selected approval
+Get-SPGuiSdkApprovals           -- -State Pending | Completed
+Invoke-SPGuiSdkApprovalAction   -- -Action Approve | Deny | Forward
 ```
 
 ### Work Items Bridge (2 functions)
 ```
-Get-SPGuiSdkWorkItems               -- loads work items + summary
-Invoke-SPGuiSdkWorkItemAction       -- complete / forward / bulk-approve
+Get-SPGuiSdkWorkItems           -- loads work items + summary in one call
+Invoke-SPGuiSdkWorkItemAction   -- -Action Complete | Forward | BulkApprove | BulkReject
 ```
 
 ### Workflows Bridge (3 functions)
 ```
-Get-SPGuiSdkWorkflows               -- loads workflow list
-Get-SPGuiSdkWorkflowExecutions      -- loads executions for selected workflow
-Invoke-SPGuiSdkWorkflowAction       -- enable/disable / test / create-ooo
+Get-SPGuiSdkWorkflows           -- loads workflow list
+Get-SPGuiSdkWorkflowExecutions  -- loads executions for selected workflow
+Invoke-SPGuiSdkWorkflowAction   -- -Action Toggle | Test | CreateOOO
 ```
 
-**Total: 12 bridge functions**
+### Filters Bridge (2 functions)  [WAS MISSING in the original plan -- gap fixed]
+```
+Get-SPGuiSdkCampaignFilters     -- -IncludeSystem switch
+Invoke-SPGuiSdkFilterAction     -- -Action Create | Update | Delete
+```
+
+**Total: 14 bridge functions** (was incorrectly stated as 12; the original also
+omitted the Filters bridge entirely despite sub-tab 6 needing it).
+
+### Canonical mapping: bridge function -> real SP.Sdk function(s)
+
+Verified against the live module exports (2026-06-04). Use these exact names.
+
+| Bridge function | `-Action` | Backed by SP.Sdk function |
+|---|---|---|
+| Get-SPGuiSdkCampaignTemplates | -- | `Get-SPSdkCampaignTemplates` + `Get-SPSdkTemplateSchedule` |
+| Invoke-SPGuiSdkTemplateAction | Create | `New-SPSdkCampaignTemplate` |
+| | Update | `Update-SPSdkCampaignTemplate` |
+| | Delete | `Remove-SPSdkCampaignTemplate` |
+| | SetSchedule | `Set-SPSdkTemplateSchedule` |
+| | RemoveSchedule | `Remove-SPSdkTemplateSchedule` |
+| Get-SPGuiSdkCertSummaries | (Identity) | `Get-SPSdkIdentitySummaries` |
+| | (Access) | `Get-SPSdkAccessSummaries` |
+| Get-SPGuiSdkDecisionSummary | -- | `Get-SPSdkDecisionSummary` |
+| Get-SPGuiSdkApprovals | (Pending) | `Get-SPSdkPendingApprovals` / `Get-SPSdkAllPendingApprovals` |
+| | (Completed) | `Get-SPSdkCompletedApprovals` / `Get-SPSdkAllCompletedApprovals` |
+| Invoke-SPGuiSdkApprovalAction | Approve | `Approve-SPSdkAccessRequest` |
+| | Deny | `Deny-SPSdkAccessRequest` |
+| | Forward | `Forward-SPSdkAccessRequest` |
+| Get-SPGuiSdkWorkItems | -- | `Get-SPSdkWorkItems` (+ `Get-SPSdkWorkItemsSummary`) |
+| Invoke-SPGuiSdkWorkItemAction | Complete | `Complete-SPSdkWorkItem` |
+| | Forward | `Forward-SPSdkWorkItem` |
+| | BulkApprove | `Invoke-SPSdkBulkApproveWorkItem` |
+| | BulkReject | `Invoke-SPSdkBulkRejectWorkItem` |
+| Get-SPGuiSdkWorkflows | -- | `Get-SPSdkWorkflows` / `Get-SPSdkAllWorkflows` |
+| Get-SPGuiSdkWorkflowExecutions | -- | `Get-SPSdkWorkflowExecutions` |
+| Invoke-SPGuiSdkWorkflowAction | Toggle | `Set-SPSdkWorkflow` (enabled flag) |
+| | Test | `Test-SPSdkWorkflow` |
+| | CreateOOO | `Set-SPSdkOOOFallbackWorkflow` |
+| Get-SPGuiSdkCampaignFilters | -- | `Get-SPSdkCampaignFilters` / `Get-SPSdkAllCampaignFilters` |
+| Invoke-SPGuiSdkFilterAction | Create | `New-SPSdkCampaignFilter` |
+| | Update | `Update-SPSdkCampaignFilter` |
+| | Delete | `Remove-SPSdkCampaignFilter` |
+
+---
+
+## Safety & What-If Integration (REQUIRED -- gap fixed)
+
+**Every write/destructive bridge action must honor the toolkit `Safety` config**,
+exactly as the CLI does. Without this, the GUI SDK tab becomes a way to bypass
+the guardrails the CLI enforces. This was absent from the original plan.
+
+Destructive operations on this tab: Delete Template, RemoveSchedule, Delete
+Filter, Deny/Forward approval, Complete/BulkApprove/BulkReject work items,
+Toggle (disable) workflow, Test workflow, CreateOOO.
+
+Requirements for `Invoke-SPGuiSdk*Action`:
+1. **Honor `Safety.RequireWhatIfOnProd`.** When set and the environment is not a
+   mock/sandbox, show a confirmation MessageBox before executing -- mirror the
+   existing pattern in `SP.MainWindow.psm1` (`Invoke-GuiTestRun`, ~line 468:
+   `MessageBox.Show(... YesNo, Warning)`, cancel -> status "cancelled by user
+   (Safety.RequireWhatIfOnProd)").
+2. **Honor `Safety.AllowCompleteCampaign` / equivalent gates** for any terminal
+   action; refuse with a clear status message when disabled.
+3. **Confirm dialog on every delete/bulk action**, even in mock, with the count
+   of affected items (e.g. "Delete 3 filters?").
+4. **Never silently truncate.** If `Safety.MaxCampaignsPerRun` (or an analogous
+   cap) bounds a bulk action, surface what was/was not done in the status label.
+5. Bridge write functions return `@{ Success=$false; Error='blocked by Safety...' }`
+   when a gate refuses, so the UI can show it without a thrown exception.
 
 ---
 
@@ -454,3 +564,209 @@ _Raw reference for detail views, etc.).
 - PowerShell 5.1 Desktop (STA mode for WPF)
 - Pode module (for mock server if running locally)
 - SP.Sdk module files (already on master after commit)
+
+---
+
+## Windows WPF Framework Notes (context the macOS authoring session lacked)
+
+WPF is Windows-only -- none of the patterns below can be exercised on the
+MacBook. They are the load-bearing conventions of the existing dashboard
+(`SP.MainWindow.psm1`, `Show-SPDashboard.ps1`); the SDK tab MUST follow them or
+it will fail in ways that only reproduce on Windows. Each is verified against the
+current code with a file:line reference.
+
+### 1. STA + process isolation (the WPF Application singleton trap)
+`[System.Windows.Application]` is a **once-per-AppDomain singleton**. Once a
+dashboard window is closed in a given PowerShell process, a second
+`Show-SPDashboard` in that same session throws *"Cannot set Visibility ... after
+a Window has closed."* `Show-SPDashboard.ps1` solves this by **always
+re-launching the GUI in a fresh STA child `powershell.exe`** (the `-NoIsolation`
+switch is the recursion sentinel: parent omits it, child carries it). WPF also
+requires STA apartment state; the child is spawned with `-STA`.
+**SDK-tab impact:** none directly, but any new "open a second window" behavior
+(e.g. a non-modal SDK detail window) must respect this -- prefer **modal**
+dialogs (`ShowDialog`) which the existing `Show-SPGuiDialog` helper already
+handles. See `Show-SPDashboard.ps1:55-107`, `SP.MainWindow.psm1:3814-3841`.
+
+### 2. Module-scope event handlers: `& $module { } + .GetNewClosure()`
+This is the single most important and least obvious idiom. When you attach a WPF
+event handler (`$btn.Add_Click({...})`), the script block is converted to a
+delegate and **loses access to module-scope (`$script:*`) functions and
+variables**. The toolkit's fix, used by every existing tab:
+
+```powershell
+$module = $script:ThisModule          # captured once at top of Initialize-*Tab
+...
+$btn.Add_Click({
+    & $module {
+        param($a, $b)
+        # inside here, module-private functions (Set-StatusMessage, bridge
+        # calls, $script:* state) resolve correctly
+        Some-ModulePrivateFunction -X $a -Y $b
+    } $localA $localB
+}.GetNewClosure())                     # GetNewClosure() preserves the locals
+```
+
+Two rules, both mandatory:
+- Wrap the handler body in `& $module { ... }` so it runs in **module scope**.
+- End the handler with `.GetNewClosure()` so the `$module` ref and any captured
+  locals survive the delegate conversion.
+
+`Initialize-SdkTab` must use this for **every** button/checkbox/radio/sub-tab
+handler. Reference implementation: `SP.MainWindow.psm1:319, 337-374` (Campaign
+tab) and the Audit tab at `:1271+`.
+
+### 3. Background runspace pattern (keep the UI responsive)
+All API/bridge calls run on a **background STA runspace**, never on the UI
+thread, or the window freezes during the (potentially multi-second) ISC call.
+The established pattern (`Invoke-GuiTestRun`, `SP.MainWindow.psm1:495-535`):
+1. `RunspaceFactory::CreateRunspace()`, set `.ApartmentState = 'STA'`, `.Open()`.
+2. Pass state in via `$runspace.SessionStateProxy.SetVariable(...)` (campaigns,
+   ToolkitRoot, the progress controls, and `$script:MainWindow`).
+3. Inside the runspace scriptblock, **re-import the modules** (SP.Core, SP.Api,
+   **SP.Sdk**, SP.Gui) -- a runspace starts empty.
+4. Marshal results back to the UI thread via `$MainWindow.Dispatcher` (the UI
+   thread owns the controls; you cannot touch them from the runspace directly).
+5. A `DispatcherTimer` (or the dispatcher invoke) updates the grid/labels.
+
+**SDK-tab impact:** each of the 7 grids refreshes through this pattern; the
+runspace's module-import list must include `SP.Sdk\SP.Sdk.psd1`. Performance
+note: importing 8 SDK `.psm1` files cold on every refresh adds latency -- if it's
+noticeable, consider an `InitialSessionState` with the modules pre-imported, or a
+shared/pooled runspace. The existing tabs accept the cold-import cost, so match
+that first and optimize only if measured.
+
+### 4. DPI / fit-to-screen: use DIPs, never physical pixels
+WPF coordinates (`Window.Width/Left/Top`) are **device-independent units
+(DIPs)**. `System.Windows.Forms.Screen.WorkingArea` reports **physical pixels**.
+Mixing them put the window (and its right-edge toolbar) partly off-screen on
+125%/150% laptops. The fix uses `[System.Windows.SystemParameters]::WorkArea`
+(DIPs, same units as the window) inside `add_Loaded`
+(`SP.MainWindow.psm1:3786-3812`). **This is also why the FlaUI mouse jumped to
+(0,0)** -- see GUI Testing note 6 below. The SDK tab adds width via the nested
+sub-tab toolbar; re-verify the window still fits after the tab is added.
+
+### 5. XAML loading + the modal dialog helper
+XAML is loaded via `[System.Windows.Markup.XamlReader]::Load(XmlNodeReader)` from
+an `[xml]` of the file (not `Window.LoadComponent`). Reuse the existing
+**`Show-SPGuiDialog`** helper (`SP.MainWindow.psm1:149`) for the three SDK modal
+dialogs -- do NOT hand-roll dialog plumbing. Its contract:
+- Params: `-XamlPath`, `-ControlNames` (x:Names to read on OK), optional
+  `-Defaults` (hashtable to pre-populate), `-OkButtonName`/`-CancelButtonName`
+  (default `BtnOK`/`BtnCancel`).
+- Sets `Owner = $script:MainWindow` (centers the dialog), wires OK/Cancel,
+  pre-populates TextBox/ComboBox/CheckBox, returns a **hashtable of values on
+  OK** or **`$null` on Cancel**.
+- So the SDK dialogs (`SdkTemplateScheduleDialog`, `SdkWorkflowDialog`,
+  `SdkApprovalActionDialog`) just need x:Names matching what you pass in
+  `-ControlNames`, and `BtnOK`/`BtnCancel` buttons. No code-behind.
+
+### 6. Tab wiring entry point
+Tabs are initialized in `Show-SPDashboard`'s tab sequence
+(`SP.MainWindow.psm1:3722-3752`): `Initialize-CampaignTab`, `-EvidenceTab`,
+`-SettingsTab`, `-AuditTab`, `-DeltaCertTab`, `-GovernanceTab`. Add
+`Initialize-SdkTab` here (before Settings). Each `Initialize-*Tab` takes the
+`$TabContent` element and uses `Find-Control -Parent $TabContent -Name '...'` to
+locate controls by x:Name.
+
+---
+
+## GUI Testing Methods -- the FlaUI Harness (true end-to-end GUI testing)
+
+This is how the toolkit drives the **real, visible WPF window** under UI
+Automation. It is **Windows-only** and was not runnable on the MacBook, so the
+W-08b interactive plan could only be authored, not executed, there. The harness
+is `Tests/Harness/SP.UiTest.psm1`; the orchestrator is
+`Tests/Harness/Invoke-FullGuiValidation.ps1` (existing tests W-02..W-07).
+
+### Two-layer test model (mirror it for W-08)
+- **Headless / structural (W-08):** load `MainWindow.xaml` via `XamlReader`
+  *without showing it*, walk the visual tree, assert TabItems/controls/x:Names
+  and that every Btn*/Chk* has a non-empty ToolTip. **Runs on macOS or Windows,
+  no display needed** -- so this is the part the loop can fully validate before
+  the Windows GUI session. Pattern: `Test-W03-AuditTabStructure.ps1`.
+- **Interactive / FlaUI (W-08b):** launch the real window, click, type, read grid
+  rows, screenshot. **Windows-only, needs the mock at localhost:8080.** This is
+  the deferral boundary -- author it in the loop, run it in the Windows GUI
+  session. Pattern: `Test-W03b-AuditTabInteractive.ps1`.
+
+### FlaUI harness API (from SP.UiTest.psm1)
+- **DLLs are vendored** in `Tests\Tools\FlaUI\`:
+  `Interop.UIAutomationClient.dll`, `FlaUI.Core.dll`, `FlaUI.UIA3.dll`
+  (FlaUI 4.0, UIA3). `Initialize-SPUiAutomation` `Add-Type`s them idempotently.
+- `Start-SPDashboardForTest -ConfigPath <mock-settings.json>` spawns the
+  dashboard as a **child STA process** and attaches FlaUI via
+  `Application::Attach($pid)` + `GetMainWindow(...)`. Returns a context hashtable
+  (`Process`, `Automation`, `Application`, `Window`).
+  **CRITICAL gotcha:** the launcher is passed **`-NoIsolation`** here. The
+  harness already spawns the STA child; without `-NoIsolation` the launcher forks
+  a *grandchild* for the window and FlaUI attaches to the wrong (empty) PID and
+  times out. (`SP.UiTest.psm1:98-106`.)
+- `Find-SPUiElement -Root $win -AutomationId <x:Name>` (or `-Name`) `-ControlType
+  Button|TabItem|TextBox` `-TimeoutMs 5000` -- **polls** until found or timeout.
+  **WPF `x:Name` surfaces as the UIA `AutomationId`**, so every control the test
+  touches must have an `x:Name` in the XAML (the SDK control inventory already
+  specifies these).
+- `Find-SPUiTab -Window $win -Header 'SDK Features'` -- finds a TabItem by header;
+  note FlaUI 4 has no `AsTabItem()` so it constructs the typed wrapper manually.
+- `Save-SPUiScreenshot -Element $el -Path <png>` -- for the W-08-22 visual
+  baseline round and for failure evidence.
+- `Stop-SPDashboardForTest -UiContext $ui` -- graceful close then force-kill;
+  always call in a `finally`.
+
+### Timeout tuning (real lesson from this box)
+Default finder timeout is 5000ms. Under load, actions that spawn a runspace +
+hit the mock can exceed a 2s timeout: `Test-W03b`'s "Open Audit Folder" button
+was bumped **2000 -> 5000ms** to stop a flaky failure. **Budget 5000ms for any
+W-08b step that triggers a bridge/runspace call** (Refresh*, action buttons),
+and use the polling finder rather than a fixed sleep.
+
+### The (0,0) mouse jump -- why GUI fit matters for testing
+FlaUI clicks an element's **clickable point**; if the control is **off-screen**
+(the DPI bug in WPF note 4), the clickable point falls back to the top-left of
+the screen and **the mouse jumps to (0,0)** and the click misfires. So the
+WorkArea/DIP fit-to-screen fix is not just cosmetic -- it is a **prerequisite for
+reliable FlaUI clicks**. After adding the SDK tab (which widens the toolbar),
+confirm the window still fits the work area, or W-08b right-edge buttons will
+flake. This is the exact symptom reported and fixed this cycle.
+
+### Registering W-08 with the orchestrator
+Add W-08 (headless) and W-08b (interactive) invocations to
+`Tests/Harness/Invoke-FullGuiValidation.ps1` alongside W-02..W-07 so a single run
+covers the new tab.
+
+---
+
+## Reviewer Notes (Opus 4.8, 2026-06-04, Windows box)
+
+**Verified against live code/mock before edits:**
+- SP.Sdk: 8 `.psm1` + manifest, ~53 exported functions (not 66).
+- SDK GUI genuinely unbuilt (no `SdkBridge`/`SdkTab`/`Initialize-SdkTab` refs).
+- Existing bridge return shape `@{Success;Data;Error}` confirmed.
+- Real SP.Sdk function names captured into the canonical mapping table above.
+- **Mock seed data matches W-08b assertions exactly** (3 templates; 4 pending /
+  3 completed approvals; 6 work items = 4 Pending + 2 Finished; 4 workflows,
+  wf-004 disabled; 3 filters) -- `API-MockServer\Profiles\SailPoint-ISC`.
+
+**Gaps fixed in this doc:** bridge inventory was internally inconsistent
+("12" but 11 listed) and **omitted the Filters bridge entirely** -> corrected to
+14 with a verified mapping table; per-sub-tab action names reconciled to the
+dispatcher convention; **Safety/What-If integration section added** (was absent
+and is the main risk gap); Cert Summaries flagged as a phase-2 scope decision;
+function-count and tab-position drift corrected.
+
+**Adjacent finding (not part of this tab, logged for the backlog):** running the
+full Windows Pester suite surfaced that `Tests/SP.CliScripts.Tests.ps1` had a
+Pester-5 discovery-phase bug (`-ForEach` referenced `$script:` vars set only in
+`BeforeAll`), which silently dropped its entire parametrized matrix. Fixed via a
+`BeforeDiscovery` block. That in turn revealed a real latent inconsistency:
+**`Invoke-SPCampaignSearch.ps1`'s `OutputMode` ValidateSet is
+`Console/JSON/CSV/HTML` and omits `Both`**, which every other script includes
+(the CLI-004 consistency test now fails on it). Decision needed: add `Both` to
+CampaignSearch (and implement the Console+JSON branch) vs. relax the test for
+scripts with richer output taxonomies. Tracked as a backlog item.
+
+**Execution:** this plan is decomposed for the 3-loop autonomous process in
+`docs/phase7-sdk-gui-backlog.md` (+ `docs/phase7-sdk-gui-rounds/`). The
+GUI-testing boundary (W-08b interactive FlaUI) is the last, post-loop step that
+requires a live Windows GUI session.

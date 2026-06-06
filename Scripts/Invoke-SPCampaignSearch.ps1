@@ -16,8 +16,8 @@
     At least one filter or analysis parameter is required. Without any filter
     the script exits with code 2.
 
-    Output modes: Console (tabular), JSON (machine-parseable), CSV (file),
-    HTML (styled report).
+    Output modes: Console (tabular), JSON (machine-parseable), Both
+    (Console+JSON), CSV (file), HTML (styled report).
 .PARAMETER Keyword
     Substring search against campaign names. Uses ISC 'co' (contains) filter.
 .PARAMETER Type
@@ -54,7 +54,7 @@
     Two or more campaign IDs for side-by-side metric comparison.
     Incompatible with other analysis modes.
 .PARAMETER OutputMode
-    Output format: Console (default), JSON, CSV, HTML.
+    Output format: Console (default), JSON, Both (Console+JSON), CSV, HTML.
 .PARAMETER OutputPath
     Directory for CSV/HTML output files. Created if absent. Defaults to
     .\SearchResults relative to the toolkit root.
@@ -140,7 +140,7 @@ param(
 
     # --- Output ---
     [Parameter()]
-    [ValidateSet('Console', 'JSON', 'CSV', 'HTML')]
+    [ValidateSet('Console', 'JSON', 'CSV', 'HTML', 'Both')]
     [string]$OutputMode = 'Console',
 
     [Parameter()]
@@ -575,7 +575,7 @@ Write-Host "  $resultLabel -- $resultCount result(s) ($([Math]::Round($elapsed, 
 Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
 
 # ---- CONSOLE OUTPUT ----
-if ($OutputMode -eq 'Console' -or $OutputMode -eq 'JSON') {
+if ($OutputMode -in @('Console', 'Both')) {
 
     if ($modeCompare -and $null -ne $outputData.ComparisonTable) {
         # Comparison table
@@ -735,7 +735,7 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'JSON') {
 }
 
 # ---- JSON OUTPUT ----
-if ($OutputMode -eq 'JSON') {
+if ($OutputMode -in @('JSON', 'Both')) {
     Write-Host ''
     $jsonOutput = @{
         CorrelationID = $correlationID
