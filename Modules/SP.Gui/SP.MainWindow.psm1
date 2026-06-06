@@ -4456,6 +4456,42 @@ function Set-SdkSubTabStatus {
     }
 }
 
+function Set-SdkSubTabButtonsEnabled {
+    <#
+    .SYNOPSIS
+        Enables/disables every per-sub-tab SDK Refresh/action Button under $TabContent.
+    .DESCRIPTION
+        Used by the SDK load engines to give the single-load guard
+        ($script:IsSdkRunning) a visible state: disabled buttons during a load make
+        a click an obvious no-op instead of a silent one. Each button is resolved by
+        x:Name via Find-Control and null-guarded (a button may be absent in some
+        sub-tab). Writes .IsEnabled directly because every caller is already on the
+        UI thread (mirrors Set-SdkSubTabStatus): the initial disable runs
+        synchronously in the button-click handler, and the re-enable runs inside the
+        DispatcherTimer Add_Tick body -- both on the dispatcher (UI) thread.
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+
+    if ($null -eq $TabContent) { return }
+
+    $names = @(
+        'BtnSdkRefreshTemplates','BtnSdkNewTemplate','BtnSdkEditSchedule','BtnSdkRemoveSchedule','BtnSdkDeleteTemplate',
+        'BtnSdkRefreshSummaries',
+        'BtnSdkRefreshApprovals','BtnSdkApprove','BtnSdkDeny','BtnSdkForward',
+        'BtnSdkRefreshWorkItems','BtnSdkCompleteWorkItem','BtnSdkForwardWorkItem','BtnSdkBulkApprove',
+        'BtnSdkRefreshWorkflows','BtnSdkEnableWorkflow','BtnSdkTestWorkflow','BtnSdkViewExecutions','BtnSdkCreateOOO',
+        'BtnSdkRefreshFilters','BtnSdkNewFilter','BtnSdkEditFilter','BtnSdkDeleteFilter'
+    )
+    foreach ($n in $names) {
+        $btn = Find-Control -Parent $TabContent -Name $n
+        if ($null -ne $btn) { $btn.IsEnabled = $Enabled }
+    }
+}
+
 function Invoke-SdkGridRefresh {
     <#
     .SYNOPSIS
@@ -4506,6 +4542,7 @@ function Invoke-SdkGridRefresh {
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $LoadingMessage
 
     $script:IsSdkRunning = $true
+    Set-SdkSubTabButtonsEnabled -TabContent $TabContent -Enabled $false
 
     # Create background runspace (STA) -- mirror Invoke-GuiAuditRun.
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -4612,6 +4649,7 @@ function Invoke-SdkGridRefresh {
             }
             finally {
                 $script:IsSdkRunning = $false
+                Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
             }
         } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnLoaded
     }.GetNewClosure())
@@ -4719,6 +4757,7 @@ function Invoke-SdkActionRun {
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $RunningMessage
 
     $script:IsSdkRunning = $true
+    Set-SdkSubTabButtonsEnabled -TabContent $TabContent -Enabled $false
 
     # Create background runspace (STA) -- mirror Invoke-SdkGridRefresh.
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -4814,6 +4853,7 @@ function Invoke-SdkActionRun {
             }
             finally {
                 $script:IsSdkRunning = $false
+                Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
             }
         } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnSuccess
     }.GetNewClosure())
