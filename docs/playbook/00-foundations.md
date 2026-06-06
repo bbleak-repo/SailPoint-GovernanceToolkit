@@ -22,6 +22,7 @@ covers:
 - **Delta certification** — targeted re-certification of recently-changed access (e.g. new AD grants).
 - **Disconnected applications** — certify access for apps that don't integrate directly with ISC.
 - **Governance reporting** — health checks, KPI metrics, leadership rollups, data-quality scoring.
+- **Adaptive reports** — composable, themeable HTML reports (KPI cards, heatmaps, top-N bars, drill-down trees) plus a baseline report library (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-certification attestation, governance executive summary), rendered over an **entitlement-** or **campaign-centric** view of your campaign data (`Invoke-SPAdaptiveReport`). Additive — alongside the existing reports.
 - **Vendor SDK features** — campaign templates/scheduling, approvals, work items, workflows, campaign filters (the **SDK Features** GUI tab and the `Invoke-SPSdk*` scripts).
 - **Operations** — report distribution, retention/archival, scheduling, connectivity checks.
 
@@ -241,7 +242,7 @@ deciding work items, etc.) are governed by `Safety`:
 | Location | Contents |
 |---|---|
 | `Logs\` | Structured run logs (`<FilePrefix>-*.log`), severity-filtered. |
-| `Audit\` | Campaign audit reports (HTML / text / JSONL). |
+| `Audit\` | Campaign audit reports (HTML / text / JSONL); **adaptive reports** under `Audit\adaptive\`, leadership reports under `Audit\leadership\`. |
 | `DeltaCert\` | Delta-certification run output + history. |
 | `Reports\` | Governance reports, metrics, health checks. |
 | `Evidence\` | Test/campaign evidence bundles. |
@@ -281,6 +282,8 @@ Most reporting scripts take `-OutputMode`:
 | **Work item** | A task assigned to a user (certification, approval, remediation, manual action). |
 | **Workflow** | An ISC automation definition (event/scheduled/external trigger). |
 | **OOO fallback** | An out-of-office fallback-reviewer workflow (SDK feature). |
+| **Adaptive report** | A composable HTML report assembled from independent components (KPI cards, heatmap, top-N, drill-down tree, group table) over a generic "groups containing members" view of governance data, plus a baseline report library (inventory, privileged review, orphaned/disabled, SoD, roster, access-cert, exec summary). See `Invoke-SPAdaptiveReport`. |
+| **Anchor (adaptive reports)** | How SailPoint data maps into the adaptive report engine: **entitlement-centric** (entitlement → group, identity → member) or **campaign-centric** (campaign → group). |
 
 ---
 

@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, weekly digest
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, weekly digest, **adaptive reports**
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -431,6 +431,47 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 .\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML
 ```
 **Related GUI:** Governance tab.
+
+### `Invoke-SPAdaptiveReport.ps1`
+**Purpose:** generate **adaptive, composable HTML reports** over your governance data —
+a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group
+table) plus a **baseline report library** (entitlement inventory, privileged review,
+orphaned/disabled access, separation-of-duties, certification roster, access-cert
+attestation, governance executive summary). **Additive** — it sits alongside the
+existing reports; nothing is replaced.
+**When to use:** richer, presentation-ready governance views; ad-hoc analysis of
+entitlement assignment or campaign coverage; as the source for tiered leadership
+distribution (see `Invoke-SPReportDistribution`).
+
+**Anchor — what becomes a "group" and its "members":**
+- `Entitlement` (default) — group = an entitlement / access profile / role; members =
+  the identities holding it. Drives inventory, top-N most-assigned, privileged-
+  entitlement review, disabled-still-has-access, and SoD toxic combinations.
+- `Campaign` — group = a certification campaign; members = the identities under it.
+
+Both anchors pivot the same campaign access-review data, so they need only the
+campaign/certification endpoints (no extra scopes).
+
+| Parameter | Description |
+|---|---|
+| `-Anchor <a>` | `Entitlement` (default) or `Campaign`. |
+| `-Components <keys>` | Composable component list: `kpi-cards`, `heatmap`, `tree`, `top-n`, `group-table` (append `:half` for side-by-side). Default `kpi-cards,top-n,group-table`; pass `@()` to skip the composable report. |
+| `-BaselineReport <names>` | One or more of `inventory`, `privileged`, `orphaned`, `exec-summary`, `roster`, `access-cert`, `sod`, or `all`. |
+| `-Theme <t>` | `light` (default) or `dark`. |
+| `-Status <list>` | Campaign status filter (default `COMPLETED, ACTIVE`). |
+| `-DaysBack <n>` | Campaign window in days (default 90). |
+| `-CreatedAfter` / `-CreatedBefore <date>` | Explicit creation-date bounds (take precedence over `-DaysBack`). |
+| `-OutputPath <dir>` | Destination (default `Audit\adaptive`). |
+| `-OutputMode` | `Console` (default) / `JSON` / `HTML` / `Both` — controls the run summary; the HTML report files are always written. |
+
+```powershell
+# Entitlement view: composable dashboard + three baseline reports, last 180 days
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
+# Campaign view, dark theme, an explicit window
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31
+```
+*Exit codes:* 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config.
+**Related GUI:** *(Adaptive Reports tab — forthcoming.)*
 
 ---
 

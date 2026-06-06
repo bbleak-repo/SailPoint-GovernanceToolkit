@@ -815,7 +815,7 @@ body {
 <div id="section-found-what-the-toolkit-is" class="report-section" style="display:none">
 <h2>1. What the toolkit is</h2>
 <p>The SailPoint ISC Governance Toolkit is a PowerShell 5.1 toolkit for operating identity governance against a SailPoint Identity Security Cloud (ISC) tenant. It covers:</p>
-<ul><li><strong>Campaign certification</strong> — create, run, monitor, and audit access-review campaigns.</li><li><strong>Delta certification</strong> — targeted re-certification of recently-changed access (e.g. new AD grants).</li><li><strong>Disconnected applications</strong> — certify access for apps that don't integrate directly with ISC.</li><li><strong>Governance reporting</strong> — health checks, KPI metrics, leadership rollups, data-quality scoring.</li><li><strong>Vendor SDK features</strong> — campaign templates/scheduling, approvals, work items, workflows, campaign filters (the <strong>SDK Features</strong> GUI tab and the <code>Invoke-SPSdk*</code> scripts).</li><li><strong>Operations</strong> — report distribution, retention/archival, scheduling, connectivity checks.</li></ul>
+<ul><li><strong>Campaign certification</strong> — create, run, monitor, and audit access-review campaigns.</li><li><strong>Delta certification</strong> — targeted re-certification of recently-changed access (e.g. new AD grants).</li><li><strong>Disconnected applications</strong> — certify access for apps that don't integrate directly with ISC.</li><li><strong>Governance reporting</strong> — health checks, KPI metrics, leadership rollups, data-quality scoring.</li><li><strong>Adaptive reports</strong> — composable, themeable HTML reports (KPI cards, heatmaps, top-N bars, drill-down trees) plus a baseline report library (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-certification attestation, governance executive summary), rendered over an <strong>entitlement-</strong> or <strong>campaign-centric</strong> view of your campaign data (<code>Invoke-SPAdaptiveReport</code>). Additive — alongside the existing reports.</li><li><strong>Vendor SDK features</strong> — campaign templates/scheduling, approvals, work items, workflows, campaign filters (the <strong>SDK Features</strong> GUI tab and the <code>Invoke-SPSdk*</code> scripts).</li><li><strong>Operations</strong> — report distribution, retention/archival, scheduling, connectivity checks.</li></ul>
 <p>Everything is available two ways: a <strong>CLI</strong> (headless, automatable) and a <strong>WPF GUI dashboard</strong> (interactive). They share the same modules, configuration, and safety rules.</p>
 </div>
 <div id="section-found-prerequisites" class="report-section" style="display:none">
@@ -1103,7 +1103,7 @@ body {
 </tr>
 <tr>
 <td><code>Audit\</code></td>
-<td>Campaign audit reports (HTML / text / JSONL).</td>
+<td>Campaign audit reports (HTML / text / JSONL); <strong>adaptive reports</strong> under <code>Audit\adaptive\</code>, leadership reports under <code>Audit\leadership\</code>.</td>
 </tr>
 <tr>
 <td><code>DeltaCert\</code></td>
@@ -1226,6 +1226,14 @@ body {
 <td><strong>OOO fallback</strong></td>
 <td>An out-of-office fallback-reviewer workflow (SDK feature).</td>
 </tr>
+<tr>
+<td><strong>Adaptive report</strong></td>
+<td>A composable HTML report assembled from independent components (KPI cards, heatmap, top-N, drill-down tree, group table) over a generic "groups containing members" view of governance data, plus a baseline report library (inventory, privileged review, orphaned/disabled, SoD, roster, access-cert, exec summary). See <code>Invoke-SPAdaptiveReport</code>.</td>
+</tr>
+<tr>
+<td><strong>Anchor (adaptive reports)</strong></td>
+<td>How SailPoint data maps into the adaptive report engine: <strong>entitlement-centric</strong> (entitlement → group, identity → member) or <strong>campaign-centric</strong> (campaign → group).</td>
+</tr>
 </tbody></table>
 </div>
 <div id="section-found-getting-help-exit-codes" class="report-section" style="display:none">
@@ -1241,7 +1249,7 @@ body {
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, weekly digest</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, weekly digest, <strong>adaptive reports</strong></li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -1856,6 +1864,58 @@ body {
 </tbody></table>
 <pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML</code></pre>
 <p><strong>Related GUI:</strong> Governance tab.</p>
+<h3 id="invoke-spadaptivereport-ps1"><code>Invoke-SPAdaptiveReport.ps1</code></h3>
+<p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>
+<p><strong>Anchor — what becomes a "group" and its "members":</strong></p>
+<ul><li><code>Entitlement</code> (default) — group = an entitlement / access profile / role; members = the identities holding it. Drives inventory, top-N most-assigned, privileged- entitlement review, disabled-still-has-access, and SoD toxic combinations.</li><li><code>Campaign</code> — group = a certification campaign; members = the identities under it.</li></ul>
+<p>Both anchors pivot the same campaign access-review data, so they need only the campaign/certification endpoints (no extra scopes).</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-Anchor &lt;a&gt;</code></td>
+<td><code>Entitlement</code> (default) or <code>Campaign</code>.</td>
+</tr>
+<tr>
+<td><code>-Components &lt;keys&gt;</code></td>
+<td>Composable component list: <code>kpi-cards</code>, <code>heatmap</code>, <code>tree</code>, <code>top-n</code>, <code>group-table</code> (append <code>:half</code> for side-by-side). Default <code>kpi-cards,top-n,group-table</code>; pass <code>@()</code> to skip the composable report.</td>
+</tr>
+<tr>
+<td><code>-BaselineReport &lt;names&gt;</code></td>
+<td>One or more of <code>inventory</code>, <code>privileged</code>, <code>orphaned</code>, <code>exec-summary</code>, <code>roster</code>, <code>access-cert</code>, <code>sod</code>, or <code>all</code>.</td>
+</tr>
+<tr>
+<td><code>-Theme &lt;t&gt;</code></td>
+<td><code>light</code> (default) or <code>dark</code>.</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code></td>
+<td>Campaign status filter (default <code>COMPLETED, ACTIVE</code>).</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Campaign window in days (default 90).</td>
+</tr>
+<tr>
+<td><code>-CreatedAfter</code> / <code>-CreatedBefore &lt;date&gt;</code></td>
+<td>Explicit creation-date bounds (take precedence over <code>-DaysBack</code>).</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Destination (default <code>Audit\adaptive</code>).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code> (default) / <code>JSON</code> / <code>HTML</code> / <code>Both</code> — controls the run summary; the HTML report files are always written.</td>
+</tr>
+</tbody></table>
+<pre><code># Entitlement view: composable dashboard + three baseline reports, last 180 days
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
+# Campaign view, dark theme, an explicit window
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31</code></pre>
+<p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> <em>(Adaptive Reports tab — forthcoming.)</em></p>
 </div>
 <div id="section-cli-sdk-features" class="report-section" style="display:none">
 <h2>6. SDK features</h2>
