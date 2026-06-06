@@ -45,7 +45,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
 | AR-19 | DEFERRED | Interactive FlaUI `Test-W09b-AdaptiveTabInteractive.ps1` — AUTHOR only, human-run | L | AR-17 | TODO |
 | AR-20 | MEDIUM | Docs: playbook (CLI+GUI) + USER-GUIDE additions; regenerate HTML | M | AR-12,15 | TODO |
-| AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | TODO |
+| AR-21 | HIGH | Adaptive→Leadership distribution: bands + WhatIf-SMTP preview + upper rollup (reuse existing fns) | L | AR-12 | DONE |
 | AR-22 | HIGH | Pester/AST for the leadership-distribution mode (WhatIf-by-default, no-send) | M | AR-21 | TODO |
 
 Exit criteria: AR-01..AR-18 + AR-20 `DONE`; AR-19 `AUTHORED`. Full Pester suite
@@ -287,7 +287,18 @@ catalog.
 **Accept:** HTML regenerates clean; new sections present; no stale claims.
 
 ## AR-21: Adaptive -> Leadership distribution (bands + WhatIf SMTP + upper rollup)
-- **Status:** `TODO` · **Depends:** AR-12 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-12 · **Size:** L
+> Implemented as a `-DistributeToLeadership` mode on `Invoke-SPAdaptiveReport.ps1`
+> (additive switch). Reuses `Build-SPOrgTree` -> `Resolve-SPIdentityBand` ->
+> `Group-SPAuditByLeadership` -> `Export-SPLeadershipExecutiveHtml` (upper rollup)
+> + `Export-SPLeadershipBandHtml -TargetBands` (per-band) -> per-leader delivery via
+> `Send-SPReport`. **WhatIf by default:** generates reports and prints "WOULD send ->
+> <leader> <email> [band]" with **zero emails sent**; `-PreviewOnly` shows the plan +
+> SMTP status and exits; `-SendReports` calls Send-SPReport (which still only emails
+> when `Audit.Smtp.Enabled=$true`). Verified live (mock): 29 identities -> org tree
+> (11 mgr/3 dir/1 top), bands B/C/D/E, exec rollup + 4 per-band reports, 3 simulated
+> sends to directors, 0 emails. Added a compact-name match fallback so per-director
+> files resolve to recipients. Existing `Invoke-SPReportDistribution.ps1` untouched.
 **Goal:** Add a `-DistributeToLeadership` mode to `Invoke-SPAdaptiveReport.ps1`
 (additive switch; off by default) that **reuses the existing** tiered leadership
 machinery — no edits to existing files, no rebuild:
