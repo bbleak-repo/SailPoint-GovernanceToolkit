@@ -1715,6 +1715,156 @@
                 </Grid>
             </TabItem>
 
+            <!-- Adaptive Reports Tab -->
+            <TabItem Header="Adaptive Reports" Style="{StaticResource ToolkitTabItem}">
+                <Grid x:Name="AdaptiveReportsTabContent" Background="#1E1E2E" Margin="12,8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Adaptive report form -->
+                    <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="8,4">
+
+                            <!-- Anchor + Theme + Date window -->
+                            <TextBlock Text="Report Options" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="16"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="16"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Anchor -->
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Anchor:" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox x:Name="AdaptiveReportsAnchorCombo"
+                                                  Style="{StaticResource FieldCombo}"
+                                                  SelectedIndex="0"
+                                                  ToolTip="Pivot the adaptive report around an Entitlement or a Campaign anchor">
+                                            <ComboBoxItem Content="Entitlement"/>
+                                            <ComboBoxItem Content="Campaign"/>
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <!-- Theme -->
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Theme:" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox x:Name="AdaptiveReportsThemeCombo"
+                                                  Style="{StaticResource FieldCombo}"
+                                                  SelectedIndex="0"
+                                                  ToolTip="Visual theme for the generated HTML report (light or dark)">
+                                            <ComboBoxItem Content="light"/>
+                                            <ComboBoxItem Content="dark"/>
+                                        </ComboBox>
+                                    </StackPanel>
+
+                                    <!-- Days Back -->
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox x:Name="AdaptiveReportsDaysBackBox"
+                                                 Style="{StaticResource FieldBox}"
+                                                 Text="90"
+                                                 ToolTip="Look-back window in days for audit/event data (default 90)"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Composable Components -->
+                            <TextBlock Text="Components" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <WrapPanel Orientation="Horizontal">
+                                    <CheckBox x:Name="ChkArCompKpiCards" Content="KPI Cards"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="True" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the KPI summary-cards component (kpi-cards)"/>
+                                    <CheckBox x:Name="ChkArCompHeatmap" Content="Heatmap"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the source x risk heatmap component (heatmap)"/>
+                                    <CheckBox x:Name="ChkArCompTree" Content="Tree"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the hierarchical tree component (tree)"/>
+                                    <CheckBox x:Name="ChkArCompTopN" Content="Top-N"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="True" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the Top-N ranked-items component (top-n)"/>
+                                    <CheckBox x:Name="ChkArCompGroupTable" Content="Group Table"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="True" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the grouped detail-table component (group-table)"/>
+                                </WrapPanel>
+                            </Border>
+
+                            <!-- Baseline Reports -->
+                            <TextBlock Text="Baseline Reports" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <WrapPanel Orientation="Horizontal">
+                                    <CheckBox x:Name="ChkArBaseInventory" Content="Inventory"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the access inventory baseline report (inventory)"/>
+                                    <CheckBox x:Name="ChkArBasePrivileged" Content="Privileged"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the privileged-access baseline report (privileged)"/>
+                                    <CheckBox x:Name="ChkArBaseOrphaned" Content="Orphaned"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the orphaned-account baseline report (orphaned)"/>
+                                    <CheckBox x:Name="ChkArBaseExecSummary" Content="Exec Summary"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the executive-summary baseline report (exec-summary)"/>
+                                    <CheckBox x:Name="ChkArBaseRoster" Content="Roster"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the access roster baseline report (roster)"/>
+                                    <CheckBox x:Name="ChkArBaseAccessCert" Content="Access Cert"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the access-certification baseline report (access-cert)"/>
+                                    <CheckBox x:Name="ChkArBaseSod" Content="SoD"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the Separation-of-Duties baseline report (sod)"/>
+                                </WrapPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Row 2: Actions + progress + status -->
+                    <StackPanel Grid.Row="2" Margin="8,8,8,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="BtnArGenerate" Content="Generate"
+                                    Style="{StaticResource ToolkitButton}" Margin="0,0,8,0"
+                                    ToolTip="Generate the adaptive report(s) from the selected anchor, components and baselines"/>
+                            <Button x:Name="BtnArOpenFolder" Content="Open Folder"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                    ToolTip="Open the output folder containing the generated reports"/>
+                            <Button x:Name="BtnArOpenReport" Content="Open Report"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                    ToolTip="Open the most recently generated adaptive report in the browser"/>
+                        </StackPanel>
+
+                        <ProgressBar x:Name="AdaptiveReportsProgressBar"
+                                     Height="10" Background="#252538"
+                                     Foreground="#5B9BD5"
+                                     BorderBrush="#3D3D5C" BorderThickness="1"
+                                     IsIndeterminate="False" Margin="0,0,0,6"/>
+
+                        <TextBlock x:Name="AdaptiveReportsStatusLabel"
+                                   Foreground="#AAAACC" FontSize="12" FontStyle="Italic"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
             <!-- Settings Tab -->
             <TabItem Header="Settings" Style="{StaticResource ToolkitTabItem}">
                 <Grid x:Name="SettingsTabContent" Background="#1E1E2E" Margin="12,8">

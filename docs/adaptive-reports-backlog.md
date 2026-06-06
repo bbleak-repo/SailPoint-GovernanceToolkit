@@ -38,7 +38,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | DONE |
 | AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme + date period) | L | AR-03,05,08 | DONE |
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | DONE |
-| AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | TODO |
+| AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | DONE |
 | AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | TODO |
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | TODO |
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | TODO |
@@ -224,7 +224,7 @@ AST-clean (CLI-001..004 stay green).
 **Accept:** CLI-00x green including the new script.
 
 ## AR-14: GUI Adaptive Reports tab (XAML)
-- **Status:** `TODO` · **Depends:** AR-01 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-01 · **Size:** L
 **Goal:** Insert an **Adaptive Reports** TabItem in `Gui/MainWindow.xaml` (after
 Governance, before Settings): anchor selector, component checkboxes (kpi/heatmap/
 tree/topN/table), baseline-report checkboxes, theme selector, **Generate** +
