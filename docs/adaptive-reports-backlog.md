@@ -32,7 +32,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-05 | CRITICAL | `Build-SPRCDataset` — campaign anchor (cert→group, identity→member) | M | AR-03 | DONE |
 | AR-06 | HIGH | Pester: campaign adapter shape | S | AR-05 | DONE |
 | AR-07 | MEDIUM | Mock-parity: serve the endpoints both adapters read (the `/v3/entitlements` 405) | M | AR-03,05 | DONE |
-| AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | TODO |
+| AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | DONE |
 | AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | TODO |
 | AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | TODO |
 | AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | TODO |
@@ -151,7 +151,15 @@ least-invasive path that gives both anchors real mock data.
 documented coverage list.
 
 ## AR-08: Port CLEAN baseline reports
-- **Status:** `TODO` · **Depends:** AR-01,03 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-01,03 · **Size:** L
+> Ported B03/B05/B06/B10 **verbatim** (byte-identical; B03's privileged-name
+> heuristic already covers ISC terms — privileged/elevated/global-admin/root/etc.
+> — so no tune needed). Kept original `Export-*Report` names (unique, internal;
+> CLI/GUI map friendly keys). New `SP.BaselineReports.psm1` dot-sources them.
+> Manifest switched to **NestedModules-only** (no RootModule — the toolkit
+> convention; RootModule+NestedModule each calling Export-ModuleMember suppressed
+> the nested exports). Re-authored both psd1 as ASCII (New-ModuleManifest emits
+> UTF-16, which broke repo grep/diff parity).
 **Goal:** In `Modules/SP.AdaptiveReports/SP.BaselineReports.psm1`, port the CLEAN
 governance subset over the adapted dataset, keeping the proven bodies, renamed:
 `Export-SPRCInventoryReport` (B06), `Export-SPRCPrivilegedReviewReport` (B03 — ISC
