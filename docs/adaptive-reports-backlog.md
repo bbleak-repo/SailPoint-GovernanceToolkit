@@ -35,7 +35,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | DONE |
 | AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | DONE |
 | AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | DONE |
-| AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | TODO |
+| AR-11 | HIGH | Pester: each baseline report emits valid HTML from adapted mock data | M | AR-08 | DONE |
 | AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme) | L | AR-03,05,08 | TODO |
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | TODO |
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | TODO |
@@ -191,7 +191,7 @@ toxic pairs + risk tiers); keep the detection engine.
 **Accept:** valid HTML; rule-set is data (editable), not hardcoded logic.
 
 ## AR-11: Baseline report tests
-- **Status:** `TODO` · **Depends:** AR-08 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-08 · **Size:** M
 **Goal:** Extend the adaptive-reports tests — each `Export-SPRC*` writes a
 well-formed HTML file (has `<html>…</html>`, expected section markers, no error
 dump) from adapted mock data.
