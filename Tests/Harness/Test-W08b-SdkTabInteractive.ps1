@@ -294,8 +294,8 @@ function Get-SPMockExpectedCounts {
         $out.ShowCompletedTotal = [int]$out.WorkItemsTotal
     }
     try {
-        $wf = @(Invoke-RestMethod -Uri "$v3/workflows" -Headers $headers -TimeoutSec 5 -ErrorAction Stop)
-        $out.Workflows = $wf.Count
+        $wf = Invoke-RestMethod -Uri "$v3/workflows" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.Workflows = @($wf).Count
         # Read the disabled (enabled=false) workflow id from the served data
         # rather than hard-coding 'wf-004' -- robust to any seed.
         $disabled = @($wf | Where-Object { $_.enabled -eq $false })
