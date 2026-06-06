@@ -28,9 +28,9 @@ OUT     = REPO / "docs" / "USER-GUIDE.html"
 # Constants
 # ---------------------------------------------------------------------------
 TITLE    = "SailPoint ISC Governance Toolkit — User Guide"
-SUBTITLE = "Comprehensive reference: Foundations · CLI Playbook · GUI Playbook"
-VERSION  = "1.0.0"
-DATE     = "2026-06-05"
+SUBTITLE = "Comprehensive reference: Foundations · CLI Reference · GUI Reference · App Onboarding · Production Runbook"
+VERSION  = "2.0.0"
+DATE     = "2026-05-21"
 
 # ---------------------------------------------------------------------------
 # Markdown → HTML helpers (stdlib only)
@@ -330,6 +330,46 @@ def parse_gui():
                     "body": intro_body, "group": "GUI Reference"})
     return secs
 
+def parse_onboarding():
+    lines = read_md("04-onboarding-guide.md")
+    segs  = split_h2(lines)
+    secs  = []
+    intro_body = []
+    for raw_title, body in segs:
+        if not raw_title:
+            intro_body = list(body)
+            continue
+        tl = raw_title.strip().lower()
+        sid = make_sid("onb", raw_title)
+        nav = raw_title
+        h2  = inline_md(raw_title)
+        secs.append({"id": sid, "nav": nav, "h2": h2, "body": body, "group": "App Onboarding"})
+    if intro_body:
+        secs.insert(0, {"id": "onb-overview", "nav": "Overview",
+                        "h2": "Disconnected App Onboarding &mdash; Overview",
+                        "body": intro_body, "group": "App Onboarding"})
+    return secs
+
+def parse_runbook():
+    lines = read_md("05-production-runbook.md")
+    segs  = split_h2(lines)
+    secs  = []
+    intro_body = []
+    for raw_title, body in segs:
+        if not raw_title:
+            intro_body = list(body)
+            continue
+        tl = raw_title.strip().lower()
+        sid = make_sid("run", raw_title)
+        nav = raw_title
+        h2  = inline_md(raw_title)
+        secs.append({"id": sid, "nav": nav, "h2": h2, "body": body, "group": "Production Runbook"})
+    if intro_body:
+        secs.insert(0, {"id": "run-overview", "nav": "Overview",
+                        "h2": "Production Runbook &mdash; Overview",
+                        "body": intro_body, "group": "Production Runbook"})
+    return secs
+
 # ---------------------------------------------------------------------------
 # Build sidebar + mobile nav HTML
 # ---------------------------------------------------------------------------
@@ -464,7 +504,9 @@ def build():
     found = parse_foundations()
     cli   = parse_cli()
     gui   = parse_gui()
-    all_secs = found + cli + gui
+    onb   = parse_onboarding()
+    run   = parse_runbook()
+    all_secs = found + cli + gui + onb + run
 
     sidebar_html, mobile_html = build_sidebar(all_secs)
     sections_html = "".join(render_section(s) for s in all_secs)
@@ -559,7 +601,8 @@ document.addEventListener('DOMContentLoaded', function() {{
     print(f"Wrote: {OUT}")
     print(f"Size:  {kb} KB")
     print(f"Sections: {len(all_secs)}  "
-          f"(Foundations: {len(found)}, CLI: {len(cli)}, GUI: {len(gui)})")
+          f"(Foundations: {len(found)}, CLI: {len(cli)}, GUI: {len(gui)}, "
+          f"Onboarding: {len(onb)}, Runbook: {len(run)})")
     ids_str = "\n  ".join(all_ids)
     print(f"Section IDs:\n  {ids_str}")
 

@@ -181,6 +181,62 @@ workload, or find source coverage gaps.
 > **Scope:** all three read `/v3/account-activities`, which requires `sp:scopes:all`
 > or a browser `-Token`.
 
+### Finding Your Source ID
+
+The `-SourceId` parameter on all delta-cert scripts is the ISC internal identifier for
+the source (AD domain, Entra connector, etc.) you want to monitor. To find it:
+
+1. Log into the **ISC Admin Console**.
+2. Navigate to **Admin > Connections > Sources**.
+3. Click the source you want to monitor.
+4. The **Source ID** is visible in the browser URL bar: `https://<tenant>.identitynow.com/ui/admin#admin:sources:edit:<SOURCE_ID>`.
+5. Copy the ID (it looks like `2c91808a7f3e8b01017f3e9abc123456`).
+
+**Which sources to monitor:** Start with your AD sources -- these are where the most
+frequent group-membership changes happen. Add other sources (Entra, LDAP) as your
+delta-cert program matures. Each source ID is an independent monitor, so you can
+add them incrementally.
+
+### Testing Your Delta Cert Pipeline
+
+Before scheduling delta certs for production, validate the end-to-end pipeline:
+
+1. **Start the mock server** (or use a sandbox tenant) and configure `settings-mock.json`
+   with `SourceIds: ["src-ad-001"]`.
+2. **Preview** what would be created:
+   ```powershell
+   .\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-ad-001' -ConfigPath .\Config\settings-mock.json -WhatIf
+   ```
+   Expected: a summary of GRANT_ACCESS events found and the campaigns that would be
+   created, without actually creating them.
+3. **Run for real** against the mock:
+   ```powershell
+   .\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'src-ad-001' -ConfigPath .\Config\settings-mock.json
+   ```
+   Expected: exit code 0, campaigns created in the mock, JSONL evidence written to `DeltaCert\`.
+4. **Generate the delta report:**
+   ```powershell
+   .\Scripts\Invoke-SPDeltaReport.ps1 -SourceId 'src-ad-001' -ConfigPath .\Config\settings-mock.json
+   ```
+   Expected: HTML report in `DeltaCert\reports\` showing grants, revocations, and pending certs.
+5. **Run escalation** to verify the stale-reviewer logic:
+   ```powershell
+   .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 0 -ConfigPath .\Config\settings-mock.json
+   ```
+   Expected: escalation log entries (stale hours = 0 forces everything to escalate for testing).
+
+> **What Can Go Wrong (Delta Cert)**
+>
+> - **No GRANT_ACCESS events found (exit code 1).** The look-back window
+>   (`-HoursBack`) may be too narrow, or the source has no recent grants. Widen the
+>   window to 48-72 hours to catch up. Verify the source ID is correct.
+> - **Identity has no manager.** Identities without a manager in ISC are skipped
+>   unless `-FallbackReviewerIdentityId` is set. Check the JSONL output for
+>   `"skipped: no manager"` entries and either fix the manager attribute in the
+>   authoritative source or set a fallback.
+> - **`sp:scopes:all` required error.** The account-activities endpoint has no
+>   granular scope. Either add `sp:scopes:all` to your PAT or use a browser `-Token`.
+
 ### `Invoke-SPADDeltaCert.ps1`
 **Purpose:** creates **daily AD delta-cert campaigns** — finds `GRANT_ACCESS` events on
 the specified AD sources in the look-back window, resolves each affected active identity's
@@ -310,6 +366,40 @@ isolating errors so one bad app doesn't stop the batch. Each app → `Success`, 
 ```
 *Exit codes:* 0 all ok/no-changes · 1 partial · 2 all failed.
 
+> **What Can Go Wrong (Disconnected Apps)**
+>
+> - **AccountDeletionThresholdPct exceeded.** The CSV has too many missing accounts
+>   compared to the previous snapshot. This safety guard prevents accidental mass
+>   removal. Verify the CSV is a **full export** (not a delta/changes-only file).
+>   If the removal is legitimate (e.g. org restructure), temporarily increase
+>   `DisconnectedApps.AccountDeletionThresholdPct`.
+> - **Identity correlation failures.** The `e-mail` in the CSV does not match any
+>   ISC identity. Common causes: wrong email format, the identity is in a non-active
+>   lifecycle state (`ExcludeLifecycleStates`), or the `CorrelationAttribute` is
+>   misconfigured. Run `Invoke-SPDisconnectedAppRegistry.ps1 -Action Test` to validate.
+> - **Duplicate campaign guard.** If a campaign with the same name prefix already
+>   exists for today, the pipeline skips creation (exit code 1). Use `-Force` to
+>   bypass, or wait until the existing campaign is completed/cleaned up.
+
+### Remediation Tracking
+
+When disconnected-app campaigns complete, the toolkit tracks remediation status for
+revoked access. This means: after a reviewer marks an entitlement as `REVOKE`, the
+toolkit monitors whether the revocation was actually carried out in subsequent CSV
+deliveries.
+
+- **Remediation data collection:** the orchestrator step 9 (`Update-SPRemediationStatus`)
+  compares the current CSV snapshot against the previous day's revocation decisions. If a
+  revoked account or entitlement still appears in the next delivery, it is flagged as
+  "pending remediation."
+- **Investigating stuck remediations:** check the weekly digest's remediation tracking
+  section, or query the JSONL audit trail for `Action=RemediationCheck` entries with
+  `Status=Pending`. Common causes: the app team did not process the revocation, or the
+  CSV was not refreshed after the change.
+- **SLA enforcement:** each registered app has a `SlaDays` setting. Remediations
+  exceeding the SLA are escalated in the daily summary and (if configured) via
+  notification.
+
 ---
 
 ## 5. Governance & reporting
@@ -414,6 +504,61 @@ resolves bands, groups decisions by level. Generate-only by default.
 .\Scripts\Invoke-SPReportDistribution.ps1 -Status COMPLETED -SendReports -TargetBands B,C
 ```
 **Related GUI:** Governance tab (report generation).
+
+### Band Classification Guide
+
+The leadership report system classifies identities into **bands** based on their
+position in the org tree. Bands determine who receives which reports and at what level
+of detail.
+
+| Band | Role Level | Org-Tree Depth | Report Content |
+|---|---|---|---|
+| **A** | President / CEO | Depth 4+ above reviewed identity | Executive summary only |
+| **B** | VP / SVP | Depth 3 above reviewed identity | Aggregated division rollup |
+| **C** | Director | Depth 2 above reviewed identity | Department-level detail |
+| **D** | Manager | Depth 1 above reviewed identity | Direct-report detail (individual decisions) |
+| **E** | Individual Contributor | Depth 0 (the reviewed identity) | Not a report recipient |
+
+The band mapping is configured in `Leadership.DefaultBandMapping` in `settings.json`.
+The default maps org-tree depth to band letter (`0=E, 1=D, 2=C, 3=B, 4=A`). If your
+organization uses a different hierarchy, adjust the mapping.
+
+**Org supplement CSV:** When ISC's manager attribute has gaps (missing managers, incorrect
+reporting chains), supply a supplement CSV via `-OrgSupplementPath`:
+
+```csv
+identityId,managerId,band
+2c918..abc,2c918..def,C
+2c918..ghi,,B
+```
+
+The supplement overrides ISC's org tree for the specified identities. Place it at
+`Config\org-chart-supplement.csv` or pass the path explicitly.
+
+**Leadership report workflow:** (1) run the audit first (`Invoke-SPCampaignAudit.ps1`),
+then (2) distribute with `Invoke-SPReportDistribution.ps1 -PreviewOnly` to verify
+who-gets-what, then (3) send with `-SendReports`.
+
+### Compliance Evidence Guide
+
+The toolkit's reports map to common compliance frameworks. Use this guide when
+packaging evidence for auditors.
+
+| Framework | Control Area | Toolkit Report | What It Proves |
+|---|---|---|---|
+| **SOX** | Access review (ITGC) | Campaign Audit, Leadership Rollup | Access was reviewed and decisions were made by authorized reviewers |
+| **SOX** | Segregation of duties | Adaptive SoD Baseline | Toxic combinations identified and reviewed |
+| **SOC 2** | CC6.1 -- Logical access | Campaign Audit, Data Quality | Access is periodically reviewed; orphan accounts identified |
+| **SOC 2** | CC6.2 -- Prior to access | Delta Report | New access grants are certified promptly |
+| **SOC 2** | CC6.3 -- Access removal | Remediation Tracking (Weekly Digest) | Revoked access is actually removed |
+| **ISO 27001** | A.9.2.5 -- Review of access rights | Governance Report | Comprehensive governance posture snapshot |
+| **ISO 27001** | A.9.2.6 -- Removal of access | Delta Report, Remediation Tracking | Timely revocation and follow-through |
+
+**Packaging evidence for auditors:**
+1. Run `Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality` to generate the full evidence package.
+2. Collect the output directory (`Reports\`) -- it includes a manifest listing all artifacts.
+3. Include the JSONL audit trail (`Audit\*.jsonl`) for machine-verifiable provenance.
+4. For SOX, add the leadership rollup reports to show reviewer accountability.
 
 ### `Invoke-SPWeeklyDigest.ps1`
 **Purpose:** a consolidated **weekly digest** — campaign activity, campaign health, identity
@@ -585,6 +730,60 @@ toolkit file types.
 ```
 *Exit codes:* 0 success · 1 retention disabled (no action) · 2 param · 4 config.
 > Requires `Retention.Enabled = true` **or** explicit `-ArchiveDays`/`-DeleteDays`.
+
+### Orchestrator Troubleshooting
+
+The daily orchestrator is the most common entry point for scheduled automation. When
+it fails or produces warnings, use this reference.
+
+**Exit code table:**
+
+| Exit Code | Meaning | Action |
+|---|---|---|
+| 0 | All steps succeeded | No action needed |
+| 1 | Success with warnings | Check the JSONL summary for skipped steps or non-critical issues |
+| 2 | Parameter error | Review script invocation; a required parameter is missing or invalid |
+| 3 | Authentication failure | Token expired or PAT credentials invalid; re-authenticate |
+| 4 | Configuration error | `settings.json` / `settings.local.json` has invalid values or missing required keys |
+| 5 | Critical failure | One or more steps failed (e.g. disconnected-app batch all-failed, health check grade D/F) |
+
+**Log file location:** `Logs\GovernanceToolkit-YYYY-MM-DD.log` (JSONL format). The
+orchestrator also writes a dedicated summary to its output path.
+
+**JSONL summary fields:**
+
+| Field | Description |
+|---|---|
+| `RunId` | Unique UUID for this orchestrator run |
+| `StepName` | Step name (e.g. `DeltaCert`, `HealthCheck`, `DisconnectedApps`) |
+| `StepNumber` | Step sequence (1-11) |
+| `Status` | `Success`, `Warning`, `Error`, `Skipped` |
+| `Duration` | Elapsed time for the step |
+| `Detail` | Human-readable summary of what happened |
+| `ExitCode` | Worst exit code at the time this step completed |
+
+**Re-run guidance for partial failures:**
+
+If only specific steps failed, re-run the orchestrator with `-Skip*` flags to skip the
+steps that already succeeded:
+
+```powershell
+# Example: steps 1-6 succeeded, step 7 (disconnected apps) failed
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' `
+    -SkipValidation -SkipCleanup -SkipDeltaCert -SkipDeltaReport -SkipEscalation -SkipHealthCheck
+```
+
+> **What Can Go Wrong (Operations)**
+>
+> - **Token expires mid-run.** Browser tokens last only 10-12 minutes. The 11-step
+>   orchestrator can exceed this. Use a PAT (which auto-refreshes) for scheduled runs,
+>   not a browser token.
+> - **Scheduled task runs but produces no output.** The service account may lack write
+>   permissions to the toolkit directory, or the execution policy blocks the script.
+>   Check Task Scheduler history and the Windows event log.
+> - **Retention deletes reports needed for compliance.** Review `Retention.ArchiveDays`
+>   and `Retention.DeleteDays` against your retention policy. Archive zips are kept
+>   for `DeleteDays` after archival, so effective retention is `ArchiveDays + DeleteDays`.
 
 ---
 
