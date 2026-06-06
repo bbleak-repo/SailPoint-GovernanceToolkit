@@ -25,7 +25,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 
 | # | Priority | Item | Size | Depends | Status |
 |---|----------|------|------|---------|--------|
-| AR-01 | CRITICAL | `SP.ReportComponents` module — copy RC00–RC06 verbatim + manifest | M | none | TODO |
+| AR-01 | CRITICAL | `SP.ReportComponents` module — copy RC00–RC06 verbatim + manifest | M | none | DONE |
 | AR-02 | HIGH | Pester: each RC component renders a valid HTML fragment | M | AR-01 | TODO |
 | AR-03 | CRITICAL | `Build-SPRCDataset` — entitlement anchor (entitlement→group, identity→member) | L | AR-01 | TODO |
 | AR-04 | HIGH | Pester: entitlement adapter → correct `GroupResults` shape (mock + synthetic) | M | AR-03 | TODO |
@@ -54,7 +54,7 @@ GUI tabs unchanged (additive only).
 ---
 
 ## AR-01: SP.ReportComponents module (copy RC00–RC06)
-- **Status:** `TODO` · **Depends:** none · **Size:** M
+- **Status:** `DONE` · **Depends:** none · **Size:** M
 **Goal:** New `Modules/SP.ReportComponents/` containing **verbatim** copies of
 `RC00-Framework.ps1` … `RC06-GroupTable.ps1` from
 `C:\temp\Coding\EntraIDScripts\Group-Enumerator\Modules\ReportComponents\`, plus a
