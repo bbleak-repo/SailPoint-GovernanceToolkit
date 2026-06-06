@@ -12,7 +12,7 @@
 
     Asserts the @{Success;Data;Error} envelope, a non-empty self-contained HTML file
     with distinct 7-day and 30-day rolling sections + per-calendar-day buckets, the
-    privileged-role membership change Added/Removed series (priv-scoped, 41 removes in
+    privileged-role membership change Added/Removed series (priv-scoped, 39 removes in
     30d), and the manager-accountability attested/overdue/missed series.
 
     Imports only -Core -Audit (SP.ReportComponents is intentionally ABSENT, proving the
@@ -31,10 +31,20 @@ BeforeAll {
     $script:Changelog = @($script:State.membershipChangelog)
     $script:Tracked   = @($script:State.trackedPrivilegedRoles)
 
-    # Deterministic anchor = max changelog date (matches the function's default rule).
-    $script:Anchor = ($script:Changelog |
-        ForEach-Object { [datetime]::Parse($_.date, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } |
-        Measure-Object -Maximum).Maximum
+    # Deterministic anchor mirrors the function's NEW default rule: max DAILY-campaign
+    # created day when daily campaigns exist; else max changelog date. (Previously this
+    # derived from changelog max -- 06-06 -- which produced a trailing empty-campaign
+    # bucket; the function now anchors to the daily-campaign signal -- 06-05.)
+    if ($script:Daily.Count -gt 0) {
+        $script:Anchor = ($script:Daily |
+            ForEach-Object { [datetime]::Parse($_.created, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } |
+            Measure-Object -Maximum).Maximum
+    }
+    else {
+        $script:Anchor = ($script:Changelog |
+            ForEach-Object { [datetime]::Parse($_.date, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime() } |
+            Measure-Object -Maximum).Maximum
+    }
 
     $script:OutDir = Join-Path ([System.IO.Path]::GetTempPath()) ("rolltrend-" + [guid]::NewGuid().ToString('N'))
 
@@ -90,6 +100,20 @@ Describe 'Export-SPRollingTrendHtml' {
         $days30.Count | Should -BeGreaterThan 1
         $distinct = @($days30 | ForEach-Object { $_.Date } | Select-Object -Unique)
         $distinct.Count | Should -Be $days30.Count
+    }
+
+    It 'a 7-day window yields exactly 7 day-buckets' {
+        @($script:Result.Data.Windows['7'].Days).Count | Should -Be 7
+    }
+
+    It 'a 30-day window yields exactly 30 day-buckets' {
+        @($script:Result.Data.Windows['30'].Days).Count | Should -Be 30
+    }
+
+    It 'the newest 30-day bucket corresponds to a real daily campaign (no trailing empty bucket)' {
+        $days = @($script:Result.Data.Windows['30'].Days)
+        $newest = $days[$days.Count - 1]
+        $newest.CampaignCount | Should -BeGreaterThan 0
     }
 
     It 'has a monotone 7-day day-count not exceeding the 30-day day-count' {

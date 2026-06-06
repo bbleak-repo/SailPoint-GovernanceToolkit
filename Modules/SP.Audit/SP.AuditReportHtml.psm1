@@ -10632,8 +10632,9 @@ function Export-SPRollingTrendHtml {
     .PARAMETER OutputPath
         DIRECTORY for the HTML output file (mirrors Export-SPCampaignTrendHtml).
     .PARAMETER AnchorDate
-        Fixed reference date for window math. Default = max(campaign.created,
-        changelog.date); Get-Date only as last resort when no data carries a date.
+        Fixed reference date for window math. Default = max DAILY-campaign
+        created day when daily campaigns exist; else max changelog date;
+        Get-Date only as last resort when no data carries a date.
     .PARAMETER WindowDays
         Windows to render (days). Default @(7, 30). Each becomes one section.
     .PARAMETER CorrelationID
@@ -10786,13 +10787,24 @@ function Export-SPRollingTrendHtml {
             $anchor = $AnchorDate.ToUniversalTime()
         }
         else {
-            $maxDate = $null
-            foreach ($r in $campRows) { if ($null -eq $maxDate -or $r.Day -gt $maxDate) { $maxDate = $r.Day } }
-            foreach ($e in $events) {
-                $ed = _RtParseDateUtc ([string](_RtProp $e 'date'))
-                if ($null -ne $ed -and ($null -eq $maxDate -or $ed -gt $maxDate)) { $maxDate = $ed }
+            # Prefer the max DAILY-campaign day when daily campaigns exist (the
+            # daily-attestation signal). campRows are built only from $campaigns
+            # (= DailyCampaigns). Fall back to changelog max only when there are
+            # NO campaigns, so no trailing empty-campaign bucket is produced when
+            # the changelog max date runs one day past the last daily campaign.
+            $maxCampDay = $null
+            foreach ($r in $campRows) { if ($null -eq $maxCampDay -or $r.Day -gt $maxCampDay) { $maxCampDay = $r.Day } }
+            if ($null -ne $maxCampDay) {
+                $anchor = $maxCampDay
             }
-            if ($null -ne $maxDate) { $anchor = $maxDate } else { $anchor = (Get-Date).ToUniversalTime() }
+            else {
+                $maxDate = $null
+                foreach ($e in $events) {
+                    $ed = _RtParseDateUtc ([string](_RtProp $e 'date'))
+                    if ($null -ne $ed -and ($null -eq $maxDate -or $ed -gt $maxDate)) { $maxDate = $ed }
+                }
+                if ($null -ne $maxDate) { $anchor = $maxDate } else { $anchor = (Get-Date).ToUniversalTime() }
+            }
         }
         $anchorDay = $anchor.Date
 
@@ -10801,8 +10813,10 @@ function Export-SPRollingTrendHtml {
         $windowSections = [System.Collections.Generic.List[string]]::new()
 
         foreach ($W in ($WindowDays | Sort-Object)) {
-            $cutoffDay = $anchorDay.AddDays(-$W).Date
-            # Contiguous calendar range cutoffDay..anchorDay inclusive.
+            # A W-day window = exactly W contiguous day-buckets ENDING at anchorDay.
+            # cutoffDay = anchorDay - (W-1) so cutoffDay..anchorDay inclusive == W buckets.
+            $cutoffDay = $anchorDay.AddDays(-($W - 1)).Date
+            # Contiguous calendar range cutoffDay..anchorDay inclusive (W buckets).
             $buckets = [ordered]@{}
             $cursor = $cutoffDay
             while ($cursor -le $anchorDay) {
