@@ -31,7 +31,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-04 | HIGH | Pester: entitlement adapter → correct `GroupResults` shape (mock + synthetic) | M | AR-03 | DONE |
 | AR-05 | CRITICAL | `Build-SPRCDataset` — campaign anchor (cert→group, identity→member) | M | AR-03 | DONE |
 | AR-06 | HIGH | Pester: campaign adapter shape | S | AR-05 | DONE |
-| AR-07 | MEDIUM | Mock-parity: serve the endpoints both adapters read (the `/v3/entitlements` 405) | M | AR-03,05 | TODO |
+| AR-07 | MEDIUM | Mock-parity: serve the endpoints both adapters read (the `/v3/entitlements` 405) | M | AR-03,05 | DONE |
 | AR-08 | HIGH | Port CLEAN baseline subset (B06 inventory, B03 privileged, B05 orphaned, B10 exec) | L | AR-01,03 | TODO |
 | AR-09 | MEDIUM | Port B01 roster + B02 access-cert attestation | M | AR-08 | TODO |
 | AR-10 | MEDIUM | Port B04 SoD with an ISC entitlement-conflict rule-set | M | AR-08 | TODO |
@@ -127,7 +127,18 @@ RC components render it.
 **Accept:** tests pass.
 
 ## AR-07: Mock-parity audit (the /v3/entitlements 405)
-- **Status:** `TODO` · **Depends:** AR-03,05 · **Size:** M
+- **Status:** `DONE` · **Depends:** AR-03,05 · **Size:** M
+> **Resolution (route, don't fix-mock):** the adapters consume campaign-audit data
+> built from `/v3/campaigns` → `/v3/certifications` → `.../access-review-items`
+> (all mock-served; proven by W-03b/W-05) and **never call `/v3/entitlements`** —
+> so the mock's 405 there does NOT block the adaptive reports. End-to-end proof:
+> `Tests/Harness/Test-AR07-AdapterMockParity.ps1` builds real audits from the
+> running mock (4 campaigns, 81 decision items) and confirms both anchors produce
+> non-empty GroupResults that render: **Entitlement = 7 groups / 31 members,
+> Campaign = 4 groups / 81 members**. Coverage list: campaigns, certifications,
+> access-review-items (used + served). **Deferred (documented, not blocking):** a
+> live entitlement *catalog* enrichment via `Get-SPEntitlementInventory`
+> (`/v3/entitlements`) — add once the mock serves that endpoint.
 **Goal:** Audit which endpoints the two adapters call against the
 `API-MockServer` SailPoint-ISC profile. The mock returned **405 on
 `/v3/entitlements`** during report validation — either (a) add/fix the mock
