@@ -52,7 +52,9 @@
 #>
 
 # ---------------------------------------------------------------------------
-# DISCOVERY-SCOPE mock probe (so -Skip:(-not $mockUpRun) discovery cross-check matches).
+# DISCOVERY-SCOPE mock probe. -Skip is evaluated at DISCOVERY time, so EA-12 below
+# must gate on $script:MockUp (set here, in discovery scope) -- NOT on $script:mockUpRun,
+# which is only assigned in BeforeAll (run phase) and is $null during discovery.
 # ---------------------------------------------------------------------------
 $script:MockUp = $true
 try {
@@ -388,7 +390,7 @@ Describe "EA: Reporting + analytics over the enriched dataset -> HTML" {
 
     Context "EA-12: live cross-check over the enriched mock (skips if mock down)" {
 
-        It "EA-12 live campaigns -> metrics -> trends produces >=1 period" -Skip:(-not $script:mockUpRun) {
+        It "EA-12 live campaigns -> metrics -> trends produces >=1 period" -Skip:(-not $script:MockUp) {
             # Resolve the localhost mock config only here (live path only). We do NOT
             # write any snapshot/overlay: Get-SPConfig with the mock settings is enough
             # for the read-only Get-SPAuditCampaigns call.
