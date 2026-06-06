@@ -592,7 +592,10 @@ if (-not $resolveResult.Success) {
 $resolved = $resolveResult.Data
 Write-Host "    Resolved: $($resolved.Summary.Resolved)  Unresolved: $($resolved.Summary.Unresolved)" -ForegroundColor DarkGray
 
-if ($resolved.Unresolved -gt 0) {
+# Real-bug fix (T-03): $resolved.Unresolved is the ARRAY of unresolved entries
+# (iterated below), not a count. Comparing the array `-gt 0` throws under
+# StrictMode when entries are hashtables ("not IComparable"). Guard on the count.
+if (@($resolved.Unresolved).Count -gt 0) {
     foreach ($unr in $resolved.Unresolved) {
         Write-Host "    Unresolved: $($unr.AccountId) ($($unr.Email)) -- $($unr.Reason)" -ForegroundColor Yellow
     }
