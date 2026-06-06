@@ -908,3 +908,155 @@ Describe "MC-07: Manager accountability -- per-day attestation status and monoto
     }
 }
 #endregion
+
+# ===========================================================================
+#region MC-09 -- OVERDUE/MISSED streak + org-chain ESCALATION + reassignment
+#   (T-02 manager-accountability: "managers kept accountable")
+#   Layer A: data-truth on the refreshed frozen fixture (consecutive non-attest
+#            streak, escalation up the REAL org chain, delegated reassignment).
+#   Layer B: the REAL toolkit classifier (Get-SPAuditCertifications) surfaces the
+#            delegated cert's EffectiveReviewer = reassignment.to (Reassigned).
+# ===========================================================================
+Describe "MC-09: Overdue/missed streak, org-chain escalation, and reassignment/delegation" {
+
+    BeforeAll {
+        # Daily campaigns ordered oldest-first by created date.
+        $script:mc09Daily = @($script:Daily | Sort-Object { [datetime]$_.created })
+        $script:mc09StreakMgr = 'id-gen-006'   # Jennifer Garcia (mgr -> dir id-gen-003 -> VP id-gen-001)
+        $script:mc09IdentityIds = @($script:Fx.Identities | ForEach-Object { $_.id })
+    }
+
+    Context "A named manager is OVERDUE/MISSED for >= N consecutive daily campaigns (Layer A)" {
+
+        It "Should record id-gen-006 (Jennifer Garcia) as non-'attested' for >= 7 CONSECUTIVE daily campaigns" {
+            $streak = 0; $max = 0
+            foreach ($c in $script:mc09Daily) {
+                $a = $c.managerAttestation | Where-Object { $_.managerId -eq $script:mc09StreakMgr } | Select-Object -First 1
+                if ($a -and $a.status -ne 'attested') {
+                    $streak++
+                    if ($streak -gt $max) { $max = $streak }
+                } else {
+                    $streak = 0
+                }
+            }
+            $max | Should -BeGreaterOrEqual 7
+        }
+
+        It "Should escalate the streak from OVERDUE to MISSED (status transitions within the streak)" {
+            $statuses = @()
+            foreach ($c in $script:mc09Daily) {
+                $a = $c.managerAttestation | Where-Object { $_.managerId -eq $script:mc09StreakMgr } | Select-Object -First 1
+                if ($a) { $statuses += $a.status }
+            }
+            $statuses | Should -Contain 'overdue'
+            $statuses | Should -Contain 'missed'
+        }
+    }
+
+    Context "Escalation names the correct next rung UP the real org chain (Layer A)" {
+
+        It "Should populate escalatedTo with a VALID identity present in identities[] on every escalated day" {
+            $escEntries = @()
+            foreach ($c in $script:mc09Daily) {
+                $a = $c.managerAttestation | Where-Object { $_.managerId -eq $script:mc09StreakMgr } | Select-Object -First 1
+                if ($a -and $a.escalationLevel -gt 0) { $escEntries += $a }
+            }
+            $escEntries.Count | Should -BeGreaterThan 0
+            foreach ($e in $escEntries) {
+                $e.escalatedTo | Should -Not -BeNullOrEmpty
+                $script:mc09IdentityIds | Should -Contain $e.escalatedTo
+            }
+        }
+
+        It "Should escalate level 1 to the DIRECT manager (id-gen-003) and level 2 to the VP (id-gen-001) -- the real chain" {
+            foreach ($c in $script:mc09Daily) {
+                $a = $c.managerAttestation | Where-Object { $_.managerId -eq $script:mc09StreakMgr } | Select-Object -First 1
+                if (-not $a) { continue }
+                if ($a.escalationLevel -eq 1) { $a.escalatedTo | Should -Be 'id-gen-003' }
+                if ($a.escalationLevel -eq 2) { $a.escalatedTo | Should -Be 'id-gen-001' }
+            }
+        }
+
+        It "Should keep daysOverdue monotone-increasing across the consecutive streak" {
+            $prev = 0
+            foreach ($c in $script:mc09Daily) {
+                $a = $c.managerAttestation | Where-Object { $_.managerId -eq $script:mc09StreakMgr } | Select-Object -First 1
+                if (-not $a) { continue }
+                if ($a.status -ne 'attested') {
+                    [int]$a.daysOverdue | Should -BeGreaterThan $prev
+                    $prev = [int]$a.daysOverdue
+                } else {
+                    $prev = 0
+                }
+            }
+        }
+
+        It "Should leave non-streak managers un-escalated (escalationLevel 0, escalatedTo empty) -- MC-01..MC-08 untouched" {
+            $c1 = $script:mc09Daily | Where-Object { $_.id -eq 'camp-daily-priv-01' } | Select-Object -First 1
+            $others = @($c1.managerAttestation | Where-Object { $_.managerId -ne $script:mc09StreakMgr })
+            $others.Count | Should -BeGreaterThan 0
+            foreach ($o in $others) {
+                [int]$o.escalationLevel | Should -Be 0
+                $o.escalatedTo | Should -BeNullOrEmpty
+            }
+        }
+    }
+
+    Context "Exactly one cert carries a delegation/reassignment from->to up the chain (Layer A)" {
+        BeforeAll {
+            $script:mc09Reassigned = @($script:Fx.Json.certifications | Where-Object { $null -ne $_.reassignment })
+        }
+
+        It "Should populate reassignment on the delegated cert only (a single deterministic case)" {
+            $script:mc09Reassigned.Count | Should -Be 1
+        }
+
+        It "Should delegate FROM id-gen-006 TO id-gen-003 (both real identities) with a reason" {
+            $r = $script:mc09Reassigned[0].reassignment
+            $r.from.id | Should -Be 'id-gen-006'
+            $r.to.id   | Should -Be 'id-gen-003'
+            $script:mc09IdentityIds | Should -Contain $r.from.id
+            $script:mc09IdentityIds | Should -Contain $r.to.id
+            $r.reason  | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    Context "The toolkit classifier SURFACES the delegated reviewer (Layer B -- real Get-SPAuditCertifications over mocked transport)" {
+        BeforeAll {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+            Mock Get-SPConfig -ModuleName SP.AuditQueries {
+                return [PSCustomObject]@{ Api = [PSCustomObject]@{ MaxPaginationPages = 5 } }
+            }
+            # Return the real delegated cert from the fixture so the classifier
+            # consumes reassignment.to exactly as it would against the live mock.
+            # Build the page payload HERE (test scope) and capture it in the mock
+            # closure; Pester 5 mock bodies see variables from the defining scope.
+            $mc09Fx = Get-Content -Path (Get-MC30FixturePath) -Raw | ConvertFrom-Json
+            $mc09DelegatedCert = @($mc09Fx.certifications | Where-Object { $null -ne $_.reassignment })[0]
+            # Return Data as the cert array directly (the classifier does $page =
+            # $result.Data; @($page)) -- mirrors MC-04's Data=$rec shape. The first
+            # page (offset 0) carries the delegated cert; later pages are empty so
+            # the auto-pagination loop terminates (Count < pageSize).
+            $mc09Page0 = @{ Success = $true; Data = @($mc09DelegatedCert); Error = $null }
+            $mc09PageEmpty = @{ Success = $true; Data = @(); Error = $null }
+            Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries -ParameterFilter {
+                $QueryParams -and $QueryParams['offset'] -eq '0'
+            } -MockWith ([scriptblock]::Create("return `$mc09Page0").GetNewClosure())
+            Mock Invoke-SPApiRequest -ModuleName SP.AuditQueries `
+                -MockWith ([scriptblock]::Create("return `$mc09PageEmpty").GetNewClosure())
+            $script:mc09Res = Get-SPAuditCertifications -CampaignId 'camp-daily-priv-01' -CorrelationID 'mc09'
+        }
+
+        It "Should return the cert classified as 'Reassigned'" {
+            $script:mc09Res.Success | Should -Be $true
+            $c = @($script:mc09Res.Data)[0]
+            $c.ReviewerClassification | Should -Be 'Reassigned'
+        }
+
+        It "Should surface EffectiveReviewer = reassignment.to (id-gen-003), NOT the original reviewer" {
+            $c = @($script:mc09Res.Data)[0]
+            $c.EffectiveReviewer.id | Should -Be 'id-gen-003'
+        }
+    }
+}
+#endregion
