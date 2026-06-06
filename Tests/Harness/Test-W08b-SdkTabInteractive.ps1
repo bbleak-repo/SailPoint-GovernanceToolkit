@@ -205,6 +205,110 @@ function Select-SPUiRow {
     try { return [bool]$Row.Patterns.SelectionItem.Pattern.IsSelected.Value } catch { return $true }
 }
 
+# ----- Runtime expected-counts probe ---------------------------------------
+
+function Get-SPMockExpectedCounts {
+    <#
+    .SYNOPSIS
+        Queries the live mock ONCE for the counts the SDK tab will load, so the
+        GUI assertions can be checked against what the mock actually serves
+        instead of hard-coded literals (robust to the enriched/regenerated seed).
+        Mirrors the OAuth/Bearer pattern in Invoke-FullGuiValidation.ps1
+        (Test-MockOAuth) and the SDK BaseUrl '/v3' suffix (line ~331 there).
+    .DESCRIPTION
+        Every probe is wrapped in its own try/catch so a single endpoint failure
+        does NOT crash the run -- the affected field comes back $null and the
+        caller degrades that assertion to a non-empty (>=1) check. Uses
+        Invoke-RestMethod (NOT Invoke-WebRequest) to avoid proxy-cred prompts
+        under -NonInteractive STA, matching the health probe below.
+    .OUTPUTS
+        [pscustomobject] with: Templates, ApprovalsPending, ApprovalsCompleted,
+        WorkItemsOpen, WorkItemsCompleted, WorkItemsTotal, ShowCompletedTotal,
+        Workflows, DisabledWorkflowId, Filters. Any field may be $null on probe
+        failure.
+    #>
+    param([Parameter(Mandatory)][string]$BaseUrl)
+
+    $v3 = "$BaseUrl/v3"
+    $out = [pscustomobject]@{
+        Templates           = $null
+        ApprovalsPending    = $null
+        ApprovalsCompleted  = $null
+        WorkItemsOpen       = $null
+        WorkItemsCompleted  = $null
+        WorkItemsTotal      = $null
+        ShowCompletedTotal  = $null
+        Workflows           = $null
+        DisabledWorkflowId  = $null
+        Filters             = $null
+    }
+
+    # Bearer token (mirror Test-MockOAuth: client_credentials form POST).
+    $headers = @{}
+    try {
+        $body = "grant_type=client_credentials&client_id=test&client_secret=test"
+        $tok  = Invoke-RestMethod -Uri "$BaseUrl/oauth/token" -Method POST -Body $body `
+                  -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 5 -ErrorAction Stop
+        if ($tok.access_token) { $headers = @{ Authorization = "Bearer $($tok.access_token)" } }
+    } catch { $headers = @{} }
+
+    # Each collection endpoint returns a RAW JSON ARRAY except /work-items/summary
+    # (an object {total,completed,open}). Use @(...).Count for arrays.
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/campaign-templates" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.Templates = @($r).Count
+    } catch { }
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/access-request-approvals/pending" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.ApprovalsPending = @($r).Count
+    } catch { }
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/access-request-approvals/completed" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.ApprovalsCompleted = @($r).Count
+    } catch { }
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/work-items" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.WorkItemsOpen = @($r).Count
+    } catch { }
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/work-items/completed" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.WorkItemsCompleted = @($r).Count
+    } catch { }
+    try {
+        $s = Invoke-RestMethod -Uri "$v3/work-items/summary" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        # Badge semantics: SdkWiBadgeOpen=open, Completed=completed, Total=total
+        # (SP.SdkBridge Get-SPGuiSdkWorkItems). Prefer the summary object; if a
+        # field is missing fall back to the array counts probed above.
+        if ($null -ne $s.open)      { $out.WorkItemsOpen      = [int]$s.open }
+        if ($null -ne $s.completed) { $out.WorkItemsCompleted = [int]$s.completed }
+        if ($null -ne $s.total)     { $out.WorkItemsTotal     = [int]$s.total }
+    } catch { }
+    # Derive total / show-completed from open+completed when summary.total absent.
+    if ($null -eq $out.WorkItemsTotal -and $null -ne $out.WorkItemsOpen -and $null -ne $out.WorkItemsCompleted) {
+        $out.WorkItemsTotal = [int]$out.WorkItemsOpen + [int]$out.WorkItemsCompleted
+    }
+    if ($null -ne $out.WorkItemsOpen -and $null -ne $out.WorkItemsCompleted) {
+        # Show-completed grid merges /work-items + /work-items/completed.
+        $out.ShowCompletedTotal = [int]$out.WorkItemsOpen + [int]$out.WorkItemsCompleted
+    } elseif ($null -ne $out.WorkItemsTotal) {
+        $out.ShowCompletedTotal = [int]$out.WorkItemsTotal
+    }
+    try {
+        $wf = @(Invoke-RestMethod -Uri "$v3/workflows" -Headers $headers -TimeoutSec 5 -ErrorAction Stop)
+        $out.Workflows = $wf.Count
+        # Read the disabled (enabled=false) workflow id from the served data
+        # rather than hard-coding 'wf-004' -- robust to any seed.
+        $disabled = @($wf | Where-Object { $_.enabled -eq $false })
+        if ($disabled.Count -ge 1) { $out.DisabledWorkflowId = [string]$disabled[0].id }
+    } catch { }
+    try {
+        $r = Invoke-RestMethod -Uri "$v3/campaign-filters" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $out.Filters = @($r).Count
+    } catch { }
+
+    return $out
+}
+
 # ----- Mock-up check (BLOCKED guard) ---------------------------------------
 
 $mockUp = $false
@@ -215,6 +319,30 @@ try {
     $h = Invoke-RestMethod -Uri "$MockBaseUrl/health" -TimeoutSec 5 -ErrorAction Stop
     if ($h -and $h.status -eq 'ok') { $mockUp = $true }
 } catch { $mockProbeError = $_.Exception.Message; $mockUp = $false }
+
+# ----- Runtime-derived expected counts (only when the mock is up) -----------
+# Query the served collections ONCE so every step below asserts the GUI grids/
+# badges against what the mock actually serves (templates drifted 3->10, etc.)
+# instead of stale hard-coded literals. On any probe failure the per-field value
+# is $null and the local resolvers below degrade that step to a non-empty check.
+$expected = $null
+if ($mockUp) {
+    try { $expected = Get-SPMockExpectedCounts -BaseUrl $MockBaseUrl } catch { $expected = $null }
+}
+
+# Local resolvers: an int when the mock served a usable value, else $null. A
+# $null means "count unknown" -> the consuming step falls back to >=1 / -Expected -1.
+function Resolve-ExpInt { param($Value) if ($null -ne $Value -and [int]$Value -gt 0) { [int]$Value } else { $null } }
+$expTemplates          = if ($expected) { Resolve-ExpInt $expected.Templates }           else { $null }
+$expPending            = if ($expected) { Resolve-ExpInt $expected.ApprovalsPending }     else { $null }
+$expCompleted          = if ($expected) { Resolve-ExpInt $expected.ApprovalsCompleted }   else { $null }
+$expWiOpen             = if ($expected) { Resolve-ExpInt $expected.WorkItemsOpen }        else { $null }
+$expWiCompleted        = if ($expected) { Resolve-ExpInt $expected.WorkItemsCompleted }   else { $null }
+$expWiTotal            = if ($expected) { Resolve-ExpInt $expected.WorkItemsTotal }       else { $null }
+$expShowCompletedTotal = if ($expected) { Resolve-ExpInt $expected.ShowCompletedTotal }   else { $null }
+$expWorkflows          = if ($expected) { Resolve-ExpInt $expected.Workflows }            else { $null }
+$expFilters            = if ($expected) { Resolve-ExpInt $expected.Filters }              else { $null }
+$expDisabledWfId       = if ($expected) { $expected.DisabledWorkflowId }                  else { $null }
 
 # All the live-dependent step IDs, for the BLOCKED-everything fast path.
 $liveStepIds = @(
@@ -271,14 +399,19 @@ try {
                 $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshTemplates' -ControlType 'Button' -TimeoutMs $RefreshTimeoutMs
                 Invoke-SPUiButton -Button $btn
                 $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkTemplateGrid' -TimeoutMs $RefreshTimeoutMs
-                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 3
+                # Runtime-derived expected count (mock served Templates); -1 = any>0 when unknown.
+                $expTpl = if ($null -ne $expTemplates) { [int]$expTemplates } else { -1 }
+                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expTpl
                 Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-12-templates.png') | Out-Null
-                if ($rows.Count -eq 3) {
+                if ($null -ne $expTemplates -and $rows.Count -eq $expTemplates) {
                     $templatesOk = $true
-                    Add-Result 'WG-08-12' 'PASS' "SdkTemplateGrid populated with 3 seed templates"
+                    Add-Result 'WG-08-12' 'PASS' ("SdkTemplateGrid populated with {0} seed templates (mock-served count)" -f $expTemplates)
+                } elseif ($null -eq $expTemplates -and $rows.Count -ge 1) {
+                    $templatesOk = $true
+                    Add-Result 'WG-08-12' 'PASS' ("SdkTemplateGrid populated with {0} template(s) (expected count unknown; asserted >=1)" -f $rows.Count)
                 } elseif ($rows.Count -gt 0) {
                     $templatesOk = $true
-                    Add-Result 'WG-08-12' 'FAIL' ("Expected 3 templates, grid shows {0}" -f $rows.Count)
+                    Add-Result 'WG-08-12' 'FAIL' ("Expected {0} templates, grid shows {1}" -f $expTemplates, $rows.Count)
                 } else {
                     Add-Result 'WG-08-12' 'FAIL' "SdkTemplateGrid did not populate within ${RefreshTimeoutMs}ms"
                 }
@@ -353,37 +486,46 @@ try {
                 $apvTab.Select() | Out-Null
                 $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkApprovalGrid' -TimeoutMs $RefreshTimeoutMs
 
+                # Runtime-derived expected counts; -1 = any>0 when unknown.
+                $expPnd = if ($null -ne $expPending)   { [int]$expPending }   else { -1 }
+                $expCmp = if ($null -ne $expCompleted) { [int]$expCompleted } else { -1 }
+
                 # Pending (default state, but click the radio to drive the refresh).
                 $rbPending = Find-SPUiElement -Root $ui.Window -AutomationId 'RbSdkPending' -ControlType 'RadioButton' -TimeoutMs $RefreshTimeoutMs
                 try { $rbPending.Patterns.SelectionItem.Pattern.Select() } catch { try { $rbPending.Click() } catch { } }
-                $pendingRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
-                if ($pendingRows.Count -ne 4) {
+                $pendingRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expPnd
+                if ($null -ne $expPending -and $pendingRows.Count -ne $expPending) {
                     # Belt-and-suspenders: explicit Refresh if the radio change lagged.
                     try {
                         $btnR = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshApprovals' -ControlType 'Button' -TimeoutMs 2000
                         Invoke-SPUiButton -Button $btnR
-                        $pendingRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
+                        $pendingRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expPnd
                     } catch { }
                 }
 
                 # Completed.
                 $rbCompleted = Find-SPUiElement -Root $ui.Window -AutomationId 'RbSdkCompleted' -ControlType 'RadioButton' -TimeoutMs $RefreshTimeoutMs
                 try { $rbCompleted.Patterns.SelectionItem.Pattern.Select() } catch { try { $rbCompleted.Click() } catch { } }
-                $completedRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 3
-                if ($completedRows.Count -ne 3) {
+                $completedRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expCmp
+                if ($null -ne $expCompleted -and $completedRows.Count -ne $expCompleted) {
                     try {
                         $btnR = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshApprovals' -ControlType 'Button' -TimeoutMs 2000
                         Invoke-SPUiButton -Button $btnR
-                        $completedRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 3
+                        $completedRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expCmp
                     } catch { }
                 }
                 Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-14-approvals.png') | Out-Null
 
-                if ($pendingRows.Count -eq 4 -and $completedRows.Count -eq 3) {
+                # PASS when each grid matches its served count (or >=1 when unknown).
+                $pndOk = if ($null -ne $expPending)   { $pendingRows.Count -eq $expPending }     else { $pendingRows.Count -ge 1 }
+                $cmpOk = if ($null -ne $expCompleted) { $completedRows.Count -eq $expCompleted } else { $completedRows.Count -ge 1 }
+                $expPndStr = if ($null -ne $expPending)   { [string]$expPending }   else { '>=1' }
+                $expCmpStr = if ($null -ne $expCompleted) { [string]$expCompleted } else { '>=1' }
+                if ($pndOk -and $cmpOk) {
                     $approvalsOk = $true
-                    Add-Result 'WG-08-14' 'PASS' "RbSdkPending -> 4 rows; RbSdkCompleted -> 3 rows"
+                    Add-Result 'WG-08-14' 'PASS' ("RbSdkPending -> {0} rows (want {1}); RbSdkCompleted -> {2} rows (want {3})" -f $pendingRows.Count, $expPndStr, $completedRows.Count, $expCmpStr)
                 } else {
-                    Add-Result 'WG-08-14' 'FAIL' ("Expected pending=4 completed=3; got pending={0} completed={1}" -f $pendingRows.Count, $completedRows.Count)
+                    Add-Result 'WG-08-14' 'FAIL' ("Expected pending={0} completed={1}; got pending={2} completed={3}" -f $expPndStr, $expCmpStr, $pendingRows.Count, $completedRows.Count)
                 }
             }
         }
@@ -468,6 +610,13 @@ try {
                 # Refresh click is a no-op with "...an SDK data load is already in
                 # progress...". Re-click Refresh until the guard frees and our load
                 # actually runs + populates, or we hit the overall deadline.
+                # Runtime-derived expected counts. The OPEN grid shows /work-items;
+                # badges are the summary {open,completed,total} as STRINGS.
+                $expGrid = if ($null -ne $expWiOpen) { [int]$expWiOpen } else { -1 }
+                $wantOpenStr  = if ($null -ne $expWiOpen)      { [string]$expWiOpen }      else { $null }
+                $wantCmpStr   = if ($null -ne $expWiCompleted) { [string]$expWiCompleted } else { $null }
+                $wantTotalStr = if ($null -ne $expWiTotal)     { [string]$expWiTotal }     else { $null }
+
                 $rows = @()
                 $badgeOpen = '-'; $badgeCompleted = '-'; $badgeTotal = '-'
                 $populated = $false
@@ -484,7 +633,7 @@ try {
                     # Our refresh was accepted -- wait for the load to finish, then read.
                     $null = Wait-SPUiSdkIdle -Root $ui.Window -StatusName 'SdkWorkItemStatusLabel' -TimeoutMs 20000
                     $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
-                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
+                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expGrid
                     $bDeadline = (Get-Date).AddMilliseconds($RefreshTimeoutMs)
                     while ((Get-Date) -lt $bDeadline) {
                         try {
@@ -492,20 +641,28 @@ try {
                             $badgeCompleted = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeCompleted' -TimeoutMs 500).Name
                             $badgeTotal     = (Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWiBadgeTotal'     -TimeoutMs 500).Name
                         } catch { }
-                        if ($badgeOpen -eq '4' -and $badgeCompleted -eq '2' -and $badgeTotal -eq '6') { break }
+                        if ($null -ne $wantOpenStr -and $badgeOpen -eq $wantOpenStr -and $badgeCompleted -eq $wantCmpStr -and $badgeTotal -eq $wantTotalStr) { break }
+                        if ($null -eq $wantOpenStr -and ($badgeOpen -match '^\d+$')) { break }
                         Start-Sleep -Milliseconds 200
                     }
-                    if ($rows.Count -ge 1 -or $badgeOpen -eq '4') { $populated = $true }
+                    if ($rows.Count -ge 1 -or ($null -ne $wantOpenStr -and $badgeOpen -eq $wantOpenStr)) { $populated = $true }
                 }
                 Save-SPUiScreenshot -Element $ui.Window -Path (Join-Path $ScreenshotDir 'WG-08b-16-workitems.png') | Out-Null
 
-                $badgesOk = ($badgeOpen -eq '4' -and $badgeCompleted -eq '2' -and $badgeTotal -eq '6')
-                $rowsOk   = ($rows.Count -eq 4)
+                # Compare against served counts (strings) when known, else assert numeric/non-empty.
+                if ($null -ne $wantOpenStr) {
+                    $badgesOk = ($badgeOpen -eq $wantOpenStr -and $badgeCompleted -eq $wantCmpStr -and $badgeTotal -eq $wantTotalStr)
+                } else {
+                    $badgesOk = (($badgeOpen -match '^\d+$') -and ($badgeCompleted -match '^\d+$') -and ($badgeTotal -match '^\d+$'))
+                }
+                $rowsOk = if ($null -ne $expWiOpen) { $rows.Count -eq $expWiOpen } else { $rows.Count -ge 1 }
+                $wantTriple = if ($null -ne $wantOpenStr) { "$wantOpenStr/$wantCmpStr/$wantTotalStr" } else { 'numeric/non-empty' }
+                $wantRows   = if ($null -ne $expWiOpen) { [string]$expWiOpen } else { '>=1' }
                 if ($badgesOk -and $rowsOk) {
                     $workItemsOk = $true
-                    Add-Result 'WG-08-16' 'PASS' "Badges Open/Completed/Total = 4/2/6; grid shows 4 pending"
+                    Add-Result 'WG-08-16' 'PASS' ("Badges Open/Completed/Total = {0}/{1}/{2} (want {3}); grid shows {4} open (want {5})" -f $badgeOpen, $badgeCompleted, $badgeTotal, $wantTriple, $rows.Count, $wantRows)
                 } else {
-                    Add-Result 'WG-08-16' 'FAIL' ("badges Open={0} Completed={1} Total={2} (want 4/2/6); pendingRows={3} (want 4)" -f $badgeOpen, $badgeCompleted, $badgeTotal, $rows.Count)
+                    Add-Result 'WG-08-16' 'FAIL' ("badges Open={0} Completed={1} Total={2} (want {3}); openRows={4} (want {5})" -f $badgeOpen, $badgeCompleted, $badgeTotal, $wantTriple, $rows.Count, $wantRows)
                 }
             }
         }
@@ -544,13 +701,22 @@ try {
                 if (-not $idle) {
                     Add-Result 'WG-08-17' 'FAIL' "SdkWorkItemStatusLabel never left 'Loading' after Show Completed Refresh (25s timeout); lastStatus='$statusText'"
                 } else {
+                    # Show-completed merges open+completed = total (mock-served).
+                    $expSC = if ($null -ne $expShowCompletedTotal) { [int]$expShowCompletedTotal } else { -1 }
                     $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkItemGrid' -TimeoutMs $RefreshTimeoutMs
-                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs 4000 -Expected 6
+                    $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs 4000 -Expected $expSC
                     Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-17-show-completed.png') | Out-Null
-                    if ($rows.Count -eq 6) {
-                        Add-Result 'WG-08-17' 'PASS' "ChkSdkShowCompleted ON + Refresh; grid shows 6 work items (all states)"
+                    # Fallback when total unknown: at least the open set (>= open, or >=1).
+                    $scOk = if ($null -ne $expShowCompletedTotal) { $rows.Count -eq $expShowCompletedTotal }
+                            elseif ($null -ne $expWiOpen)         { $rows.Count -ge $expWiOpen }
+                            else                                  { $rows.Count -ge 1 }
+                    $wantSC = if ($null -ne $expShowCompletedTotal) { [string]$expShowCompletedTotal }
+                              elseif ($null -ne $expWiOpen)         { ">={0}" -f $expWiOpen }
+                              else                                  { '>=1' }
+                    if ($scOk) {
+                        Add-Result 'WG-08-17' 'PASS' ("ChkSdkShowCompleted ON + Refresh; grid shows {0} work items (want {1}; all states)" -f $rows.Count, $wantSC)
                     } else {
-                        Add-Result 'WG-08-17' 'FAIL' ("Expected 6 items; got {0} (toggleSet={1}; statusAfterRefresh='{2}')" -f $rows.Count, $set, $statusText)
+                        Add-Result 'WG-08-17' 'FAIL' ("Expected {0} items; got {1} (toggleSet={2}; statusAfterRefresh='{3}')" -f $wantSC, $rows.Count, $set, $statusText)
                     }
                 }
             }
@@ -569,8 +735,10 @@ try {
                 $wfTab.Select() | Out-Null
                 $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshWorkflows' -ControlType 'Button' -TimeoutMs $RefreshTimeoutMs
                 Invoke-SPUiButton -Button $btn
+                # Runtime-derived expected workflow count; -1 = any>0 when unknown.
+                $expWf = if ($null -ne $expWorkflows) { [int]$expWorkflows } else { -1 }
                 $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkWorkflowGrid' -TimeoutMs $RefreshTimeoutMs
-                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 4
+                $rows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expWf
 
                 $execPopulated = $false
                 if ($rows.Count -gt 0) {
@@ -583,14 +751,16 @@ try {
                 }
                 Save-SPUiScreenshot -Element $ui.Window -Path (Join-Path $ScreenshotDir 'WG-08b-18-workflows.png') | Out-Null
 
-                if ($rows.Count -eq 4 -and $execPopulated) {
+                $wfRowsOk = if ($null -ne $expWorkflows) { $rows.Count -eq $expWorkflows } else { $rows.Count -ge 1 }
+                $wantWf   = if ($null -ne $expWorkflows) { [string]$expWorkflows } else { '>=1' }
+                if ($wfRowsOk -and $execPopulated) {
                     $workflowsOk = $true
-                    Add-Result 'WG-08-18' 'PASS' "SdkWorkflowGrid shows 4 rows; SdkExecutionGrid populated for selected workflow"
-                } elseif ($rows.Count -eq 4) {
+                    Add-Result 'WG-08-18' 'PASS' ("SdkWorkflowGrid shows {0} rows (want {1}); SdkExecutionGrid populated for selected workflow" -f $rows.Count, $wantWf)
+                } elseif ($wfRowsOk) {
                     $workflowsOk = $true
-                    Add-Result 'WG-08-18' 'FAIL' "Workflow grid shows 4 rows but SdkExecutionGrid did not populate"
+                    Add-Result 'WG-08-18' 'FAIL' ("Workflow grid shows {0} rows (want {1}) but SdkExecutionGrid did not populate" -f $rows.Count, $wantWf)
                 } else {
-                    Add-Result 'WG-08-18' 'FAIL' ("Expected 4 workflows; got {0}" -f $rows.Count)
+                    Add-Result 'WG-08-18' 'FAIL' ("Expected {0} workflows; got {1}" -f $wantWf, $rows.Count)
                 }
             }
         }
@@ -617,14 +787,19 @@ try {
                     elseif ($state -eq 'On') { $enabledCount++ }
                 }
                 Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-19-wf-enabled.png') | Out-Null
-                $wf004Disabled = $false
-                foreach ($d in $disabledRows) { if ($d -match 'wf-004') { $wf004Disabled = $true } }
-                if ($disabledRows.Count -eq 1 -and $wf004Disabled) {
-                    Add-Result 'WG-08-19' 'PASS' ("Exactly one workflow disabled (enabled=False) and it is wf-004; {0} enabled" -f $enabledCount)
+                # Disabled workflow id read from the served data (not hard-coded).
+                $wantDisabledId = $expDisabledWfId
+                $wantIdStr = if ($wantDisabledId) { $wantDisabledId } else { '(served disabled id)' }
+                $idMatched = $false
+                if ($wantDisabledId) {
+                    foreach ($d in $disabledRows) { if ($d -match [regex]::Escape($wantDisabledId)) { $idMatched = $true } }
+                }
+                if ($disabledRows.Count -eq 1 -and $wantDisabledId -and $idMatched) {
+                    Add-Result 'WG-08-19' 'PASS' ("Exactly one workflow disabled (enabled=False) and it is {0}; {1} enabled" -f $wantIdStr, $enabledCount)
                 } elseif ($disabledRows.Count -eq 1) {
-                    Add-Result 'WG-08-19' 'PASS' ("Exactly one workflow disabled (enabled=False): '{0}' (wf-004 id not text-scrapable cross-process -- soft note); {1} enabled" -f ($disabledRows -join ''), $enabledCount)
+                    Add-Result 'WG-08-19' 'PASS' ("Exactly one workflow disabled (enabled=False): '{0}' (served disabled id {1} not text-scrapable cross-process -- soft note); {2} enabled" -f ($disabledRows -join ''), $wantIdStr, $enabledCount)
                 } else {
-                    Add-Result 'WG-08-19' 'FAIL' ("Expected exactly one disabled workflow (wf-004); found {0} disabled, {1} enabled" -f $disabledRows.Count, $enabledCount)
+                    Add-Result 'WG-08-19' 'FAIL' ("Expected exactly one disabled workflow ({0}); found {1} disabled, {2} enabled" -f $wantIdStr, $disabledRows.Count, $enabledCount)
                 }
             }
         }
@@ -646,7 +821,9 @@ try {
                 $btn = Find-SPUiElement -Root $ui.Window -AutomationId 'BtnSdkRefreshFilters' -ControlType 'Button' -TimeoutMs $RefreshTimeoutMs
                 Invoke-SPUiButton -Button $btn
                 $grid = Find-SPUiElement -Root $ui.Window -AutomationId 'SdkFilterGrid' -TimeoutMs $RefreshTimeoutMs
-                $allRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected 3
+                # Runtime-derived expected filter count; -1 = any>0 when unknown.
+                $expFlt = if ($null -ne $expFilters) { [int]$expFilters } else { -1 }
+                $allRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $expFlt
 
                 # The mock seed has 0 system filters (isSystem=false on all 3), so
                 # unchecking Include System leaves the count unchanged at 3. The
@@ -657,10 +834,14 @@ try {
                 $nonSystemRows = Get-SPUiGridRows -Grid $grid -TimeoutMs $RefreshTimeoutMs -Expected $allRows.Count
                 Save-SPUiScreenshot -Element $grid -Path (Join-Path $ScreenshotDir 'WG-08b-20-filters.png') | Out-Null
 
-                if ($allRows.Count -ge 1 -and $nonSystemRows.Count -ge 1) {
-                    Add-Result 'WG-08-20' 'PASS' ("Filters: Include System ON -> {0} filter(s); OFF -> {1} filter(s). Mock has 0 system filters so counts match -- expected." -f $allRows.Count, $nonSystemRows.Count)
+                # Cross-check against the served filter count when known (>= since
+                # the GUI may include extra non-system filters); else assert >=1.
+                $allOk = if ($null -ne $expFilters) { $allRows.Count -ge $expFilters } else { $allRows.Count -ge 1 }
+                $wantFlt = if ($null -ne $expFilters) { ">={0}" -f $expFilters } else { '>=1' }
+                if ($allOk -and $nonSystemRows.Count -ge 1) {
+                    Add-Result 'WG-08-20' 'PASS' ("Filters: Include System ON -> {0} filter(s) (want {1}); OFF -> {2} filter(s). Mock has 0 system filters so counts match -- expected." -f $allRows.Count, $wantFlt, $nonSystemRows.Count)
                 } else {
-                    Add-Result 'WG-08-20' 'FAIL' ("Filter grid empty; expected >=1 row in both states (all={0} nonSystem={1})" -f $allRows.Count, $nonSystemRows.Count)
+                    Add-Result 'WG-08-20' 'FAIL' ("Filter grid: expected {0} ON and >=1 OFF (all={1} nonSystem={2})" -f $wantFlt, $allRows.Count, $nonSystemRows.Count)
                 }
             }
         }
