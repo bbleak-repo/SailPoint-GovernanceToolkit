@@ -124,7 +124,9 @@ Tests Passed: 16, Failed: 0, Skipped: 0, Inconclusive: 0, NotRun: 0
 ```
 
 ## Commit
-<filled in after commit below>
+`9393225` feat(audit): add rolling 7/30-day manager-cert trend HTML view (Export-SPRollingTrendHtml, T-06)
+(record committed in the same commit; the hash above is final on branch
+feature/manager-cert-30day-sim. Not pushed.)
 
 ## Status
 DONE
