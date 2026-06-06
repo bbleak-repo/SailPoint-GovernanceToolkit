@@ -39,7 +39,7 @@ Each item is sized S/M/L. CRITICAL/HIGH first. Every item except **AR-19**
 | AR-12 | HIGH | CLI `Invoke-SPAdaptiveReport.ps1` (additive; -Anchor/-Components/-BaselineReport/-Theme + date period) | L | AR-03,05,08 | DONE |
 | AR-13 | HIGH | Pester/AST for the CLI + CLI-00x convention compliance | S | AR-12 | DONE |
 | AR-14 | HIGH | GUI: add **Adaptive Reports** TabItem to `MainWindow.xaml` (namespaced, tooltips) | L | AR-01 | DONE |
-| AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | TODO |
+| AR-15 | HIGH | `Initialize-SPAdaptiveTab` region (runspace + dispatcher + `Wait-SPReportFileReady`) | L | AR-14,12 | DONE |
 | AR-16 | LOW | `Show-SPDashboard.ps1` — load new modules + call `Initialize-SPAdaptiveTab` | S | AR-15 | TODO |
 | AR-17 | MEDIUM | Headless structure test W-09 (XAML parse + control/tooltip presence) | M | AR-14 | TODO |
 | AR-18 | LOW | Register W-09 in `Invoke-FullGuiValidation.ps1` | S | AR-17 | TODO |
@@ -234,7 +234,21 @@ reuse existing SP styles. Re-verify the window still fits the work area.
 **Accept:** XAML parses via `XamlReader`; tab present; W-09 finds all controls.
 
 ## AR-15: Initialize-SPAdaptiveTab region
-- **Status:** `TODO` · **Depends:** AR-14,12 · **Size:** L
+- **Status:** `DONE` · **Depends:** AR-14,12 · **Size:** L
+> Added `#region Adaptive Reports Tab` to `SP.MainWindow.psm1` (3 functions:
+> `Initialize-SPAdaptiveTab` + internal `Invoke-GuiAdaptiveReport` /
+> `Invoke-GuiAdaptiveOpenReport` / `Resolve-AdaptiveOutputPath`), mirroring the
+> Delta Cert tab. Generate gathers UI selections on the UI thread, runs the same
+> CLI chain (Get-SPAuditCampaigns -> Build-SPRCDataset -> New-ComposableReport /
+> Export-SPRC*) on a background STA runspace, marshals status via the dispatcher,
+> and opens the primary HTML via `Wait-SPReportFileReady` + `Start-Process`. Added
+> `$script:IsAdaptiveRunning`/`$script:LastAdaptiveReportPath` state vars. Exported
+> `Initialize-SPAdaptiveTab` via both the manifest FunctionsToExport AND the
+> `SP.MainWindow` `Export-ModuleMember` (the manifest allowlist alone cannot
+> surface a nested-module function the nested module does not export) so
+> Get-Command resolves it; the three helpers stay internal. Show-SPDashboard
+> tab-init wiring is AR-16. Headless: AST 0 errors, manifest OK, import +
+> Get-Command resolves, no regression (Show-SPDashboard still exports).
 **Goal:** `Initialize-SPAdaptiveTab` in `SP.MainWindow.psm1`: capture
 `$module = $script:ThisModule`; `Find-Control` lookups; wire every handler with
 `& $module { param(...) } $args` + `.GetNewClosure()`. Generate runs on a

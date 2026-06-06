@@ -43,6 +43,10 @@ $script:AuditCampaignDataSource     = [System.Collections.ObjectModel.Observable
 $script:IsAuditRunning              = $false
 $script:DeltaCertResultDataSource   = [System.Collections.ObjectModel.ObservableCollection[PSObject]]::new()
 $script:IsDeltaCertRunning          = $false
+# Adaptive Reports tab state (AR-15). IsAdaptiveRunning guards the Generate
+# handler against re-entrancy; LastAdaptiveReportPath feeds BtnArOpenReport.
+$script:IsAdaptiveRunning           = $false
+$script:LastAdaptiveReportPath      = $null
 $script:IsGovernanceRunning         = $false
 $script:LastDeltaCertParams         = $null
 $script:LastEscalationParams        = $null
@@ -3019,6 +3023,419 @@ function Invoke-GuiViewDisconnectedAppSla {
 
 #endregion
 
+#region Adaptive Reports Tab
+
+function Resolve-AdaptiveOutputPath {
+    <#
+    .SYNOPSIS
+        Resolves the absolute path to the Adaptive Reports output directory.
+    .DESCRIPTION
+        Mirrors Resolve-AuditOutputPath but appends 'adaptive' to the audit base,
+        matching the CLI's effectiveOutputPath ({Audit.OutputPath}\adaptive used by
+        Invoke-SPAdaptiveReport.ps1) so the GUI writes/opens the same location.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $configAuditPath = $null
+    try {
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'Audit' -and
+            $null -ne $config.Audit -and
+            $config.Audit.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+            $configAuditPath = $config.Audit.OutputPath
+        }
+    }
+    catch { }
+
+    $rawPath = if ($configAuditPath) { $configAuditPath } else { '.\Audit' }
+
+    # If relative, resolve against toolkit root
+    if (-not [System.IO.Path]::IsPathRooted($rawPath)) {
+        $rawPath = Join-Path $script:ToolkitRoot $rawPath
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $rawPath 'adaptive'))
+}
+
+function Initialize-SPAdaptiveTab {
+    <#
+    .SYNOPSIS
+        Wires up the Adaptive Reports tab controls and event handlers.
+    .DESCRIPTION
+        Captures the module reference once, looks up the AR-14 named controls, and
+        wires each button through the module-scope re-entry closure
+        (& $module { param(...) } $args + .GetNewClosure()) so private helpers
+        resolve at fire-time. No API/IO runs on init -- generation happens only on
+        the Generate handler, on a background STA runspace.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    # Local capture of module reference. .GetNewClosure() preserves locals across
+    # the WPF delegate conversion; $script:* lookups don't survive it.
+    $module = $script:ThisModule
+
+    $btnGenerate   = Find-Control -Parent $TabContent -Name 'BtnArGenerate'
+    $btnOpenFolder = Find-Control -Parent $TabContent -Name 'BtnArOpenFolder'
+    $btnOpenReport = Find-Control -Parent $TabContent -Name 'BtnArOpenReport'
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsStatusLabel'
+
+    # Generate button -- runs the report chain on a background STA runspace
+    if ($btnGenerate) {
+        $btnGenerate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiAdaptiveReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Open Output Folder button (mirrors the Delta Cert 'Open Output Folder' handler)
+    if ($btnOpenFolder) {
+        $btnOpenFolder.Add_Click({
+            $outputPath = & $module { Resolve-AdaptiveOutputPath }
+            if (-not (Test-Path $outputPath)) {
+                [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
+            }
+            Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        }.GetNewClosure())
+    }
+
+    # Open Report button -- opens the most recently generated report, if any
+    if ($btnOpenReport) {
+        $btnOpenReport.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiAdaptiveOpenReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    # Initial status -- no auto-run on init (read happens only on Generate)
+    if ($null -ne $statusLabel) {
+        $statusLabel.Text = 'Ready. Choose anchor / components / baselines, then Generate.'
+    }
+}
+
+function Invoke-GuiAdaptiveOpenReport {
+    <#
+    .SYNOPSIS
+        Opens the most recently generated adaptive report in the default browser.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    $path = $script:LastAdaptiveReportPath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path $path)) {
+        Set-StatusMessage -Message 'No report generated yet.' -IsError
+        return
+    }
+    Wait-SPReportFileReady -Path $path | Out-Null
+    Start-Process $path
+}
+
+function Invoke-GuiAdaptiveReport {
+    <#
+    .SYNOPSIS
+        Generates an adaptive report in a background runspace from the GUI.
+    .DESCRIPTION
+        Gathers UI selections on the UI thread (no API/IO here), then runs the same
+        chain the Invoke-SPAdaptiveReport.ps1 CLI uses (Get-SPAuditCampaigns ->
+        build audits -> Build-SPRCDataset -> New-ComposableReport / Export-SPRC*)
+        on a background STA runspace. Status is marshalled back via the dispatcher;
+        on success the primary HTML is opened with Wait-SPReportFileReady +
+        Start-Process. No API/IO runs on the UI thread.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsAdaptiveRunning) {
+        Set-StatusMessage -Message 'An adaptive report run is already in progress.' -IsError
+        return
+    }
+
+    # --- UI-thread gathering (no API/IO) ------------------------------------
+    $anchorCombo   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsAnchorCombo'
+    $themeCombo    = Find-Control -Parent $TabContent -Name 'AdaptiveReportsThemeCombo'
+    $daysBackBox   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsDaysBackBox'
+    $progressBar   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsProgressBar'
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'AdaptiveReportsStatusLabel'
+    $btnGenerate   = Find-Control -Parent $TabContent -Name 'BtnArGenerate'
+
+    $anchor = 'Entitlement'
+    if ($null -ne $anchorCombo -and $null -ne $anchorCombo.SelectedItem -and
+        $null -ne $anchorCombo.SelectedItem.Content) {
+        $anchor = [string]$anchorCombo.SelectedItem.Content
+    }
+
+    $theme = 'light'
+    if ($null -ne $themeCombo -and $null -ne $themeCombo.SelectedItem -and
+        $null -ne $themeCombo.SelectedItem.Content) {
+        $theme = [string]$themeCombo.SelectedItem.Content
+    }
+
+    $daysBack = 90
+    if ($null -ne $daysBackBox -and -not [string]::IsNullOrWhiteSpace($daysBackBox.Text)) {
+        [int]::TryParse($daysBackBox.Text.Trim(), [ref]$daysBack) | Out-Null
+    }
+
+    # Map component checkboxes to the CLI keys
+    $componentMap = [ordered]@{
+        'ChkArCompKpiCards'   = 'kpi-cards'
+        'ChkArCompHeatmap'    = 'heatmap'
+        'ChkArCompTree'       = 'tree'
+        'ChkArCompTopN'       = 'top-n'
+        'ChkArCompGroupTable' = 'group-table'
+    }
+    $components = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $componentMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $components.Add($componentMap[$name]) }
+    }
+
+    # Map baseline checkboxes to the CLI keys
+    $baselineMap = [ordered]@{
+        'ChkArBaseInventory'   = 'inventory'
+        'ChkArBasePrivileged'  = 'privileged'
+        'ChkArBaseOrphaned'    = 'orphaned'
+        'ChkArBaseExecSummary' = 'exec-summary'
+        'ChkArBaseRoster'      = 'roster'
+        'ChkArBaseAccessCert'  = 'access-cert'
+        'ChkArBaseSod'         = 'sod'
+    }
+    $baselines = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $baselineMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $baselines.Add($baselineMap[$name]) }
+    }
+
+    if ($components.Count -eq 0 -and $baselines.Count -eq 0) {
+        Set-StatusMessage -Message 'Select at least one component or baseline report.' -IsError
+        return
+    }
+
+    $componentArr = $components.ToArray()
+    $baselineArr  = $baselines.ToArray()
+
+    $outputPath = Resolve-AdaptiveOutputPath
+
+    $script:IsAdaptiveRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Generating adaptive report. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Generating adaptive report...' }
+    if ($null -ne $progressBar) {
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility      = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $btnGenerate) { $btnGenerate.IsEnabled = $false }
+
+    # --- Background STA runspace --------------------------------------------
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',   $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',    $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',   $statusLabel)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID', $correlationID)
+    $runspace.SessionStateProxy.SetVariable('OutputPath',    $outputPath)
+    $runspace.SessionStateProxy.SetVariable('Anchor',        $anchor)
+    $runspace.SessionStateProxy.SetVariable('Theme',         $theme)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',      $daysBack)
+    $runspace.SessionStateProxy.SetVariable('Components',    $componentArr)
+    $runspace.SessionStateProxy.SetVariable('Baselines',     $baselineArr)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        # Same module set the Invoke-SPAdaptiveReport.ps1 CLI imports, plus SP.Gui
+        # for parity with the Delta block (Set-StatusMessage availability).
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1', 'SP.Audit\SP.Audit.psd1',
+                'SP.DeltaCert\SP.DeltaCert.psd1',
+                'SP.ReportComponents\SP.ReportComponents.psd1',
+                'SP.AdaptiveReports\SP.AdaptiveReports.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $result = @{ Success = $false; Data = @{ Generated = @(); Primary = $null }; Error = $null }
+
+        try {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null }
+
+            # --- Pull campaigns + build audits (verbatim from the CLI chain) ---
+            $campaigns = @()
+            $cr = Get-SPAuditCampaigns -Status @('COMPLETED', 'ACTIVE') -DaysBack $DaysBack -CorrelationID $CorrelationID
+            if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
+            if ($campaigns.Count -eq 0) { throw 'No campaigns matched the selected window.' }
+
+            $audits = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($camp in $campaigns) {
+                $wrapped = New-Object System.Collections.Generic.List[object]
+                $certR = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
+                foreach ($cert in @(if ($certR.Success) { $certR.Data } else { @() })) {
+                    $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+                    foreach ($item in @(if ($itemR.Success) { $itemR.Data } else { @() })) {
+                        $wrapped.Add(@{ Item = $item; CertificationId = [string]$cert.id; CertificationName = [string]$cert.name; CampaignName = [string]$camp.name })
+                    }
+                }
+                $dg = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = ''; CompletionDate = '' }
+                $audits.Add(@{ CampaignName = [string]$camp.name; CampaignId = [string]$camp.id; Decisions = $dg })
+            }
+
+            # --- Adapt to the RC GroupResults shape ---
+            $ds = Build-SPRCDataset -CampaignAudits $audits.ToArray() -Anchor $Anchor -CorrelationID $CorrelationID
+            if (-not $ds.Success) { throw "adapter failed: $($ds.Error)" }
+            $gr = @($ds.Data.GroupResults)
+            if ($gr.Count -eq 0) { throw 'No groups produced from the window -- nothing to render.' }
+
+            $stamp     = (Get-Date).ToString('yyyyMMdd-HHmmss')
+            $generated = New-Object System.Collections.Generic.List[string]
+            $composableFile = $null
+
+            # Composable report
+            if (@($Components).Count -gt 0) {
+                $ctx     = New-RCContext -GroupResults $gr -StaleResults $ds.Data.StaleResults -Theme $Theme
+                $outFile = Join-Path $OutputPath "adaptive-$Anchor-$stamp.html"
+                New-ComposableReport -Components $Components -Context $ctx -Title "Adaptive $Anchor Report" -Theme $Theme -OutputPath $outFile | Out-Null
+                $generated.Add($outFile)
+                $composableFile = $outFile
+            }
+
+            # Baseline reports (same dispatch map the CLI uses)
+            $baselineFnMap = [ordered]@{
+                'inventory'    = 'Export-GroupInventoryCatalogReport'
+                'privileged'   = 'Export-PrivilegedGroupReviewReport'
+                'orphaned'     = 'Export-OrphanedDisabledMembersReport'
+                'exec-summary' = 'Export-GovernanceExecutiveSummaryReport'
+                'roster'       = 'Export-MembershipSnapshotRosterReport'
+                'access-cert'  = 'Export-AccessCertificationAttestationReport'
+                'sod'          = 'Export-SodToxicComembershipReport'
+            }
+            foreach ($key in @($Baselines)) {
+                $fn = $baselineFnMap[$key]
+                if (-not $fn) { continue }
+                $outFile = Join-Path $OutputPath "$key-$stamp.html"
+                & $fn -GroupResults $gr -OutputPath $outFile -Theme $Theme | Out-Null
+                $generated.Add($outFile)
+            }
+
+            if ($generated.Count -eq 0) { throw 'No reports were produced.' }
+
+            $primary = if ($composableFile) { $composableFile } else { $generated[0] }
+            $result.Success      = $true
+            $result.Data.Generated = $generated.ToArray()
+            $result.Data.Primary = $primary
+        }
+        catch {
+            $result.Success = $false
+            $result.Error   = $_.Exception.Message
+        }
+
+        # Marshal a status summary back to the UI thread
+        $dispatcher     = $MainWindow.Dispatcher
+        $capturedResult = $result
+        $capturedLabel  = $StatusLabel
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedLabel) {
+                if ($capturedResult.Success) {
+                    $capturedLabel.Text = "Generated $(@($capturedResult.Data.Generated).Count) report(s)."
+                } else {
+                    $capturedLabel.Text = "Adaptive report failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $result
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    # --- Completion poll (mirrors Invoke-GuiDeltaReport) ---------------------
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedBtn      = $btnGenerate
+    $capturedProgress = $progressBar
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $btn, $progress)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $finalResult = $null
+                try {
+                    $finalResult = $ps.EndInvoke($async)
+                } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Adaptive report failed: $errMsg" -IsError
+                } else {
+                    $opened = $false
+                    if ($null -ne $finalResult -and $finalResult.Count -gt 0) {
+                        $result = $finalResult[0]
+                        if ($result.Success -and $null -ne $result.Data -and
+                            -not [string]::IsNullOrWhiteSpace($result.Data.Primary) -and
+                            (Test-Path $result.Data.Primary)) {
+                            # Let the runspace-written file fully flush + unlock
+                            # before the browser opens it.
+                            Wait-SPReportFileReady -Path $result.Data.Primary | Out-Null
+                            Start-Process $result.Data.Primary
+                            $script:LastAdaptiveReportPath = $result.Data.Primary
+                            $opened = $true
+                        }
+                    }
+                    if ($opened) {
+                        Set-StatusMessage -Message 'Adaptive report generated successfully.'
+                    } else {
+                        $failMsg = if ($null -ne $finalResult -and $finalResult.Count -gt 0 -and $finalResult[0].Error) { $finalResult[0].Error } else { 'no report produced' }
+                        Set-StatusMessage -Message "Adaptive report failed: $failMsg" -IsError
+                    }
+                }
+
+                if ($null -ne $btn) { $btn.IsEnabled = $true }
+                if ($null -ne $progress) {
+                    $progress.IsIndeterminate = $false
+                    $progress.Visibility      = [System.Windows.Visibility]::Collapsed
+                }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsAdaptiveRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedBtn $capturedProgress
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+#endregion
+
 #region Governance Tab
 
 function Initialize-GovernanceTab {
@@ -5675,5 +6092,6 @@ function Show-SPDashboard {
 #endregion
 
 Export-ModuleMember -Function @(
-    'Show-SPDashboard'
+    'Show-SPDashboard',
+    'Initialize-SPAdaptiveTab'
 )

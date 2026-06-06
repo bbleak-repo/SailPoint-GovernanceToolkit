@@ -85,7 +85,8 @@
         'Invoke-SPGuiSdkApprovalAction',
         'Invoke-SPGuiSdkWorkItemAction',
         'Invoke-SPGuiSdkWorkflowAction',
-        'Invoke-SPGuiSdkFilterAction'
+        'Invoke-SPGuiSdkFilterAction',
+        'Initialize-SPAdaptiveTab'
     )
 
     # Cmdlets to export from this module
@@ -115,7 +116,7 @@
     PrivateData = @{
         PSData = @{
             Tags         = @('SailPoint', 'ISC', 'IGA', 'Governance', 'WPF', 'GUI', 'Dashboard')
-            ReleaseNotes = 'v1.0.0: Initial release - WPF dashboard with Campaign, Evidence, and Settings tabs. v1.1.0: Added Audit tab bridge functions (Get-SPGuiAuditCampaigns, Invoke-SPGuiAudit, Get-SPGuiAuditReports). v1.2.0: Added Delta Cert tab with bridge functions (Invoke-SPGuiDeltaCertRun, Invoke-SPGuiDeltaCertCleanup, Invoke-SPGuiDeltaCertEscalate, Get-SPGuiDeltaCertHistory). v1.3.0: Added Governance tab bridge functions (Invoke-SPGuiHealthCheck, Invoke-SPGuiGovernanceReport, Export-SPGuiDashboardData, Get-SPGuiGovernanceReports). v1.4.0: Registered SP.SdkBridge.psm1 nested module for the SDK Features tab and exported its 14 bridge functions (9 reads: Get-SPGuiSdkCampaignTemplates, Get-SPGuiSdkApprovals, Get-SPGuiSdkWorkItems, Get-SPGuiSdkWorkflows, Get-SPGuiSdkWorkflowExecutions, Get-SPGuiSdkCampaignFilters, Get-SPGuiSdkCertSummaries, Get-SPGuiSdkDecisionSummary, Get-SPGuiSdkCertCampaigns; 5 write dispatchers: Invoke-SPGuiSdkTemplateAction, Invoke-SPGuiSdkApprovalAction, Invoke-SPGuiSdkWorkItemAction, Invoke-SPGuiSdkWorkflowAction, Invoke-SPGuiSdkFilterAction). The private safety gate Test-SPGuiSdkSafetyGate stays unexported.'
+            ReleaseNotes = 'v1.0.0: Initial release - WPF dashboard with Campaign, Evidence, and Settings tabs. v1.1.0: Added Audit tab bridge functions (Get-SPGuiAuditCampaigns, Invoke-SPGuiAudit, Get-SPGuiAuditReports). v1.2.0: Added Delta Cert tab with bridge functions (Invoke-SPGuiDeltaCertRun, Invoke-SPGuiDeltaCertCleanup, Invoke-SPGuiDeltaCertEscalate, Get-SPGuiDeltaCertHistory). v1.3.0: Added Governance tab bridge functions (Invoke-SPGuiHealthCheck, Invoke-SPGuiGovernanceReport, Export-SPGuiDashboardData, Get-SPGuiGovernanceReports). v1.4.0: Registered SP.SdkBridge.psm1 nested module for the SDK Features tab and exported its 14 bridge functions (9 reads: Get-SPGuiSdkCampaignTemplates, Get-SPGuiSdkApprovals, Get-SPGuiSdkWorkItems, Get-SPGuiSdkWorkflows, Get-SPGuiSdkWorkflowExecutions, Get-SPGuiSdkCampaignFilters, Get-SPGuiSdkCertSummaries, Get-SPGuiSdkDecisionSummary, Get-SPGuiSdkCertCampaigns; 5 write dispatchers: Invoke-SPGuiSdkTemplateAction, Invoke-SPGuiSdkApprovalAction, Invoke-SPGuiSdkWorkItemAction, Invoke-SPGuiSdkWorkflowAction, Invoke-SPGuiSdkFilterAction). The private safety gate Test-SPGuiSdkSafetyGate stays unexported. v1.5.0: Added the Adaptive Reports tab initializer Initialize-SPAdaptiveTab (background-runspace report generator that reuses the Invoke-SPAdaptiveReport.ps1 chain -- Get-SPAuditCampaigns -> Build-SPRCDataset -> New-ComposableReport / Export-SPRC* -- and opens the HTML via Wait-SPReportFileReady). Its helpers Invoke-GuiAdaptiveReport, Invoke-GuiAdaptiveOpenReport and Resolve-AdaptiveOutputPath stay unexported (internal, matching Invoke-GuiDeltaReport).'
         }
     }
 }
