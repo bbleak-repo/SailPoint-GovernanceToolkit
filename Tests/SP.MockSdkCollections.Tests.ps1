@@ -90,7 +90,11 @@ Describe 'SP.MockSdkCollections - mock serves non-empty SDK collections (seed-dr
         }
 
         It 'serves >=1 completed approval (/v3/access-request-approvals/completed)' {
-            @(& $script:Probe '/v3/access-request-approvals/completed').Count | Should -BeGreaterThan 0
+            # Assign first: in PS 5.1 @(Invoke-RestMethod ...) as a DIRECT expression
+            # wraps the returned Object[] as a single element (.Count always 1).
+            # The assign-first idiom unrolls correctly so an empty [] yields .Count 0.
+            $d = & $script:Probe '/v3/access-request-approvals/completed'
+            @($d).Count | Should -BeGreaterThan 0
         }
 
         It 'serves an approval-summary with pending+approved+rejected total > 0 (/v3/access-request-approvals/approval-summary)' {
@@ -115,11 +119,17 @@ Describe 'SP.MockSdkCollections - mock serves non-empty SDK collections (seed-dr
         }
 
         It 'serves >=1 campaign-filter (/v3/campaign-filters)' {
-            @(& $script:Probe '/v3/campaign-filters').Count | Should -BeGreaterThan 0
+            # Assign first (see completed-approval note): @(Invoke-RestMethod ...) as a
+            # direct expression does NOT unroll in PS 5.1, so an empty [] would falsely
+            # report .Count 1 and defeat the regression guard.
+            $f = & $script:Probe '/v3/campaign-filters'
+            @($f).Count | Should -BeGreaterThan 0
         }
 
         It 'serves >=1 campaign-template (/v3/campaign-templates)' {
-            @(& $script:Probe '/v3/campaign-templates').Count | Should -BeGreaterThan 0
+            # Assign first (see completed-approval note) so an empty [] yields .Count 0.
+            $t = & $script:Probe '/v3/campaign-templates'
+            @($t).Count | Should -BeGreaterThan 0
         }
 
         It 'serves a work-items summary with open+completed > 0 (/v3/work-items/summary)' {
