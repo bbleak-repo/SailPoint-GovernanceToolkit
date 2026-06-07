@@ -71,7 +71,7 @@ $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 
 ```
 
 **Commit**
-- f0c93ae test(mock): add SP.MockSdkCollections live regression guard for non-empty SDK collections
+- 99655d2 test(mock): add SP.MockSdkCollections live regression guard for non-empty SDK collections
 
 **Status**
 DONE
