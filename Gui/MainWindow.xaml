@@ -1728,51 +1728,94 @@
                     <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="8,4">
 
-                            <!-- Anchor + Theme + Date window -->
+                            <!-- Report Options: Anchor / Theme / Days Back / Status filter / Campaign name -->
                             <TextBlock Text="Report Options" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
                             <Border Style="{StaticResource SectionBorder}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="16"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="16"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <!-- Row 1: Anchor | Theme | Days Back -->
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
 
-                                    <!-- Anchor -->
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="Anchor:" Style="{StaticResource FieldLabel}"/>
-                                        <ComboBox x:Name="AdaptiveReportsAnchorCombo"
-                                                  Style="{StaticResource FieldCombo}"
-                                                  SelectedIndex="0"
-                                                  ToolTip="Pivot the adaptive report around an Entitlement or a Campaign anchor">
-                                            <ComboBoxItem Content="Entitlement"/>
-                                            <ComboBoxItem Content="Campaign"/>
-                                        </ComboBox>
-                                    </StackPanel>
+                                        <!-- Anchor -->
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Anchor:" Style="{StaticResource FieldLabel}"/>
+                                            <ComboBox x:Name="AdaptiveReportsAnchorCombo"
+                                                      Style="{StaticResource FieldCombo}"
+                                                      SelectedIndex="0"
+                                                      ToolTip="Pivot the adaptive report around an Entitlement or a Campaign anchor">
+                                                <ComboBoxItem Content="Entitlement"/>
+                                                <ComboBoxItem Content="Campaign"/>
+                                            </ComboBox>
+                                        </StackPanel>
 
-                                    <!-- Theme -->
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="Theme:" Style="{StaticResource FieldLabel}"/>
-                                        <ComboBox x:Name="AdaptiveReportsThemeCombo"
-                                                  Style="{StaticResource FieldCombo}"
-                                                  SelectedIndex="0"
-                                                  ToolTip="Visual theme for the generated HTML report (light or dark)">
-                                            <ComboBoxItem Content="light"/>
-                                            <ComboBoxItem Content="dark"/>
-                                        </ComboBox>
-                                    </StackPanel>
+                                        <!-- Theme -->
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="Theme:" Style="{StaticResource FieldLabel}"/>
+                                            <ComboBox x:Name="AdaptiveReportsThemeCombo"
+                                                      Style="{StaticResource FieldCombo}"
+                                                      SelectedIndex="0"
+                                                      ToolTip="Visual theme for the generated HTML report (light or dark)">
+                                                <ComboBoxItem Content="light"/>
+                                                <ComboBoxItem Content="dark"/>
+                                            </ComboBox>
+                                        </StackPanel>
 
-                                    <!-- Days Back -->
-                                    <StackPanel Grid.Column="4">
-                                        <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
-                                        <TextBox x:Name="AdaptiveReportsDaysBackBox"
-                                                 Style="{StaticResource FieldBox}"
-                                                 Text="90"
-                                                 ToolTip="Look-back window in days for audit/event data (default 90)"/>
-                                    </StackPanel>
-                                </Grid>
+                                        <!-- Days Back -->
+                                        <StackPanel Grid.Column="4">
+                                            <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
+                                            <TextBox x:Name="AdaptiveReportsDaysBackBox"
+                                                     Style="{StaticResource FieldBox}"
+                                                     Text="90"
+                                                     ToolTip="Look-back window in days for campaign data (default 90). Increase this if no campaigns are found."/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Row 2: Status filter + Campaign name filter -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="24"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Status checkboxes -->
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Include Status:" Style="{StaticResource FieldLabel}"/>
+                                            <WrapPanel Orientation="Horizontal">
+                                                <CheckBox x:Name="ChkArStatusCompleted" Content="Completed"
+                                                          Foreground="#E0E0E0" IsChecked="True"
+                                                          Margin="0,0,12,0" FontSize="12"
+                                                          ToolTip="Include COMPLETED campaigns in the report window"/>
+                                                <CheckBox x:Name="ChkArStatusActive" Content="Active"
+                                                          Foreground="#E0E0E0" IsChecked="True"
+                                                          Margin="0,0,12,0" FontSize="12"
+                                                          ToolTip="Include ACTIVE campaigns in the report window"/>
+                                                <CheckBox x:Name="ChkArStatusStaged" Content="Staged"
+                                                          Foreground="#E0E0E0" IsChecked="False"
+                                                          Margin="0,0,12,0" FontSize="12"
+                                                          ToolTip="Include STAGED campaigns in the report window"/>
+                                                <CheckBox x:Name="ChkArStatusCompleting" Content="Completing"
+                                                          Foreground="#E0E0E0" IsChecked="False"
+                                                          FontSize="12"
+                                                          ToolTip="Include COMPLETING campaigns in the report window"/>
+                                            </WrapPanel>
+                                        </StackPanel>
+
+                                        <!-- Campaign name filter (optional) -->
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="Campaign Name Contains (optional):" Style="{StaticResource FieldLabel}"/>
+                                            <TextBox x:Name="TxtArCampaignNameContains"
+                                                     Style="{StaticResource FieldBox}"
+                                                     ToolTip="Optional: filter to campaigns whose name contains this text. Leave blank to include all campaigns in the window."/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
                             </Border>
 
                             <!-- Composable Components -->

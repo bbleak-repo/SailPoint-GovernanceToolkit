@@ -3191,6 +3191,34 @@ function Invoke-GuiAdaptiveReport {
         [int]::TryParse($daysBackBox.Text.Trim(), [ref]$daysBack) | Out-Null
     }
 
+    # Read the Status checkboxes (new controls -- fall back to COMPLETED+ACTIVE if absent)
+    $statusList = New-Object System.Collections.Generic.List[string]
+    $statusMap  = [ordered]@{
+        'ChkArStatusCompleted'  = 'COMPLETED'
+        'ChkArStatusActive'     = 'ACTIVE'
+        'ChkArStatusStaged'     = 'STAGED'
+        'ChkArStatusCompleting' = 'COMPLETING'
+    }
+    foreach ($ctrlName in $statusMap.Keys) {
+        $chkCtrl = Find-Control -Parent $TabContent -Name $ctrlName
+        if ($null -eq $chkCtrl -or $chkCtrl.IsChecked -eq $true) {
+            # If the control is missing (pre-existing XAML without the new controls)
+            # fall back to including the status by default.
+            $statusList.Add($statusMap[$ctrlName])
+        }
+    }
+    if ($statusList.Count -eq 0) {
+        $statusList.AddRange(@('COMPLETED', 'ACTIVE'))
+    }
+    $statusArr = $statusList.ToArray()
+
+    # Optional campaign name filter
+    $campaignNameContains = ''
+    $nameBox = Find-Control -Parent $TabContent -Name 'TxtArCampaignNameContains'
+    if ($null -ne $nameBox -and -not [string]::IsNullOrWhiteSpace($nameBox.Text)) {
+        $campaignNameContains = $nameBox.Text.Trim()
+    }
+
     # Map component checkboxes to the CLI keys
     $componentMap = [ordered]@{
         'ChkArCompKpiCards'   = 'kpi-cards'
@@ -3261,17 +3289,19 @@ function Invoke-GuiAdaptiveReport {
     $runspace.ApartmentState = 'STA'
     $runspace.Open()
 
-    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',   $script:ToolkitRoot)
-    $runspace.SessionStateProxy.SetVariable('MainWindow',    $script:MainWindow)
-    $runspace.SessionStateProxy.SetVariable('StatusLabel',   $statusLabel)
-    $runspace.SessionStateProxy.SetVariable('CorrelationID', $correlationID)
-    $runspace.SessionStateProxy.SetVariable('OutputPath',    $outputPath)
-    $runspace.SessionStateProxy.SetVariable('Anchor',        $anchor)
-    $runspace.SessionStateProxy.SetVariable('Theme',         $theme)
-    $runspace.SessionStateProxy.SetVariable('DaysBack',      $daysBack)
-    $runspace.SessionStateProxy.SetVariable('Components',    $componentArr)
-    $runspace.SessionStateProxy.SetVariable('Baselines',     $baselineArr)
-    $runspace.SessionStateProxy.SetVariable('Enriched',      $enrichedArr)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('OutputPath',           $outputPath)
+    $runspace.SessionStateProxy.SetVariable('Anchor',               $anchor)
+    $runspace.SessionStateProxy.SetVariable('Theme',                $theme)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',             $daysBack)
+    $runspace.SessionStateProxy.SetVariable('StatusArr',            $statusArr)
+    $runspace.SessionStateProxy.SetVariable('CampaignNameContains', $campaignNameContains)
+    $runspace.SessionStateProxy.SetVariable('Components',           $componentArr)
+    $runspace.SessionStateProxy.SetVariable('Baselines',            $baselineArr)
+    $runspace.SessionStateProxy.SetVariable('Enriched',             $enrichedArr)
 
     $psInstance = [System.Management.Automation.PowerShell]::Create()
     $psInstance.Runspace = $runspace
@@ -3295,11 +3325,26 @@ function Invoke-GuiAdaptiveReport {
         try {
             if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null }
 
-            # --- Pull campaigns + build audits (verbatim from the CLI chain) ---
+            # --- Pull campaigns + build audits ---
+            # Use the Status and CampaignNameContains values the user set on the UI thread.
+            $campArgs = @{
+                Status        = $StatusArr
+                DaysBack      = $DaysBack
+                CorrelationID = $CorrelationID
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+                $campArgs['CampaignNameContains'] = $CampaignNameContains
+            }
             $campaigns = @()
-            $cr = Get-SPAuditCampaigns -Status @('COMPLETED', 'ACTIVE') -DaysBack $DaysBack -CorrelationID $CorrelationID
+            $cr = Get-SPAuditCampaigns @campArgs
             if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
-            if ($campaigns.Count -eq 0) { throw 'No campaigns matched the selected window.' }
+            if ($campaigns.Count -eq 0) {
+                $filterDesc = "Status: $($StatusArr -join ', ') | Last $DaysBack days"
+                if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+                    $filterDesc += " | Name contains: '$CampaignNameContains'"
+                }
+                throw "No campaigns found ($filterDesc). Widen the Days Back window, check the Status filter, or clear the name filter."
+            }
 
             $audits = New-Object System.Collections.Generic.List[hashtable]
             foreach ($camp in $campaigns) {
@@ -4745,12 +4790,30 @@ function Invoke-SdkGridRefresh {
 
                 if ($ps.HadErrors) {
                     $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
-                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $errMsg"
-                    Set-StatusMessage -Message "SDK load failed: $errMsg" -IsError
+                    # Auth/connection failures are an EXPECTED state (mock not running,
+                    # credentials not configured, missing sp:scopes:all scope). Show a
+                    # sub-tab-only hint instead of escalating to the main status bar --
+                    # that would make the dashboard look broken when it's just the SDK
+                    # tab waiting for credentials.
+                    $isAuthErr = $errMsg -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
+                    if ($isAuthErr) {
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
+                            -Message 'Not connected — configure credentials in the Settings tab, then click Refresh.'
+                    } else {
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $errMsg"
+                        Set-StatusMessage -Message "SDK load failed: $errMsg" -IsError
+                    }
                 }
                 elseif ($null -ne $result -and -not $result.Success) {
-                    Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $($result.Error)"
-                    Set-StatusMessage -Message "SDK load failed: $($result.Error)" -IsError
+                    $errDetail = [string]$result.Error
+                    $isAuthErr = $errDetail -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
+                    if ($isAuthErr) {
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
+                            -Message 'Not connected — configure credentials in the Settings tab, then click Refresh.'
+                    } else {
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName -Message "Load failed: $errDetail"
+                        Set-StatusMessage -Message "SDK load failed: $errDetail" -IsError
+                    }
                 }
                 else {
                     $count = if ($null -ne $result) { @($result.Data).Count } else { 0 }
