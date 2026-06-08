@@ -196,6 +196,12 @@ $summaryResult = Get-SPSdkWorkItemsSummary @summaryParams
 
 if (-not $summaryResult.Success) {
     Write-Host "ERROR: Failed to get work items summary: $($summaryResult.Error)" -ForegroundColor Red
+    if ($summaryResult.Error -match '403|forbidden') {
+        Write-Host ''
+        Write-Host '  SCOPE: This endpoint requires the idn:work-item:read scope (or sp:scopes:all).' -ForegroundColor Yellow
+        Write-Host '  Fix:   ISC Admin Console → Security Settings → Personal Access Tokens → edit your token → add sp:scopes:all' -ForegroundColor Yellow
+        Write-Host '         Then re-run New-SPVault.ps1 with the new ClientSecret.' -ForegroundColor Yellow
+    }
     exit 1
 }
 
@@ -219,6 +225,12 @@ else {
 
 if (-not $listResult.Success) {
     Write-Host "ERROR: Failed to list work items: $($listResult.Error)" -ForegroundColor Red
+    if ($listResult.Error -match '403|forbidden') {
+        Write-Host ''
+        Write-Host '  SCOPE: This endpoint requires the idn:work-item:read scope (or sp:scopes:all).' -ForegroundColor Yellow
+        Write-Host '  Fix:   ISC Admin Console → Security Settings → Personal Access Tokens → edit your token → add sp:scopes:all' -ForegroundColor Yellow
+        Write-Host '         Then re-run New-SPVault.ps1 with the new ClientSecret.' -ForegroundColor Yellow
+    }
     exit 1
 }
 

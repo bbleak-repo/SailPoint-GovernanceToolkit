@@ -217,6 +217,12 @@ switch ($Action) {
 
         if (-not $result.Success) {
             Write-Host "ERROR: Failed to list workflows: $($result.Error)" -ForegroundColor Red
+            if ($result.Error -match '403|forbidden') {
+                Write-Host ''
+                Write-Host '  SCOPE: This endpoint requires the idn:workflow:read scope (or sp:scopes:all).' -ForegroundColor Yellow
+                Write-Host '  Fix:   ISC Admin Console → Security Settings → Personal Access Tokens → edit your token → add sp:scopes:all' -ForegroundColor Yellow
+                Write-Host '         Then re-run New-SPVault.ps1 with the new ClientSecret.' -ForegroundColor Yellow
+            }
             exit 1
         }
 
