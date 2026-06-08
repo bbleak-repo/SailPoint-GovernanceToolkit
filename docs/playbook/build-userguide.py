@@ -28,7 +28,7 @@ OUT     = REPO / "docs" / "USER-GUIDE.html"
 # Constants
 # ---------------------------------------------------------------------------
 TITLE    = "SailPoint ISC Governance Toolkit — User Guide"
-SUBTITLE = "Comprehensive reference: Foundations · CLI Playbook · GUI Playbook"
+SUBTITLE = "Comprehensive reference: Foundations · CLI Playbook · GUI Playbook · Delta Certification"
 VERSION  = "1.0.0"
 DATE     = "2026-06-05"
 
@@ -460,11 +460,30 @@ EXTRA_CSS = """
 # Assemble and write the final HTML
 # ---------------------------------------------------------------------------
 
+def parse_delta_cert():
+    lines = read_md("delta-cert-playbook.md")
+    segs  = split_h2(lines)
+    secs  = []
+    intro_body = []
+    for raw_title, body in segs:
+        if not raw_title:
+            intro_body = list(body)
+            continue
+        sid = make_sid("dc", raw_title)
+        nav = raw_title
+        h2  = inline_md(raw_title)
+        secs.append({"id": sid, "nav": nav, "h2": h2, "body": body, "group": "Delta Certification"})
+    secs.insert(0, {"id": "dc-overview", "nav": "Overview & Purpose",
+                    "h2": "Delta Certification — Overview &amp; Purpose",
+                    "body": intro_body, "group": "Delta Certification"})
+    return secs
+
 def build():
     found = parse_foundations()
     cli   = parse_cli()
     gui   = parse_gui()
-    all_secs = found + cli + gui
+    dc    = parse_delta_cert()
+    all_secs = found + cli + gui + dc
 
     sidebar_html, mobile_html = build_sidebar(all_secs)
     sections_html = "".join(render_section(s) for s in all_secs)

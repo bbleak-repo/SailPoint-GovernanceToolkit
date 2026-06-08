@@ -721,7 +721,7 @@ body {
   <div id="report-header">
     <div class="title-block">
       <div class="report-title">SailPoint ISC Governance Toolkit — User Guide</div>
-      <div class="report-sub">Comprehensive reference: Foundations · CLI Playbook · GUI Playbook</div>
+      <div class="report-sub">Comprehensive reference: Foundations · CLI Playbook · GUI Playbook · Delta Certification</div>
     </div>
     <div class="meta-items">
       <div class="meta-item"><strong>Version</strong>1.0.0</div>
@@ -758,6 +758,20 @@ body {
 <a href="javascript:void(0)" onclick="showSection('gui-governance-tab'); return false;">5. Governance tab</a>
 <a href="javascript:void(0)" onclick="showSection('gui-sdk-features-tab'); return false;">6. SDK Features tab</a>
 <a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;">7. Settings tab</a>
+<a href="javascript:void(0)" onclick="showSection('dc-overview'); return false;">Overview &amp; Purpose</a>
+<a href="javascript:void(0)" onclick="showSection('dc-what-problem-delta-cert-solves'); return false;">1. What problem Delta </a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-most-important-concept-read-this-first'); return false;">2. The most important </a>
+<a href="javascript:void(0)" onclick="showSection('dc-two-modes-delta-daily-and-full-quarterly'); return false;">3. Two modes: DELTA (d</a>
+<a href="javascript:void(0)" onclick="showSection('dc-configuration-reference'); return false;">4. Configuration refer</a>
+<a href="javascript:void(0)" onclick="showSection('dc-running-the-commands'); return false;">5. Running the command</a>
+<a href="javascript:void(0)" onclick="showSection('dc-understanding-the-escalation-timing'); return false;">6. Understanding the e</a>
+<a href="javascript:void(0)" onclick="showSection('dc-understanding-the-campaign-types'); return false;">7. Understanding the c</a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-jsonl-audit-trail'); return false;">8. The JSONL audit tra</a>
+<a href="javascript:void(0)" onclick="showSection('dc-limitations'); return false;">9. Limitations</a>
+<a href="javascript:void(0)" onclick="showSection('dc-troubleshooting'); return false;">10. Troubleshooting</a>
+<a href="javascript:void(0)" onclick="showSection('dc-gotchas-by-experience-level'); return false;">11. Gotchas by experie</a>
+<a href="javascript:void(0)" onclick="showSection('dc-recommended-operational-calendar'); return false;">12. Recommended operat</a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-path-to-true-entitlement-scoped-certification'); return false;">13. The path to true e</a>
 
   </div>
 </div>
@@ -802,6 +816,21 @@ body {
 <a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-5-workflows');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.5</span><span>Workflows</span></a>
 <a href="javascript:void(0)" class="sidebar-sub" onclick="showSection('gui-sdk-features-tab'); setTimeout(function(){var e=document.getElementById('6-6-filters');if(e)e.scrollIntoView({behavior:'smooth'});},80); return false;"><span class="sidebar-num">6.6</span><span>Filters</span></a>
 <a href="javascript:void(0)" onclick="showSection('gui-settings-tab'); return false;"><span class="sidebar-num">27</span><span>7. Settings tab</span></a>
+<div class="sidebar-group-label">Delta Certification</div>
+<a href="javascript:void(0)" onclick="showSection('dc-overview'); return false;"><span class="sidebar-num">28</span><span>Overview &amp; Purpose</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-what-problem-delta-cert-solves'); return false;"><span class="sidebar-num">29</span><span>1. What problem Delta Cert solves</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-most-important-concept-read-this-first'); return false;"><span class="sidebar-num">30</span><span>2. The most important concept — read this first</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-two-modes-delta-daily-and-full-quarterly'); return false;"><span class="sidebar-num">31</span><span>3. Two modes: DELTA (daily) and FULL (quarterly)</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-configuration-reference'); return false;"><span class="sidebar-num">32</span><span>4. Configuration reference</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-running-the-commands'); return false;"><span class="sidebar-num">33</span><span>5. Running the commands</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-understanding-the-escalation-timing'); return false;"><span class="sidebar-num">34</span><span>6. Understanding the escalation timing</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-understanding-the-campaign-types'); return false;"><span class="sidebar-num">35</span><span>7. Understanding the campaign types</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-jsonl-audit-trail'); return false;"><span class="sidebar-num">36</span><span>8. The JSONL audit trail</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-limitations'); return false;"><span class="sidebar-num">37</span><span>9. Limitations</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-troubleshooting'); return false;"><span class="sidebar-num">38</span><span>10. Troubleshooting</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-gotchas-by-experience-level'); return false;"><span class="sidebar-num">39</span><span>11. Gotchas by experience level</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-recommended-operational-calendar'); return false;"><span class="sidebar-num">40</span><span>12. Recommended operational calendar</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-the-path-to-true-entitlement-scoped-certification'); return false;"><span class="sidebar-num">41</span><span>13. The path to true entitlement-scoped certification</span></a>
 
     </div>
   </div>
@@ -2424,13 +2453,367 @@ body {
 <p><strong>Related CLI:</strong> <code>Test-SPConnectivity.ps1</code>, <code>New-SPVault.ps1</code> (vault setup is CLI-only).</p>
 <p><em>See also the CLI Playbook and Foundations. Screenshots of each tab will be embedded here after the live GUI validation pass.</em></p>
 </div>
+<div id="section-dc-overview" class="report-section" style="display:none">
+<h2>Delta Certification — Overview &amp; Purpose</h2>
+<h2 id="delta-certification-complete-playbook">Delta Certification — Complete Playbook</h2>
+<div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Source of truth.</strong> Edit this Markdown; never the HTML. See Foundations for installation, authentication, vault setup, and the Safety model.</p></div>
+<p><strong>Audience:</strong> operators, governance leads, and auditors who need to understand, run, and troubleshoot the Delta Certification workflow — including people who are not SailPoint experts. This playbook explains not just <em>how</em> to run the commands but <em>why</em> they work the way they do and where the system has hard limits.</p>
+</div>
+<div id="section-dc-what-problem-delta-cert-solves" class="report-section" style="display:none">
+<h2>1. What problem Delta Cert solves</h2>
+<p>Quarterly access reviews are the traditional approach: once every 90 days, every manager reviews every entitlement their direct reports hold. The problem is clear — a user could receive broad AD admin access on day 1 of a quarter and hold it unchallenged for 89 days before anyone reviews it.</p>
+<p>Delta Certification solves this by triggering a targeted review <strong>the same day new access is granted</strong>: ISC detects the AD group membership change, the toolkit creates a focused certification campaign for just the affected managers, and those managers must approve or revoke the new access within the deadline (typically 24–48 hours).</p>
+<p><strong>What it achieves:</strong></p>
+<ul><li>New access reviewed within hours, not months</li><li>Reviewers see a small, targeted queue instead of hundreds of existing entitlements</li><li>Every grant is logged in a JSONL audit trail with the reviewer's decision</li><li>Escalation to skip-level managers if a reviewer misses the deadline</li></ul>
+</div>
+<div id="section-dc-the-most-important-concept-read-this-first" class="report-section" style="display:none">
+<h2>2. The most important concept — read this first</h2>
+<p><strong>"Delta" does NOT mean "certify only the one new entitlement."</strong></p>
+<p>This is the biggest source of confusion for everyone new to this system. Here is exactly what happens when Alice receives a new AD group membership:</p>
+<pre><code>Alice gets added to the "Finance-Admins" AD group in Active Directory
+    ↓
+ISC aggregates the AD source and detects a GRANT_ACCESS event
+    ↓
+The toolkit creates a certification campaign for Alice's manager, Bob
+    ↓
+Bob's campaign shows ALL of Alice's current access:
+  - Finance-Admins      ← the NEW grant (what triggered this)
+  - CorpNetwork-Users   ← existing access from 6 months ago
+  - VPN-Standard        ← existing access from 2 years ago
+  - ... 47 more groups  ← everything Alice currently holds</code></pre>
+<p>Bob reviews all 50 items, not just the one new group.</p>
+<p><strong>Why?</strong> Because ISC's certification model is built around <em>identities</em>, not individual entitlements. A certification campaign says "review this person's access" — and ISC includes every entitlement they currently hold. The API does not (as of the v3 campaigns endpoint) support a filter that says "show only the entitlement with ID xyz."</p>
+<p><strong>What "delta" actually means:</strong> The delta is <em>which identities are in scope</em> — only people who received new access today, not everyone in the company. Bob does NOT get a campaign just because Carol (his other direct report) already had Finance-Admins from a year ago. Bob only gets a campaign today because Alice got something new today.</p>
+<p><strong>The practical benefit:</strong> On most days, 0–5 people across the organization receive new access. Bob might get a campaign with 1 identity (Alice, 50 items) instead of a quarterly campaign with 20 direct reports × 50 items each = 1,000 items. That's the delta.</p>
+</div>
+<div id="section-dc-two-modes-delta-daily-and-full-quarterly" class="report-section" style="display:none">
+<h2>3. Two modes: DELTA (daily) and FULL (quarterly)</h2>
+<h3 id="delta-mode-daily-default">DELTA mode — daily default</h3>
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID'</code></pre>
+<p><strong>What it does:</strong></p>
+<ol><li>Calls ISC's <code>/v3/account-activities</code> endpoint to find <code>GRANT_ACCESS</code> events on your AD source in the last 24 hours (configurable with <code>-HoursBack</code>)</li><li>For each affected identity, resolves their manager from ISC</li><li>Groups identities by manager — one campaign per manager group</li><li>Creates a targeted SEARCH-type campaign for each manager covering their affected staff</li><li>Writes a JSONL audit event for each campaign created</li></ol>
+<p><strong>No grants today = no campaigns created.</strong> This is correct behavior. If nobody received new AD access in the window, the script exits cleanly with "No grant events found."</p>
+<h3 id="full-mode-quarterly-baseline">FULL mode — quarterly baseline</h3>
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -FullCert</code></pre>
+<p><strong>What it does:</strong></p>
+<ol><li>Skips account-activities detection entirely — does NOT look at what changed</li><li>Queries all managers who have direct reports with accounts on the specified AD source</li><li>Creates one MANAGER-type campaign per manager covering ALL their direct reports' access</li><li>Uses a separate campaign name prefix (<code>AD Full Cert</code>) so it doesn't collide with daily delta runs on the same day</li><li>Default deadline: 14 days (configurable via <code>DeltaCert.FullCert.DeadlineDays</code>)</li></ol>
+<p><strong>When to use <code>-FullCert</code>:</strong></p>
+<ul><li><strong>First time you ever run</strong> — establishes the baseline everyone has reviewed</li><li><strong>Quarterly</strong> — periodic comprehensive review of all current access</li><li><strong>After a major onboarding wave</strong> — when many new hires received access in bulk</li></ul>
+<h3 id="first-run-advisory">First-run advisory</h3>
+<p>If you run the daily delta without ever having run <code>-FullCert</code>, the script warns you:</p>
+<pre><code>WARNING: No delta-cert baseline found in .\DeltaCert\deltacert-audit.jsonl.
+Consider running with -FullCert first to establish a baseline review of all current
+access, then switch to daily delta runs. Without a baseline, your first delta cert
+campaigns may find recent grants but existing access will never have been certified.</code></pre>
+<p>This warning does not stop execution — you can start with daily delta if you prefer — but auditors typically want to see that all access was certified at least once before the daily differential review began.</p>
+</div>
+<div id="section-dc-configuration-reference" class="report-section" style="display:none">
+<h2>4. Configuration reference</h2>
+<p>All settings live in <code>Config\settings.json</code> (or <code>settings.local.json</code> for machine-local overrides).</p>
+<pre><code>"DeltaCert": {
+    "SourceIds":               ["src-ad-001"],
+    "DefaultHoursBack":        24,
+    "DefaultDeadlineDays":     2,
+    "CampaignNamePrefix":      "AD Delta Cert",
+    "MaxCampaignsPerRun":      50,
+    "CleanupDaysStale":        3,
+    "OutputPath":              ".\\DeltaCert",
+    "DefaultReviewerMode":     "Manager",
+    "ExcludeLifecycleStates":  ["terminated", "inactive", "leaver", "prehire"],
+    "Escalation": {
+        "DefaultStaleHours":         24,
+        "MaxEscalationLevels":       2,
+        "CampaignNamePrefix":        ""
+    },
+    "FullCert": {
+        "CampaignNamePrefix":        "AD Full Cert",
+        "DeadlineDays":              14,
+        "MaxIdentitiesPerPage":      250
+    }
+}</code></pre>
+<table>
+<thead><tr>
+<th>Setting</th>
+<th>What it controls</th>
+</tr></thead><tbody>
+<tr>
+<td><code>SourceIds</code></td>
+<td>Default AD source(s) to monitor. Passed as <code>-SourceId</code> default.</td>
+</tr>
+<tr>
+<td><code>DefaultHoursBack</code></td>
+<td>Look-back window for grant detection. <code>24</code> = last 24 hours.</td>
+</tr>
+<tr>
+<td><code>DefaultDeadlineDays</code></td>
+<td>How many days managers have to review. <code>2</code> = 48-hour deadline.</td>
+</tr>
+<tr>
+<td><code>CampaignNamePrefix</code></td>
+<td>Daily delta campaign names: <code>"AD Delta Cert 2026-06-08 - Manager Smith"</code>.</td>
+</tr>
+<tr>
+<td><code>MaxCampaignsPerRun</code></td>
+<td>Safety cap — refuses to create more than this many campaigns in one run.</td>
+</tr>
+<tr>
+<td><code>ExcludeLifecycleStates</code></td>
+<td>Identities in these states are skipped even if they received new access.</td>
+</tr>
+<tr>
+<td><code>Escalation.DefaultStaleHours</code></td>
+<td>Hours with no reviewer action before escalation triggers.</td>
+</tr>
+<tr>
+<td><code>FullCert.CampaignNamePrefix</code></td>
+<td>Quarterly run campaign names: <code>"AD Full Cert 2026-06-08 - Manager Smith"</code>.</td>
+</tr>
+<tr>
+<td><code>FullCert.DeadlineDays</code></td>
+<td>Quarterly review deadline in days (default 14).</td>
+</tr>
+</tbody></table>
+<h3 id="required-isc-api-scopes">Required ISC API scopes</h3>
+<table>
+<thead><tr>
+<th>Scope</th>
+<th>Why needed</th>
+</tr></thead><tbody>
+<tr>
+<td><code>idn:campaign:read</code></td>
+<td>Read existing campaigns</td>
+</tr>
+<tr>
+<td><code>idn:campaign:manage</code></td>
+<td>Create new campaigns</td>
+</tr>
+<tr>
+<td><code>idn:campaign-report:read</code></td>
+<td>Read certifications and review items</td>
+</tr>
+<tr>
+<td><strong><code>sp:scopes:all</code></strong> or <code>idn:account-activities:read</code></td>
+<td><strong>Required</strong> — read the account-activities events that detect new grants</td>
+</tr>
+</tbody></table>
+<p>Without <code>sp:scopes:all</code> (or the specific account-activities scope), the script fails at grant detection with a 403. This is the most common setup issue. See the Foundations doc for how to add scopes to your Personal Access Token.</p>
+<h3 id="how-to-find-your-ad-source-id">How to find your AD Source ID</h3>
+<p>In ISC Admin Console: <strong>Connections → Sources → [select your AD source] → the ID appears in the browser URL</strong>, e.g. <code>https://tenant.identitynow.com/ui/admin/source/2c91808...</code>. The <code>2c91808...</code> part is your Source ID.</p>
+<p>Alternatively: <code>.\Scripts\Invoke-SPSdkCampaignTemplates.ps1 -Action List</code> won't show sources, but <code>Test-SPConnectivity.ps1</code> logs the tenant it connected to. Check your ISC Admin → Sources page directly.</p>
+</div>
+<div id="section-dc-running-the-commands" class="report-section" style="display:none">
+<h2>5. Running the commands</h2>
+<h3 id="test-without-creating-anything-whatif">Test without creating anything (-WhatIf)</h3>
+<p>Always start with <code>-WhatIf</code> to see what would happen:</p>
+<pre><code># What would a daily delta create today?
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -WhatIf
+
+# What would a quarterly full cert create?
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -FullCert -WhatIf</code></pre>
+<h3 id="first-ever-run-establish-baseline">First-ever run (establish baseline)</h3>
+<pre><code>.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -FullCert</code></pre>
+<p>This creates MANAGER campaigns for every manager with staff on the AD source. Expect this to run for several minutes and create dozens of campaigns.</p>
+<h3 id="daily-delta-run">Daily delta run</h3>
+<pre><code># Default: last 24 hours
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID'
+
+# Look back 48 hours (catch-up after a skipped day)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -HoursBack 48</code></pre>
+<h3 id="escalation-deadline-aware-recommended">Escalation — deadline-aware (recommended)</h3>
+<pre><code># Escalate if campaign deadline is within 8 hours AND cert is unsigned
+# Run this at noon for 11pm deadlines (gives 11h for escalated reviewer)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 `
+    -StaleHours 0 `
+    -EscalateBeforeDeadlineHours 11
+
+# Traditional wall-clock mode (15h after creation = run at 2pm for 11pm campaigns)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 15</code></pre>
+<h3 id="clean-up-completed-stale-campaigns">Clean up completed/stale campaigns</h3>
+<pre><code># Complete campaigns older than CleanupDaysStale (default 3 days)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -RunCleanup</code></pre>
+</div>
+<div id="section-dc-understanding-the-escalation-timing" class="report-section" style="display:none">
+<h2>6. Understanding the escalation timing</h2>
+<p>This is the second most common misunderstanding after the "all entitlements" issue above.</p>
+<h3 id="the-problem-with-stalehours-24">The problem with <code>-StaleHours 24</code></h3>
+<p>If a campaign is created at 11pm and has a 24-hour deadline (11pm tomorrow):</p>
+<pre><code>11pm  Campaign created — certs assigned to managers
+ 6am  Managers arrive at work (7 hours elapsed, 0 business hours)
+ 2pm  Managers leave work (15 hours elapsed, 8 business hours)
+11pm  -StaleHours 24 triggers → escalation fires
+      → Too late. The deadline is right now.</code></pre>
+<p>Using <code>-StaleHours 24</code> on a 24-hour campaign means you escalate <strong>at the deadline</strong>, not before it.</p>
+<h3 id="the-fix-escalatebeforedeadlinehours">The fix: <code>-EscalateBeforeDeadlineHours</code></h3>
+<p>Instead of measuring from campaign creation, measure from the campaign deadline:</p>
+<pre><code># Run at noon daily:
+# Finds certifications whose campaign expires within 11 hours (by 11pm tonight)
+# → The escalated reviewer has 11 hours to act
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 `
+    -StaleHours 0 `
+    -EscalateBeforeDeadlineHours 11</code></pre>
+<pre><code>11pm  Campaign created
+ 6am  Managers arrive
+12pm  Escalation script runs:
+      "Campaign expires within 11 hours, cert is unsigned → escalate"
+      → Manager's skip-level gets the items
+      → Skip-level has 11 hours (until 11pm) to act
+ 2pm  Original managers leave — doesn't matter, skip-level has it
+11pm  Deadline</code></pre>
+<p><strong>Rule of thumb:</strong> Set <code>-EscalateBeforeDeadlineHours</code> to the number of hours you want the <em>escalated reviewer</em> to have. If your review window is 6am–5pm (11 hours), run the escalation script at a time that leaves 11 hours before deadline.</p>
+</div>
+<div id="section-dc-understanding-the-campaign-types" class="report-section" style="display:none">
+<h2>7. Understanding the campaign types</h2>
+<p>ISC distinguishes between different campaign types that affect how reviewers are assigned and what appears in the ISC UI.</p>
+<h3 id="delta-mode-uses-search-campaigns">DELTA mode uses SEARCH campaigns</h3>
+<p>Daily delta campaigns are <code>SEARCH</code> type with <code>filter.type = "IDENTITY"</code>. This means:</p>
+<ul><li>The campaign was built by searching for specific identity IDs</li><li>Each matched identity contributes all their entitlements to the review</li><li>The certifier (reviewer) is explicitly set to the manager's identity ID</li></ul>
+<p>In the ISC UI, these appear under <strong>Certifications</strong> for each manager. The manager sees a queue filtered to their affected direct reports.</p>
+<h3 id="full-mode-uses-manager-campaigns">FULL mode uses MANAGER campaigns</h3>
+<p>Quarterly full-cert campaigns are <code>MANAGER</code> type. This means:</p>
+<ul><li>ISC automatically routes each certification to the appropriate manager</li><li>The campaign was not built from a specific identity search but from the source</li><li>All direct reports of each manager appear in their certification queue</li></ul>
+<h3 id="your-peer-s-identity-campaign-type">Your peer's "Identity" campaign type</h3>
+<p>When your peer says their custom campaign uses "Identity" type, they are likely referring to <code>filter.type = "IDENTITY"</code> in a SEARCH campaign — the same fundamental structure as the daily delta. The key limitation remains: the campaign reviews all access of matched identities, not only specific entitlements.</p>
+<p>True entitlement-level scoping (certify <em>only</em> the Finance-Admins membership, nothing else) would require a Campaign Template with <code>searchCampaignInfo.type = "ENTITLEMENT"</code>. This is not currently supported by the toolkit's campaign creation path but is a planned enhancement using the SDK Features tab's campaign template infrastructure.</p>
+</div>
+<div id="section-dc-the-jsonl-audit-trail" class="report-section" style="display:none">
+<h2>8. The JSONL audit trail</h2>
+<p>Every campaign creation and escalation event writes a line to <code>DeltaCert\deltacert-audit.jsonl</code>. This file:</p>
+<ul><li><strong>Is the baseline marker</strong> — if this file exists, the script knows a prior run occurred</li><li><strong>Provides compliance evidence</strong> — each line records: timestamp, action, campaign ID, campaign name, manager identity, number of identities included, correlation ID</li><li><strong>Includes entitlement context</strong> — since the recent update, grant events also carry <code>EntitlementId</code>, <code>EntitlementName</code>, and <code>AccessProfileId</code> from the account-activities data, so you can trace which specific AD group membership triggered each campaign</li></ul>
+<p>The audit trail grows over time. See <code>Invoke-SPRetention.ps1</code> to configure archival (default: archive after 30 days, delete archives after 90 days).</p>
+<p><strong>Important:</strong> The audit trail records that campaigns were <em>created</em> and <em>escalated</em>. The actual reviewer decisions (who approved what, who revoked what) are in the ISC platform and in the toolkit's campaign audit reports (<code>Invoke-SPCampaignAudit.ps1</code>).</p>
+</div>
+<div id="section-dc-limitations" class="report-section" style="display:none">
+<h2>9. Limitations</h2>
+<p>These are hard constraints, not bugs:</p>
+<h3 id="9-1-campaigns-review-all-access-not-just-the-new-grant">9.1 Campaigns review all access, not just the new grant</h3>
+<p><strong>Constraint:</strong> ISC's <code>/v3/campaigns</code> API does not support entitlement-level scoping. A SEARCH campaign with <code>filter.type = "IDENTITY"</code> presents all entitlements of matched identities.</p>
+<p><strong>Impact:</strong> If Alice has 50 AD groups and receives 1 new one, her manager sees 51 items in the certification, not 1.</p>
+<p><strong>Mitigation:</strong> The scope of <em>who</em> gets campaigns is still narrow (only managers with affected staff), reducing total volume significantly compared to quarterly full certs. Entitlement-level scoping is planned via Campaign Templates (SDK Features).</p>
+<h3 id="9-2-only-detects-grants-not-all-access-changes">9.2 Only detects grants, not all access changes</h3>
+<p><strong>Constraint:</strong> The toolkit reads <code>GRANT_ACCESS</code> events from account-activities. It does not detect revocations, role changes, or attribute changes.</p>
+<p><strong>Impact:</strong> If a user's access is removed outside of a certification (e.g., manually de-provisioned), no delta cert campaign is triggered.</p>
+<p><strong>Mitigation:</strong> ISC's lifecycle management handles provisioning; use quarterly <code>-FullCert</code> runs for comprehensive reconciliation.</p>
+<h3 id="9-3-depends-on-isc-aggregation-timing">9.3 Depends on ISC aggregation timing</h3>
+<p><strong>Constraint:</strong> Grant events only appear in account-activities AFTER ISC has aggregated the AD source. If aggregation runs every 4 hours, a grant at 3:00am may not appear until 7:00am, even with <code>-HoursBack 24</code>.</p>
+<p><strong>Impact:</strong> There's a small window (up to one aggregation cycle) between when access is granted in AD and when the toolkit detects it.</p>
+<p><strong>Mitigation:</strong> Schedule the daily delta run <em>after</em> your ISC aggregation completes. Check your ISC Admin Console → Sources → [your source] → Aggregation History for typical schedule.</p>
+<h3 id="9-4-requires-sp-scopes-all-for-grant-detection">9.4 Requires <code>sp:scopes:all</code> for grant detection</h3>
+<p><strong>Constraint:</strong> The <code>/v3/account-activities</code> endpoint requires broad API scope.</p>
+<p><strong>Impact:</strong> Without this scope, grant detection fails with 403. The toolkit now emits a clear error message pointing to this scope.</p>
+<p><strong>Resolution:</strong> Add <code>sp:scopes:all</code> to your ISC Personal Access Token (Admin Console → Security Settings → Personal Access Tokens).</p>
+<h3 id="9-5-maxcampaignsperrun-safety-cap">9.5 MaxCampaignsPerRun safety cap</h3>
+<p><strong>Constraint:</strong> If more campaigns would be created than <code>DeltaCert.MaxCampaignsPerRun</code> (default 50), the entire run aborts with an error.</p>
+<p><strong>Impact:</strong> On days with unusually high access grant activity, the run fails.</p>
+<p><strong>Resolution:</strong> Increase <code>MaxCampaignsPerRun</code> in settings.json, or investigate why so many grants occurred (potential security incident).</p>
+<h3 id="9-6-no-cross-manager-deduplication">9.6 No cross-manager deduplication</h3>
+<p><strong>Constraint:</strong> If Alice is a direct report of Bob, AND Alice also has a dotted-line relationship to Carol (not modeled in ISC's org tree), only Bob gets a campaign.</p>
+<p><strong>Impact:</strong> Second-level or matrix reporting structures are not visible to the toolkit.</p>
+<h3 id="9-7-excludelifecyclestates-only-applies-to-delta">9.7 ExcludeLifecycleStates only applies to delta</h3>
+<p><strong>Constraint:</strong> <code>ExcludeLifecycleStates</code> (e.g., <code>terminated</code>) only filters identities in DELTA mode. <code>-FullCert</code> creates MANAGER campaigns which ISC manages directly — lifecycle filtering happens at the ISC campaign level.</p>
+</div>
+<div id="section-dc-troubleshooting" class="report-section" style="display:none">
+<h2>10. Troubleshooting</h2>
+<h3 id="no-grant-events-found-but-you-know-access-was-granted">"No grant events found" but you know access was granted</h3>
+<p><strong>Possible causes:</strong></p>
+<ol><li><strong>Source ID is wrong</strong> — verify the exact source ID from ISC Admin Console</li><li><strong>Aggregation hasn't run yet</strong> — wait for ISC to aggregate the source, then re-run</li><li><strong>DaysBack window too narrow</strong> — the grant may have occurred outside the window; try <code>-HoursBack 48</code></li><li><strong>Lifecycle state excluded</strong> — if the identity is <code>inactive</code>, it's excluded by <code>ExcludeLifecycleStates</code>. Remove the state from config if this is intentional.</li><li><strong>Account-activities 403</strong> — missing <code>sp:scopes:all</code> scope (see §9.4)</li></ol>
+<h3 id="campaign-created-but-manager-sees-50-items-not-1">Campaign created but manager sees 50+ items, not 1</h3>
+<p>This is expected behavior — see §2 and §9.1. The manager sees all of the identity's entitlements, not just the new grant. The delta is in <em>who</em> gets a campaign, not in the scope of items within each campaign.</p>
+<h3 id="campaign-search-failed-request-timed-out-error-400">"Campaign search failed: request timed out / error 400"</h3>
+<p><strong>Cause:</strong> Escalation was previously using a full-text <code>co</code> (contains) filter on campaign names, which ISC times out. <strong>Fixed:</strong> The escalation script now uses <code>sw</code> (starts-with) which is an indexed prefix scan.</p>
+<p><strong>Resolution:</strong> Pull the latest toolkit version.</p>
+<h3 id="campaign-search-failed-access-denied-403">"Campaign search failed: access denied (403)"</h3>
+<p><strong>Cause:</strong> Missing ISC API scope.</p>
+<p><strong>Resolution:</strong> Add <code>sp:scopes:all</code> to your PAT and re-run <code>New-SPVault.ps1</code> with the new client secret.</p>
+<h3 id="escalation-fires-but-it-s-too-late">"Escalation fires but it's too late"</h3>
+<p><strong>Cause:</strong> Using <code>-StaleHours 24</code> on a 24-hour campaign. See §6.</p>
+<p><strong>Resolution:</strong> Switch to <code>-EscalateBeforeDeadlineHours</code> mode. Run the escalation script at a time that leaves enough hours before the deadline for the escalated reviewer to act.</p>
+<h3 id="campaigns-are-created-with-wrong-manager">Campaigns are created with wrong manager</h3>
+<p><strong>Cause:</strong> ISC's identity-to-manager mapping is based on the <code>manager</code> attribute in the identity profile. If the manager attribute is missing or incorrect, ISC resolves to the fallback reviewer (<code>FallbackReviewerIdentityId</code> in config).</p>
+<p><strong>Resolution:</strong> Verify the manager attribute is populated in ISC Admin → Identities → [affected identity] → Attributes. Run a data quality check: <code>Invoke-SPDataQualityReport.ps1</code> (Section 3 checks manager self-references and missing attributes).</p>
+<h3 id="fullcert-creates-duplicate-campaigns-when-run-twice"><code>-FullCert</code> creates duplicate campaigns when run twice</h3>
+<p><strong>Cause:</strong> There is no deduplication check for FULL mode. Running it twice creates two sets of campaigns.</p>
+<p><strong>Resolution:</strong> Complete (or cancel) existing full-cert campaigns before running again. Use <code>Invoke-SPADDeltaCert.ps1 -RunCleanup</code> to close out stale campaigns first.</p>
+<h3 id="first-run-advisory-keeps-appearing">First-run advisory keeps appearing</h3>
+<p><strong>Cause:</strong> The <code>DeltaCert\deltacert-audit.jsonl</code> file doesn't exist. Either the output directory is wrong or a previous run was on a different machine.</p>
+<p><strong>Resolution:</strong> Run <code>-FullCert</code> once, OR manually create the file with an empty JSON line if you're intentionally skipping the baseline (not recommended for production).</p>
+</div>
+<div id="section-dc-gotchas-by-experience-level" class="report-section" style="display:none">
+<h2>11. Gotchas by experience level</h2>
+<h3 id="if-you-re-new-to-this-toolkit">If you're new to this toolkit</h3>
+<ul><li><strong>Always run <code>-WhatIf</code> first.</strong> It shows exactly what would be created without making any API calls.</li><li><strong>Start with <code>-FullCert</code>.</strong> Your auditors will thank you for having a clear baseline certification before the daily delta started.</li><li><strong>The vault passphrase is prompted once</strong> when you launch the GUI or run the first script. It's shared across all operations in the same session — you won't be prompted again.</li></ul>
+<h3 id="if-you-ve-been-running-daily-delta-for-a-while">If you've been running daily delta for a while</h3>
+<ul><li><strong>Check your escalation timing.</strong> If you're using <code>-StaleHours 24</code> and your campaigns have 24-hour deadlines, escalation is firing at the worst possible moment. Switch to <code>-EscalateBeforeDeadlineHours</code>.</li><li><strong>Monitor MaxCampaignsPerRun.</strong> A spike in campaign count (50+) means a lot of access was granted in one day — which might be a security event worth investigating.</li><li><strong>Archive your JSONL.</strong> The <code>DeltaCert\deltacert-audit.jsonl</code> file grows indefinitely. Add <code>DeltaCert</code> to your <code>Retention.Paths</code> in settings.json.</li></ul>
+<h3 id="if-you-re-a-governance-auditor-reviewing-evidence">If you're a governance auditor reviewing evidence</h3>
+<ul><li>The JSONL audit trail proves <strong>campaigns were created</strong> and <strong>escalations occurred</strong>.</li><li>The campaign audit reports (<code>Invoke-SPCampaignAudit.ps1</code>) prove <strong>decisions made</strong> (who approved, who revoked, who didn't respond).</li><li>Both together prove the chain of custody: access was granted → campaign created → manager reviewed (or was escalated to skip-level) → decision recorded.</li></ul>
+</div>
+<div id="section-dc-recommended-operational-calendar" class="report-section" style="display:none">
+<h2>12. Recommended operational calendar</h2>
+<table>
+<thead><tr>
+<th>Frequency</th>
+<th>Action</th>
+<th>Command</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>One time</strong> (setup)</td>
+<td>Establish full baseline</td>
+<td><code>-FullCert</code></td>
+</tr>
+<tr>
+<td><strong>Daily</strong> (cron, ~11pm)</td>
+<td>Detect and certify new grants</td>
+<td>default mode</td>
+</tr>
+<tr>
+<td><strong>Daily</strong> (noon)</td>
+<td>Escalate uncompleted reviews</td>
+<td><code>-EscalateBeforeDeadlineHours 11</code></td>
+</tr>
+<tr>
+<td><strong>Daily</strong> (cleanup)</td>
+<td>Close stale/overdue campaigns</td>
+<td><code>-RunCleanup</code></td>
+</tr>
+<tr>
+<td><strong>Quarterly</strong></td>
+<td>Full portfolio review</td>
+<td><code>-FullCert</code></td>
+</tr>
+<tr>
+<td><strong>As needed</strong></td>
+<td>Catch-up after missed run</td>
+<td><code>-HoursBack 48</code></td>
+</tr>
+</tbody></table>
+<h3 id="suggested-task-scheduler-setup-windows">Suggested Task Scheduler setup (Windows)</h3>
+<pre><code># Task 1: Daily delta (after AD aggregation completes — adjust time to match your ISC schedule)
+# Trigger: Daily at 11:30pm
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID'
+
+# Task 2: Midday escalation (business-hours aware)
+# Trigger: Daily at 12:00pm  
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 0 -EscalateBeforeDeadlineHours 11
+
+# Task 3: Cleanup stale campaigns
+# Trigger: Daily at 11:45pm (after delta run)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -RunCleanup</code></pre>
+</div>
+<div id="section-dc-the-path-to-true-entitlement-scoped-certification" class="report-section" style="display:none">
+<h2>13. The path to true entitlement-scoped certification</h2>
+<p>The ideal state — certifying only the specific new entitlement, not the full identity portfolio — is not achievable through the current v3/campaigns API endpoint. It requires ISC's Campaign Templates feature with <code>searchCampaignInfo.type = "ENTITLEMENT"</code>.</p>
+<p>The toolkit's SDK Features tab and <code>Invoke-SPSdkCampaignTemplates.ps1</code> already have the infrastructure to create and schedule campaign templates. The gap is building a template-per-entitlement creation workflow that:</p>
+<ol><li>Detects a new grant (same as current delta cert)</li><li>Creates or references a campaign template scoped to that specific entitlement ID</li><li>Triggers the template to generate a campaign for only that entitlement</li></ol>
+<p>This approach would give managers a single-item queue ("Should Alice keep Finance-Admins?") rather than a 50-item queue. It is documented as a planned enhancement in future-features-modernization.md.</p>
+<p>Until that work is done, the current delta cert meaningfully reduces the <em>frequency</em> of broad reviews (daily targeted vs. quarterly comprehensive) even if it cannot yet reduce the <em>scope</em> of each review to a single entitlement.</p>
+<p><em>Related playbooks: CLI Playbook · GUI Playbook · Foundations</em></p>
+</div>
 
   </div>
 </div>
 
 <script>
 
-var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-settings-tab"];
+var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-settings-tab", "dc-overview", "dc-what-problem-delta-cert-solves", "dc-the-most-important-concept-read-this-first", "dc-two-modes-delta-daily-and-full-quarterly", "dc-configuration-reference", "dc-running-the-commands", "dc-understanding-the-escalation-timing", "dc-understanding-the-campaign-types", "dc-the-jsonl-audit-trail", "dc-limitations", "dc-troubleshooting", "dc-gotchas-by-experience-level", "dc-recommended-operational-calendar", "dc-the-path-to-true-entitlement-scoped-certification"];
 function showSection(id) {
     sections.forEach(function(s) {
         var el = document.getElementById('section-' + s);
