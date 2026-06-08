@@ -3848,6 +3848,19 @@ function Invoke-GuiGovernanceReport {
         return
     }
 
+    # Read the configured default DaysBack from Audit.DefaultDaysBack so a single
+    # config change controls all report windows. Fall back to 7 if not set.
+    $_govDefaultDays = 7
+    try {
+        $_govCfg = Get-SPConfig
+        if ($null -ne $_govCfg.Audit -and
+            $_govCfg.Audit.PSObject.Properties.Name -contains 'DefaultDaysBack' -and
+            [int]$_govCfg.Audit.DefaultDaysBack -gt 0) {
+            $_govDefaultDays = [int]$_govCfg.Audit.DefaultDaysBack
+        }
+    } catch { }
+    $_govDefaultDaysStr = [string]$_govDefaultDays
+
     # Show GovernanceRunDialog.xaml (GU-04) when present; otherwise use safe defaults.
     # If the file exists and the user cancels, $reportParams will be $null -> bail out.
     $reportParams = $null
@@ -3859,19 +3872,18 @@ function Invoke-GuiGovernanceReport {
                 'ChkIncludeCampaignAudit', 'ChkIncludeLeadershipRollup',
                 'ChkIncludePolicyCheck', 'ChkIncludeDataQuality',
                 'ChkIncludeDashboardExport', 'CboStatus', 'TxtDaysBack') `
-            -Defaults     @{ CboStatus = 'COMPLETED'; TxtDaysBack = '90' }
+            -Defaults     @{ CboStatus = 'COMPLETED'; TxtDaysBack = $_govDefaultDaysStr }
         if ($null -eq $reportParams) { return }
     }
     else {
-        # GU-04 not yet implemented -- use defaults and run immediately
         $reportParams = @{
             ChkIncludeCampaignAudit    = $true
-            ChkIncludeLeadershipRollup = $true
+            ChkIncludeLeadershipRollup = $false
             ChkIncludePolicyCheck      = $false
             ChkIncludeDataQuality      = $false
             ChkIncludeDashboardExport  = $false
             CboStatus                  = 'COMPLETED'
-            TxtDaysBack                = '90'
+            TxtDaysBack                = $_govDefaultDaysStr
         }
     }
 
@@ -3882,7 +3894,7 @@ function Invoke-GuiGovernanceReport {
 
     # Parse dialog values
     $status = if ($reportParams['CboStatus']) { $reportParams['CboStatus'] } else { 'COMPLETED' }
-    $daysBack = 90
+    $daysBack = $_govDefaultDays
     if ($reportParams['TxtDaysBack']) {
         [int]::TryParse([string]$reportParams['TxtDaysBack'], [ref]$daysBack) | Out-Null
     }

@@ -147,7 +147,8 @@
                 <StackPanel Grid.Column="2">
                     <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
                     <TextBox x:Name="TxtDaysBack" Style="{StaticResource FieldBox}"
-                             Width="80" HorizontalAlignment="Left" Text="90"/>
+                             Width="80" HorizontalAlignment="Left" Text="7"
+                             ToolTip="Days back to include campaigns. Default reads from Audit.DefaultDaysBack in settings.local.json — set to 1 for a quick test run."/>
                 </StackPanel>
             </Grid>
 
