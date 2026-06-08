@@ -4907,13 +4907,17 @@ function Get-SPOrphanAccounts {
         }
     }
 
-    # Build summary counts
-    $uncorrelatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'Uncorrelated' }).Count
-    $terminatedCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'TerminatedOwner' }).Count
-    $danglingCount = @($orphanAccounts | Where-Object { $_['OrphanType'] -eq 'DanglingReference' }).Count
-    $disabledCount = @($orphanAccounts | Where-Object { $_['Disabled'] -eq $true }).Count
-    $serviceCount = @($orphanAccounts | Where-Object { $_['IsServiceAccount'] -eq $true }).Count
-    $withEntitlements = @($orphanAccounts | Where-Object { $_['HasEntitlements'] -eq $true }).Count
+    # Build summary counts.
+    # Use a PS-5.1-safe accessor: dot notation works for both hashtable and PSCustomObject;
+    # bracket notation $obj['key'] only works reliably on hashtables. Switching to dot
+    # notation prevents "does not contain a method named 'ContainsKey'" errors (line 1 char 1)
+    # that appear when any item in the list happens to be a PSCustomObject.
+    $uncorrelatedCount = @($orphanAccounts | Where-Object { $_.OrphanType -eq 'Uncorrelated' }).Count
+    $terminatedCount = @($orphanAccounts | Where-Object { $_.OrphanType -eq 'TerminatedOwner' }).Count
+    $danglingCount = @($orphanAccounts | Where-Object { $_.OrphanType -eq 'DanglingReference' }).Count
+    $disabledCount = @($orphanAccounts | Where-Object { $_.Disabled -eq $true }).Count
+    $serviceCount = @($orphanAccounts | Where-Object { $_.IsServiceAccount -eq $true }).Count
+    $withEntitlements = @($orphanAccounts | Where-Object { $_.HasEntitlements -eq $true }).Count
 
     $result = @{
         OrphanAccounts = @($orphanAccounts)
@@ -5045,7 +5049,11 @@ function Get-SPSourceAggregationHealth {
                 -QueryParams $queryParams -CorrelationID $CorrelationID
 
             if (-not $srcResult.Success) {
-                Write-SPLog -Message "Get-SPSourceAggregationHealth: API error querying sources at page ${pageNum}: $($srcResult.Error)" `
+                $srcErrMsg = $srcResult.Error
+                if ($srcErrMsg -match '403|forbidden') {
+                    $srcErrMsg = "Access denied (403) on /v3/sources. Add 'idn:source:read' (or 'sp:scopes:all') to your Personal Access Token. Source aggregation health will show 0/0/0 until scope is granted."
+                }
+                Write-SPLog -Message "Get-SPSourceAggregationHealth: API error querying sources at page ${pageNum}: $srcErrMsg" `
                     -Severity ERROR -Component 'SP.AuditQueries' -Action 'Get-SPSourceAggregationHealth' `
                     -CorrelationID $CorrelationID
                 break
@@ -5447,7 +5455,13 @@ function Measure-SPIdentityDataQuality {
             -QueryParams $queryParams -CorrelationID $CorrelationID
 
         if (-not $result.Success) {
-            Write-SPLog -Message "Measure-SPIdentityDataQuality: API error at page ${pageNum} -- $($result.Error)" `
+            $errMsg = $result.Error
+            # 403 on /v3/public-identities means missing scope -- surface it clearly
+            # so the caller can add idn:identity-profile:read or sp:scopes:all to the PAT.
+            if ($errMsg -match '403|forbidden') {
+                $errMsg = "Access denied (403) on /v3/public-identities. Add 'idn:identity-profile:read' (or 'sp:scopes:all') to your Personal Access Token. Identity quality score will be 0 until scope is granted."
+            }
+            Write-SPLog -Message "Measure-SPIdentityDataQuality: API error at page ${pageNum} -- $errMsg" `
                 -Severity ERROR -Component 'SP.AuditQueries' -Action 'Measure-SPIdentityDataQuality' `
                 -CorrelationID $CorrelationID
             break
@@ -5623,8 +5637,10 @@ function Measure-SPIdentityDataQuality {
     }
 
     # Quality issues
-    $managerSelfRefs = @($identities | Where-Object { $_['ManagerSelfRef'] -eq $true } | ForEach-Object { $_['IdentityId'] })
-    $staleProfiles = @($identities | Where-Object { $_['StaleProfile'] -eq $true } | ForEach-Object { $_['IdentityId'] })
+    # Use dot notation (works for both hashtable and PSCustomObject) to prevent
+    # "does not contain a method named 'ContainsKey'" line-1-char-1 errors.
+    $managerSelfRefs = @($identities | Where-Object { $_.ManagerSelfRef -eq $true } | ForEach-Object { $_.IdentityId })
+    $staleProfiles = @($identities | Where-Object { $_.StaleProfile -eq $true } | ForEach-Object { $_.IdentityId })
 
     # Duplicate email detection
     $emailMap = @{}
@@ -5680,15 +5696,15 @@ function Measure-SPIdentityDataQuality {
         }
     }
 
-    # Identities with at least one issue
-    $identitiesWithIssues = @($identities | Where-Object { $_['Issues'].Count -gt 0 }).Count
+    # Identities with at least one issue -- dot notation for PS-5.1 PSCustomObject safety
+    $identitiesWithIssues = @($identities | Where-Object { $_.Issues.Count -gt 0 }).Count
 
     # Grade distribution
-    $gradeA = @($identities | Where-Object { $_['QualityScore'] -ge 90 }).Count
-    $gradeB = @($identities | Where-Object { $_['QualityScore'] -ge 80 -and $_['QualityScore'] -lt 90 }).Count
-    $gradeC = @($identities | Where-Object { $_['QualityScore'] -ge 70 -and $_['QualityScore'] -lt 80 }).Count
-    $gradeD = @($identities | Where-Object { $_['QualityScore'] -ge 60 -and $_['QualityScore'] -lt 70 }).Count
-    $gradeF = @($identities | Where-Object { $_['QualityScore'] -lt 60 }).Count
+    $gradeA = @($identities | Where-Object { $_.QualityScore -ge 90 }).Count
+    $gradeB = @($identities | Where-Object { $_.QualityScore -ge 80 -and $_.QualityScore -lt 90 }).Count
+    $gradeC = @($identities | Where-Object { $_.QualityScore -ge 70 -and $_.QualityScore -lt 80 }).Count
+    $gradeD = @($identities | Where-Object { $_.QualityScore -ge 60 -and $_.QualityScore -lt 70 }).Count
+    $gradeF = @($identities | Where-Object { $_.QualityScore -lt 60 }).Count
 
     $summaryResult = @{
         TotalIdentitiesScanned   = $identities.Count
