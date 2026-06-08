@@ -554,8 +554,14 @@ foreach ($campaign in $campaigns) {
     }
     $allCampaignAudits.Add($campaignAudit)
 
-    # Per-campaign HTML + text
-    $safeFileName = ($campName -replace '[\\/:*?"<>|]', '_').TrimEnd('.')
+    # Per-campaign HTML + text.
+    # Truncate to 40 chars MAX to avoid Windows MAX_PATH (260) violations when the
+    # campaign name is long (e.g. "Daily Attestation Manager Campaign - Monday, June 08 2026").
+    # Replace all chars unsafe in filesystem names + spaces/commas with hyphens,
+    # collapse runs, strip leading/trailing hyphens, then trim to 40.
+    $safeFileName = ($campName -replace '[\\/:*?"<>|\s,.]', '-' -replace '-{2,}', '-').Trim('-')
+    if ($safeFileName.Length -gt 40) { $safeFileName = $safeFileName.Substring(0, 40).TrimEnd('-') }
+    if ([string]::IsNullOrWhiteSpace($safeFileName)) { $safeFileName = 'campaign' }
     $campOutputDir = Join-Path $packagePath $safeFileName
     if (-not (Test-Path $campOutputDir)) {
         $null = New-Item -ItemType Directory -Path $campOutputDir -Force

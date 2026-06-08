@@ -1415,7 +1415,13 @@ function Export-SPAuditHtml {
         if ($null -eq $audit) { continue }
 
         $campName  = if ($audit.ContainsKey('CampaignName')) { [string]$audit['CampaignName'] } else { 'UnknownCampaign' }
-        $safeName  = $campName -replace '[\\/:*?"<>|\s]', '-'
+        # Sanitize and truncate campaign name for the filename component.
+        # Full campaign names (e.g. "Daily Attestation Manager Campaign - Monday, June 08, 2026")
+        # exceed MAX_PATH (260) when combined with the containing directory path.
+        # Cap at 35 chars: prefix "campaign-audit-" (15) + 35 + "-YYYYMMDD-HHMMSS.html" (21) = 71-char filename.
+        $safeName  = ($campName -replace '[\\/:*?"<>|\s,.]', '-' -replace '-{2,}', '-').Trim('-')
+        if ($safeName.Length -gt 35) { $safeName = $safeName.Substring(0, 35).TrimEnd('-') }
+        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = 'campaign' }
         $fileName  = "campaign-audit-${safeName}-${timestamp}.html"
         $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
 
@@ -1666,7 +1672,10 @@ function Export-SPAuditText {
         $lines.Add("SailPoint ISC Governance Toolkit v$($script:AuditReportVersion)")
         $lines.Add('')
 
-        $safeName = $campName -replace '[\\/:*?"<>|\s]', '-'
+        # Same 35-char cap as the HTML export to prevent MAX_PATH violations.
+        $safeName = ($campName -replace '[\\/:*?"<>|\s,.]', '-' -replace '-{2,}', '-').Trim('-')
+        if ($safeName.Length -gt 35) { $safeName = $safeName.Substring(0, 35).TrimEnd('-') }
+        if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = 'campaign' }
         $fileName = "campaign-audit-${safeName}-${timestamp}.txt"
         $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
 
