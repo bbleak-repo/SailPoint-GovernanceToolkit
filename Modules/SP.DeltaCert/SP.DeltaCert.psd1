@@ -3,7 +3,7 @@
     GUID              = 'f4a82c17-9e3b-4d61-b5f8-0c7a1e6d2948'
 
     # Module version
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.1.0'
 
     # Minimum PowerShell version
     PowerShellVersion = '5.1'
@@ -30,12 +30,13 @@
 
     # Public functions exported by this module
     FunctionsToExport = @(
-        # SP.DeltaCertQueries - Data retrieval
+        # SP.DeltaCertQueries - Data retrieval and query functions
         'Get-SPDeltaGrantEvents'
         'Get-SPDeltaAffectedIdentities'
         'Group-SPDeltaByManager'
         'Get-SPDeltaCertStaleCertifications'
         'Get-SPDeltaIdentityDetail'
+        'Get-SPDeltaManagersForSources'
         'Build-SPOrgTree'
         'Import-SPOrgChartSupplement'
         'Merge-SPOrgTreeWithSupplement'
@@ -48,8 +49,10 @@
 
         # SP.DeltaCertRunner - Campaign orchestration
         'Invoke-SPDeltaCertRun'
+        'Invoke-SPDeltaCertFullRun'
         'Invoke-SPDeltaCertCleanup'
         'Invoke-SPDeltaCertEscalate'
+        'Test-SPDeltaCertBaselineExists'
 
         # SP.DeltaCertReport - Delta report generation
         'Get-SPDeltaReportData'

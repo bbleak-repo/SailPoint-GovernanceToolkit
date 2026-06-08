@@ -405,6 +405,39 @@ function Get-SPDeltaGrantEvents {
                 $itemValue = if ($null -ne $item.PSObject.Properties['value'] -and $null -ne $item.value) { [string]$item.value } else { '' }
                 $itemName  = if ($null -ne $item.PSObject.Properties['name']  -and $null -ne $item.name)  { [string]$item.name  } else { $itemValue }
 
+                # Extract entitlement / access-profile ID if the item carries it.
+                # ISC account-activity provisioning items may carry entitlementId
+                # or accessProfileId depending on the ISC provisioning path.
+                # These fields are captured for audit traceability and are
+                # available to callers for post-hoc reporting. They are NOT
+                # passed to the ISC /v3/campaigns API because the SEARCH
+                # campaign filter only accepts identity-level Lucene queries --
+                # there is no entitlement-level filter parameter in the campaign
+                # creation body. See design note in SP.DeltaCertRunner.psm1.
+                $entitlementId   = ''
+                $accessProfileId = ''
+                foreach ($prop in @('entitlementId', 'entitlement_id')) {
+                    if ($null -ne $item.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($item.$prop)) {
+                        $entitlementId = [string]$item.$prop
+                        break
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($entitlementId) -and
+                    $null -ne $item.PSObject.Properties['entitlement'] -and
+                    $null -ne $item.entitlement -and
+                    $null -ne $item.entitlement.PSObject.Properties['id'] -and
+                    -not [string]::IsNullOrWhiteSpace($item.entitlement.id)) {
+                    $entitlementId = [string]$item.entitlement.id
+                }
+                foreach ($prop in @('accessProfileId', 'access_profile_id')) {
+                    if ($null -ne $item.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($item.$prop)) {
+                        $accessProfileId = [string]$item.$prop
+                        break
+                    }
+                }
+
                 $grantEvents.Add([PSCustomObject]@{
                     IdentityId      = $identityId
                     SourceId        = $itemSourceId
@@ -413,6 +446,9 @@ function Get-SPDeltaGrantEvents {
                     ItemType        = $itemType
                     ItemValue       = $itemValue
                     ItemName        = $itemName
+                    EntitlementId   = $entitlementId
+                    EntitlementName = $itemName   # best available name; ItemName already falls back to ItemValue
+                    AccessProfileId = $accessProfileId
                 })
             }
         }
@@ -3285,6 +3321,324 @@ function Get-SPOrgChartGaps {
     }
 }
 
+function Get-SPDeltaManagersForSources {
+    <#
+    .SYNOPSIS
+        Returns a hashtable of all unique managers who have direct reports with
+        accounts on the specified AD source IDs.
+    .DESCRIPTION
+        Used by Invoke-SPDeltaCertFullRun to determine which managers should
+        receive a MANAGER-type full certification campaign.
+
+        Queries GET /v3/search/identities with filters that narrow to active
+        identities who have accounts on the monitored source IDs and who have a
+        manager assignment in ISC. Extracts the unique manager IDs and resolves
+        their display names.
+
+        The same ExcludeLifecycleStates, ExcludeIdentityIds, and
+        ExcludeDisplayNamePatterns filters applied by Get-SPDeltaAffectedIdentities
+        are applied here for consistency.
+
+        IMPORTANT -- ISC API ceiling:
+          The /v3/search/identities filter supports 'accounts.source.id in (...)' for
+          source-level scoping. If that filter is not indexed or returns errors on the
+          tenant, the function falls back to fetching all active identities and
+          filtering client-side by source ID from the accounts array.
+
+    .PARAMETER SourceIds
+        Array of SailPoint ISC source IDs to scope to. If empty, all active
+        identities with any manager are included (not recommended for large tenants).
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{ managerId = ManagerName }  # keyed by manager identity ID
+            Error   = $string
+        }
+    .EXAMPLE
+        $mgrs = Get-SPDeltaManagersForSources -SourceIds @('src-abc123')
+        foreach ($mgrId in $mgrs.Data.Keys) {
+            "Manager: $($mgrs.Data[$mgrId]) ($mgrId)"
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$SourceIds = @(),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $srcLabel = if ($SourceIds.Count -gt 0) { $SourceIds -join ',' } else { '(all)' }
+    Write-SPLog -Message "Get-SPDeltaManagersForSources: SourceIds='$srcLabel'" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load exclusion config (fail-safe to hardcoded defaults)
+        $excludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+        $excludeDisplayNamePatterns = @()
+        $excludeIdentityIds         = @()
+        $maxPerPage                 = 250
+
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg -and $null -ne $cfg.PSObject.Properties['DeltaCert'] -and
+                $null -ne $cfg.DeltaCert) {
+                $dc = $cfg.DeltaCert
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeLifecycleStates' -and
+                    $null -ne $dc.ExcludeLifecycleStates) {
+                    $excludeLifecycleStates = @($dc.ExcludeLifecycleStates)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeDisplayNamePatterns' -and
+                    $null -ne $dc.ExcludeDisplayNamePatterns) {
+                    $excludeDisplayNamePatterns = @($dc.ExcludeDisplayNamePatterns)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeIdentityIds' -and
+                    $null -ne $dc.ExcludeIdentityIds) {
+                    $excludeIdentityIds = @($dc.ExcludeIdentityIds)
+                }
+
+                # Optional per-page override for full-cert identity search
+                if ($null -ne $dc.PSObject.Properties['FullCert'] -and
+                    $null -ne $dc.FullCert -and
+                    $dc.FullCert.PSObject.Properties.Name -contains 'MaxIdentitiesPerPage' -and
+                    [int]$dc.FullCert.MaxIdentitiesPerPage -gt 0) {
+                    $maxPerPage = [int]$dc.FullCert.MaxIdentitiesPerPage
+                }
+            }
+        } catch { }
+
+        $excludeIdSet = if ($excludeIdentityIds.Count -gt 0) {
+            [System.Collections.Generic.HashSet[string]]::new([string[]]$excludeIdentityIds)
+        } else { $null }
+
+        $sourceSet = if ($SourceIds.Count -gt 0) {
+            [System.Collections.Generic.HashSet[string]]::new($SourceIds)
+        } else { $null }
+
+        # Pagination ceiling (reuse Api.MaxPaginationPages from config)
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # Attempt server-side source filter first. If the filter is unsupported,
+        # fall back to fetching all active identities with a manager.
+        $useServerSideSourceFilter = ($SourceIds.Count -gt 0)
+        $allIdentities = [System.Collections.Generic.List[object]]::new()
+        $offset  = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached at $maxPages pages while retrieving identity list for full-cert manager resolution."
+                Write-SPLog -Message $errMsg -Severity ERROR `
+                    -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                    -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams = @{
+                'limit'  = $maxPerPage.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            # Build server-side filter. The 'manager.id is present' filter selects
+            # identities that have any manager assignment.
+            if ($useServerSideSourceFilter) {
+                $srcFilterParts = $SourceIds | ForEach-Object { "`"$_`"" }
+                $queryParams['filters'] = "manager.id is present and attributes.cloudLifecycleState ne `"terminated`" and accounts.source.id in ($($srcFilterParts -join ','))"
+            } else {
+                $queryParams['filters'] = 'manager.id is present'
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/search/identities' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                # Server-side source filter may not be supported by tenant -- fall back
+                if ($useServerSideSourceFilter) {
+                    Write-SPLog -Message "Server-side source filter unsupported or failed ($($result.Error)). Falling back to client-side source filtering." `
+                        -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                        -CorrelationID $CorrelationID
+                    $useServerSideSourceFilter = $false
+                    $offset  = 0
+                    $pageNum = 0
+                    $allIdentities.Clear()
+                    continue
+                }
+                else {
+                    $errMsg = "Identity search failed at page $($pageNum): $($result.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR `
+                        -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                        -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and
+                $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($identity in $page) { $allIdentities.Add($identity) }
+            }
+
+            Write-SPLog -Message "Page ${pageNum}: retrieved $($page.Count) identities (running total: $($allIdentities.Count))" `
+                -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                -CorrelationID $CorrelationID
+
+            $offset += $maxPerPage
+        } while ($page.Count -ge $maxPerPage)
+
+        Write-SPLog -Message "Retrieved $($allIdentities.Count) candidate identities for full-cert manager resolution" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+            -CorrelationID $CorrelationID
+
+        # Extract unique manager IDs, applying exclusion filters
+        # Key: managerId, Value: manager display name (best resolved from any subordinate record)
+        $managerMap = @{}
+
+        foreach ($identity in $allIdentities) {
+
+            # Explicit identity exclusion
+            $identId = ''
+            if ($null -ne $identity.PSObject.Properties['id'] -and
+                -not [string]::IsNullOrWhiteSpace($identity.id)) {
+                $identId = [string]$identity.id
+            }
+            if ([string]::IsNullOrWhiteSpace($identId)) { continue }
+            if ($null -ne $excludeIdSet -and $excludeIdSet.Contains($identId)) { continue }
+
+            # Lifecycle state exclusion
+            $lcs = ''
+            if ($null -ne $identity.PSObject.Properties['attributes'] -and
+                $null -ne $identity.attributes -and
+                $null -ne $identity.attributes.PSObject.Properties['cloudLifecycleState'] -and
+                -not [string]::IsNullOrWhiteSpace($identity.attributes.cloudLifecycleState)) {
+                $lcs = [string]$identity.attributes.cloudLifecycleState
+            }
+            if (-not [string]::IsNullOrWhiteSpace($lcs) -and
+                $excludeLifecycleStates.Count -gt 0 -and $lcs -in $excludeLifecycleStates) {
+                continue
+            }
+
+            # Display name exclusion
+            $displayName = ''
+            foreach ($prop in @('displayName', 'name')) {
+                if ($null -ne $identity.PSObject.Properties[$prop] -and
+                    -not [string]::IsNullOrWhiteSpace($identity.$prop)) {
+                    $displayName = [string]$identity.$prop
+                    break
+                }
+            }
+            if ($excludeDisplayNamePatterns.Count -gt 0 -and
+                -not [string]::IsNullOrWhiteSpace($displayName)) {
+                $isExcluded = $false
+                foreach ($pattern in $excludeDisplayNamePatterns) {
+                    if (-not [string]::IsNullOrWhiteSpace($pattern) -and
+                        $displayName -match $pattern) {
+                        $isExcluded = $true
+                        break
+                    }
+                }
+                if ($isExcluded) { continue }
+            }
+
+            # Client-side source filter (only needed when server-side filter is not active)
+            if (-not $useServerSideSourceFilter -and $null -ne $sourceSet) {
+                $hasMatchingSource = $false
+                if ($null -ne $identity.PSObject.Properties['accounts'] -and
+                    $null -ne $identity.accounts) {
+                    $accts = @($identity.accounts)
+                    foreach ($acct in $accts) {
+                        $acctSrcId = ''
+                        foreach ($prop in @('sourceId', 'source_id')) {
+                            if ($null -ne $acct.PSObject.Properties[$prop] -and
+                                -not [string]::IsNullOrWhiteSpace($acct.$prop)) {
+                                $acctSrcId = [string]$acct.$prop
+                                break
+                            }
+                        }
+                        if ([string]::IsNullOrWhiteSpace($acctSrcId) -and
+                            $null -ne $acct.PSObject.Properties['source'] -and
+                            $null -ne $acct.source -and
+                            $null -ne $acct.source.PSObject.Properties['id'] -and
+                            -not [string]::IsNullOrWhiteSpace($acct.source.id)) {
+                            $acctSrcId = [string]$acct.source.id
+                        }
+                        if ($sourceSet.Contains($acctSrcId)) {
+                            $hasMatchingSource = $true
+                            break
+                        }
+                    }
+                }
+                if (-not $hasMatchingSource) { continue }
+            }
+
+            # Extract manager
+            $managerId   = ''
+            $managerName = ''
+            if ($null -ne $identity.PSObject.Properties['manager'] -and
+                $null -ne $identity.manager) {
+                $mgr = $identity.manager
+                if ($null -ne $mgr.PSObject.Properties['id'] -and
+                    -not [string]::IsNullOrWhiteSpace($mgr.id)) {
+                    $managerId = [string]$mgr.id
+                }
+                foreach ($prop in @('displayName', 'name')) {
+                    if ($null -ne $mgr.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($mgr.$prop)) {
+                        $managerName = [string]$mgr.$prop
+                        break
+                    }
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($managerId)) { continue }
+
+            # Add or update manager entry (prefer a non-empty display name)
+            if (-not $managerMap.ContainsKey($managerId)) {
+                $managerMap[$managerId] = $managerName
+            }
+            elseif ([string]::IsNullOrWhiteSpace($managerMap[$managerId]) -and
+                    -not [string]::IsNullOrWhiteSpace($managerName)) {
+                $managerMap[$managerId] = $managerName
+            }
+        }
+
+        Write-SPLog -Message "Get-SPDeltaManagersForSources: Found $($managerMap.Count) unique manager(s) with staff on monitored source(s)" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $managerMap; Error = $null }
+    }
+    catch {
+        $errMsg = "Get-SPDeltaManagersForSources failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Get-SPDeltaManagersForSources' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -3301,5 +3655,6 @@ Export-ModuleMember -Function @(
     'Show-SPReportDistributionPreview',
     'Export-SPOrgChartHtml',
     'Resolve-SPIdentityBand',
-    'Get-SPOrgChartGaps'
+    'Get-SPOrgChartGaps',
+    'Get-SPDeltaManagersForSources'
 )

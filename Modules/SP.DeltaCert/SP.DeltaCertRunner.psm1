@@ -66,6 +66,12 @@ function Write-SPDeltaCertAuditEvent {
     .DESCRIPTION
         Writes a single JSON line to {OutputPath}/deltacert-audit.jsonl following
         the Export-SPAuditJsonl pattern (UTF-8 no BOM, AppendAllText).
+
+        The optional -RunMode parameter distinguishes DELTA runs (the default
+        account-activity-driven mode) from FULL runs (quarterly baseline mode
+        created by Invoke-SPDeltaCertFullRun). Existing consumers of the JSONL
+        file see a new RunMode field; ConvertFrom-Json ignores unknown keys so
+        this is backward-compatible.
     #>
     [CmdletBinding()]
     param(
@@ -79,7 +85,9 @@ function Write-SPDeltaCertAuditEvent {
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CampaignIds,
         [Parameter(Mandatory)][string]$Reason,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Errors,
-        [Parameter(Mandatory)][double]$DurationSeconds
+        [Parameter(Mandatory)][double]$DurationSeconds,
+        # 'Delta' (default) or 'Full' -- used to distinguish run types in the audit trail.
+        [Parameter()][string]$RunMode = 'Delta'
     )
 
     try {
@@ -99,6 +107,7 @@ function Write-SPDeltaCertAuditEvent {
         $event = [ordered]@{
             Timestamp           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
             CorrelationID       = $CorrelationID
+            RunMode             = $RunMode
             Action              = 'DeltaCertRun'
             SourceIds           = $SourceIds
             HoursBack           = $HoursBack
@@ -117,7 +126,7 @@ function Write-SPDeltaCertAuditEvent {
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::AppendAllText($filePath, "$jsonLine`n", $utf8NoBom)
 
-        Write-SPLog -Message "Audit event written to $filePath" `
+        Write-SPLog -Message "Audit event written to $filePath (RunMode=$RunMode)" `
             -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Write-SPDeltaCertAuditEvent' `
             -CorrelationID $CorrelationID
     }
@@ -125,6 +134,47 @@ function Write-SPDeltaCertAuditEvent {
         Write-SPLog -Message "Failed to write audit JSONL event: $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Write-SPDeltaCertAuditEvent' `
             -CorrelationID $CorrelationID
+    }
+}
+
+function Test-SPDeltaCertBaselineExists {
+    <#
+    .SYNOPSIS
+        Returns $true if the deltacert-audit.jsonl file exists at the configured output path.
+    .DESCRIPTION
+        Used by Invoke-SPADDeltaCert.ps1 to detect whether this is a first-ever run
+        against this output directory. If the file is absent AND -FullCert is not
+        specified, the script emits an advisory warning recommending a full-cert
+        baseline run before starting daily delta runs.
+
+        The audit JSONL file is written by Write-SPDeltaCertAuditEvent on every
+        successful run. Its absence is the lightest-weight first-run signal available
+        without a dedicated state file or ISC API call.
+
+        Reads DeltaCert.OutputPath from config; falls back to '.\DeltaCert' if config
+        is unavailable.
+    .OUTPUTS
+        [bool] $true if the audit file exists; $false otherwise.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    try {
+        $config     = Get-SPConfig
+        $outputPath = '.\DeltaCert'
+        if ($null -ne $config -and
+            $config.PSObject.Properties.Name -contains 'DeltaCert' -and
+            $config.DeltaCert.PSObject.Properties.Name -contains 'OutputPath' -and
+            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+            $outputPath = $config.DeltaCert.OutputPath
+        }
+        $filePath = Join-Path -Path $outputPath -ChildPath 'deltacert-audit.jsonl'
+        return (Test-Path -Path $filePath -PathType Leaf)
+    }
+    catch {
+        # If config load fails, assume baseline does not exist (safest advisory posture)
+        return $false
     }
 }
 
@@ -1216,10 +1266,368 @@ function Invoke-SPDeltaCertCleanup {
     }
 }
 
+function Invoke-SPDeltaCertFullRun {
+    <#
+    .SYNOPSIS
+        Creates quarterly full-certification campaigns for all managers who have
+        staff on the monitored AD sources.
+    .DESCRIPTION
+        FULL mode establishes a baseline certification covering ALL current
+        entitlements for every active identity with an account on the monitored
+        source IDs. It does not query account-activities and is not bounded by
+        a time window.
+
+        One MANAGER-type campaign is created per unique manager found by
+        Get-SPDeltaManagersForSources. ISC's MANAGER campaign type automatically
+        scopes the review to all direct reports of the certifier identity,
+        presenting their full entitlement set. No identity list or Lucene search
+        filter is required.
+
+        IMPORTANT -- ISC API scope:
+          The ISC /v3/campaigns API does not support entitlement-level SEARCH
+          filters. A MANAGER campaign covers ALL entitlements for all direct
+          reports, not just entitlements on the monitored AD sources. This is
+          correct for a quarterly full baseline: the goal is a complete review
+          of each manager's direct reports, not a narrow window view.
+          See the DELTA mode (Invoke-SPDeltaCertRun) for time-window-scoped
+          reviews limited to identities who received new AD access.
+
+        Campaign naming: "{FullCertPrefix} {YYYY-MM-DD} - {ManagerName}"
+          The prefix defaults to DeltaCert.FullCert.CampaignNamePrefix in
+          settings.json (fallback: 'AD Full Cert'). The separate prefix ensures
+          the duplicate guard does not collide with same-day DELTA campaigns.
+
+        Safety guards, WhatIf, and the audit JSONL trail work identically to
+        Invoke-SPDeltaCertRun. The return envelope shape is identical so the
+        Invoke-SPADDeltaCert.ps1 output section does not require branching.
+
+    .PARAMETER SourceIds
+        Array of SailPoint ISC source IDs to use when resolving which managers
+        have staff on the monitored AD sources.
+    .PARAMETER DeadlineDays
+        Days from today until the campaign deadline.
+        Reads DeltaCert.FullCert.DeadlineDays from settings.json; defaults to 14
+        (two weeks, appropriate for quarterly review cadence).
+    .PARAMETER CampaignNamePrefix
+        Prefix for full-cert campaign names.
+        Reads DeltaCert.FullCert.CampaignNamePrefix from settings.json; defaults
+        to 'AD Full Cert'.
+    .PARAMETER FallbackManagerId
+        Identity ID used as campaign certifier for managers who are not found in
+        ISC. If omitted, unresolved managers are skipped.
+    .PARAMETER MaxCampaignsPerRun
+        Abort before creating any campaigns if the number of managers exceeds this.
+        Default: 50. Operators running -FullCert on large orgs should temporarily
+        raise DeltaCert.MaxCampaignsPerRun in settings.json.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                CampaignsCreated = [int]
+                CampaignIds      = [string[]]
+                IdentityCount    = [int]       # 0 for MANAGER type (scope is implicit)
+                ManagerGroups    = [int]
+                Reason           = [string]    # NoManagers | WhatIf | Created | DuplicatesExist
+                Errors           = [string[]]
+                WhatIfGroups     = [hashtable] # only present when WhatIf=true
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        $result = Invoke-SPDeltaCertFullRun -SourceIds @('src-abc123')
+        "Created $($result.Data.CampaignsCreated) full-cert campaign(s)"
+    .EXAMPLE
+        Invoke-SPDeltaCertFullRun -SourceIds @('src-abc123') -WhatIf
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$SourceIds,
+
+        [Parameter()]
+        [int]$DeadlineDays = 14,
+
+        [Parameter()]
+        [string]$CampaignNamePrefix = 'AD Full Cert',
+
+        [Parameter()]
+        [string]$FallbackManagerId,
+
+        [Parameter()]
+        [int]$MaxCampaignsPerRun = 50,
+
+        [Parameter()]
+        [string]$CorrelationID,
+
+        [Parameter()]
+        [switch]$Force
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $runStartTime = [System.Diagnostics.Stopwatch]::StartNew()
+
+    Write-SPLog -Message "Invoke-SPDeltaCertFullRun: Sources='$($SourceIds -join ',')' DeadlineDays=$DeadlineDays WhatIf=$(($WhatIfPreference -eq $true))" `
+        -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+        -CorrelationID $CorrelationID
+
+    try {
+        $dateStamp = Get-Date -Format 'yyyy-MM-dd'
+
+        # Duplicate campaign guard (Full campaigns use their own prefix)
+        if (-not $Force) {
+            Write-SPLog -Message "Checking for existing full-cert campaigns matching '$CampaignNamePrefix $dateStamp'" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+
+            $searchResult = Search-SPCampaigns -Keyword "$CampaignNamePrefix $dateStamp" `
+                -CorrelationID $CorrelationID
+
+            if ($searchResult.Success -and @($searchResult.Data).Count -gt 0) {
+                $existingCount = @($searchResult.Data).Count
+                Write-SPLog -Message "Duplicate guard: Found $existingCount existing full-cert campaign(s) matching '$CampaignNamePrefix $dateStamp'. Use -Force to bypass." `
+                    -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                    -CorrelationID $CorrelationID
+
+                $runStartTime.Stop()
+                Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                    -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups 0 `
+                    -CampaignsCreated 0 -CampaignIds @() -Reason 'DuplicatesExist' `
+                    -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+                return @{
+                    Success = $true
+                    Data    = @{
+                        CampaignsCreated = 0
+                        CampaignIds      = @()
+                        IdentityCount    = 0
+                        ManagerGroups    = 0
+                        Reason           = 'DuplicatesExist'
+                        Errors           = @()
+                    }
+                    Error   = $null
+                }
+            }
+        }
+
+        # Step 1: Resolve all managers who have staff on the monitored sources
+        Write-SPLog -Message "Step 1: Resolving managers with staff on monitored sources" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+            -CorrelationID $CorrelationID
+
+        $mgrResult = Get-SPDeltaManagersForSources -SourceIds $SourceIds -CorrelationID $CorrelationID
+
+        if (-not $mgrResult.Success) {
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'Error' `
+                -Errors @("Manager resolution failed: $($mgrResult.Error)") `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Manager resolution failed: $($mgrResult.Error)"
+            }
+        }
+
+        $managerMap = $mgrResult.Data  # hashtable: managerId -> ManagerName
+
+        if ($managerMap.Count -eq 0) {
+            Write-SPLog -Message "No managers found with staff on monitored sources -- no campaigns created" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups 0 `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'NoManagers' `
+                -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = 0
+                    ManagerGroups    = 0
+                    Reason           = 'NoManagers'
+                    Errors           = @()
+                }
+                Error   = $null
+            }
+        }
+
+        # Safety guard: abort before writing if manager count exceeds limit
+        if ($managerMap.Count -gt $MaxCampaignsPerRun) {
+            $errMsg = "Manager count ($($managerMap.Count)) exceeds MaxCampaignsPerRun ($MaxCampaignsPerRun). " +
+                      "Increase DeltaCert.MaxCampaignsPerRun in settings.json or use -MaxCampaignsPerRun."
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                -Action 'Invoke-SPDeltaCertFullRun' -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups $managerMap.Count `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'Error' -Errors @($errMsg) `
+                -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+            return @{ Success = $false; Data = $null; Error = $errMsg }
+        }
+
+        # WhatIf: describe without creating
+        if (($WhatIfPreference -eq $true)) {
+            $whatIfGroups = @{}
+            foreach ($managerId in $managerMap.Keys) {
+                $managerName = $managerMap[$managerId]
+                if ([string]::IsNullOrWhiteSpace($managerName)) { $managerName = $managerId }
+                $whatIfGroups[$managerId] = @{
+                    ManagerName  = $managerName
+                    CampaignName = "$CampaignNamePrefix $dateStamp - $managerName"
+                    Deadline     = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-dd')
+                    CampaignType = 'MANAGER'
+                }
+            }
+
+            Write-SPLog -Message "WhatIf: Would create $($managerMap.Count) MANAGER campaign(s) for full cert" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+
+            $runStartTime.Stop()
+            Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+                -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups $managerMap.Count `
+                -CampaignsCreated 0 -CampaignIds @() -Reason 'WhatIf' `
+                -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+            return @{
+                Success = $true
+                Data    = @{
+                    CampaignsCreated = 0
+                    CampaignIds      = @()
+                    IdentityCount    = 0
+                    ManagerGroups    = $managerMap.Count
+                    Reason           = 'WhatIf'
+                    Errors           = @()
+                    WhatIfGroups     = $whatIfGroups
+                }
+                Error   = $null
+            }
+        }
+
+        # Step 2: Create and activate one MANAGER campaign per manager
+        Write-SPLog -Message "Step 2: Creating $($managerMap.Count) MANAGER campaign(s) (deadline +$DeadlineDays day(s))" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+            -CorrelationID $CorrelationID
+
+        $campaignIds    = [System.Collections.Generic.List[string]]::new()
+        $campaignErrors = [System.Collections.Generic.List[string]]::new()
+        $deadlineStr    = (Get-Date).AddDays($DeadlineDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+        foreach ($managerId in $managerMap.Keys) {
+            $managerName = $managerMap[$managerId]
+            if ([string]::IsNullOrWhiteSpace($managerName)) { $managerName = $managerId }
+
+            $campaignName = "$CampaignNamePrefix $dateStamp - $managerName"
+
+            Write-SPLog -Message "Creating MANAGER campaign '$campaignName' (certifier='$managerId')" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+
+            $createResult = New-SPCampaign `
+                -Name                $campaignName `
+                -Type                'MANAGER' `
+                -CertifierIdentityId $managerId `
+                -Description         "Quarterly AD full certification: all direct reports of $managerName as of $dateStamp." `
+                -Deadline            $deadlineStr `
+                -CorrelationID       $CorrelationID
+
+            if (-not $createResult.Success) {
+                $errMsg = "Campaign '$campaignName' create failed: $($createResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertFullRun' -CorrelationID $CorrelationID
+                $campaignErrors.Add($errMsg)
+                continue
+            }
+
+            $campaignId = $createResult.Data.id
+
+            $activateResult = Start-SPCampaign -CampaignId $campaignId -CorrelationID $CorrelationID
+
+            if (-not $activateResult.Success) {
+                $errMsg = "Campaign '$campaignName' ($campaignId) created but activation failed: $($activateResult.Error)"
+                Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+                    -Action 'Invoke-SPDeltaCertFullRun' -CorrelationID $CorrelationID
+                $campaignErrors.Add($errMsg)
+                $campaignIds.Add($campaignId)
+                continue
+            }
+
+            Write-SPLog -Message "Campaign '$campaignName' ($campaignId) created and activation requested" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+            $campaignIds.Add($campaignId)
+        }
+
+        $overallSuccess = ($campaignErrors.Count -eq 0)
+
+        if ($campaignErrors.Count -gt 0) {
+            Write-SPLog -Message "$($campaignErrors.Count) full-cert campaign(s) had creation/activation errors" `
+                -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+                -CorrelationID $CorrelationID
+        }
+
+        Write-SPLog -Message "Invoke-SPDeltaCertFullRun complete: $($campaignIds.Count) MANAGER campaign(s) for $($managerMap.Count) manager(s)" `
+            -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertFullRun' `
+            -CorrelationID $CorrelationID
+
+        $runStartTime.Stop()
+        Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+            -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 -ManagerGroups $managerMap.Count `
+            -CampaignsCreated $campaignIds.Count -CampaignIds $campaignIds.ToArray() `
+            -Reason 'Created' -Errors $campaignErrors.ToArray() `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+        return @{
+            Success = $overallSuccess
+            Data    = @{
+                CampaignsCreated = $campaignIds.Count
+                CampaignIds      = $campaignIds.ToArray()
+                IdentityCount    = 0   # MANAGER campaigns scope to all direct reports implicitly
+                ManagerGroups    = $managerMap.Count
+                Reason           = 'Created'
+                Errors           = $campaignErrors.ToArray()
+            }
+            Error   = if ($campaignErrors.Count -gt 0) { $campaignErrors -join '; ' } else { $null }
+        }
+    }
+    catch {
+        $errMsg = "Invoke-SPDeltaCertFullRun failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertRunner' `
+            -Action 'Invoke-SPDeltaCertFullRun' -CorrelationID $CorrelationID
+
+        $runStartTime.Stop()
+        Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
+            -HoursBack 0 -GrantEventsFound 0 -IdentitiesProcessed 0 `
+            -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
+            -Reason 'Error' -Errors @($errMsg) `
+            -DurationSeconds $runStartTime.Elapsed.TotalSeconds -RunMode 'Full'
+
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
     'Invoke-SPDeltaCertRun',
+    'Invoke-SPDeltaCertFullRun',
     'Invoke-SPDeltaCertCleanup',
-    'Invoke-SPDeltaCertEscalate'
+    'Invoke-SPDeltaCertEscalate',
+    'Test-SPDeltaCertBaselineExists'
 )

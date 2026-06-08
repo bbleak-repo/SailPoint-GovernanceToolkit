@@ -209,6 +209,12 @@
             "MaxEscalationLevels": 2,
             "CampaignNamePrefix": "",
             "_note": "CampaignNamePrefix defaults to DeltaCert.CampaignNamePrefix when empty. Only set if escalation campaigns need a distinct prefix."
+        },
+        "FullCert": {
+            "CampaignNamePrefix": "AD Full Cert",
+            "DeadlineDays": 14,
+            "MaxIdentitiesPerPage": 250,
+            "_note": "Settings for the quarterly -FullCert mode (Invoke-SPDeltaCertFullRun). CampaignNamePrefix uses a separate value from DeltaCert.CampaignNamePrefix so same-day full and delta campaigns do not collide. DeadlineDays defaults to 14 (two weeks) for quarterly cadence. MaxIdentitiesPerPage controls pagination when resolving managers via the /v3/search/identities endpoint."
         }
     },
     "Governance": {
