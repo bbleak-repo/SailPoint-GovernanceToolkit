@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Certification Program Metrics | SailPoint ISC</title>
+<style>
+/* =========================================================
+   RESET & BASE
+   ========================================================= */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --color-header:    #1e2a3a;
+  --color-primary:   #336699;
+  --color-accent:    #5B9BD5;
+  --color-green:     #2e7d32;
+  --color-green-bg:  #e8f5e9;
+  --color-green-bar: #4caf50;
+  --color-amber:     #e65100;
+  --color-amber-bg:  #fff8e1;
+  --color-amber-bar: #ff9800;
+  --color-red:       #b71c1c;
+  --color-red-bg:    #ffebee;
+  --color-red-bar:   #f44336;
+  --color-blue:      #0d47a1;
+  --color-blue-bg:   #e3f2fd;
+  --color-blue-bar:  #2196f3;
+  --color-gray:      #546e7a;
+  --color-gray-bg:   #eceff1;
+  --color-gray-bar:  #90a4ae;
+  --color-white:     #ffffff;
+  --color-page-bg:   #f0f4f8;
+  --color-border:    #d0d9e4;
+  --color-text:      #1e2a3a;
+  --color-text-muted:#546e7a;
+  --radius:          6px;
+  --shadow:          0 2px 8px rgba(30,42,58,0.12);
+  --shadow-card:     0 2px 12px rgba(30,42,58,0.10);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-page-bg);
+  line-height: 1.5;
+}
+
+/* =========================================================
+   HEADER
+   ========================================================= */
+.site-header {
+  background: var(--color-header);
+  color: var(--color-white);
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-mark {
+  width: 36px;
+  height: 36px;
+  background: var(--color-accent);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--color-white);
+  letter-spacing: 0;
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.header-subtitle {
+  font-size: 13px;
+  color: #8faac8;
+  margin-top: 1px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.date-range {
+  font-size: 13px;
+  color: #8faac8;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: #ff9800;
+  color: #ffffff;
+  border: 1px solid #e65100;
+}
+
+/* =========================================================
+   MAIN CONTENT
+   ========================================================= */
+.main-content {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 28px 24px 40px;
+}
+
+/* =========================================================
+   SECTION LABELS
+   ========================================================= */
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+  padding-left: 2px;
+}
+
+/* =========================================================
+   KPI CARD ROW
+   ========================================================= */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.kpi-card {
+  background: var(--color-white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 18px 16px 16px;
+  border-top: 3px solid var(--color-primary);
+  position: relative;
+  min-height: 128px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.kpi-card.status-green  { border-top-color: var(--color-green-bar); }
+.kpi-card.status-amber  { border-top-color: var(--color-amber-bar); }
+.kpi-card.status-red    { border-top-color: var(--color-red-bar); }
+.kpi-card.status-blue   { border-top-color: var(--color-blue-bar); }
+.kpi-card.status-neutral{ border-top-color: var(--color-accent); }
+
+.kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+
+.kpi-value {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.kpi-card.status-green  .kpi-value { color: var(--color-green); }
+.kpi-card.status-amber  .kpi-value { color: var(--color-amber); }
+.kpi-card.status-red    .kpi-value { color: var(--color-red); }
+.kpi-card.status-blue   .kpi-value { color: var(--color-blue); }
+
+.kpi-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+
+.kpi-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* CSS-only triangle arrows */
+.arrow-up {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid var(--color-green-bar);
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.arrow-down {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 8px solid var(--color-red-bar);
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.kpi-trend.trend-up   { color: var(--color-green); }
+.kpi-trend.trend-down { color: var(--color-red); }
+.kpi-trend.trend-warn { color: var(--color-amber); }
+
+.kpi-target {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.kpi-target.target-met   { color: var(--color-green); font-weight: 600; }
+.kpi-target.target-close { color: var(--color-amber); font-weight: 600; }
+.kpi-target.target-miss  { color: var(--color-red);   font-weight: 600; }
+
+/* =========================================================
+   CHARTS ROW
+   ========================================================= */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.panel {
+  background: var(--color-white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 20px 22px;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* ---- Horizontal bar chart ---- */
+.bar-chart { width: 100%; }
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 14px;
+  gap: 10px;
+}
+
+.bar-row:last-child { margin-bottom: 0; }
+
+.bar-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.bar-track {
+  flex: 1;
+  height: 22px;
+  background: #e9eef4;
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.bar-fill.green { background: var(--color-green-bar); }
+.bar-fill.amber { background: var(--color-amber-bar); }
+.bar-fill.red   { background: var(--color-red-bar); }
+
+/* Target dashed line overlay */
+.bar-target-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-amber) 0px,
+    var(--color-amber) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  z-index: 2;
+}
+
+.bar-value {
+  font-size: 13px;
+  font-weight: 700;
+  width: 40px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.bar-value.green { color: var(--color-green); }
+.bar-value.amber { color: var(--color-amber); }
+.bar-value.red   { color: var(--color-red); }
+
+.bar-chart-legend {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.legend-dash {
+  display: inline-block;
+  width: 24px;
+  height: 2px;
+  background: repeating-linear-gradient(
+    to right,
+    var(--color-amber) 0px, var(--color-amber) 5px,
+    transparent 5px, transparent 10px
+  );
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* ---- Decision breakdown chart ---- */
+.decisions-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.decision-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f4f8;
+}
+
+.decision-stat:last-child { border-bottom: none; }
+
+.decision-color-block {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.decision-color-block.green { background: var(--color-green-bar); }
+.decision-color-block.red   { background: var(--color-red-bar); }
+.decision-color-block.blue  { background: var(--color-blue-bar); }
+.decision-color-block.gray  { background: var(--color-gray-bar); }
+
+.decision-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.decision-bar-track {
+  width: 160px;
+  height: 18px;
+  background: #e9eef4;
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.decision-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.decision-bar-fill.green { background: var(--color-green-bar); }
+.decision-bar-fill.red   { background: var(--color-red-bar); }
+.decision-bar-fill.blue  { background: var(--color-blue-bar); }
+.decision-bar-fill.gray  { background: var(--color-gray-bar); }
+
+.decision-count {
+  font-size: 14px;
+  font-weight: 700;
+  width: 40px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.decision-count.green { color: var(--color-green); }
+.decision-count.red   { color: var(--color-red); }
+.decision-count.blue  { color: var(--color-blue); }
+.decision-count.gray  { color: var(--color-gray); }
+
+.decisions-total {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 2px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+/* =========================================================
+   MANAGER TABLE
+   ========================================================= */
+.table-section {
+  margin-bottom: 28px;
+}
+
+.data-table-wrap {
+  background: var(--color-white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table thead th {
+  background: var(--color-header);
+  color: var(--color-white);
+  padding: 11px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.data-table thead th .sort-indicator {
+  display: inline-block;
+  margin-left: 4px;
+  opacity: 0.5;
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.data-table tbody tr:nth-child(even) { background: #f7fafd; }
+.data-table tbody tr:hover           { background: #eef4fb; }
+
+.data-table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #edf2f8;
+  vertical-align: middle;
+}
+
+.data-table tbody tr:last-child td { border-bottom: none; }
+
+.score-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.score-badge.good      { background: var(--color-green-bg);  color: var(--color-green);  border: 1px solid #a5d6a7; }
+.score-badge.attention { background: var(--color-amber-bg);  color: var(--color-amber);  border: 1px solid #ffcc80; }
+.score-badge.action    { background: var(--color-red-bg);    color: var(--color-red);    border: 1px solid #ef9a9a; }
+.score-badge.info      { background: var(--color-blue-bg);   color: var(--color-blue);   border: 1px solid #90caf9; }
+
+.td-manager-name { font-weight: 600; }
+.td-dept         { color: var(--color-text-muted); font-size: 12px; }
+
+.td-time.good    { color: var(--color-green); font-weight: 600; }
+.td-time.warn    { color: var(--color-amber); font-weight: 600; }
+.td-time.fast    { color: var(--color-amber); font-weight: 600; }
+
+.td-revoke.good  { color: var(--color-green); font-weight: 600; }
+.td-revoke.low   { color: var(--color-amber); font-weight: 600; }
+.td-revoke.zero  { color: var(--color-amber); font-weight: 600; }
+
+.td-completed.partial { color: var(--color-red); font-weight: 600; }
+.td-completed.full    { color: var(--color-green); }
+
+.td-note {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* =========================================================
+   BOTTOM PANELS ROW
+   ========================================================= */
+.bottom-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+/* Follow-up items */
+.followup-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.followup-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border-left: 4px solid transparent;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.followup-item.red   { background: var(--color-red-bg);   border-left-color: var(--color-red-bar);   color: var(--color-red); }
+.followup-item.amber { background: var(--color-amber-bg); border-left-color: var(--color-amber-bar); color: var(--color-amber); }
+.followup-item.blue  { background: var(--color-blue-bg);  border-left-color: var(--color-blue-bar);  color: var(--color-blue); }
+
+.followup-item .fi-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.followup-item.red   .fi-label { background: var(--color-red-bar);   color: #fff; }
+.followup-item.amber .fi-label { background: var(--color-amber-bar); color: #fff; }
+.followup-item.blue  .fi-label { background: var(--color-blue-bar);  color: #fff; }
+
+.followup-item .fi-text {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.followup-item .fi-text strong {
+  font-weight: 700;
+}
+
+/* Documentation panel */
+.doc-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.doc-stat {
+  background: #f7fafd;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  text-align: center;
+}
+
+.doc-stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.doc-stat-value.improved { color: var(--color-green); }
+.doc-stat-value.neutral  { color: var(--color-primary); }
+
+.doc-stat-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.doc-trend-note {
+  font-size: 11px;
+  color: var(--color-green);
+  font-weight: 600;
+  margin-top: 3px;
+}
+
+.doc-insight {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--color-amber-bg);
+  border-left: 3px solid var(--color-amber-bar);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.doc-insight strong { color: var(--color-amber); font-weight: 700; }
+
+.doc-faq-item {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.doc-faq-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 5px;
+}
+
+.doc-faq-value {
+  font-size: 13px;
+  color: var(--color-text);
+  font-style: italic;
+}
+
+.doc-faq-count {
+  display: inline-block;
+  background: var(--color-red-bg);
+  color: var(--color-red);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 6px;
+}
+
+/* =========================================================
+   FOOTER
+   ========================================================= */
+.site-footer {
+  background: var(--color-header);
+  color: #8faac8;
+  text-align: center;
+  padding: 14px 24px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.site-footer a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.site-footer a:hover { text-decoration: underline; }
+
+/* =========================================================
+   PRINT STYLES
+   ========================================================= */
+@media print {
+  body { background: #fff; font-size: 12px; }
+
+  .site-header, .site-footer {
+    background: #fff !important;
+    color: #1e2a3a !important;
+    border: 1px solid #ccc;
+  }
+  .header-subtitle, .date-range { color: #546e7a !important; }
+
+  .kpi-card, .panel, .data-table-wrap {
+    box-shadow: none;
+    border: 1px solid var(--color-border);
+    break-inside: avoid;
+  }
+
+  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .charts-row, .bottom-row { grid-template-columns: 1fr; }
+
+  .data-table thead th {
+    background: #e0e8f0 !important;
+    color: #1e2a3a !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .score-badge { border: 1px solid #aaa !important; }
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+@media (max-width: 1100px) {
+  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .charts-row, .bottom-row { grid-template-columns: 1fr; }
+  .site-header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 16px; }
+  .main-content { padding: 16px 12px 32px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     HEADER
+     ============================================================ -->
+<header class="site-header">
+  <div class="header-left">
+    <div class="header-logo">
+      <div class="logo-mark">SP</div>
+      <div>
+        <div class="header-title">Certification Program Metrics</div>
+        <div class="header-subtitle">SailPoint ISC &mdash; Access Certification Rollout Tracking</div>
+      </div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="date-range">Week 3 &mdash; Jun 2&ndash;6, 2026</span>
+    <span class="status-badge">Expansion Phase</span>
+  </div>
+</header>
+
+<!-- ============================================================
+     MAIN
+     ============================================================ -->
+<main class="main-content">
+
+  <!-- ROW 1: KPI CARDS -->
+  <div class="section-label">Key Performance Indicators</div>
+  <div class="kpi-row">
+
+    <!-- Card 1: Campaigns Created -->
+    <div class="kpi-card status-neutral">
+      <div>
+        <div class="kpi-label">Campaigns Created</div>
+        <div class="kpi-value" style="color:var(--color-primary);">47</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-trend trend-up">
+          <span class="arrow-up"></span>+12 vs last week
+        </span>
+      </div>
+    </div>
+
+    <!-- Card 2: Completion Rate -->
+    <div class="kpi-card status-amber">
+      <div>
+        <div class="kpi-label">Completion Rate</div>
+        <div class="kpi-value">87%</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-target target-close">Target: &gt;90%</span>
+        <span class="kpi-trend trend-down">
+          <span class="arrow-down"></span>-4% vs last week
+        </span>
+      </div>
+    </div>
+
+    <!-- Card 3: Avg Review Time -->
+    <div class="kpi-card status-green">
+      <div>
+        <div class="kpi-label">Avg Review Time</div>
+        <div class="kpi-value">8 min</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-target target-met">Target: &lt;15 min</span>
+      </div>
+    </div>
+
+    <!-- Card 4: Revocation Rate -->
+    <div class="kpi-card status-green">
+      <div>
+        <div class="kpi-label">Revocation Rate</div>
+        <div class="kpi-value">18%</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-target target-met">Healthy: 5&ndash;25%</span>
+      </div>
+    </div>
+
+    <!-- Card 5: Comment Rate (Privileged) -->
+    <div class="kpi-card status-green">
+      <div>
+        <div class="kpi-label">Comment Rate (Priv.)</div>
+        <div class="kpi-value">62%</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-target target-met">Target: &gt;50%</span>
+        <span class="kpi-trend trend-up">
+          <span class="arrow-up"></span>+7% vs last week
+        </span>
+      </div>
+    </div>
+
+    <!-- Card 6: Rubber-Stamp Score -->
+    <div class="kpi-card status-green">
+      <div>
+        <div class="kpi-label">Rubber-Stamp Score</div>
+        <div class="kpi-value">8%</div>
+      </div>
+      <div class="kpi-meta">
+        <span class="kpi-target target-met">Target: &lt;10%</span>
+        <span class="kpi-trend trend-up">
+          <span class="arrow-up"></span>Stable
+        </span>
+      </div>
+    </div>
+
+  </div><!-- /kpi-row -->
+
+
+  <!-- ROW 2: CHARTS -->
+  <div class="section-label">Trends &amp; Decisions</div>
+  <div class="charts-row">
+
+    <!-- Left: Completion Rate by Week -->
+    <div class="panel">
+      <div class="panel-title">Completion Rate by Week</div>
+      <div class="bar-chart">
+
+        <div class="bar-row">
+          <div class="bar-label">Week 1 &mdash; Pilot</div>
+          <div class="bar-track">
+            <!-- Target line at 90%: position = 90% of track width -->
+            <div class="bar-target-line" style="left:90%;"></div>
+            <div class="bar-fill green" style="width:94%;"></div>
+          </div>
+          <div class="bar-value green">94%</div>
+        </div>
+
+        <div class="bar-row">
+          <div class="bar-label">Week 2 &mdash; Pilot</div>
+          <div class="bar-track">
+            <div class="bar-target-line" style="left:90%;"></div>
+            <div class="bar-fill green" style="width:91%;"></div>
+          </div>
+          <div class="bar-value green">91%</div>
+        </div>
+
+        <div class="bar-row">
+          <div class="bar-label">Week 3 &mdash; Expansion</div>
+          <div class="bar-track">
+            <div class="bar-target-line" style="left:90%;"></div>
+            <div class="bar-fill amber" style="width:87%;"></div>
+          </div>
+          <div class="bar-value amber">87%</div>
+        </div>
+
+      </div>
+      <div class="bar-chart-legend">
+        <span class="legend-dash"></span>
+        <span>Target: 90% completion</span>
+      </div>
+    </div>
+
+    <!-- Right: Decisions This Week -->
+    <div class="panel">
+      <div class="panel-title">Decisions This Week</div>
+      <div class="decisions-chart">
+
+        <div class="decision-stat">
+          <div class="decision-color-block green"></div>
+          <div class="decision-name">Approved</div>
+          <div class="decision-bar-track">
+            <!-- 156 / 210 = 74.3% -->
+            <div class="decision-bar-fill green" style="width:74.3%;"></div>
+          </div>
+          <div class="decision-count green">156</div>
+        </div>
+
+        <div class="decision-stat">
+          <div class="decision-color-block red"></div>
+          <div class="decision-name">Revoked</div>
+          <div class="decision-bar-track">
+            <!-- 34 / 210 = 16.2% -->
+            <div class="decision-bar-fill red" style="width:16.2%;"></div>
+          </div>
+          <div class="decision-count red">34</div>
+        </div>
+
+        <div class="decision-stat">
+          <div class="decision-color-block blue"></div>
+          <div class="decision-name">Reassigned</div>
+          <div class="decision-bar-track">
+            <!-- 12 / 210 = 5.7% -->
+            <div class="decision-bar-fill blue" style="width:5.7%;"></div>
+          </div>
+          <div class="decision-count blue">12</div>
+        </div>
+
+        <div class="decision-stat">
+          <div class="decision-color-block gray"></div>
+          <div class="decision-name">Pending</div>
+          <div class="decision-bar-track">
+            <!-- 8 / 210 = 3.8% -->
+            <div class="decision-bar-fill gray" style="width:3.8%;"></div>
+          </div>
+          <div class="decision-count gray">8</div>
+        </div>
+
+      </div>
+      <div class="decisions-total">
+        <span>Total Decisions</span>
+        <span>210</span>
+      </div>
+    </div>
+
+  </div><!-- /charts-row -->
+
+
+  <!-- ROW 3: MANAGER PERFORMANCE TABLE -->
+  <div class="section-label table-section">Manager Performance</div>
+  <div class="data-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Manager <span class="sort-indicator">&#9650;</span></th>
+          <th>Department <span class="sort-indicator">&#9650;</span></th>
+          <th>Campaigns <span class="sort-indicator">&#9650;</span></th>
+          <th>Completed <span class="sort-indicator">&#9650;</span></th>
+          <th>Avg Time <span class="sort-indicator">&#9650;</span></th>
+          <th>Revoke % <span class="sort-indicator">&#9650;</span></th>
+          <th>Score <span class="sort-indicator">&#9650;</span></th>
+        </tr>
+      </thead>
+      <tbody>
+
+        <!-- Good performers -->
+        <tr>
+          <td class="td-manager-name">David Okafor</td>
+          <td class="td-dept">IT</td>
+          <td>6</td>
+          <td class="td-completed full">6 / 6</td>
+          <td class="td-time good">11 min</td>
+          <td class="td-revoke good">22%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <tr>
+          <td class="td-manager-name">Priya Nair</td>
+          <td class="td-dept">Engineering</td>
+          <td>5</td>
+          <td class="td-completed full">5 / 5</td>
+          <td class="td-time good">14 min</td>
+          <td class="td-revoke good">19%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <tr>
+          <td class="td-manager-name">Marcus Webb</td>
+          <td class="td-dept">Finance</td>
+          <td>4</td>
+          <td class="td-completed full">4 / 4</td>
+          <td class="td-time good">9 min</td>
+          <td class="td-revoke good">25%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <tr>
+          <td class="td-manager-name">Alicia Mendez</td>
+          <td class="td-dept">Customer Service</td>
+          <td>5</td>
+          <td class="td-completed full">5 / 5</td>
+          <td class="td-time good">12 min</td>
+          <td class="td-revoke good">17%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <tr>
+          <td class="td-manager-name">James Thornton</td>
+          <td class="td-dept">Legal</td>
+          <td>3</td>
+          <td class="td-completed full">3 / 3</td>
+          <td class="td-time good">18 min</td>
+          <td class="td-revoke good">21%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <tr>
+          <td class="td-manager-name">Karen Hollis</td>
+          <td class="td-dept">Marketing</td>
+          <td>4</td>
+          <td class="td-completed full">4 / 4</td>
+          <td class="td-time good">10 min</td>
+          <td class="td-revoke good">14%</td>
+          <td><span class="score-badge good">Good</span></td>
+        </tr>
+
+        <!-- Rubber-stamper: Mike Johnson, Sales -->
+        <tr>
+          <td class="td-manager-name">Mike Johnson</td>
+          <td class="td-dept">Sales</td>
+          <td>5</td>
+          <td class="td-completed full">5 / 5</td>
+          <td class="td-time fast">0:24 avg</td>
+          <td class="td-revoke zero">0%</td>
+          <td><span class="score-badge attention">Needs Attention</span></td>
+        </tr>
+
+        <!-- Reassigned everything: Lisa Park, Operations -->
+        <tr>
+          <td class="td-manager-name">Lisa Park</td>
+          <td class="td-dept">Operations</td>
+          <td>4</td>
+          <td class="td-completed full">4 / 4</td>
+          <td class="td-time warn">N/A</td>
+          <td class="td-revoke good">--</td>
+          <td><span class="score-badge info">Training</span></td>
+        </tr>
+
+        <!-- Missed deadlines: Sarah Chen, Finance -->
+        <tr>
+          <td class="td-manager-name">Sarah Chen</td>
+          <td class="td-dept">Finance</td>
+          <td>5</td>
+          <td class="td-completed partial">3 / 5</td>
+          <td class="td-time warn">31 min</td>
+          <td class="td-revoke good">11%</td>
+          <td><span class="score-badge action">Action Required</span></td>
+        </tr>
+
+        <!-- Missed one deadline: HR -->
+        <tr>
+          <td class="td-manager-name">Robert Ingram</td>
+          <td class="td-dept">HR</td>
+          <td>4</td>
+          <td class="td-completed partial">3 / 4</td>
+          <td class="td-time warn">22 min</td>
+          <td class="td-revoke good">9%</td>
+          <td><span class="score-badge attention">Needs Attention</span></td>
+        </tr>
+
+      </tbody>
+    </table>
+  </div><!-- /data-table-wrap -->
+
+
+  <!-- ROW 4: FOLLOW-UP + DOCUMENTATION -->
+  <div class="section-label" style="margin-top:28px;">Alerts &amp; Effectiveness</div>
+  <div class="bottom-row">
+
+    <!-- Left: Items Requiring Follow-Up -->
+    <div class="panel">
+      <div class="panel-title">Items Requiring Follow-Up</div>
+      <ul class="followup-list">
+
+        <li class="followup-item red">
+          <span class="fi-label">Action Required</span>
+          <span class="fi-text">
+            <strong>Sarah Chen (Finance)</strong> missed 2 consecutive campaign deadlines.
+            Escalation to department head recommended.
+          </span>
+        </li>
+
+        <li class="followup-item amber">
+          <span class="fi-label">Investigate</span>
+          <span class="fi-text">
+            <strong>Mike Johnson (Sales)</strong> approved 100% of items with a 24-second
+            average review time &mdash; suspected rubber-stamping. Request attestation
+            justification review.
+          </span>
+        </li>
+
+        <li class="followup-item blue">
+          <span class="fi-label">Training</span>
+          <span class="fi-text">
+            <strong>Lisa Park (Operations)</strong> reassigned all campaign items &mdash;
+            likely unfamiliar with the review process. Schedule onboarding session with
+            IAM team.
+          </span>
+        </li>
+
+        <li class="followup-item amber">
+          <span class="fi-label">Remediation</span>
+          <span class="fi-text">
+            <strong>3 revoked items</strong> have been pending manual remediation for more
+            than 48 hours. Verify access has been removed in source systems.
+          </span>
+        </li>
+
+      </ul>
+    </div>
+
+    <!-- Right: Documentation Effectiveness -->
+    <div class="panel">
+      <div class="panel-title">Documentation Effectiveness</div>
+
+      <div class="doc-stats">
+
+        <div class="doc-stat">
+          <div class="doc-stat-value improved">4</div>
+          <div class="doc-stat-label">Support Tickets This Week</div>
+          <div class="doc-trend-note">Down from 11 in Week 1</div>
+        </div>
+
+        <div class="doc-stat">
+          <div class="doc-stat-value neutral">28</div>
+          <div class="doc-stat-label">Quick-Ref Downloads</div>
+        </div>
+
+        <div class="doc-stat">
+          <div class="doc-stat-value neutral">156</div>
+          <div class="doc-stat-label">Guide Page Views</div>
+        </div>
+
+        <div class="doc-stat">
+          <div class="doc-stat-value improved">64%</div>
+          <div class="doc-stat-label">Ticket Reduction (vs Wk 1)</div>
+        </div>
+
+      </div>
+
+      <div class="doc-faq-item">
+        <div class="doc-faq-label">Most Common Question</div>
+        <div class="doc-faq-value">
+          "What does 'Acknowledge' mean?"
+          <span class="doc-faq-count">3 tickets</span>
+        </div>
+      </div>
+
+      <div class="doc-insight">
+        <strong>Recommendation:</strong> Update the FAQ section of the Manager Attestation
+        Guide to prominently explain the difference between Acknowledge and Approve.
+        Consider adding a callout box to the Quick-Ref card with a plain-language
+        description of each decision type.
+      </div>
+
+    </div>
+
+  </div><!-- /bottom-row -->
+
+</main><!-- /main-content -->
+
+<!-- ============================================================
+     FOOTER
+     ============================================================ -->
+<footer class="site-footer">
+  Generated by SailPoint ISC Governance Toolkit | Data refreshed: Jun 6, 2026 17:00
+  <br>
+  <a href="mailto:iam-team@example.com">iam-team@example.com</a>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  Metrics methodology: <a href="Campaign-Rollout-Plan.html">Campaign-Rollout-Plan.html</a>
+</footer>
+
+</body>
+</html>

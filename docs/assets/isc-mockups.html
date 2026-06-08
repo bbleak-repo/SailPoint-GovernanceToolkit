@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SailPoint ISC -- Certification Campaign Screens (Manager Reference)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    background: #f0f2f5;
+    color: #1a2332;
+    padding: 40px 20px;
+  }
+  h1.page-title {
+    text-align: center;
+    font-size: 24px;
+    color: #1a2332;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  p.page-subtitle {
+    text-align: center;
+    color: #5a6a7a;
+    font-size: 14px;
+    margin-bottom: 48px;
+  }
+
+  /* --- Figure wrapper --- */
+  .figure-block {
+    max-width: 960px;
+    margin: 0 auto 64px auto;
+  }
+  .figure-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #5a6a7a;
+    margin-bottom: 8px;
+    padding-left: 2px;
+  }
+  .figure-caption {
+    font-size: 13px;
+    color: #5a6a7a;
+    font-style: italic;
+    margin-bottom: 10px;
+    padding-left: 2px;
+  }
+  .mockup-frame {
+    border: 1px solid #c8cdd4;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+    background: #fff;
+    position: relative;
+  }
+
+  /* --- Annotation callout numbers --- */
+  .ann {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #e8512a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: middle;
+    margin-left: 4px;
+    flex-shrink: 0;
+  }
+
+  /* --- Legend below each mockup --- */
+  .legend {
+    background: #f8f9fa;
+    border: 1px solid #c8cdd4;
+    border-top: none;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: #3a4a5a;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 24px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  /* ====================================================
+     SHARED APP CHROME STYLES
+     ==================================================== */
+
+  /* Top Nav */
+  .app-nav {
+    background: #1a2332;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 16px;
+  }
+  .app-nav .logo-text {
+    color: #ffffff;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  .app-nav .logo-dot {
+    color: #00b4d8;
+  }
+  .app-nav .nav-spacer { flex: 1; }
+  .app-nav .nav-org {
+    color: #8a9bac;
+    font-size: 12px;
+  }
+  .app-nav .avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #0066cc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* App body: sidebar + content */
+  .app-body {
+    display: flex;
+    min-height: 480px;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px;
+    background: #1e2d40;
+    padding: 16px 0;
+    flex-shrink: 0;
+  }
+  .sidebar-item {
+    padding: 10px 20px;
+    color: #8a9bac;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: relative;
+  }
+  .sidebar-item.active {
+    background: #0066cc;
+    color: #ffffff;
+  }
+  .sidebar-item:not(.active):hover {
+    background: #243347;
+  }
+  .sidebar-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  /* Content area */
+  .content {
+    flex: 1;
+    padding: 24px;
+    background: #f8f9fa;
+    overflow: auto;
+  }
+  .content-white {
+    background: #fff;
+  }
+
+  /* Page heading */
+  .page-heading {
+    font-size: 20px;
+    font-weight: 600;
+    color: #1a2332;
+    margin-bottom: 20px;
+  }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex;
+    border-bottom: 2px solid #dde1e7;
+    margin-bottom: 20px;
+    gap: 0;
+  }
+  .tab {
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #5a6a7a;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    position: relative;
+  }
+  .tab.selected {
+    color: #0066cc;
+    border-bottom-color: #0066cc;
+    font-weight: 600;
+  }
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #0066cc;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 10px;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 5px;
+    margin-left: 6px;
+  }
+
+  /* Campaign cards grid */
+  .card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .campaign-card {
+    background: #fff;
+    border: 1px solid #dde1e7;
+    border-radius: 6px;
+    padding: 18px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+  .campaign-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a2332;
+    margin-bottom: 4px;
+  }
+  .campaign-card-meta {
+    font-size: 12px;
+    color: #5a6a7a;
+    margin-bottom: 12px;
+  }
+  .campaign-card-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+  .stat-pill {
+    font-size: 11px;
+    font-weight: 600;
+    color: #3a4a5a;
+    background: #f0f2f5;
+    border-radius: 10px;
+    padding: 3px 8px;
+  }
+  .progress-bar-wrap {
+    background: #e9ecef;
+    border-radius: 3px;
+    height: 6px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: #0066cc;
+  }
+  .progress-label {
+    font-size: 11px;
+    color: #5a6a7a;
+    margin-bottom: 12px;
+  }
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .due-date {
+    font-size: 11px;
+    color: #5a6a7a;
+  }
+  .due-date.urgent { color: #c0392b; font-weight: 600; }
+
+  /* Buttons */
+  .btn {
+    display: inline-block;
+    padding: 7px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    text-align: center;
+  }
+  .btn-primary { background: #0066cc; color: #fff; }
+  .btn-teal { background: #0a9396; color: #fff; }
+  .btn-outline { background: #fff; color: #0066cc; border: 1px solid #0066cc; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-danger { background: #c0392b; color: #fff; }
+  .btn-success { background: #27ae60; color: #fff; }
+  .btn-neutral { background: #6c7a89; color: #fff; }
+  .btn-large {
+    padding: 12px 32px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 5px;
+  }
+
+  /* Breadcrumb */
+  .breadcrumb {
+    font-size: 12px;
+    color: #5a6a7a;
+    margin-bottom: 16px;
+  }
+  .breadcrumb a { color: #0066cc; text-decoration: none; }
+  .breadcrumb span { margin: 0 6px; }
+
+  /* Toggle buttons */
+  .toggle-bar {
+    display: inline-flex;
+    border: 1px solid #0066cc;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .toggle-btn {
+    padding: 7px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    background: #fff;
+    color: #0066cc;
+  }
+  .toggle-btn.active {
+    background: #0066cc;
+    color: #fff;
+  }
+
+  /* Filter bar */
+  .filter-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    align-items: center;
+  }
+  .search-input {
+    flex: 1;
+    padding: 7px 12px;
+    border: 1px solid #c8cdd4;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #3a4a5a;
+    background: #fff;
+    max-width: 280px;
+  }
+  .filter-select {
+    padding: 7px 12px;
+    border: 1px solid #c8cdd4;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #3a4a5a;
+    background: #fff;
+  }
+
+  /* Table */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .data-table th {
+    text-align: left;
+    padding: 9px 12px;
+    background: #f0f2f5;
+    border-bottom: 2px solid #dde1e7;
+    color: #5a6a7a;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .data-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid #e9ecef;
+    color: #1a2332;
+    vertical-align: middle;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tbody tr:hover { background: #f5f8fc; cursor: pointer; }
+  .data-table tbody tr.no-hover:hover { background: transparent; cursor: default; }
+
+  /* Status pill */
+  .status-pill {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .status-pending { background: #fff3cd; color: #7a5a00; }
+  .status-approved { background: #d4edda; color: #155724; }
+  .status-revoked { background: #f8d7da; color: #721c24; }
+  .status-complete { background: #d4edda; color: #155724; }
+
+  /* Access item badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 3px;
+  }
+  .badge-privileged { background: #c0392b; color: #fff; }
+  .badge-new { background: #0066cc; color: #fff; }
+  .badge-warning { background: #e67e22; color: #fff; }
+
+  /* Decision buttons row */
+  .decision-btns {
+    display: flex;
+    gap: 6px;
+  }
+  .decide-approve {
+    padding: 5px 11px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #27ae60;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  .decide-revoke {
+    padding: 5px 11px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #c0392b;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  .decide-reassign {
+    padding: 5px 11px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #6c7a89;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+
+  /* Identity header card */
+  .identity-header {
+    background: #fff;
+    border: 1px solid #dde1e7;
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .id-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: #1a2332;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .id-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1a2332;
+  }
+  .id-meta {
+    font-size: 12px;
+    color: #5a6a7a;
+    margin-top: 2px;
+  }
+
+  /* Info footer below table */
+  .info-footer {
+    margin-top: 12px;
+    padding: 12px;
+    background: #f0f6ff;
+    border: 1px solid #c8ddf5;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #2c4a7a;
+  }
+  .info-footer-row {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .info-footer-item strong { font-weight: 600; }
+
+  /* Checkbox */
+  .cb-cell {
+    width: 36px;
+    text-align: center;
+  }
+  .fake-checkbox {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #c8cdd4;
+    border-radius: 2px;
+    display: inline-block;
+    background: #fff;
+    position: relative;
+  }
+  .fake-checkbox.checked {
+    background: #0066cc;
+    border-color: #0066cc;
+  }
+  .fake-checkbox.checked::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 0px;
+    width: 5px;
+    height: 9px;
+    border: 2px solid #fff;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+  }
+
+  /* Bulk action bar */
+  .bulk-bar {
+    background: #e8f0fd;
+    border: 1px solid #b8cef5;
+    border-radius: 4px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #1a3a6a;
+    font-weight: 500;
+  }
+
+  /* Modal overlay simulation */
+  .modal-area {
+    margin-top: 16px;
+    position: relative;
+  }
+  .modal-backdrop {
+    background: rgba(26,35,50,0.55);
+    border-radius: 4px;
+    padding: 40px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-box {
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+    width: 440px;
+    max-width: 90%;
+    padding: 24px;
+  }
+  .modal-header {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a2332;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e9ecef;
+  }
+  .modal-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #5a6a7a;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+  .modal-textarea {
+    width: 100%;
+    border: 1px solid #c8cdd4;
+    border-radius: 4px;
+    padding: 10px;
+    font-size: 13px;
+    color: #1a2332;
+    resize: none;
+    height: 80px;
+    background: #fdfdfd;
+    margin-bottom: 14px;
+    font-family: inherit;
+  }
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid #e9ecef;
+  }
+
+  /* Summary stats row */
+  .summary-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .summary-stat-box {
+    background: #fff;
+    border: 1px solid #dde1e7;
+    border-radius: 6px;
+    padding: 14px 20px;
+    min-width: 110px;
+    text-align: center;
+    flex: 1;
+  }
+  .summary-stat-num {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1a2332;
+  }
+  .summary-stat-num.blue { color: #0066cc; }
+  .summary-stat-num.green { color: #27ae60; }
+  .summary-stat-num.red { color: #c0392b; }
+  .summary-stat-label {
+    font-size: 11px;
+    color: #5a6a7a;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+  }
+
+  /* Sign-off area */
+  .signoff-area {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #dde1e7;
+    text-align: center;
+  }
+  .signoff-warning {
+    font-size: 12px;
+    color: #7a5a00;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    display: inline-block;
+  }
+
+  /* Divider between figures */
+  .figure-divider {
+    max-width: 960px;
+    margin: 0 auto 64px auto;
+    border: none;
+    border-top: 1px solid #dde1e7;
+  }
+</style>
+</head>
+<body>
+
+<h1 class="page-title">SailPoint Identity Security Cloud</h1>
+<p class="page-subtitle">Manager Reference -- Certification Campaign Screen Mockups</p>
+
+<!-- ============================================================
+     FIGURE 1: Campaign List
+     ============================================================ -->
+<div class="figure-block">
+  <div class="figure-label">Figure 1: Campaign List (Active Tab)</div>
+  <div class="figure-caption">The main Certifications landing page showing all active campaigns assigned to you.</div>
+  <div class="mockup-frame">
+
+    <!-- Nav -->
+    <div class="app-nav">
+      <span class="logo-text">Sail<span class="logo-dot">P</span>oint <span style="font-weight:300;font-size:13px;color:#8a9bac;">Identity Security Cloud</span></span>
+      <span class="ann" title="1">1</span>
+      <span class="nav-spacer"></span>
+      <span class="nav-org" style="margin-right:8px;">Acme Corp</span>
+      <div class="avatar" title="User avatar">JM</div>
+      <span class="ann" title="2">2</span>
+    </div>
+
+    <div class="app-body">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Access
+        </div>
+        <div class="sidebar-item active">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h8v2H2z"/></svg>
+          Certifications
+          <span class="ann" title="3" style="margin-left:auto;">3</span>
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v6h8V5H4z"/></svg>
+          Reports
+        </div>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+          <span class="page-heading" style="margin-bottom:0;">Certifications</span>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tab-bar">
+          <div class="tab selected">
+            Active <span class="tab-badge">2</span>
+            <span class="ann" title="4">4</span>
+          </div>
+          <div class="tab">Completed</div>
+          <div class="tab">All</div>
+        </div>
+
+        <!-- Campaign cards -->
+        <div class="card-grid">
+
+          <!-- Card 1 -->
+          <div class="campaign-card">
+            <div class="campaign-card-title">
+              Daily AD Delta Cert -- 2026-06-05
+              <span class="ann" title="5">5</span>
+            </div>
+            <div class="campaign-card-meta">Certification campaign -- AD Delta</div>
+            <div class="campaign-card-stats">
+              <span class="stat-pill">3 Identities</span>
+              <span class="stat-pill">5 Access Items</span>
+            </div>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" style="width:0%;"></div>
+            </div>
+            <div class="progress-label">0% complete</div>
+            <div class="card-footer">
+              <span class="due-date urgent">Due: Jun 7, 2026</span>
+              <span class="btn btn-primary btn-sm">Review</span>
+            </div>
+          </div>
+
+          <!-- Card 2 -->
+          <div class="campaign-card">
+            <div class="campaign-card-title">Q2 Privileged Access Review</div>
+            <div class="campaign-card-meta">Quarterly access review -- privileged accounts</div>
+            <div class="campaign-card-stats">
+              <span class="stat-pill">12 Identities</span>
+              <span class="stat-pill">34 Access Items</span>
+            </div>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" style="width:60%;"></div>
+            </div>
+            <div class="progress-label">60% complete -- 20 items remaining</div>
+            <div class="card-footer">
+              <span class="due-date">Due: Jun 15, 2026</span>
+              <span class="btn btn-outline btn-sm">Continue</span>
+            </div>
+          </div>
+
+        </div><!-- /card-grid -->
+      </div><!-- /content -->
+    </div><!-- /app-body -->
+  </div><!-- /mockup-frame -->
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item"><span class="ann">1</span> Top navigation bar with SailPoint branding and tenant name</div>
+    <div class="legend-item"><span class="ann">2</span> User avatar (initials) -- click to access profile and sign out</div>
+    <div class="legend-item"><span class="ann">3</span> Active sidebar item -- "Certifications" is currently selected</div>
+    <div class="legend-item"><span class="ann">4</span> Tab with badge showing count of active campaigns requiring attention</div>
+    <div class="legend-item"><span class="ann">5</span> Campaign card -- each card represents one certification assigned to you; due dates in red indicate urgency</div>
+  </div>
+</div><!-- /figure-block -->
+
+
+<!-- ============================================================
+     FIGURE 2: Campaign Detail -- Identity List
+     ============================================================ -->
+<div class="figure-block">
+  <div class="figure-label">Figure 2: Campaign Detail -- Identity List</div>
+  <div class="figure-caption">After clicking a campaign, you see the list of identities (people) whose access you must review.</div>
+  <div class="mockup-frame">
+
+    <div class="app-nav">
+      <span class="logo-text">Sail<span class="logo-dot">P</span>oint <span style="font-weight:300;font-size:13px;color:#8a9bac;">Identity Security Cloud</span></span>
+      <span class="nav-spacer"></span>
+      <span class="nav-org" style="margin-right:8px;">Acme Corp</span>
+      <div class="avatar">JM</div>
+    </div>
+
+    <div class="app-body">
+      <div class="sidebar">
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Access
+        </div>
+        <div class="sidebar-item active">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h8v2H2z"/></svg>
+          Certifications
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v6h8V5H4z"/></svg>
+          Reports
+        </div>
+      </div>
+
+      <div class="content">
+        <!-- Breadcrumb -->
+        <div class="breadcrumb">
+          <a href="#">Certifications</a>
+          <span>&rsaquo;</span>
+          Daily AD Delta Cert -- 2026-06-05
+          <span class="ann" title="1">1</span>
+        </div>
+
+        <div class="page-heading">Daily AD Delta Cert -- 2026-06-05</div>
+
+        <!-- Toggle -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <div class="toggle-bar">
+            <div class="toggle-btn active">Identities <span class="ann" title="2">2</span></div>
+            <div class="toggle-btn">Access Items</div>
+          </div>
+          <span style="font-size:12px;color:#5a6a7a;">3 identities requiring review</span>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="filter-bar">
+          <input class="search-input" type="text" value="" placeholder="Search by name or email..." />
+          <span class="ann" title="3">3</span>
+          <select class="filter-select"><option>All Statuses</option><option>Pending</option><option>Complete</option></select>
+          <select class="filter-select"><option>All Departments</option><option>Engineering</option><option>IT</option></select>
+        </div>
+
+        <!-- Identity table -->
+        <div style="background:#fff;border:1px solid #dde1e7;border-radius:6px;overflow:hidden;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Title</th>
+                <th>Department</th>
+                <th>Items to Review</th>
+                <th>Status <span class="ann" title="4">4</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <div class="id-avatar" style="width:30px;height:30px;font-size:12px;">JS</div>
+                    <div>
+                      <div style="font-weight:600;">Jane Smith</div>
+                      <div style="font-size:11px;color:#5a6a7a;">j.smith@acme.com</div>
+                    </div>
+                  </div>
+                </td>
+                <td>Software Engineer</td>
+                <td>Engineering</td>
+                <td><span style="font-weight:600;color:#c0392b;">2 items</span> <span class="ann" title="5">5</span></td>
+                <td><span class="status-pill status-pending">Pending</span></td>
+              </tr>
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <div class="id-avatar" style="width:30px;height:30px;font-size:12px;">JP</div>
+                    <div>
+                      <div style="font-weight:600;">John Park</div>
+                      <div style="font-size:11px;color:#5a6a7a;">j.park@acme.com</div>
+                    </div>
+                  </div>
+                </td>
+                <td>Systems Administrator</td>
+                <td>IT Operations</td>
+                <td><span style="font-weight:600;color:#c0392b;">2 items</span></td>
+                <td><span class="status-pill status-pending">Pending</span></td>
+              </tr>
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <div class="id-avatar" style="width:30px;height:30px;font-size:12px;">AC</div>
+                    <div>
+                      <div style="font-weight:600;">Alex Chen</div>
+                      <div style="font-size:11px;color:#5a6a7a;">a.chen@acme.com</div>
+                    </div>
+                  </div>
+                </td>
+                <td>Junior Developer</td>
+                <td>Engineering</td>
+                <td>1 item</td>
+                <td><span class="status-pill status-pending">Pending</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div><!-- /content -->
+    </div>
+  </div><!-- /mockup-frame -->
+
+  <div class="legend">
+    <div class="legend-item"><span class="ann">1</span> Breadcrumb navigation -- click "Certifications" to return to the campaign list</div>
+    <div class="legend-item"><span class="ann">2</span> View toggle -- switch between reviewing by Identity (person) or by Access Item (group/role)</div>
+    <div class="legend-item"><span class="ann">3</span> Filter bar -- search by name or filter by status/department to manage large campaigns</div>
+    <div class="legend-item"><span class="ann">4</span> Status column -- "Pending" means no decision has been made yet for that person's items</div>
+    <div class="legend-item"><span class="ann">5</span> Items shown in red indicate items flagged for attention (e.g., privileged access or recent changes)</div>
+  </div>
+</div><!-- /figure-block -->
+
+
+<!-- ============================================================
+     FIGURE 3: Identity Expanded -- Access Items
+     ============================================================ -->
+<div class="figure-block">
+  <div class="figure-label">Figure 3: Identity Detail -- Access Items for Jane Smith</div>
+  <div class="figure-caption">Clicking a person's row opens their individual access items. You decide Approve or Revoke for each item.</div>
+  <div class="mockup-frame">
+
+    <div class="app-nav">
+      <span class="logo-text">Sail<span class="logo-dot">P</span>oint <span style="font-weight:300;font-size:13px;color:#8a9bac;">Identity Security Cloud</span></span>
+      <span class="nav-spacer"></span>
+      <span class="nav-org" style="margin-right:8px;">Acme Corp</span>
+      <div class="avatar">JM</div>
+    </div>
+
+    <div class="app-body">
+      <div class="sidebar">
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Access
+        </div>
+        <div class="sidebar-item active">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h8v2H2z"/></svg>
+          Certifications
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v6h8V5H4z"/></svg>
+          Reports
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="breadcrumb">
+          <a href="#">Certifications</a>
+          <span>&rsaquo;</span>
+          <a href="#">Daily AD Delta Cert -- 2026-06-05</a>
+          <span>&rsaquo;</span>
+          Jane Smith
+        </div>
+
+        <!-- Identity header -->
+        <div class="identity-header">
+          <div class="id-avatar">JS</div>
+          <div>
+            <div class="id-name">Jane Smith <span class="ann" title="1">1</span></div>
+            <div class="id-meta">Software Engineer &nbsp;|&nbsp; Engineering &nbsp;|&nbsp; j.smith@acme.com</div>
+            <div class="id-meta" style="margin-top:4px;">Manager: Michael Torres &nbsp;|&nbsp; Employee ID: E-40291</div>
+          </div>
+        </div>
+
+        <!-- Access items table -->
+        <div style="background:#fff;border:1px solid #dde1e7;border-radius:6px;overflow:hidden;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Access Item</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Flags <span class="ann" title="2">2</span></th>
+                <th>Decision <span class="ann" title="3">3</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="background:#fff5f5;">
+                <td style="font-weight:600;">Domain Admins</td>
+                <td style="color:#5a6a7a;">Entitlement</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td>
+                  <span class="badge badge-privileged">PRIVILEGED</span>
+                  <span class="badge badge-new">NEW</span>
+                </td>
+                <td>
+                  <div class="decision-btns">
+                    <button class="decide-approve">Approve</button>
+                    <button class="decide-revoke">Revoke</button>
+                    <button class="decide-reassign">Reassign</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style="font-weight:600;">VPN_Users</td>
+                <td style="color:#5a6a7a;">Entitlement</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td>
+                  <span class="badge badge-new">NEW</span>
+                </td>
+                <td>
+                  <div class="decision-btns">
+                    <button class="decide-approve">Approve</button>
+                    <button class="decide-revoke">Revoke</button>
+                    <button class="decide-reassign">Reassign</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Info footer -->
+        <div class="info-footer">
+          <div class="info-footer-row">
+            <div class="info-footer-item">
+              <strong>Last Activity:</strong> 2 days ago (login from 10.1.4.22)
+              <span class="ann" title="4">4</span>
+            </div>
+            <div class="info-footer-item">
+              <strong>Peer Comparison:</strong> Only 15% of Software Engineers have Domain Admins
+              <span class="ann" title="5">5</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /mockup-frame -->
+
+  <div class="legend">
+    <div class="legend-item"><span class="ann">1</span> Identity header -- name, title, department, email, and their reporting manager</div>
+    <div class="legend-item"><span class="ann">2</span> Flags column -- PRIVILEGED (red) means elevated AD group; NEW (blue) means recently granted access that triggered this review</div>
+    <div class="legend-item"><span class="ann">3</span> Decision buttons -- Approve (green) to confirm access, Revoke (red) to remove it, Reassign (gray) to delegate the decision</div>
+    <div class="legend-item"><span class="ann">4</span> Recent activity context -- helps confirm if the employee is actively using this access</div>
+    <div class="legend-item"><span class="ann">5</span> Peer comparison -- ISC shows how unusual this access is compared to peers in the same role; low percentages warrant scrutiny</div>
+  </div>
+</div><!-- /figure-block -->
+
+
+<!-- ============================================================
+     FIGURE 4: Bulk Actions and Comment Dialog
+     ============================================================ -->
+<div class="figure-block">
+  <div class="figure-label">Figure 4: Bulk Decisions and Comment Dialog</div>
+  <div class="figure-caption">You can select multiple items and decide them at once. Comments are required or optional depending on your organization's policy.</div>
+  <div class="mockup-frame">
+
+    <div class="app-nav">
+      <span class="logo-text">Sail<span class="logo-dot">P</span>oint <span style="font-weight:300;font-size:13px;color:#8a9bac;">Identity Security Cloud</span></span>
+      <span class="nav-spacer"></span>
+      <span class="nav-org" style="margin-right:8px;">Acme Corp</span>
+      <div class="avatar">JM</div>
+    </div>
+
+    <div class="app-body">
+      <div class="sidebar">
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Access
+        </div>
+        <div class="sidebar-item active">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h8v2H2z"/></svg>
+          Certifications
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v6h8V5H4z"/></svg>
+          Reports
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="breadcrumb">
+          <a href="#">Certifications</a>
+          <span>&rsaquo;</span>
+          <a href="#">Daily AD Delta Cert -- 2026-06-05</a>
+          <span>&rsaquo;</span>
+          John Park
+        </div>
+
+        <div class="identity-header">
+          <div class="id-avatar">JP</div>
+          <div>
+            <div class="id-name">John Park</div>
+            <div class="id-meta">Systems Administrator &nbsp;|&nbsp; IT Operations &nbsp;|&nbsp; j.park@acme.com</div>
+          </div>
+        </div>
+
+        <!-- Bulk action bar -->
+        <div class="bulk-bar">
+          <span class="fake-checkbox checked"></span>
+          <strong>2 items selected</strong>
+          <span class="ann" title="1">1</span>
+          <span style="flex:1;"></span>
+          <div style="position:relative;display:inline-block;">
+            <button class="btn btn-primary btn-sm" style="display:flex;align-items:center;gap:6px;">
+              Bulk Decisions
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="white"><path d="M2 3l3 4 3-4z"/></svg>
+            </button>
+            <!-- Dropdown hint -->
+            <div style="position:absolute;top:100%;left:0;background:#fff;border:1px solid #c8cdd4;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.12);min-width:140px;z-index:10;margin-top:2px;">
+              <div style="padding:8px 14px;font-size:13px;color:#27ae60;font-weight:500;cursor:pointer;border-bottom:1px solid #f0f2f5;">Approve All</div>
+              <div style="padding:8px 14px;font-size:13px;color:#c0392b;font-weight:500;cursor:pointer;">Revoke All</div>
+            </div>
+          </div>
+          <span class="ann" title="2">2</span>
+        </div>
+
+        <!-- Table with checkboxes -->
+        <div style="background:#fff;border:1px solid #dde1e7;border-radius:6px;overflow:hidden;margin-bottom:0;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="cb-cell"><span class="fake-checkbox checked"></span></th>
+                <th>Access Item</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Flags</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="background:#f0f6ff;">
+                <td class="cb-cell"><span class="fake-checkbox checked"></span></td>
+                <td style="font-weight:600;">Server Operators</td>
+                <td style="color:#5a6a7a;">Entitlement</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="badge badge-privileged">PRIVILEGED</span> <span class="badge badge-new">NEW</span></td>
+              </tr>
+              <tr style="background:#f0f6ff;">
+                <td class="cb-cell"><span class="fake-checkbox checked"></span></td>
+                <td style="font-weight:600;">Exchange_Users</td>
+                <td style="color:#5a6a7a;">Entitlement</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="badge badge-new">NEW</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Modal overlay -->
+        <div class="modal-area">
+          <div class="modal-backdrop">
+            <div class="modal-box">
+              <div class="modal-header">
+                Add Comment
+                <span class="ann" title="3">3</span>
+                <span style="font-size:12px;font-weight:400;color:#5a6a7a;margin-left:8px;">for 2 selected items</span>
+              </div>
+              <div class="modal-label">Decision Comment <span style="color:#c0392b;">*</span></div>
+              <div style="font-size:11px;color:#5a6a7a;margin-bottom:6px;">
+                Required for Revoke decisions. Recommended for all decisions.
+              </div>
+              <div style="position:relative;">
+                <textarea class="modal-textarea">Employee transferred to Marketing; no longer needs this access</textarea>
+                <span class="ann" title="4" style="position:absolute;right:8px;bottom:8px;">4</span>
+              </div>
+              <div style="font-size:11px;color:#5a6a7a;margin-bottom:4px;">
+                This comment will be recorded in the audit trail and visible to compliance teams.
+                <span class="ann" title="5">5</span>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-outline btn-sm">Cancel</button>
+                <button class="btn btn-teal btn-sm">Save Comment</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- /mockup-frame -->
+
+  <div class="legend">
+    <div class="legend-item"><span class="ann">1</span> Selection indicator -- shows how many items are selected; checkbox in header selects all</div>
+    <div class="legend-item"><span class="ann">2</span> Bulk Decisions dropdown -- apply Approve or Revoke to all selected items simultaneously (max 250 items per bulk action)</div>
+    <div class="legend-item"><span class="ann">3</span> Comment dialog -- opens when a decision is made; applies the comment to all selected items</div>
+    <div class="legend-item"><span class="ann">4</span> Comment text area -- explain the business reason for your decision; this text is permanently recorded</div>
+    <div class="legend-item"><span class="ann">5</span> Audit trail notice -- all decisions and comments are logged and cannot be deleted; they are used in compliance reporting</div>
+  </div>
+</div><!-- /figure-block -->
+
+
+<!-- ============================================================
+     FIGURE 5: Sign-Off Summary
+     ============================================================ -->
+<div class="figure-block">
+  <div class="figure-label">Figure 5: Review Summary and Sign-Off</div>
+  <div class="figure-caption">After deciding all items, this summary screen lets you review all decisions before making them final with your sign-off.</div>
+  <div class="mockup-frame">
+
+    <div class="app-nav">
+      <span class="logo-text">Sail<span class="logo-dot">P</span>oint <span style="font-weight:300;font-size:13px;color:#8a9bac;">Identity Security Cloud</span></span>
+      <span class="nav-spacer"></span>
+      <span class="nav-org" style="margin-right:8px;">Acme Corp</span>
+      <div class="avatar">JM</div>
+    </div>
+
+    <div class="app-body">
+      <div class="sidebar">
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Access
+        </div>
+        <div class="sidebar-item active">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h8v2H2z"/></svg>
+          Certifications
+        </div>
+        <div class="sidebar-item">
+          <svg class="sidebar-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm1 3v6h8V5H4z"/></svg>
+          Reports
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="breadcrumb">
+          <a href="#">Certifications</a>
+          <span>&rsaquo;</span>
+          Daily AD Delta Cert -- 2026-06-05
+          <span>&rsaquo;</span>
+          Review Summary
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <div class="page-heading" style="margin-bottom:0;">Review Summary</div>
+          <span class="ann" title="1">1</span>
+        </div>
+
+        <!-- Summary stats -->
+        <div class="summary-stats">
+          <div class="summary-stat-box">
+            <div class="summary-stat-num blue">5</div>
+            <div class="summary-stat-label">Total Reviewed</div>
+          </div>
+          <div class="summary-stat-box">
+            <div class="summary-stat-num green">3</div>
+            <div class="summary-stat-label">Approved</div>
+          </div>
+          <div class="summary-stat-box">
+            <div class="summary-stat-num red">2</div>
+            <div class="summary-stat-label">Revoked</div>
+          </div>
+          <div class="summary-stat-box">
+            <div class="summary-stat-num" style="color:#5a6a7a;">0</div>
+            <div class="summary-stat-label">Reassigned</div>
+          </div>
+        </div>
+        <span class="ann" title="2" style="display:block;margin-top:-16px;margin-bottom:20px;">2</span>
+
+        <!-- Decisions table -->
+        <div style="background:#fff;border:1px solid #dde1e7;border-radius:6px;overflow:hidden;margin-bottom:16px;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Identity</th>
+                <th>Access Item</th>
+                <th>Source</th>
+                <th>Decision <span class="ann" title="3">3</span></th>
+                <th>Comment</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="no-hover">
+                <td>
+                  <div style="font-weight:600;font-size:13px;">Jane Smith</div>
+                  <div style="font-size:11px;color:#5a6a7a;">Software Engineer</div>
+                </td>
+                <td>Domain Admins</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="status-pill status-revoked">REVOKED</span></td>
+                <td style="font-size:12px;color:#5a6a7a;font-style:italic;">"Transferred teams"</td>
+              </tr>
+              <tr class="no-hover">
+                <td>
+                  <div style="font-weight:600;font-size:13px;">Jane Smith</div>
+                  <div style="font-size:11px;color:#5a6a7a;">Software Engineer</div>
+                </td>
+                <td>VPN_Users</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="status-pill status-approved">APPROVED</span></td>
+                <td style="font-size:12px;color:#bbb;">--</td>
+              </tr>
+              <tr class="no-hover">
+                <td>
+                  <div style="font-weight:600;font-size:13px;">John Park</div>
+                  <div style="font-size:11px;color:#5a6a7a;">Systems Administrator</div>
+                </td>
+                <td>Server Operators</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="status-pill status-revoked">REVOKED</span></td>
+                <td style="font-size:12px;color:#5a6a7a;font-style:italic;">"No longer needed"</td>
+              </tr>
+              <tr class="no-hover">
+                <td>
+                  <div style="font-weight:600;font-size:13px;">John Park</div>
+                  <div style="font-size:11px;color:#5a6a7a;">Systems Administrator</div>
+                </td>
+                <td>Exchange_Users</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="status-pill status-approved">APPROVED</span></td>
+                <td style="font-size:12px;color:#bbb;">--</td>
+              </tr>
+              <tr class="no-hover">
+                <td>
+                  <div style="font-weight:600;font-size:13px;">Alex Chen</div>
+                  <div style="font-size:11px;color:#5a6a7a;">Junior Developer</div>
+                </td>
+                <td>Dev_Tools</td>
+                <td style="color:#5a6a7a;">Active Directory</td>
+                <td><span class="status-pill status-approved">APPROVED</span></td>
+                <td style="font-size:12px;color:#5a6a7a;font-style:italic;">"Active developer"</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Sign-off area -->
+        <div class="signoff-area">
+          <div class="signoff-warning">
+            WARNING: Your decisions will be final after signing off. Revoked access will begin deprovisioning within 24 hours. Please review all decisions carefully before proceeding.
+            <span class="ann" title="4">4</span>
+          </div>
+          <br/>
+          <button class="btn btn-primary btn-large">
+            Sign Off and Finish
+            <span class="ann" title="5">5</span>
+          </button>
+          <div style="margin-top:10px;font-size:12px;color:#5a6a7a;">
+            Signing off as: J. Manager &nbsp;|&nbsp; 2026-06-06 09:14 UTC &nbsp;|&nbsp; Certification ID: CERT-20260605-001
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- /mockup-frame -->
+
+  <div class="legend">
+    <div class="legend-item"><span class="ann">1</span> Review Summary heading -- this screen appears only after all items have received a decision</div>
+    <div class="legend-item"><span class="ann">2</span> Decision statistics -- quick count of approved vs. revoked decisions across the entire campaign for your review</div>
+    <div class="legend-item"><span class="ann">3</span> Decision column -- color-coded badges: green APPROVED, red REVOKED; each row is read-only on this screen</div>
+    <div class="legend-item"><span class="ann">4</span> Warning banner -- sign-off is irreversible; revoked items trigger immediate deprovisioning workflows</div>
+    <div class="legend-item"><span class="ann">5</span> Sign Off button -- submitting this records your identity, timestamp, and all decisions in the compliance audit log permanently</div>
+  </div>
+</div><!-- /figure-block -->
+
+<hr style="max-width:960px;margin:0 auto 24px auto;border:none;border-top:1px solid #dde1e7;">
+<p style="text-align:center;font-size:12px;color:#8a9bac;margin-bottom:40px;">
+  SailPoint Identity Security Cloud -- Manager Reference Mockups &nbsp;|&nbsp; Generated for Acme Corp &nbsp;|&nbsp; June 2026
+  <br>
+  These are illustrative mockups for training purposes. Exact UI elements may differ between ISC versions and tenant configurations.
+</p>
+
+</body>
+</html>

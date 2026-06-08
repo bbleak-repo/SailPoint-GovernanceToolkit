@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manager's Guide to Privileged Access Attestation</title>
+<style>
+/* Word/ServiceNow compatible - no CSS variables, simple selectors */
+body {
+    font-family: 'Segoe UI', Calibri, -apple-system, system-ui, sans-serif;
+    color: #2c3e50;
+    background: #ffffff;
+    line-height: 1.7;
+    max-width: 850px;
+    margin: 0 auto;
+    padding: 40px 48px;
+    font-size: 14.5px;
+}
+
+/* ---- COVER / TITLE BLOCK ---- */
+.cover-block {
+    background: linear-gradient(135deg, #1e2a3a 0%, #2c3e50 60%, #34495e 100%);
+    color: #ffffff;
+    padding: 48px 44px 40px;
+    border-radius: 8px;
+    margin-bottom: 36px;
+    border-bottom: 4px solid #5B9BD5;
+}
+.cover-block h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #5B9BD5;
+    margin: 0 0 8px;
+    letter-spacing: -0.3px;
+}
+.cover-sub {
+    font-size: 15px;
+    color: rgba(255,255,255,0.72);
+    margin: 0 0 20px;
+    line-height: 1.5;
+}
+.cover-meta {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+    color: rgba(255,255,255,0.55);
+}
+.cover-meta strong {
+    color: rgba(255,255,255,0.85);
+    margin-right: 4px;
+}
+
+/* ---- TABLE OF CONTENTS ---- */
+.toc {
+    background: #f7f8fa;
+    border: 1px solid #e0e4ea;
+    border-radius: 6px;
+    padding: 24px 28px;
+    margin-bottom: 36px;
+}
+.toc h2 {
+    font-size: 16px;
+    color: #336699;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #e0e4ea;
+}
+.toc ol {
+    margin: 0;
+    padding-left: 22px;
+    columns: 2;
+    column-gap: 36px;
+}
+.toc li {
+    margin-bottom: 6px;
+    font-size: 13.5px;
+    break-inside: avoid;
+}
+.toc a {
+    color: #336699;
+    text-decoration: none;
+}
+.toc a:hover { text-decoration: underline; }
+
+/* ---- HEADINGS ---- */
+h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e2a3a;
+    margin: 48px 0 16px;
+    padding-bottom: 10px;
+    border-bottom: 3px solid #5B9BD5;
+}
+h3 {
+    font-size: 17px;
+    font-weight: 600;
+    color: #336699;
+    margin: 28px 0 10px;
+}
+h4 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #34495e;
+    margin: 20px 0 8px;
+}
+
+/* ---- PARAGRAPHS & LISTS ---- */
+p { margin: 0 0 14px; }
+ul, ol { margin: 0 0 14px; padding-left: 24px; }
+li { margin-bottom: 6px; }
+
+/* ---- TABLES ---- */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 20px;
+    font-size: 13.5px;
+}
+th {
+    background: #34495e;
+    color: #ffffff;
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #e0e4ea;
+    vertical-align: top;
+}
+tr:nth-child(even) td { background: #f9f9fb; }
+
+/* ---- CALLOUT BOXES ---- */
+.callout {
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 18px 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    border-left: 4px solid;
+}
+.callout-label {
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+.callout-tip {
+    background: #edf6ef;
+    border-color: #339933;
+    color: #1a5c1a;
+}
+.callout-tip .callout-label { color: #339933; }
+.callout-note {
+    background: #edf2f9;
+    border-color: #336699;
+    color: #1e3d5c;
+}
+.callout-note .callout-label { color: #336699; }
+.callout-warning {
+    background: #fff8ec;
+    border-color: #e68a00;
+    color: #5c3600;
+}
+.callout-warning .callout-label { color: #e68a00; }
+.callout-important {
+    background: #fdf0ef;
+    border-color: #CC3333;
+    color: #5c1a1a;
+}
+.callout-important .callout-label { color: #CC3333; }
+
+/* ---- BLOCKQUOTE (script text) ---- */
+blockquote {
+    background: #f7f8fa;
+    border-left: 3px solid #b0bec5;
+    margin: 16px 0;
+    padding: 14px 20px;
+    font-style: italic;
+    color: #555e70;
+    border-radius: 0 6px 6px 0;
+}
+
+/* ---- CODE ---- */
+code {
+    background: #f0f2f5;
+    color: #c0392b;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+}
+
+/* ---- KEY-VALUE HIGHLIGHT ---- */
+.kv-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.kv-label {
+    font-weight: 600;
+    color: #336699;
+    min-width: 160px;
+}
+
+/* ---- SCENARIO CARDS ---- */
+.scenario {
+    background: #ffffff;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    padding: 22px 24px;
+    margin: 20px 0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.scenario-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e2a3a;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eaecf0;
+}
+.scenario-what {
+    font-weight: 600;
+    color: #555e70;
+    margin: 10px 0 4px;
+    font-size: 13.5px;
+}
+
+/* ---- CHECKLIST ---- */
+.checklist {
+    list-style: none;
+    padding-left: 0;
+}
+.checklist li {
+    position: relative;
+    padding-left: 30px;
+    margin-bottom: 12px;
+}
+.checklist li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: 18px;
+    height: 18px;
+    border: 2px solid #b0bec5;
+    border-radius: 3px;
+    background: #ffffff;
+}
+
+/* ---- FAQ ---- */
+.faq-item {
+    margin-bottom: 18px;
+}
+.faq-q {
+    font-weight: 700;
+    color: #1e2a3a;
+    margin-bottom: 4px;
+}
+.faq-a {
+    color: #555e70;
+}
+
+/* ---- STAT BADGES ---- */
+.stat-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 18px 0;
+}
+.stat-badge {
+    flex: 1;
+    min-width: 180px;
+    background: #f7f8fa;
+    border: 1px solid #e0e4ea;
+    border-radius: 8px;
+    padding: 16px 18px;
+    text-align: center;
+}
+.stat-badge .stat-num {
+    font-size: 28px;
+    font-weight: 800;
+    color: #CC3333;
+}
+.stat-badge .stat-label {
+    font-size: 12px;
+    color: #555e70;
+    margin-top: 4px;
+}
+
+/* ---- FLOW DIAGRAM (CSS-only) ---- */
+.flow-steps {
+    display: flex;
+    gap: 0;
+    flex-wrap: wrap;
+    margin: 20px 0;
+    align-items: stretch;
+}
+.flow-step {
+    flex: 1;
+    min-width: 130px;
+    background: #336699;
+    color: #ffffff;
+    padding: 14px 16px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    position: relative;
+}
+.flow-step:first-child { border-radius: 6px 0 0 6px; }
+.flow-step:last-child { border-radius: 0 6px 6px 0; }
+.flow-step + .flow-step { border-left: 2px solid rgba(255,255,255,0.3); }
+.flow-step .flow-num {
+    display: block;
+    font-size: 20px;
+    font-weight: 800;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 2px;
+}
+.flow-step.flow-decision { background: #e68a00; }
+.flow-step.flow-done { background: #339933; }
+
+/* ---- COMPARISON CARDS ---- */
+.compare-row {
+    display: flex;
+    gap: 16px;
+    margin: 18px 0;
+}
+.compare-card {
+    flex: 1;
+    border-radius: 8px;
+    padding: 18px 20px;
+    border: 1px solid;
+}
+.compare-card.good {
+    background: #edf6ef;
+    border-color: #a3d9a5;
+}
+.compare-card.bad {
+    background: #fdf0ef;
+    border-color: #e6a5a5;
+}
+.compare-card h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+}
+.compare-card.good h4 { color: #1a7a1a; }
+.compare-card.bad h4 { color: #a12c2c; }
+.compare-card p {
+    margin: 0;
+    font-size: 13.5px;
+}
+
+/* ---- DIVIDER ---- */
+.section-divider {
+    border: none;
+    border-top: 1px solid #e0e4ea;
+    margin: 40px 0;
+}
+
+/* ---- FOOTER ---- */
+.doc-footer {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 2px solid #e0e4ea;
+    font-size: 12px;
+    color: #999;
+    text-align: center;
+}
+
+/* ---- PRINT ---- */
+@media print {
+    body { max-width: 100%; padding: 20px; }
+    .cover-block { break-after: page; }
+    h2 { break-after: avoid; }
+    .scenario, .callout { break-inside: avoid; }
+    .toc { break-after: page; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     COVER BLOCK
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="cover-block">
+    <h1>Manager's Guide to Privileged Access Attestation</h1>
+    <p class="cover-sub">
+        A comprehensive reference for people-managers who review access certification
+        campaigns in SailPoint Identity Security Cloud. Understand why daily delta
+        certification matters, how to navigate the reviewer interface, and how to
+        make informed approve/revoke decisions for your team's privileged access.
+    </p>
+    <div class="cover-meta">
+        <span><strong>Platform:</strong> SailPoint ISC</span>
+        <span><strong>Audience:</strong> People-Managers</span>
+        <span><strong>Classification:</strong> Internal</span>
+        <span><strong>Version:</strong> 1.0</span>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     TABLE OF CONTENTS
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="toc">
+    <h2>Contents</h2>
+    <ol>
+        <li><a href="#s1">Why We Certify Privileged Access Daily</a></li>
+        <li><a href="#s2">The Shift: Application Owners to Managers</a></li>
+        <li><a href="#s3">Why Privileged Access Deserves Extra Scrutiny</a></li>
+        <li><a href="#s4">Communicating with Your Team</a></li>
+        <li><a href="#s5">The SailPoint ISC Campaign Experience</a></li>
+        <li><a href="#s6">Making Decisions: Approve, Revoke, Reassign</a></li>
+        <li><a href="#s7">Signing Off and Completing Your Review</a></li>
+        <li><a href="#s8">Real-World Scenarios</a></li>
+        <li><a href="#s9">Avoiding Rubber-Stamping</a></li>
+        <li><a href="#s10">The Least-Privilege Mindset</a></li>
+        <li><a href="#s11">Frequently Asked Questions</a></li>
+        <li><a href="#s12">Quick-Reference Decision Checklist</a></li>
+        <li><a href="#s13">Glossary</a></li>
+    </ol>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 1
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s1">1. Why We Certify Privileged Access Daily</h2>
+
+<p>Traditional access reviews run quarterly or annually. A user is granted Domain Admin
+on January 3; the next review is April 1 -- for <strong>88 days</strong> that privilege sits
+unexamined. If the account is compromised, the blast radius includes every system
+the Domain Admin can reach.</p>
+
+<p><strong>Daily delta certification</strong> changes the equation. Instead of reviewing <em>all</em> access
+once a quarter, we review <em>only access that changed in the last 24 hours</em>, every day.</p>
+
+<table>
+    <thead>
+        <tr><th>Approach</th><th>Scope per Review</th><th>Reviewer Fatigue</th><th>Time-to-Review</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>Quarterly full</strong></td><td>Hundreds of items</td><td>High (rubber-stamping risk)</td><td>Up to 90 days</td></tr>
+        <tr><td><strong>Daily delta</strong></td><td>1-5 items (typical)</td><td>Low (focused decisions)</td><td>&lt; 24 hours</td></tr>
+    </tbody>
+</table>
+
+<div class="callout callout-tip">
+    <div class="callout-label">Tip</div>
+    Daily reviews are <em>smaller</em> than quarterly reviews, not more work. You are
+    reviewing fewer items more frequently -- which leads to better decisions and
+    stronger audit evidence.
+</div>
+
+<h3>What Triggers a Daily Campaign</h3>
+
+<p>A campaign is created for you when one of your direct reports receives a new privileged
+entitlement -- typically an Active Directory security group membership that grants
+elevated access (Domain Admins, Server Operators, privileged application roles, etc.).
+The system detects the <code>GRANT_ACCESS</code> event from the previous 24 hours and groups
+affected identities by manager.</p>
+
+<p>You will <strong>not</strong> receive a campaign if nothing changed. No changes = no campaign =
+no action required.</p>
+
+<div class="flow-steps">
+    <div class="flow-step"><span class="flow-num">1</span>Access Granted</div>
+    <div class="flow-step"><span class="flow-num">2</span>Event Detected</div>
+    <div class="flow-step"><span class="flow-num">3</span>Grouped by Manager</div>
+    <div class="flow-step flow-decision"><span class="flow-num">4</span>Campaign Created</div>
+    <div class="flow-step"><span class="flow-num">5</span>You Review</div>
+    <div class="flow-step flow-done"><span class="flow-num">6</span>Decision Recorded</div>
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 2
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s2">2. The Shift: Application Owners to Managers</h2>
+
+<p>Historically, many organizations ran <strong>Source Owner</strong> campaigns -- the application
+owner (the person responsible for the system) reviewed who had access. This model has
+a fundamental limitation: the application owner knows the <em>system</em> but often does not
+know the <em>person</em>.</p>
+
+<div class="compare-row">
+    <div class="compare-card bad">
+        <h4>Source Owner Reviews</h4>
+        <p>"Is this account configured correctly in my system?"</p>
+        <p style="margin-top:8px; font-size:12.5px; color:#8a4444;">Cannot answer whether the <em>person</em> still needs access for their current role.</p>
+    </div>
+    <div class="compare-card good">
+        <h4>Manager Reviews</h4>
+        <p>"Should this person have this access at all?"</p>
+        <p style="margin-top:8px; font-size:12.5px; color:#2a6a2a;">You know the person, their current projects, recent role changes, and whether the access is still needed.</p>
+    </div>
+</div>
+
+<p>Only you, as the employee's manager, can answer these questions:</p>
+<ul>
+    <li>What project is your team member working on <em>right now</em>?</li>
+    <li>Have they recently changed roles, transferred teams, or shifted responsibilities?</li>
+    <li>Was this access a temporary need that has since expired?</li>
+    <li>Could another team member fulfill the same function with lower-privilege access?</li>
+</ul>
+
+<div class="callout callout-note">
+    <div class="callout-label">Note</div>
+    In SailPoint ISC, a Manager campaign automatically distributes certifications to
+    each identity's manager. You only see your direct reports -- never someone else's
+    team. If an identity has no manager assigned, the campaign falls back to the
+    campaign owner or an administrator.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 3
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s3">3. Why Privileged Access Deserves Extra Scrutiny</h2>
+
+<p>Not all access is equal. Standard user access (email, HR self-service, intranet) poses
+relatively low risk if over-provisioned. Privileged access is different:</p>
+
+<table>
+    <thead>
+        <tr><th>Risk Factor</th><th>Standard Access</th><th>Privileged Access</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>Blast radius</strong></td><td>User's own data</td><td>Entire domain, all servers, all users</td></tr>
+        <tr><td><strong>Attacker value</strong></td><td>Low</td><td>Highest-priority target</td></tr>
+        <tr><td><strong>Regulatory exposure</strong></td><td>Low</td><td>SOX 404, SOC 2, ISO 27001, NIST 800-53</td></tr>
+        <tr><td><strong>Audit scrutiny</strong></td><td>Sampled</td><td>100% reviewed</td></tr>
+        <tr><td><strong>Recovery time</strong></td><td>Minutes</td><td>Days to weeks (full domain rebuild)</td></tr>
+    </tbody>
+</table>
+
+<div class="stat-row">
+    <div class="stat-badge">
+        <div class="stat-num">74%</div>
+        <div class="stat-label">of data breaches involve misuse<br>of privileged credentials (DBIR)</div>
+    </div>
+    <div class="stat-badge">
+        <div class="stat-num">75%+</div>
+        <div class="stat-label">of organizations acknowledge<br>rubber-stamping as a problem</div>
+    </div>
+    <div class="stat-badge">
+        <div class="stat-num">&lt;10s</div>
+        <div class="stat-label">average time reviewers spend<br>per decision when rubber-stamping</div>
+    </div>
+</div>
+
+<p>When you approve a privileged entitlement, you are personally attesting:</p>
+<ol>
+    <li>This person needs this level of access <strong>right now</strong></li>
+    <li>No lower-privilege alternative exists</li>
+    <li>The access aligns with their <strong>current</strong> job responsibilities</li>
+    <li>You accept accountability for this decision</li>
+</ol>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Warning</div>
+    Auditors review certification decisions. They check <em>who</em> approved, <em>when</em>,
+    and whether the approval pattern suggests genuine review versus rubber-stamping.
+    Approving everything in under 10 seconds flags your decisions for additional scrutiny.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 4
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s4">4. Communicating with Your Team about Least Privilege</h2>
+
+<p>As a manager, you are the bridge between security policy and your team's daily work.
+Here is how to have productive conversations about access rights.</p>
+
+<h3>4.1 The Conversation Framework</h3>
+
+<p>When an employee requests elevated access -- or when you see a new grant appear in a
+certification campaign -- ask these four questions:</p>
+
+<div class="scenario">
+    <div class="scenario-title">The Four Questions</div>
+    <ol>
+        <li><strong>"What specifically do you need to accomplish?"</strong><br>
+            Understand the task, not just the access. Often the real need is narrower than the access requested.</li>
+        <li><strong>"Is there a lower-privilege way to do this?"</strong><br>
+            Can a read-only role work instead of read-write? Can a delegated admin role replace full admin?</li>
+        <li><strong>"How long will you need this access?"</strong><br>
+            If the answer is "for this project" or "until next Tuesday," the access should be time-bound.</li>
+        <li><strong>"What happens if you lose this access tomorrow?"</strong><br>
+            If the answer is "nothing, I haven't used it in months," that is your signal to revoke.</li>
+    </ol>
+</div>
+
+<h3>4.2 Setting the Tone</h3>
+
+<p>Frame least privilege as <strong>professional hygiene</strong>, not punishment:</p>
+
+<table>
+    <thead>
+        <tr><th>Instead of...</th><th>Try...</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>"I'm revoking your access"</td>
+            <td>"Let's right-size your access to match your current role"</td>
+        </tr>
+        <tr>
+            <td>"Security says you can't have this"</td>
+            <td>"We're reducing the team's attack surface -- here's what that means for you"</td>
+        </tr>
+        <tr>
+            <td>"You don't need Domain Admin"</td>
+            <td>"What specific tasks require Domain Admin? Let's find the right level of access"</td>
+        </tr>
+        <tr>
+            <td>"This is a compliance requirement"</td>
+            <td>"This protects both you and the company -- if this account were compromised, you'd be in the blast radius"</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>4.3 What to Tell Your Team about Daily Campaigns</h3>
+
+<blockquote>
+    "We've moved to daily access reviews for privileged roles. This means when you get
+    new elevated access, I'll review it within 24 hours. This is actually better for
+    everyone -- instead of a massive quarterly review where I'm looking at hundreds of
+    items, I'm reviewing 1-2 items with full context of what you're working on right
+    now. If I approve it, the audit trail shows a thoughtful, timely decision. If it
+    was a mistake or you no longer need it, we catch it immediately instead of letting
+    it sit for months."
+</blockquote>
+
+<h3>4.4 Handling Pushback</h3>
+
+<p><strong>"I might need it later"</strong></p>
+<p>Keeping access "just in case" is the definition of over-provisioning. Access can be
+re-granted when a specific need arises -- typically within hours. The risk of an unused
+privileged account sitting idle for months far outweighs the inconvenience of re-requesting.</p>
+
+<p><strong>"Everyone on my old team had this"</strong></p>
+<p>Role transfers are the #1 source of privilege accumulation. Access appropriate for your
+previous role is not necessarily appropriate for your current one. This is normal -- it
+means the system is working correctly.</p>
+
+<p><strong>"I need it for emergencies"</strong></p>
+<p>Emergency access should go through a break-glass process with time-limited grants and
+enhanced logging -- not through a standing privileged account.</p>
+
+<p><strong>"It's too much hassle to request access every time"</strong></p>
+<p>If a team member needs recurring access, the right solution is a properly scoped role
+or access profile -- not a permanent grant of a broader privilege. Work with the IAM
+team to create the right entitlement.</p>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 5
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s5">5. The SailPoint ISC Campaign Experience</h2>
+
+<p>When a certification campaign is created for you, SailPoint ISC notifies you via email
+and an in-app notification. Here is what to expect.</p>
+
+<h3>5.1 Accessing Your Campaigns</h3>
+
+<ol>
+    <li>Log in to the SailPoint ISC admin console</li>
+    <li>Navigate to <strong>Certifications</strong> from the main menu</li>
+    <li>Select the <strong>Active</strong> tab to see campaigns awaiting your review</li>
+    <li>Campaigns appear as <strong>cards</strong> (default) or in a <strong>table</strong> view</li>
+</ol>
+
+<p>Each campaign card shows:</p>
+<ul>
+    <li>Campaign name (e.g., "Daily AD Delta Cert -- 2026-06-05")</li>
+    <li>Number of identities and access items to review</li>
+    <li>Deadline date</li>
+    <li>Progress indicator</li>
+</ul>
+
+<h3>5.2 Two Ways to Review: Identities vs Access Items</h3>
+
+<p>Once inside a campaign, you can toggle between two views:</p>
+
+<div class="compare-row">
+    <div class="compare-card good" style="border-color:#a5c8e6; background:#edf2f9;">
+        <h4 style="color:#264d73;">Identities View (recommended for managers)</h4>
+        <p>See a list of your direct reports. Click a person to see <em>all</em> of their access items.</p>
+        <p style="margin-top:8px; font-size:12.5px; color:#3a6a8a;"><strong>Best for:</strong> "Let me review everything about Jane first, then move to John." You think about people, not abstract entitlements.</p>
+    </div>
+    <div class="compare-card good" style="border-color:#a5c8e6; background:#edf2f9;">
+        <h4 style="color:#264d73;">Access Items View</h4>
+        <p>See a list of roles, access profiles, or entitlements. Click one to see which direct reports have it.</p>
+        <p style="margin-top:8px; font-size:12.5px; color:#3a6a8a;"><strong>Best for:</strong> "Does it make sense that 5 people on my team all have Domain Admin?" Compare across your team.</p>
+    </div>
+</div>
+
+<h3>5.3 What You See for Each Access Item</h3>
+
+<table>
+    <thead>
+        <tr><th>Information</th><th>What It Tells You</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>Access flags</strong></td><td>Icons indicating: new access, birthright (auto-assigned), privileged, time-bound, critical data</td></tr>
+        <tr><td><strong>How it was granted</strong></td><td>Requested (you can revoke) vs. auto-assigned via role membership (acknowledge only)</td></tr>
+        <tr><td><strong>Last account activity</strong></td><td>When the user last actively used this access (if SaaS Management data is available)</td></tr>
+        <tr><td><strong>Peer comparison</strong></td><td>Whether similar users in the same role have this access (recommendation engine)</td></tr>
+        <tr><td><strong>Source activity</strong></td><td>Account activity in the past 90 days</td></tr>
+    </tbody>
+</table>
+
+<div class="callout callout-tip">
+    <div class="callout-label">Tip</div>
+    Pay special attention to the <strong>privileged</strong> flag and the <strong>last
+    activity</strong> timestamp. An account flagged as privileged that has not been used
+    in 60+ days is a strong candidate for revocation.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 6
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s6">6. Making Decisions: Approve, Revoke, Reassign</h2>
+
+<h3>6.1 Approving Access</h3>
+
+<p>Click the <strong>Approve</strong> (checkmark) icon next to an access item.</p>
+
+<p><strong>When to approve:</strong></p>
+<ul>
+    <li>The person actively uses this access for their current job responsibilities</li>
+    <li>No lower-privilege alternative exists</li>
+    <li>The access is appropriate for their role level</li>
+</ul>
+
+<p><strong>What happens:</strong> Nothing changes operationally. The access remains in place, and
+the audit trail records your approval with a timestamp.</p>
+
+<div class="callout callout-note">
+    <div class="callout-label">Important</div>
+    For roles that were <strong>automatically assigned</strong> through membership criteria
+    (birthright/lifecycle rules), the button says <strong>Acknowledge</strong> instead of Approve.
+    You cannot revoke these -- they are controlled by the identity model. If you believe
+    the assignment is wrong, contact the IAM team to update the membership criteria.
+</div>
+
+<h3>6.2 Revoking Access</h3>
+
+<p>Click the <strong>Revoke</strong> (X) icon next to an access item.</p>
+
+<p><strong>When to revoke:</strong></p>
+<ul>
+    <li>The person no longer needs this access for their current role</li>
+    <li>A lower-privilege alternative exists and should be used instead</li>
+    <li>The access was granted temporarily and the need has passed</li>
+    <li>The person has changed roles, teams, or responsibilities</li>
+    <li>The access has not been used in an extended period</li>
+</ul>
+
+<p><strong>What happens after revocation:</strong></p>
+
+<table>
+    <thead><tr><th>Source Type</th><th>Remediation</th></tr></thead>
+    <tbody>
+        <tr><td><strong>Automated sources</strong> (Active Directory via SailPoint VA)</td><td>ISC removes the entitlement automatically. The group membership is deleted in the target system.</td></tr>
+        <tr><td><strong>Manual/disconnected sources</strong> (flat-file apps)</td><td>A remediation task is created for the source owner, who must manually remove access and confirm completion.</td></tr>
+    </tbody>
+</table>
+
+<p>You can optionally set a <strong>future revocation date</strong> for roles and access profiles
+(not individual entitlements). Useful for planned transitions.</p>
+
+<div class="callout callout-warning">
+    <div class="callout-label">Warning</div>
+    Revocation is generally permanent. Reinstating revoked access requires a new access
+    request through the normal process. Make sure the person truly no longer needs the
+    access before revoking.
+</div>
+
+<h3>6.3 Reassigning a Certification</h3>
+
+<p>If you are <strong>not the right person</strong> to make a decision, you can reassign.</p>
+
+<p><strong>When to reassign:</strong></p>
+<ul>
+    <li>You have a new direct report and their previous manager knows their access needs better</li>
+    <li>The access involves a system you are not familiar with</li>
+    <li>You are going on leave and cannot complete the review by the deadline</li>
+</ul>
+
+<p><strong>How to reassign:</strong></p>
+<ol>
+    <li>Navigate to the campaign</li>
+    <li>Select <strong>Reassign</strong> for the certification</li>
+    <li>Choose the new reviewer from the directory</li>
+    <li>Provide a reason (include your name so the new reviewer can contact you)</li>
+    <li>Submit</li>
+</ol>
+
+<p><strong>Reassignment rules:</strong></p>
+<ul>
+    <li>You <strong>cannot</strong> reassign to the person whose access is being reviewed (ISC prevents self-certification)</li>
+    <li>You <strong>cannot</strong> reassign after you have already signed off</li>
+    <li>The campaign must still be active (not completed or past deadline)</li>
+</ul>
+
+<h3>6.4 Bulk Decisions</h3>
+
+<ol>
+    <li>Select items using checkboxes (header checkbox selects all on current page or entire review)</li>
+    <li>Click <strong>Bulk Decisions</strong></li>
+    <li>Choose <strong>Approve</strong> or <strong>Revoke</strong></li>
+</ol>
+
+<div class="callout callout-important">
+    <div class="callout-label">Caution</div>
+    Use bulk approve with extreme caution for privileged access. Bulk approval is the
+    primary indicator of rubber-stamping. If auditors see that you bulk-approved 15
+    privileged entitlements in 3 seconds, your decisions will be flagged. Review each
+    privileged item individually.
+</div>
+
+<h3>6.5 Adding Comments</h3>
+
+<p>Comments are <strong>required</strong> for role composition revocations and <strong>strongly recommended</strong>
+for any privileged access decision. Good examples:</p>
+
+<ul>
+    <li>"Employee transferred to Marketing 2026-06-01; no longer needs AD Server Operators"</li>
+    <li>"Temporary access for Q2 infra migration; project completed 2026-05-28"</li>
+    <li>"Discussed with employee -- confirms this access is no longer needed"</li>
+</ul>
+
+<h3>6.6 Revisiting Decisions</h3>
+
+<p>Before sign-off, click <strong>Revisit Decision</strong> to change an approval to a revocation
+(or vice versa). Once you sign off, your decisions are final.</p>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 7
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s7">7. Signing Off and Completing Your Review</h2>
+
+<p>When you have made decisions on all items in your certification:</p>
+
+<div class="flow-steps">
+    <div class="flow-step"><span class="flow-num">1</span>Review All Items</div>
+    <div class="flow-step"><span class="flow-num">2</span>Make Decisions</div>
+    <div class="flow-step flow-decision"><span class="flow-num">3</span>Sign-Off Page</div>
+    <div class="flow-step"><span class="flow-num">4</span>Click Finish</div>
+    <div class="flow-step flow-done"><span class="flow-num">5</span>Read-Only</div>
+</div>
+
+<p><strong>After sign-off:</strong></p>
+<ul>
+    <li>Your certification moves to the <strong>Completed</strong> tab</li>
+    <li>Your decisions become <strong>read-only</strong> -- no further changes possible</li>
+    <li>Approved items remain unchanged</li>
+    <li>Revoked items enter the remediation pipeline</li>
+    <li>The audit trail permanently records your decisions, timestamps, and comments</li>
+</ul>
+
+<h3>What Happens If You Miss the Deadline</h3>
+
+<p>If the deadline passes before you complete your review:</p>
+<ul>
+    <li>An administrator must decide what happens to <strong>undecided items</strong></li>
+    <li>Options: <strong>maintain access</strong> (items keep access) or <strong>revoke access</strong> (items removed)</li>
+    <li>SailPoint strongly recommends maintaining access for undecided items</li>
+    <li>Your incomplete review is <strong>visible to auditors and administrators</strong></li>
+</ul>
+
+<div class="callout callout-important">
+    <div class="callout-label">Important</div>
+    Missing a deadline creates audit exposure. Regulatory auditors specifically look for
+    incomplete reviews as evidence of control weakness. Complete your reviews before the deadline.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 8
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s8">8. Real-World Scenarios</h2>
+
+<div class="scenario">
+    <div class="scenario-title">Scenario 1: New Hire with Inherited Access</div>
+    <p>You receive a campaign card showing your new hire, Alex, with 8 entitlements
+    including Domain Admin and Exchange Admin.</p>
+    <div class="scenario-what">What happened:</div>
+    <p>Alex was onboarded from a template that included access from a previous role holder. The template was too broad.</p>
+    <div class="scenario-what">What to do:</div>
+    <ol>
+        <li>Switch to <strong>Identities</strong> view, click on Alex</li>
+        <li>Review each entitlement individually</li>
+        <li><strong>Revoke</strong> Domain Admin and Exchange Admin -- Alex is a junior developer</li>
+        <li><strong>Approve</strong> development environment access that matches Alex's actual role</li>
+        <li>Add a comment: "New hire; right-sizing access to junior developer role"</li>
+        <li>Contact the IAM team about updating the onboarding template</li>
+    </ol>
+</div>
+
+<div class="scenario">
+    <div class="scenario-title">Scenario 2: Role Transfer with Access Accumulation</div>
+    <p>Your team member Jamie transferred from Infrastructure to Application Development
+    3 months ago. A daily campaign shows a <code>GRANT_ACCESS</code> for a new developer tool,
+    but you notice Jamie still has 4 infrastructure entitlements from the old role.</p>
+    <div class="scenario-what">What happened:</div>
+    <p>The new grant triggered the campaign, surfacing existing access. Infrastructure access was never cleaned up during the transfer.</p>
+    <div class="scenario-what">What to do:</div>
+    <ol>
+        <li><strong>Approve</strong> the new developer tool entitlement (appropriate for current role)</li>
+        <li><strong>Revoke</strong> the 4 infrastructure entitlements (no longer appropriate)</li>
+        <li>Add comments explaining the role transfer context</li>
+        <li>Have a quick conversation with Jamie about the cleanup</li>
+    </ol>
+</div>
+
+<div class="scenario">
+    <div class="scenario-title">Scenario 3: The "I Need It for Emergencies" Request</div>
+    <p>Chris, a senior engineer, has Domain Admin. When you ask, Chris says:
+    "I only use it during outages -- maybe once a quarter."</p>
+    <div class="scenario-what">What to do:</div>
+    <ol>
+        <li><strong>Revoke</strong> the standing Domain Admin access</li>
+        <li>Work with the IAM team to set up a <strong>just-in-time (JIT)</strong> access or break-glass procedure</li>
+        <li>Explain: "We're replacing standing admin access with an emergency access process. When you need it, you'll get it quickly -- but it won't sit unused between incidents."</li>
+    </ol>
+</div>
+
+<div class="scenario">
+    <div class="scenario-title">Scenario 4: Legitimate Privileged Access</div>
+    <p>Database administrator Pat receives a campaign showing DB Admin access across
+    three production database servers.</p>
+    <div class="scenario-what">What to do:</div>
+    <ol>
+        <li>Confirm Pat is still actively working as a DBA (yes)</li>
+        <li>Confirm the scope matches current assignment (these three servers, not others)</li>
+        <li><strong>Approve</strong> all three with a comment: "Active DBA; primary administrator per current assignment"</li>
+    </ol>
+    <p style="margin-top:8px;"><em>Not every review results in a revocation. The goal is <strong>informed decisions</strong>, not maximum revocations.</em></p>
+</div>
+
+<div class="scenario">
+    <div class="scenario-title">Scenario 5: Access You Cannot Evaluate</div>
+    <p>You receive a certification for "SCCM_PatchAdmin_Tier2." You have no idea whether your
+    team member needs this.</p>
+    <div class="scenario-what">What to do:</div>
+    <ol>
+        <li><strong>Reassign</strong> to the application owner or technical lead who manages SCCM</li>
+        <li>Include a note: "Reassigning -- I am not the appropriate reviewer for SCCM entitlements."</li>
+    </ol>
+    <p style="margin-top:8px;"><em>Reassigning is always better than guessing.</em></p>
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 9
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s9">9. Avoiding Rubber-Stamping</h2>
+
+<p>Rubber-stamping -- approving everything without genuine review -- is the single biggest
+risk to certification program effectiveness.</p>
+
+<h3>How Rubber-Stamping Is Detected</h3>
+
+<table>
+    <thead>
+        <tr><th>Pattern</th><th>What It Suggests</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>All items approved in &lt; 10 seconds</td><td>No individual review occurred</td></tr>
+        <tr><td>100% approval rate over multiple campaigns</td><td>Blanket approval without evaluation</td></tr>
+        <tr><td>No comments on any decision</td><td>No documented reasoning</td></tr>
+        <tr><td>Bulk approve on privileged items</td><td>High-risk decisions made without examination</td></tr>
+        <tr><td>Campaign completed within seconds of opening</td><td>Items not even read</td></tr>
+    </tbody>
+</table>
+
+<h3>How to Avoid It</h3>
+
+<ul>
+    <li><strong>Review each privileged item individually</strong> -- take at least 15-30 seconds per item</li>
+    <li><strong>Add a brief comment</strong> for non-obvious approvals: "Active project lead; requires prod DB write through Q3"</li>
+    <li><strong>Revoke items you know are wrong</strong> -- a 100% approval rate draws auditor attention</li>
+    <li><strong>Ask your team</strong> if unsure -- a quick message is faster than explaining a rubber-stamping finding to an auditor</li>
+</ul>
+
+<div class="callout callout-important">
+    <div class="callout-label">Critical</div>
+    Your certification decisions are your <strong>personal attestation</strong> that the access is
+    appropriate. In a SOX or regulatory audit, you may be interviewed about specific
+    approvals. "I just approved everything" is not an acceptable response.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 10
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s10">10. The Least-Privilege Mindset</h2>
+
+<p>Least privilege is not about making people's jobs harder -- it is about ensuring that
+everyone has <strong>exactly the access they need</strong> and nothing more.</p>
+
+<h3>For Your Team Members</h3>
+<ul>
+    <li><strong>Reduced personal risk:</strong> A compromised minimal-privilege account causes contained damage. A compromised Domain Admin account triggers a major security incident.</li>
+    <li><strong>Cleaner access profile:</strong> No confusion about what someone should or should not be doing.</li>
+    <li><strong>Faster incident response:</strong> Investigators check privileged accounts first. Fewer = fewer people in forensic interviews.</li>
+</ul>
+
+<h3>For You as a Manager</h3>
+<ul>
+    <li><strong>Accountability clarity:</strong> Fewer unnecessary privileges means less exposure.</li>
+    <li><strong>Audit readiness:</strong> A documented, recent certification decision with a clear comment is your best defense.</li>
+    <li><strong>Team protection:</strong> If a team member makes an accidental change with privileges they should not have had, the investigation starts with "who approved this access?"</li>
+</ul>
+
+<h3>For the Organization</h3>
+<ul>
+    <li><strong>Attack surface reduction:</strong> Every unnecessary privilege is a potential entry point.</li>
+    <li><strong>Regulatory compliance:</strong> SOX 404, SOC 2 Type II, ISO 27001, and NIST 800-53 all require documented access review evidence.</li>
+    <li><strong>Insurance and liability:</strong> Cyber insurance providers increasingly examine privilege management practices.</li>
+</ul>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 11
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s11">11. Frequently Asked Questions</h2>
+
+<div class="faq-item">
+    <div class="faq-q">Q: How often will I receive certification campaigns?</div>
+    <div class="faq-a">Only when one of your direct reports receives a new privileged entitlement. If your team's access is stable, you may go days or weeks without a campaign.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: How long do I have to complete a review?</div>
+    <div class="faq-a">Check the deadline shown on the campaign card. Daily delta campaigns typically have a 24-72 hour window. Complete your review the same day if possible.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: What if I approve something and later realize it should be revoked?</div>
+    <div class="faq-a">Before sign-off, use <strong>Revisit Decision</strong> to change your decision. After sign-off, contact the IAM team for a separate revocation request.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: What if my direct report says they need access I revoked?</div>
+    <div class="faq-a">They can submit a new access request through the standard process. This creates a documented request/approval chain rather than relying on inherited or stale access.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: I received a campaign for someone who no longer reports to me.</div>
+    <div class="faq-a">Reassign the certification to the person's current manager. This happens when the HR system has not yet updated the manager-identity relationship.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: Can I delegate my reviews to someone on my team?</div>
+    <div class="faq-a">You can reassign individual certifications, but you remain accountable as the manager. If you regularly delegate, work with the IAM team to update routing.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: Why can I only acknowledge some items, not approve or revoke them?</div>
+    <div class="faq-a">Items granted through <strong>automated membership criteria</strong> (birthright roles, lifecycle state assignments) cannot be revoked through certification. Contact the IAM team to review the criteria if the assignment seems wrong.</div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: What is the difference between a role, an access profile, and an entitlement?</div>
+    <div class="faq-a">
+        <strong>Entitlement:</strong> A single permission in a target system (e.g., AD group "Domain Admins").<br>
+        <strong>Access Profile:</strong> A bundle of entitlements from one source (e.g., "AD Standard User" = 3 AD groups).<br>
+        <strong>Role:</strong> A business concept bundling access profiles across multiple sources (e.g., "IT Administrator" = AD Admin + ServiceNow Admin + SCCM Admin).
+    </div>
+</div>
+<div class="faq-item">
+    <div class="faq-q">Q: What does the "privileged" flag mean?</div>
+    <div class="faq-a">The IAM team has classified certain entitlements as privileged based on their risk level (domain admin, server operator, DBA access, etc.). Items with this flag deserve your closest attention.</div>
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 12
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s12">12. Quick-Reference Decision Checklist</h2>
+
+<p>Before approving or revoking a privileged access item, run through this checklist:</p>
+
+<ul class="checklist">
+    <li><strong>Current role match:</strong> Does this access align with the person's current job responsibilities (not a previous role)?</li>
+    <li><strong>Active use:</strong> Has the person used this access recently, or is it sitting idle?</li>
+    <li><strong>Scope appropriateness:</strong> Is this the minimum level of access needed, or does a lower-privilege alternative exist?</li>
+    <li><strong>Time-bound need:</strong> Is this permanent access, or should it expire on a specific date?</li>
+    <li><strong>Segregation of duties:</strong> Does approving this create a conflict with other access (e.g., both "create purchase orders" and "approve purchase orders")?</li>
+    <li><strong>Peer comparison:</strong> Do similar employees in the same role have this access, or is this person an outlier?</li>
+</ul>
+
+<div class="callout callout-tip">
+    <div class="callout-label">Tip</div>
+    You do not need to check every box for every item. For standard access, a quick
+    role-match check may suffice. For privileged access, work through the full list.
+</div>
+
+
+<hr class="section-divider">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SECTION 13
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="s13">13. Glossary</h2>
+
+<table>
+    <thead>
+        <tr><th>Term</th><th>Definition</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>Attestation</strong></td><td>Your formal confirmation that an access assignment is appropriate</td></tr>
+        <tr><td><strong>Campaign</strong></td><td>A review cycle containing one or more certifications assigned to reviewers</td></tr>
+        <tr><td><strong>Certification</strong></td><td>Your specific review assignment -- the list of identities and access items you must evaluate</td></tr>
+        <tr><td><strong>Delta certification</strong></td><td>A campaign that only includes access <em>changed</em> since the last review (new grants, not existing access)</td></tr>
+        <tr><td><strong>Entitlement</strong></td><td>A specific permission in a target system (e.g., AD group membership, application role)</td></tr>
+        <tr><td><strong>Identity</strong></td><td>A person (your direct report) as represented in the identity governance system</td></tr>
+        <tr><td><strong>Least privilege</strong></td><td>The principle that users should have only the minimum access needed for their current job function</td></tr>
+        <tr><td><strong>Privilege creep</strong></td><td>The gradual accumulation of access rights over time, especially during role transfers</td></tr>
+        <tr><td><strong>Remediation</strong></td><td>The process of removing access after a revocation decision -- automatic (connected) or manual (disconnected)</td></tr>
+        <tr><td><strong>Rubber-stamping</strong></td><td>Approving all items without genuine review -- a compliance risk and audit finding</td></tr>
+        <tr><td><strong>Sign-off</strong></td><td>Your final submission of certification decisions; locks the review permanently</td></tr>
+        <tr><td><strong>Source</strong></td><td>A connected system (AD, Entra ID, ServiceNow, etc.) from which accounts and entitlements are aggregated</td></tr>
+    </tbody>
+</table>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="doc-footer">
+    SailPoint ISC Governance Toolkit -- Manager Attestation Guide v1.0<br>
+    Identity &amp; Access Management Team -- Internal Use Only
+</div>
+
+</body>
+</html>

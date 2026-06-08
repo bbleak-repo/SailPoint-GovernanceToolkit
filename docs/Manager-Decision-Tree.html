@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Access Review Decision Guide -- a printable flowchart for managers completing SailPoint certification campaigns.">
+<title>Access Review Decision Guide</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:        #336699;
+    --primary-dark:   #264d73;
+    --primary-light:  #dce8f5;
+    --success:        #339933;
+    --success-light:  #edf7ed;
+    --success-border: #2a7a2a;
+    --danger:         #CC3333;
+    --danger-light:   #fdf0ef;
+    --danger-border:  #a82929;
+    --amber:          #e68a00;
+    --amber-light:    #fff5e0;
+    --amber-border:   #c47600;
+    --blue:           #336699;
+    --blue-light:     #dce8f5;
+    --blue-border:    #264d73;
+    --header-bg:      #1e2a3a;
+    --text:           #1e2a3a;
+    --text-muted:     #596980;
+    --bg:             #f4f6f9;
+    --border:         #c4cfdb;
+    --connector:      #7a95b0;
+}
+
+/* ---- RESET + BASE ---- */
+html { font-size: 14px; }
+
+body {
+    font-family: -apple-system, 'Segoe UI', Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---- PAGE WRAPPER ---- */
+.page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+}
+
+/* ---- HEADER ---- */
+.doc-header {
+    background: linear-gradient(135deg, #14202e 0%, #1e2a3a 55%, #263545 100%);
+    color: #fff;
+    padding: 22px 36px 16px;
+    border-bottom: 3px solid #5B9BD5;
+    margin-bottom: 28px;
+}
+.doc-header h1 {
+    font-size: 1.55rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    margin-bottom: 4px;
+}
+.doc-header .subtitle {
+    font-size: 0.9rem;
+    opacity: 0.82;
+    font-weight: 400;
+}
+.header-inner {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+/* ---- LEGEND BAR ---- */
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 16px;
+    margin-bottom: 24px;
+    font-size: 0.8rem;
+    align-items: center;
+}
+.legend-label {
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-right: 4px;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid;
+    flex-shrink: 0;
+}
+.swatch-q  { background: #fff;               border-color: var(--primary); }
+.swatch-g  { background: var(--success-light); border-color: var(--success-border); }
+.swatch-r  { background: var(--danger-light);  border-color: var(--danger-border); }
+.swatch-b  { background: var(--blue-light);    border-color: var(--blue-border); }
+.swatch-a  { background: var(--amber-light);   border-color: var(--amber-border); }
+
+/* ---- FLOWCHART CONTAINER ---- */
+.flowchart {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+}
+
+/* ---- START NODE ---- */
+.start-node {
+    background: var(--header-bg);
+    color: #fff;
+    border-radius: 50px;
+    padding: 10px 28px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+/* ---- QUESTION NODES ---- */
+.q-node {
+    background: #fff;
+    border: 2px solid var(--primary);
+    border-radius: 8px;
+    padding: 12px 18px;
+    text-align: center;
+    max-width: 480px;
+    width: 100%;
+    position: relative;
+}
+.q-node .q-num {
+    display: inline-block;
+    background: var(--primary);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-bottom: 6px;
+}
+.q-node .q-text {
+    font-size: 0.93rem;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.35;
+}
+.q-node .q-hint {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* ---- CONNECTOR (vertical line from node to branch row) ---- */
+.connector-v {
+    width: 2px;
+    background: var(--connector);
+    flex-shrink: 0;
+    align-self: center;
+}
+.connector-v.short  { height: 16px; }
+.connector-v.medium { height: 22px; }
+
+/* ---- BRANCH ROW ---- */
+.branch-row {
+    display: flex;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 820px;
+    position: relative;
+    justify-content: center;
+}
+
+/* The horizontal rule that spans across all branches */
+.h-rule {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--connector);
+}
+
+/* A single branch column */
+.branch-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    position: relative;
+    padding-top: 0;
+    min-width: 0;
+}
+
+/* Vertical drop from horizontal rule to label/node */
+.branch-drop {
+    width: 2px;
+    background: var(--connector);
+    align-self: center;
+}
+.branch-drop.short  { height: 14px; }
+.branch-drop.medium { height: 20px; }
+
+/* Branch label (YES / NO / NOT SURE) */
+.branch-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 2px 9px;
+    white-space: nowrap;
+    margin-bottom: 0;
+    position: relative;
+    z-index: 1;
+}
+
+/* ---- ACTION BOXES ---- */
+.action-box {
+    border-radius: 7px;
+    padding: 10px 13px;
+    font-size: 0.82rem;
+    text-align: center;
+    width: 95%;
+    max-width: 220px;
+    border-width: 1.5px;
+    border-style: solid;
+    margin: 0 4px;
+}
+.action-box .action-verdict {
+    font-weight: 700;
+    font-size: 0.88rem;
+    margin-bottom: 3px;
+    letter-spacing: 0.01em;
+}
+.action-box .action-note {
+    font-size: 0.73rem;
+    line-height: 1.35;
+}
+
+.action-green {
+    background: var(--success-light);
+    border-color: var(--success-border);
+    color: #1a4a1a;
+}
+.action-green .action-verdict { color: var(--success-border); }
+
+.action-red {
+    background: var(--danger-light);
+    border-color: var(--danger-border);
+    color: #4a1a1a;
+}
+.action-red .action-verdict { color: var(--danger-border); }
+
+.action-blue {
+    background: var(--blue-light);
+    border-color: var(--blue-border);
+    color: #1a2a4a;
+}
+.action-blue .action-verdict { color: var(--blue-border); }
+
+.action-amber {
+    background: var(--amber-light);
+    border-color: var(--amber-border);
+    color: #3d2600;
+}
+.action-amber .action-verdict { color: var(--amber-border); }
+
+/* Loop-back note inside amber box */
+.loop-note {
+    margin-top: 5px;
+    padding-top: 5px;
+    border-top: 1px dashed var(--amber-border);
+    font-size: 0.7rem;
+    color: var(--amber-border);
+    font-style: italic;
+}
+
+/* Continue indicator when a branch continues downward */
+.continue-indicator {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 3px 0;
+}
+
+/* The "continue" branch column -- center column that flows downward */
+.branch-continue {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    position: relative;
+}
+
+/* ---- SECTION SPACER ---- */
+.section-gap {
+    height: 8px;
+}
+
+/* ---- FOOTER ---- */
+.doc-footer {
+    margin-top: 28px;
+    padding: 12px 18px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.6;
+}
+.doc-footer strong { color: var(--text); }
+
+/* ---- PRINT RULES ---- */
+@media print {
+    @page {
+        size: landscape;
+        margin: 0.45in 0.5in;
+    }
+
+    html { font-size: 11px; }
+
+    body {
+        background: #fff !important;
+        color: #000 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .doc-header {
+        background: #1e2a3a !important;
+        color: #fff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        border-bottom: 2px solid #5B9BD5 !important;
+        padding: 12px 20px 10px;
+        margin-bottom: 12px;
+    }
+
+    .doc-header h1 { font-size: 1.2rem; }
+
+    .page {
+        padding: 0 10px 0;
+        max-width: 100%;
+    }
+
+    .legend {
+        padding: 6px 12px;
+        margin-bottom: 10px;
+        page-break-inside: avoid;
+    }
+
+    .flowchart {
+        page-break-inside: avoid;
+    }
+
+    .q-node {
+        border-color: var(--primary) !important;
+        background: #fff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .action-green {
+        background: #edf7ed !important;
+        border-color: #2a7a2a !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .action-red {
+        background: #fdf0ef !important;
+        border-color: #a82929 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .action-blue {
+        background: #dce8f5 !important;
+        border-color: #264d73 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .action-amber {
+        background: #fff5e0 !important;
+        border-color: #c47600 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .connector-v,
+    .branch-drop,
+    .h-rule {
+        background: #7a95b0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .start-node {
+        background: #1e2a3a !important;
+        color: #fff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .doc-footer {
+        margin-top: 10px;
+        padding: 7px 14px;
+        font-size: 0.72rem;
+        border: 1px solid #c4cfdb !important;
+    }
+}
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <div class="header-inner">
+    <h1>Access Review Decision Guide</h1>
+    <div class="subtitle">Follow this flowchart for each item in your certification campaign</div>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <span class="legend-label">Key:</span>
+    <span class="legend-item"><span class="legend-swatch swatch-q"></span> Question</span>
+    <span class="legend-item"><span class="legend-swatch swatch-g"></span> Approve</span>
+    <span class="legend-item"><span class="legend-swatch swatch-r"></span> Revoke</span>
+    <span class="legend-item"><span class="legend-swatch swatch-b"></span> Reassign</span>
+    <span class="legend-item"><span class="legend-swatch swatch-a"></span> Not Sure -- investigate first</span>
+  </div>
+
+  <!-- FLOWCHART -->
+  <div class="flowchart">
+
+    <!-- START -->
+    <div class="start-node">START: You received an access review for a team member</div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q1 -->
+    <div class="q-node">
+      <div class="q-num">Question 1</div>
+      <div class="q-text">Is this person still on your team?</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q1 BRANCH -->
+    <div class="branch-row" style="max-width:700px;">
+      <div class="h-rule"></div>
+
+      <!-- NO branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NO</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-blue">
+          <div class="action-verdict">REASSIGN</div>
+          <div class="action-note">Forward to their current manager -- they know this person's current role.</div>
+        </div>
+      </div>
+
+      <!-- YES -- continue -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">YES</div>
+        <div class="connector-v medium"></div>
+        <div class="continue-indicator">continue</div>
+      </div>
+    </div>
+
+    <!-- Connector from YES branch down to Q2 -->
+    <div class="connector-v short"></div>
+
+    <!-- Q2 -->
+    <div class="q-node">
+      <div class="q-num">Question 2</div>
+      <div class="q-text">Do you recognize this system or permission?</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q2 BRANCH -->
+    <div class="branch-row" style="max-width:700px;">
+      <div class="h-rule"></div>
+
+      <!-- NO branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NO</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-blue">
+          <div class="action-verdict">REASSIGN</div>
+          <div class="action-note">Send to the system owner, or ask the team member whether they use it before deciding.</div>
+        </div>
+      </div>
+
+      <!-- YES -- continue -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">YES</div>
+        <div class="connector-v medium"></div>
+        <div class="continue-indicator">continue</div>
+      </div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q3 -->
+    <div class="q-node">
+      <div class="q-num">Question 3</div>
+      <div class="q-text">Does this person actively use this access for their CURRENT job?</div>
+      <div class="q-hint">Check Last Activity date in ISC if you are unsure</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q3 BRANCH -- three-way -->
+    <div class="branch-row" style="max-width:820px;">
+      <div class="h-rule"></div>
+
+      <!-- NO branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NO</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-red">
+          <div class="action-verdict">REVOKE</div>
+          <div class="action-note">Comment: "No longer needed for current role." Remove it now; it can be re-requested if needed.</div>
+        </div>
+      </div>
+
+      <!-- NOT SURE branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NOT SURE</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-amber">
+          <div class="action-verdict">INVESTIGATE FIRST</div>
+          <div class="action-note">Ask: "What do you use [system] for?" or check Last Activity date in ISC.</div>
+          <div class="loop-note">Then return to Question 3 with your answer.</div>
+        </div>
+      </div>
+
+      <!-- YES -- continue -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">YES</div>
+        <div class="connector-v medium"></div>
+        <div class="continue-indicator">continue</div>
+      </div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q4 -->
+    <div class="q-node">
+      <div class="q-num">Question 4</div>
+      <div class="q-text">Is this elevated or privileged access?</div>
+      <div class="q-hint">Look for a PRIVILEGED flag or admin-level entitlement name</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q4 BRANCH -->
+    <div class="branch-row" style="max-width:700px;">
+      <div class="h-rule"></div>
+
+      <!-- NO branch -- approve routine -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NO</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-green">
+          <div class="action-verdict">APPROVE</div>
+          <div class="action-note">Routine access confirmed. No comment required -- click Approve and move on.</div>
+        </div>
+      </div>
+
+      <!-- YES -- continue to Q5 -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">YES, PRIVILEGED</div>
+        <div class="connector-v medium"></div>
+        <div class="continue-indicator">continue</div>
+      </div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q5 -->
+    <div class="q-node">
+      <div class="q-num">Question 5</div>
+      <div class="q-text">Is there a lower-level permission that would cover this person's needs?</div>
+      <div class="q-hint">Least-privilege principle: grant only what is required, nothing more</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q5 BRANCH -->
+    <div class="branch-row" style="max-width:700px;">
+      <div class="h-rule"></div>
+
+      <!-- YES branch -- over-privileged -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">YES</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-red">
+          <div class="action-verdict">REVOKE</div>
+          <div class="action-note">Over-privileged. Revoke this level, then work with the IAM team to request the correct entitlement.</div>
+        </div>
+      </div>
+
+      <!-- NO -- continue to Q6 -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">NO</div>
+        <div class="connector-v medium"></div>
+        <div class="continue-indicator">continue</div>
+      </div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q6 -->
+    <div class="q-node">
+      <div class="q-num">Question 6</div>
+      <div class="q-text">Is this a permanent ongoing need, or time-limited?</div>
+      <div class="q-hint">Project-based or temporary roles are common examples of time-limited access</div>
+    </div>
+
+    <div class="connector-v short"></div>
+
+    <!-- Q6 BRANCH -- two approve paths -->
+    <div class="branch-row" style="max-width:700px;">
+      <div class="h-rule"></div>
+
+      <!-- TIME-LIMITED branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">TIME-LIMITED</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-green">
+          <div class="action-verdict">APPROVE</div>
+          <div class="action-note">Approve with a comment stating the expected end date or project completion milestone. Flag for follow-up review.</div>
+        </div>
+      </div>
+
+      <!-- PERMANENT branch -->
+      <div class="branch-col">
+        <div class="branch-drop short"></div>
+        <div class="branch-label">PERMANENT</div>
+        <div class="connector-v short"></div>
+        <div class="action-box action-green">
+          <div class="action-verdict">APPROVE</div>
+          <div class="action-note">Comment: explain the business reason why this elevated access is required on an ongoing basis.</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end .flowchart -->
+
+  <!-- FOOTER -->
+  <div class="doc-footer">
+    <strong>Need help?</strong> Contact IAM Team: [IAM-TEAM-EMAIL]
+    &nbsp;|&nbsp;
+    <a href="Manager-QuickRef-Card.html" style="color:#5B9BD5;">Quick Reference Card</a>
+    &nbsp;|&nbsp;
+    <a href="Manager-Attestation-Guide-Tabbed-v2.html" style="color:#5B9BD5;">Full Guide</a>
+    &nbsp;|&nbsp;
+    <a href="Manager-Certification-Index.html" style="color:#5B9BD5;">All Documents</a>
+  </div>
+
+</div><!-- end .page -->
+</body>
+</html>

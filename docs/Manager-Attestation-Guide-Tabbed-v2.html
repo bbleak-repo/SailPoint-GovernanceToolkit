@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="A manager's guide to reviewing access certification campaigns in SailPoint ISC. Quick start, step-by-step instructions, decision flowchart, and FAQ.">
+<title>Manager's Guide to Access Certification Reviews</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:      #336699;
+    --primary-dark:  #264d73;
+    --primary-light: #4a7fb5;
+    --accent:       #5B9BD5;
+    --accent-glow:  rgba(91,155,213,0.15);
+    --success:      #339933;
+    --success-bg:   #edf6ef;
+    --danger:       #CC3333;
+    --danger-bg:    #fdf0ef;
+    --warning:      #e68a00;
+    --warning-bg:   #fff8ec;
+    --header-bg:    #1e2a3a;
+    --header-fg:    #ffffff;
+    --text:         #2c3e50;
+    --text-muted:   #596980;
+    --bg:           #f4f6f9;
+    --surface:      #ffffff;
+    --border:       #dce3eb;
+    --border-light: #eaecf0;
+    --tab-bg:       #263545;
+    --tab-hover:    #2f4255;
+    --shadow-sm:    0 1px 3px rgba(0,0,0,0.06);
+    --shadow-md:    0 2px 8px rgba(0,0,0,0.08);
+    --radius:       8px;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+
+body {
+    font-family: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ---- HEADER ---- */
+.app-header {
+    background: linear-gradient(135deg, #14202e 0%, #1e2a3a 50%, #263545 100%);
+    color: var(--header-fg);
+    padding: 24px 36px 18px;
+    border-bottom: 3px solid var(--accent);
+}
+.header-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.header-title { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+.header-sub { font-size: 0.78rem; color: rgba(255,255,255,0.6); margin-top: 3px; }
+.header-meta { display: flex; gap: 20px; font-size: 0.72rem; color: rgba(255,255,255,0.45); }
+.header-meta strong { color: rgba(255,255,255,0.75); margin-right: 3px; }
+
+/* ---- TAB BAR ---- */
+.tab-bar {
+    background: var(--tab-bg);
+    display: flex;
+    flex-wrap: wrap;
+    padding: 0 36px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow-md);
+}
+.tab-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.55);
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 500;
+    padding: 12px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s ease;
+}
+.tab-btn:hover { background: var(--tab-hover); color: rgba(255,255,255,0.85); }
+.tab-btn.active { color: #fff; border-bottom-color: var(--accent); background: rgba(91,155,213,0.08); font-weight: 600; }
+.tab-num {
+    display: inline-block; width: 18px; height: 18px; line-height: 18px;
+    text-align: center; font-size: 0.62rem; font-weight: 700;
+    background: rgba(255,255,255,0.1); border-radius: 50%; margin-right: 5px; vertical-align: middle;
+}
+.tab-btn.active .tab-num { background: var(--accent); color: #fff; }
+
+/* ---- CONTENT ---- */
+.content-wrap { max-width: 900px; margin: 0 auto; padding: 32px 36px 60px; }
+.tab-panel { display: none; animation: fadeIn 0.25s ease; }
+.tab-panel.active { display: block; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+/* ---- TYPOGRAPHY ---- */
+h2 { font-size: 1.4rem; font-weight: 700; color: var(--header-bg); margin: 0 0 8px; padding-bottom: 12px; border-bottom: 3px solid var(--accent); }
+.section-intro { font-size: 0.92rem; color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; }
+h3 { font-size: 1.05rem; font-weight: 600; color: var(--primary); margin: 28px 0 10px; }
+h4 { font-size: 0.92rem; font-weight: 600; color: var(--text); margin: 18px 0 8px; }
+p { margin: 0 0 14px; }
+ul, ol { margin: 0 0 14px; padding-left: 22px; }
+li { margin-bottom: 6px; }
+strong { color: #1e2a3a; }
+.jargon { color: var(--primary); font-weight: 500; border-bottom: 1px dotted var(--primary); cursor: help; }
+
+/* ---- TABLES ---- */
+table { width: 100%; border-collapse: collapse; margin: 16px 0 20px; font-size: 0.88rem; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+th { background: #34495e; color: #fff; text-align: left; padding: 10px 14px; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
+td { padding: 10px 14px; border-bottom: 1px solid var(--border-light); vertical-align: top; background: var(--surface); }
+tr:nth-child(even) td { background: #f9f9fb; }
+tr:last-child td { border-bottom: none; }
+
+/* ---- CALLOUTS ---- */
+.callout { border-radius: var(--radius); padding: 16px 20px; margin: 18px 0; font-size: 0.88rem; line-height: 1.6; border-left: 4px solid; box-shadow: var(--shadow-sm); }
+.callout-label { font-weight: 700; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+.callout-tip    { background: var(--success-bg); border-color: var(--success); }
+.callout-tip    .callout-label { color: var(--success); }
+.callout-note   { background: #edf2f9; border-color: var(--primary); }
+.callout-note   .callout-label { color: var(--primary); }
+.callout-warn   { background: var(--warning-bg); border-color: var(--warning); }
+.callout-warn   .callout-label { color: var(--warning); }
+.callout-danger { background: var(--danger-bg); border-color: var(--danger); }
+.callout-danger .callout-label { color: var(--danger); }
+.callout-safety { background: #e8f4f8; border-color: #2196F3; }
+.callout-safety .callout-label { color: #1976D2; }
+
+/* ---- CARDS ---- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px; margin: 16px 0; box-shadow: var(--shadow-sm); }
+.card-title { font-size: 0.95rem; font-weight: 700; color: var(--header-bg); margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border-light); }
+.card-meta { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); margin: 10px 0 4px; }
+.card-outcome { display: inline-block; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+.card-outcome.revoke { background: var(--danger-bg); color: var(--danger); }
+.card-outcome.approve { background: var(--success-bg); color: var(--success); }
+.card-outcome.reassign { background: #edf2f9; color: var(--primary); }
+.card-outcome.mixed { background: var(--warning-bg); color: var(--warning); }
+
+/* ---- STAT BADGES ---- */
+.stats-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 20px 0; }
+.stat { flex: 1; min-width: 170px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; text-align: center; box-shadow: var(--shadow-sm); }
+.stat-num { font-size: 2rem; font-weight: 800; color: var(--danger); line-height: 1; }
+.stat-label { font-size: 0.72rem; color: var(--text-muted); margin-top: 6px; line-height: 1.35; }
+
+/* ---- FLOW STEPS ---- */
+.flow { display: flex; gap: 0; flex-wrap: wrap; margin: 20px 0; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-md); }
+.flow-step { flex: 1; min-width: 110px; padding: 14px 10px; text-align: center; font-size: 0.8rem; font-weight: 600; color: #fff; background: var(--primary); }
+.flow-step + .flow-step { border-left: 2px solid rgba(255,255,255,0.2); }
+.flow-step .fn { display: block; font-size: 1.15rem; font-weight: 800; color: rgba(255,255,255,0.4); margin-bottom: 2px; }
+.flow-step.decision { background: var(--warning); }
+.flow-step.done { background: var(--success); }
+
+/* ---- COMPARE CARDS ---- */
+.compare { display: flex; gap: 16px; margin: 18px 0; }
+.compare-card { flex: 1; border-radius: var(--radius); padding: 18px 20px; border: 1px solid; box-shadow: var(--shadow-sm); }
+.compare-card.good { background: var(--success-bg); border-color: #a3d9a5; }
+.compare-card.bad  { background: var(--danger-bg);  border-color: #e6a5a5; }
+.compare-card.info { background: #edf2f9; border-color: #a5c8e6; }
+.compare-card h4 { margin: 0 0 6px; }
+.compare-card.good h4 { color: #1a7a1a; }
+.compare-card.bad  h4 { color: #a12c2c; }
+.compare-card.info h4 { color: var(--primary-dark); }
+.compare-card p { margin: 0; font-size: 0.88rem; }
+
+/* ---- DECISION FLOWCHART ---- */
+.flowchart { margin: 24px 0; }
+.fc-node { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin: 8px 0; font-size: 0.88rem; position: relative; }
+.fc-question { border-color: var(--primary); border-left: 5px solid var(--primary); font-weight: 600; }
+.fc-answer { margin-left: 32px; display: flex; gap: 12px; align-items: flex-start; }
+.fc-arrow { font-weight: 700; font-size: 0.82rem; min-width: 36px; padding-top: 12px; }
+.fc-arrow.yes { color: var(--success); }
+.fc-arrow.no  { color: var(--danger); }
+.fc-action { border-radius: var(--radius); padding: 10px 14px; font-size: 0.85rem; flex: 1; }
+.fc-action.approve { background: var(--success-bg); border: 1px solid #a3d9a5; color: #1a5c1a; }
+.fc-action.revoke  { background: var(--danger-bg);  border: 1px solid #e6a5a5; color: #5c1a1a; }
+.fc-action.reassign { background: #edf2f9; border: 1px solid #a5c8e6; color: var(--primary-dark); }
+.fc-action.next { background: #f7f8fa; border: 1px solid var(--border); color: var(--text-muted); }
+
+/* ---- SCREENSHOT PLACEHOLDER (kept for any unfilled spots) ---- */
+.screenshot-placeholder {
+    background: #f0f2f5;
+    border: 2px dashed #b0bec5;
+    border-radius: var(--radius);
+    padding: 28px 24px;
+    margin: 18px 0;
+    text-align: center;
+    color: #78909c;
+    font-size: 0.82rem;
+}
+.screenshot-placeholder .sp-label {
+    font-weight: 700;
+
+/* ---- INLINE MOCKUPS ---- */
+.mockup { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin: 18px 0; box-shadow: var(--shadow-md); font-size: 0.82rem; }
+.mockup-label { font-size: 0.7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.mk-nav { background: #1a2332; color: #fff; padding: 8px 14px; font-size: 0.75rem; display: flex; align-items: center; gap: 10px; }
+.mk-nav .mk-logo { font-weight: 700; color: #5B9BD5; }
+.mk-nav .mk-user { margin-left: auto; background: #2d6da3; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 700; }
+.mk-tabs { display: flex; gap: 0; border-bottom: 2px solid #e0e4ea; background: #f7f8fa; }
+.mk-tab { padding: 8px 16px; font-size: 0.75rem; font-weight: 500; color: var(--text-muted); border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: default; }
+.mk-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; background: #fff; }
+.mk-tab .mk-badge { background: var(--primary); color: #fff; font-size: 0.6rem; padding: 1px 6px; border-radius: 8px; margin-left: 4px; }
+.mk-content { background: #fff; padding: 16px; }
+.mk-card { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; margin-bottom: 10px; }
+.mk-card-title { font-weight: 700; color: var(--text); font-size: 0.85rem; margin-bottom: 4px; }
+.mk-card-meta { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px; }
+.mk-pills { display: flex; gap: 6px; margin-bottom: 8px; }
+.mk-pill { background: #f0f2f5; color: var(--text-muted); padding: 2px 8px; border-radius: 10px; font-size: 0.65rem; }
+.mk-progress { height: 4px; background: #e0e4ea; border-radius: 2px; overflow: hidden; margin-bottom: 4px; }
+.mk-progress-fill { height: 100%; background: var(--primary); border-radius: 2px; }
+.mk-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.72rem; }
+.mk-due { color: var(--text-muted); }
+.mk-due.urgent { color: var(--danger); font-weight: 600; }
+.mk-btn { padding: 4px 14px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: default; display: inline-block; }
+.mk-btn-primary { background: #0066cc; color: #fff; }
+.mk-btn-outline { border: 1px solid #0066cc; color: #0066cc; background: transparent; }
+.mk-btn-approve { background: var(--success); color: #fff; }
+.mk-btn-revoke { background: var(--danger); color: #fff; }
+.mk-btn-reassign { background: #607d8b; color: #fff; }
+.mk-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.mk-table th { background: #f7f8fa; padding: 6px 10px; text-align: left; font-weight: 600; font-size: 0.68rem; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.mk-table td { padding: 8px 10px; border-bottom: 1px solid var(--border-light); }
+.mk-table tr:hover td { background: #f9f9fb; }
+.mk-flag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; margin-right: 3px; }
+.mk-flag-priv { background: #fdf0ef; color: var(--danger); border: 1px solid #e6a5a5; }
+.mk-flag-new { background: #edf2f9; color: var(--primary); border: 1px solid #a5c8e6; }
+.mk-actions { display: flex; gap: 4px; }
+.mk-ann { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; background: var(--danger); color: #fff; border-radius: 50%; font-size: 0.55rem; font-weight: 700; flex-shrink: 0; }
+.mk-legend { font-size: 0.75rem; color: var(--text-muted); padding: 10px 16px; background: #f7f8fa; border-top: 1px solid var(--border-light); }
+.mk-legend-item { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 4px; }
+.mk-signoff-stats { display: flex; gap: 16px; margin-bottom: 14px; }
+.mk-signoff-stat { text-align: center; flex: 1; }
+.mk-signoff-num { font-size: 1.4rem; font-weight: 800; }
+.mk-signoff-label { font-size: 0.68rem; color: var(--text-muted); }
+.mk-decision-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.65rem; font-weight: 700; }
+.mk-decision-approved { background: var(--success-bg); color: var(--success); }
+.mk-decision-revoked { background: var(--danger-bg); color: var(--danger); }
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #546e7a;
+    margin-bottom: 6px;
+}
+.screenshot-placeholder .sp-desc { line-height: 1.5; }
+
+/* ---- QUICK-START STEPS ---- */
+.qs-steps { counter-reset: qs; list-style: none; padding: 0; margin: 20px 0; }
+.qs-step {
+    counter-increment: qs;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+}
+.qs-step::before {
+    content: counter(qs);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 36px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 800;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.qs-step-content { flex: 1; }
+.qs-step-content strong { display: block; margin-bottom: 2px; }
+
+/* ---- TONE TABLE ---- */
+.tone-table td:first-child { color: var(--danger); font-weight: 500; text-decoration: line-through; text-decoration-color: rgba(204,51,51,0.3); }
+.tone-table td:last-child { color: var(--success); font-weight: 500; }
+
+/* ---- BLOCKQUOTE ---- */
+blockquote { background: #f7f8fa; border-left: 3px solid #b0bec5; margin: 16px 0; padding: 14px 20px; font-style: italic; color: var(--text-muted); border-radius: 0 var(--radius) var(--radius) 0; }
+
+/* ---- CODE ---- */
+code { background: #f0f2f5; color: #5d4037; padding: 2px 6px; border-radius: 3px; font-family: 'Consolas','Courier New',monospace; font-size: 0.87rem; }
+
+/* ---- CHECKLIST ---- */
+.checklist { list-style: none; padding-left: 0; }
+.checklist li {
+    position: relative; padding: 12px 12px 12px 38px; margin-bottom: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+}
+.checklist li::before { content: ''; position: absolute; left: 12px; top: 14px; width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 3px; background: #fff; }
+
+/* ---- FAQ ---- */
+.faq { margin: 12px 0; }
+.faq-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.faq-q {
+    padding: 14px 44px 14px 18px; font-weight: 600; color: var(--header-bg);
+    cursor: pointer; position: relative; transition: background 0.15s;
+    border: none; background: transparent; width: 100%; text-align: left;
+    font-family: inherit; font-size: 0.92rem; line-height: 1.5;
+}
+.faq-q:hover { background: #f9f9fb; }
+.faq-q::after { content: '+'; position: absolute; right: 18px; top: 50%; transform: translateY(-50%); font-size: 1.2rem; color: var(--accent); font-weight: 300; }
+.faq-item.open .faq-q::after { content: '-'; }
+.faq-a { max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; padding: 0 18px; color: var(--text-muted); font-size: 0.9rem; line-height: 1.65; }
+.faq-item.open .faq-a { max-height: 600px; padding: 0 18px 16px; }
+
+/* ---- GLOSSARY ---- */
+.glossary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
+.gloss-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-sm); }
+.gloss-term { font-weight: 700; color: var(--primary); font-size: 0.88rem; margin-bottom: 4px; }
+.gloss-def { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; }
+
+/* ---- WELCOME HERO ---- */
+.welcome-hero { background: linear-gradient(135deg, var(--header-bg) 0%, #263545 100%); color: #fff; border-radius: var(--radius); padding: 36px 32px; margin-bottom: 28px; border-bottom: 3px solid var(--accent); }
+.welcome-hero h2 { color: var(--accent); border-bottom: none; margin-bottom: 12px; padding-bottom: 0; font-size: 1.5rem; }
+.welcome-hero p { color: rgba(255,255,255,0.75); font-size: 0.95rem; max-width: 640px; }
+.welcome-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 20px; }
+.welcome-card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius); padding: 16px 18px; cursor: pointer; transition: all 0.2s; }
+.welcome-card:hover { background: rgba(91,155,213,0.12); border-color: rgba(91,155,213,0.3); transform: translateY(-1px); }
+.welcome-card .wc-num { font-size: 0.62rem; color: var(--accent); font-weight: 700; letter-spacing: 0.5px; }
+.welcome-card .wc-title { font-size: 0.92rem; font-weight: 600; color: #fff; margin: 3px 0 5px; }
+.welcome-card .wc-desc { font-size: 0.73rem; color: rgba(255,255,255,0.5); line-height: 1.4; }
+
+/* ---- SUPPORT BOX ---- */
+.support-box { background: #e8f4f8; border: 1px solid #b3dce8; border-radius: var(--radius); padding: 18px 22px; margin: 20px 0; font-size: 0.88rem; }
+.support-box .sb-title { font-weight: 700; color: #1565C0; margin-bottom: 6px; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.3px; }
+
+/* ---- FOOTER ---- */
+.app-footer { text-align: center; padding: 20px; font-size: 0.72rem; color: #999; border-top: 1px solid var(--border); margin-top: 40px; }
+
+/* ---- RESPONSIVE ---- */
+@media (max-width: 768px) {
+    .app-header { padding: 18px 18px 14px; }
+    .tab-bar { padding: 0 8px; }
+    .tab-btn { padding: 10px 8px; font-size: 0.7rem; }
+    .content-wrap { padding: 20px 16px 40px; }
+    .compare, .stats-row { flex-direction: column; }
+    .glossary-grid { grid-template-columns: 1fr; }
+}
+@media print {
+    .tab-bar { display: none; }
+    .tab-panel { display: block !important; page-break-inside: avoid; }
+    .app-header { position: static; }
+}
+</style>
+</head>
+<body>
+
+<!-- ════════ HEADER ════════ -->
+<header class="app-header">
+    <div class="header-inner">
+        <div>
+            <div class="header-title">Manager's Guide to Access Certification Reviews</div>
+            <div class="header-sub">How to review your team's access in SailPoint -- step by step</div>
+        </div>
+        <div class="header-meta">
+            <span><strong>Audience:</strong> All Managers</span>
+            <span><strong>Classification:</strong> Internal</span>
+            <span><strong>Version:</strong> 2.0</span>
+        </div>
+    </div>
+</header>
+
+<!-- ════════ TAB BAR ════════ -->
+<nav class="tab-bar" id="tabBar">
+    <button class="tab-btn active" data-tab="welcome"><span class="tab-num">H</span>Home</button>
+    <button class="tab-btn" data-tab="quickstart"><span class="tab-num">!</span>Quick Start</button>
+    <button class="tab-btn" data-tab="interface"><span class="tab-num">1</span>The Interface</button>
+    <button class="tab-btn" data-tab="decisions"><span class="tab-num">2</span>Decisions</button>
+    <button class="tab-btn" data-tab="signoff"><span class="tab-num">3</span>Sign-Off</button>
+    <button class="tab-btn" data-tab="scenarios"><span class="tab-num">4</span>Scenarios</button>
+    <button class="tab-btn" data-tab="why-daily"><span class="tab-num">5</span>Why Daily</button>
+    <button class="tab-btn" data-tab="mgr-shift"><span class="tab-num">6</span>Why Managers</button>
+    <button class="tab-btn" data-tab="communicate"><span class="tab-num">7</span>Your Team</button>
+    <button class="tab-btn" data-tab="quality"><span class="tab-num">8</span>Review Quality</button>
+    <button class="tab-btn" data-tab="faq"><span class="tab-num">9</span>FAQ</button>
+    <button class="tab-btn" data-tab="glossary"><span class="tab-num">10</span>Glossary</button>
+</nav>
+
+<!-- ════════ CONTENT ════════ -->
+<div class="content-wrap">
+
+<!-- ════════ HOME ════════ -->
+<div class="tab-panel active" id="panel-welcome">
+    <div class="welcome-hero">
+        <h2>Welcome</h2>
+        <p>If this is your first time receiving an access review email, you are not alone.
+        Many managers outside of IT find this process unfamiliar. This guide will walk you
+        through exactly what to do -- step by step, in plain language.</p>
+        <p style="margin-top:10px; color:rgba(255,255,255,0.6); font-size:0.85rem;">
+        Most reviews take <strong style="color:#fff;">5-10 minutes</strong>. You cannot break anything
+        while reviewing. If you make a mistake, you can change your mind before you finalize.</p>
+        <div class="welcome-cards">
+            <div class="welcome-card" onclick="switchTab('quickstart')" style="border-color:rgba(91,155,213,0.4); background:rgba(91,155,213,0.12);">
+                <div class="wc-num">START HERE</div>
+                <div class="wc-title">Quick Start</div>
+                <div class="wc-desc">Complete your first review in 5 minutes. No jargon.</div>
+            </div>
+            <div class="welcome-card" onclick="switchTab('interface')">
+                <div class="wc-num">SECTIONS 1-3</div>
+                <div class="wc-title">How to Use the System</div>
+                <div class="wc-desc">Navigate the interface, make decisions, sign off</div>
+            </div>
+            <div class="welcome-card" onclick="switchTab('scenarios')">
+                <div class="wc-num">SECTION 4</div>
+                <div class="wc-title">Common Scenarios</div>
+                <div class="wc-desc">8 real-world situations and exactly what to do</div>
+            </div>
+            <div class="welcome-card" onclick="switchTab('why-daily')">
+                <div class="wc-num">SECTIONS 5-7</div>
+                <div class="wc-title">Why This Matters</div>
+                <div class="wc-desc">Background on daily reviews and your role</div>
+            </div>
+            <div class="welcome-card" onclick="switchTab('faq')">
+                <div class="wc-num">SECTIONS 9-10</div>
+                <div class="wc-title">FAQ + Glossary</div>
+                <div class="wc-desc">Common questions and term definitions</div>
+            </div>
+        </div>
+    </div>
+    <div class="support-box">
+        <div class="sb-title">Need help?</div>
+        If you are stuck or unsure about a decision, contact the IAM team:<br>
+        <strong>[IAM-TEAM-EMAIL]</strong> | <strong>[IAM-TEAM-PHONE / EXT]</strong> | Teams: <strong>[IAM-TEAM-CHANNEL]</strong><br>
+        <span style="font-size:0.82rem; color:var(--text-muted);">Average response time: [X hours]. If you accidentally approve or revoke something, they can help fix it.</span>
+    </div>
+    <div style="font-size:0.82rem; color:var(--text-muted); margin-top:12px;">
+        <strong>Related documents:</strong>
+        <a href="Manager-QuickRef-Card.html" style="color:var(--primary);">Quick-Reference Card</a> (1-page printable) |
+        <a href="Manager-Decision-Tree.html" style="color:var(--primary);">Decision Tree</a> (printable flowchart) |
+        <a href="assets/isc-mockups.html" style="color:var(--primary);">Full Screen Guide</a> (5 annotated ISC screens) |
+        <a href="Manager-Certification-Index.html" style="color:var(--primary);">All Documents</a>
+    </div>
+</div>
+
+<!-- ════════ QUICK START ════════ -->
+<div class="tab-panel" id="panel-quickstart">
+    <h2>Quick Start: Complete Your Review in 5 Minutes</h2>
+    <p class="section-intro">You got an email saying you have access to review. Here is
+    exactly what to do. You can read the rest of the guide later -- this gets you through
+    your first review right now.</p>
+
+    <div class="callout callout-safety">
+        <div class="callout-label">You cannot break anything</div>
+        While you are reviewing, nothing changes. Access is only affected after you click
+        <strong>Sign Off</strong> at the very end. Until then, you can change any decision.
+    </div>
+
+    <ol class="qs-steps">
+        <li class="qs-step">
+            <div class="qs-step-content">
+                <strong>Click the link in your email</strong>
+                You received an email from SailPoint with the subject line containing your campaign name. Click the
+                link to go directly to your review. If the link does not work, go to
+                <code>[YOUR-ORG.identitynow.com]</code> and log in with your corporate credentials.
+                You may need to complete multi-factor authentication.
+            </div>
+        </li>
+        <li class="qs-step">
+            <div class="qs-step-content">
+                <strong>You will see your team members who received new access</strong>
+                Each person is listed with the specific access (permissions, group memberships)
+                they were given. Click on a person to see the details.
+            </div>
+        </li>
+        <li class="qs-step">
+            <div class="qs-step-content">
+                <strong>For each item, click Approve or Revoke</strong>
+                <strong>Approve</strong> (checkmark icon) = "Yes, this person should have this access."<br>
+                <strong>Revoke</strong> (X icon) = "No, remove this access."<br>
+                If you do not recognize the system or access, click <strong>Reassign</strong> to send it to
+                someone who can evaluate it (see <a href="javascript:void(0)" onclick="switchTab('decisions')">Decisions</a> tab for details).
+            </div>
+        </li>
+        <li class="qs-step">
+            <div class="qs-step-content">
+                <strong>Add a brief comment for important decisions</strong>
+                A one-line note is enough: "Still working on Project X" or "Transferred teams, no longer needed."
+                Comments are especially helpful for elevated access (anything marked with a "privileged" flag).
+            </div>
+        </li>
+        <li class="qs-step">
+            <div class="qs-step-content">
+                <strong>Click Sign Off when you have decided on every item</strong>
+                Review your decisions on the summary page, then click <strong>Finish</strong>.
+                Your decisions are now final and recorded. You are done.
+            </div>
+        </li>
+    </ol>
+
+    <div class="mockup-label">What you will see (simplified view)</div>
+    <div class="mockup">
+        <div class="mk-nav"><span class="mk-logo">SailPoint</span> <span style="opacity:0.5;font-size:0.7rem;">Identity Security Cloud</span><div class="mk-user">JM</div></div>
+        <div class="mk-content">
+            <div style="font-weight:700; margin-bottom:8px;">Daily AD Delta Cert -- 2026-06-05</div>
+            <table class="mk-table">
+                <thead><tr><th>Team Member</th><th>Access Item</th><th>Flags</th><th style="text-align:right;">Decision <span class="mk-ann">3</span></th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Jane Smith</strong><br><span style="font-size:0.68rem;color:var(--text-muted);">Software Engineer</span></td><td>Domain Admins</td><td><span class="mk-flag mk-flag-priv">PRIVILEGED</span> <span class="mk-flag mk-flag-new">NEW</span></td><td style="text-align:right;"><div class="mk-actions" style="justify-content:flex-end;"><span class="mk-btn mk-btn-approve" style="font-size:0.65rem;">Approve</span> <span class="mk-btn mk-btn-revoke" style="font-size:0.65rem;">Revoke</span> <span class="mk-btn mk-btn-reassign" style="font-size:0.65rem;">Reassign</span></div></td></tr>
+                    <tr><td><strong>John Park</strong> <span class="mk-ann">2</span><br><span style="font-size:0.68rem;color:var(--text-muted);">Systems Admin</span></td><td>Server Operators</td><td><span class="mk-flag mk-flag-new">NEW</span></td><td style="text-align:right;"><div class="mk-actions" style="justify-content:flex-end;"><span class="mk-btn mk-btn-approve" style="font-size:0.65rem;">Approve</span> <span class="mk-btn mk-btn-revoke" style="font-size:0.65rem;">Revoke</span> <span class="mk-btn mk-btn-reassign" style="font-size:0.65rem;">Reassign</span></div></td></tr>
+                </tbody>
+            </table>
+            <div style="display:flex; justify-content:flex-end; margin-top:12px; gap:8px;">
+                <span class="mk-btn mk-btn-outline">Add Comment <span class="mk-ann">4</span></span>
+                <span class="mk-btn mk-btn-primary">Sign Off <span class="mk-ann">5</span></span>
+            </div>
+        </div>
+        <div class="mk-legend">
+            <div class="mk-legend-item"><span class="mk-ann">2</span> Your team members with access to review</div>
+            <div class="mk-legend-item"><span class="mk-ann">3</span> Click Approve, Revoke, or Reassign for each item</div>
+            <div class="mk-legend-item"><span class="mk-ann">4</span> Add a comment (recommended for privileged items)</div>
+            <div class="mk-legend-item"><span class="mk-ann">5</span> Click Sign Off when all decisions are made</div>
+        </div>
+    </div>
+
+    <div class="support-box">
+        <div class="sb-title">Stuck? Need help?</div>
+        Contact the IAM team: <strong>[IAM-TEAM-EMAIL]</strong> | <strong>[IAM-TEAM-PHONE]</strong><br>
+        <span style="font-size:0.82rem; color:var(--text-muted);">They can walk you through your first review or answer questions about specific items.</span>
+    </div>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Tip</div>
+        Bookmark the Quick Start tab for future reference. For a deeper understanding of
+        why you are doing this and how to have conversations with your team about access,
+        read the remaining sections at your own pace.
+    </div>
+</div>
+
+<!-- ════════ 1. THE INTERFACE ════════ -->
+<div class="tab-panel" id="panel-interface">
+    <h2>1. Navigating the SailPoint Interface</h2>
+    <p class="section-intro">A walkthrough of what you will see when you open your
+    certification campaign, and how the different views work.</p>
+
+    <h3>1.1 Getting to Your Campaign</h3>
+    <ol>
+        <li>Click the link in your notification email, or go to <code>[YOUR-ORG.identitynow.com]</code></li>
+        <li>Log in with your corporate credentials (you may need multi-factor authentication)</li>
+        <li>Click <strong>Certifications</strong> in the navigation menu</li>
+        <li>Select the <strong>Active</strong> tab -- this shows campaigns waiting for your review</li>
+    </ol>
+
+    <div class="mockup-label">The Certifications page</div>
+    <div class="mockup">
+        <div class="mk-nav"><span class="mk-logo">SailPoint</span><div class="mk-user">JM</div></div>
+        <div style="display:flex;">
+            <div style="width:140px; background:#1a2332; padding:10px 0; min-height:120px;">
+                <div style="padding:6px 14px; color:#8a9bac; font-size:0.72rem;">Dashboard</div>
+                <div style="padding:6px 14px; color:#8a9bac; font-size:0.72rem;">Access</div>
+                <div style="padding:6px 14px; color:#fff; font-size:0.72rem; background:rgba(91,155,213,0.15); border-left:3px solid #5B9BD5; font-weight:600;">Certifications <span class="mk-ann">1</span></div>
+                <div style="padding:6px 14px; color:#8a9bac; font-size:0.72rem;">Reports</div>
+            </div>
+            <div style="flex:1;">
+                <div class="mk-tabs">
+                    <div class="mk-tab active">Active <span class="mk-badge">2</span> <span class="mk-ann">2</span></div>
+                    <div class="mk-tab">Completed</div>
+                    <div class="mk-tab">All</div>
+                </div>
+                <div class="mk-content" style="font-size:0.75rem; color:var(--text-muted);">
+                    <em>Your active campaigns appear here as cards (see next mockup)</em>
+                </div>
+            </div>
+        </div>
+        <div class="mk-legend">
+            <div class="mk-legend-item"><span class="mk-ann">1</span> Click "Certifications" in the left sidebar menu</div>
+            <div class="mk-legend-item"><span class="mk-ann">2</span> Select the "Active" tab -- the badge shows how many campaigns need your attention</div>
+        </div>
+    </div>
+
+    <h3>1.2 Campaign Cards</h3>
+    <p>Each campaign appears as a card showing:</p>
+    <ul>
+        <li><strong>Campaign name</strong> -- e.g., "Daily AD Delta Cert -- 2026-06-05"</li>
+        <li><strong>Items to review</strong> -- how many people and access items need your decision</li>
+        <li><strong>Deadline</strong> -- when you need to finish (typically 24-72 hours for daily reviews)</li>
+        <li><strong>Progress</strong> -- how far along you are</li>
+    </ul>
+    <p>Click <strong>Details</strong> on a card to open it and start reviewing.</p>
+
+    <div class="mockup-label">A campaign card</div>
+    <div class="mockup">
+        <div class="mk-content">
+            <div class="mk-card">
+                <div class="mk-card-title">Daily AD Delta Cert -- 2026-06-05 <span class="mk-ann">1</span></div>
+                <div class="mk-card-meta">Certification campaign -- AD Delta</div>
+                <div class="mk-pills"><span class="mk-pill">3 Identities</span> <span class="mk-pill">5 Access Items <span class="mk-ann">2</span></span></div>
+                <div class="mk-progress"><div class="mk-progress-fill" style="width:0%;"></div></div>
+                <div class="mk-card-footer"><span class="mk-due urgent">Due: Jun 7, 2026 <span class="mk-ann">3</span></span> <span class="mk-btn mk-btn-primary">Review <span class="mk-ann">4</span></span></div>
+            </div>
+        </div>
+        <div class="mk-legend">
+            <div class="mk-legend-item"><span class="mk-ann">1</span> Campaign name -- matches the subject of your notification email</div>
+            <div class="mk-legend-item"><span class="mk-ann">2</span> How many people and access items need your decision</div>
+            <div class="mk-legend-item"><span class="mk-ann">3</span> Deadline -- complete your review before this date (red = urgent)</div>
+            <div class="mk-legend-item"><span class="mk-ann">4</span> Click "Review" to open the campaign and start making decisions</div>
+        </div>
+    </div>
+
+    <h3>1.3 Two Ways to Review: People vs. Access</h3>
+    <p>Inside a campaign, you can switch between two views. Use whichever feels more natural:</p>
+
+    <div class="compare">
+        <div class="compare-card info">
+            <h4>Identities View (recommended)</h4>
+            <p>See a list of <strong>your team members</strong>. Click a person to see everything they need reviewed.</p>
+            <p style="margin-top:8px; font-size:0.82rem; opacity:0.7;"><strong>Best when:</strong> "Let me handle everything about Jane, then move to John."</p>
+        </div>
+        <div class="compare-card info">
+            <h4>Access Items View</h4>
+            <p>See a list of <strong>permissions and access</strong>. Click one to see which team members have it.</p>
+            <p style="margin-top:8px; font-size:0.82rem; opacity:0.7;"><strong>Best when:</strong> "Do all 5 people really need this same admin access?"</p>
+        </div>
+    </div>
+
+    <h3>1.4 What You See for Each Item</h3>
+    <p>When you expand a person's access items, the system shows helpful context:</p>
+    <table>
+        <thead><tr><th>What You See</th><th>What It Means</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Privileged flag</strong></td><td>This access has elevated risk -- pay extra attention to it</td></tr>
+            <tr><td><strong>New access flag</strong></td><td>This was recently added (this is why it appeared in your campaign)</td></tr>
+            <tr><td><strong>Last activity</strong></td><td>When the person last used this access -- if it has been months, question whether they still need it</td></tr>
+            <tr><td><strong>Peer comparison</strong></td><td>Whether other people in the same role have this access (helps you judge if it is normal)</td></tr>
+            <tr><td><strong>How it was granted</strong></td><td><strong>Requested</strong> = you can approve or revoke. <strong>Auto-assigned</strong> = you can only acknowledge (see FAQ)</td></tr>
+        </tbody>
+    </table>
+
+    <div class="mockup-label">Review screen -- a person's access items expanded</div>
+    <div class="mockup">
+        <div class="mk-content">
+            <div style="font-weight:700; margin-bottom:2px;">Jane Smith</div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:12px;">Software Engineer | jane.smith@company.com</div>
+            <table class="mk-table">
+                <thead><tr><th>Access Item</th><th>Type</th><th>Flags <span class="mk-ann">1</span></th><th>Last Activity <span class="mk-ann">2</span></th><th style="text-align:right;">Decision <span class="mk-ann">3</span></th></tr></thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Domain Admins</strong><br><span style="font-size:0.65rem; color:var(--text-muted);">Active Directory</span></td>
+                        <td>Entitlement</td>
+                        <td><span class="mk-flag mk-flag-priv">PRIVILEGED</span> <span class="mk-flag mk-flag-new">NEW</span></td>
+                        <td><span style="color:var(--danger);">Never used</span></td>
+                        <td style="text-align:right;"><div class="mk-actions" style="justify-content:flex-end;"><span class="mk-btn mk-btn-approve" style="font-size:0.6rem;">Approve</span> <span class="mk-btn mk-btn-revoke" style="font-size:0.6rem;">Revoke</span></div></td>
+                    </tr>
+                    <tr>
+                        <td><strong>VPN_Users</strong><br><span style="font-size:0.65rem; color:var(--text-muted);">Active Directory</span></td>
+                        <td>Entitlement</td>
+                        <td><span class="mk-flag mk-flag-new">NEW</span></td>
+                        <td>2 days ago</td>
+                        <td style="text-align:right;"><div class="mk-actions" style="justify-content:flex-end;"><span class="mk-btn mk-btn-approve" style="font-size:0.6rem;">Approve</span> <span class="mk-btn mk-btn-revoke" style="font-size:0.6rem;">Revoke</span></div></td>
+                    </tr>
+                </tbody>
+            </table>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Peer comparison: 15% of Software Engineers have Domain Admins <span class="mk-ann">4</span></div>
+        </div>
+        <div class="mk-legend">
+            <div class="mk-legend-item"><span class="mk-ann">1</span> <strong>PRIVILEGED</strong> flag (red) = elevated risk, review carefully. <strong>NEW</strong> = recently added.</div>
+            <div class="mk-legend-item"><span class="mk-ann">2</span> Last Activity -- "Never used" or months-old dates suggest the access may not be needed</div>
+            <div class="mk-legend-item"><span class="mk-ann">3</span> Click Approve (keep access) or Revoke (remove access) for each item</div>
+            <div class="mk-legend-item"><span class="mk-ann">4</span> Peer comparison -- helps you judge if this access is normal for the role</div>
+        </div>
+    </div>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Tip</div>
+        If you see a "privileged" flag on access that has not been used in 60+ days,
+        that is a strong signal to either revoke it or have a quick conversation with
+        the team member about whether they still need it.
+    </div>
+</div>
+
+<!-- ════════ 2. DECISIONS ════════ -->
+<div class="tab-panel" id="panel-decisions">
+    <h2>2. Making Decisions: Approve, Revoke, Reassign</h2>
+    <p class="section-intro">Three actions you can take for each access item, plus a
+    visual decision guide and a checklist for elevated access.</p>
+
+    <h3>2.1 Approve</h3>
+    <p>Click the <strong>checkmark icon</strong> next to an access item.</p>
+    <p>This means: "Yes, this person should have this access for their current job."</p>
+    <p><strong>What happens:</strong> Nothing changes. The access stays in place. Your approval is
+    recorded in the audit trail.</p>
+
+    <div class="callout callout-note">
+        <div class="callout-label">Note</div>
+        Some items show <strong>Acknowledge</strong> instead of Approve. These are access items that
+        were automatically assigned based on the person's job title or department. You cannot
+        remove them through this review -- if the assignment seems wrong, contact the IAM team.
+    </div>
+
+    <h3>2.2 Revoke</h3>
+    <p>Click the <strong>X icon</strong> next to an access item.</p>
+    <p>This means: "No, remove this access."</p>
+
+    <p><strong>What happens after you sign off:</strong></p>
+    <ul>
+        <li><strong>Connected systems</strong> (like Active Directory): the access is removed automatically</li>
+        <li><strong>Other systems</strong> (apps without a direct connection): a task is created for the system owner to remove it manually</li>
+    </ul>
+
+    <p>You can set a <strong>future removal date</strong> for roles ("Remove this on June 15 when
+    the project ends"). This is optional and only available for roles, not individual permissions.</p>
+
+    <div class="callout callout-safety">
+        <div class="callout-label">Mistakes are fixable</div>
+        Before you sign off, you can click <strong>Revisit Decision</strong> to change any approval
+        to a revocation or vice versa. After sign-off, if you made an error, contact the IAM
+        team -- they can help restore access through the standard request process, which
+        typically takes <strong>[X hours/days]</strong>.
+    </div>
+
+    <h3>2.3 Reassign</h3>
+    <p>If you are <strong>not the right person</strong> to evaluate an item, send it to someone who is.</p>
+    <p><strong>Use reassign when:</strong></p>
+    <ul>
+        <li>You see a system you have never heard of -- send it to the person who manages that system</li>
+        <li>The team member recently transferred to you and their old manager knows better</li>
+        <li>You are going on leave and cannot finish by the deadline</li>
+    </ul>
+    <ol>
+        <li>Click <strong>Reassign</strong></li>
+        <li>Choose the new reviewer</li>
+        <li>Write a reason (include your name so they can follow up)</li>
+    </ol>
+    <p><strong>Rules:</strong> You cannot reassign to the person whose access is being reviewed
+    (the system prevents self-review). You cannot reassign after you have signed off.</p>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Tip</div>
+        Reassigning is not a sign of failure -- it is the responsible thing to do when
+        you do not have enough context to make a good decision. It is always better to
+        reassign than to guess.
+    </div>
+
+    <h3>2.4 Bulk Decisions</h3>
+    <p>You can select multiple items with checkboxes and click <strong>Bulk Decisions</strong> to
+    approve or revoke them at once. This is useful for routine, low-risk items that you
+    are confident about.</p>
+    <div class="callout callout-warn">
+        <div class="callout-label">Use carefully for elevated access</div>
+        Bulk-approving items flagged as "privileged" can appear as a lack of review.
+        For elevated access, take a moment to evaluate each item individually.
+    </div>
+
+    <h3>2.5 Adding Comments</h3>
+    <p>You can add a short note to any decision. Comments are <strong>required</strong> for some
+    types of revocations and <strong>recommended</strong> for elevated access. A single sentence
+    is enough:</p>
+    <ul>
+        <li>"Employee transferred to Marketing June 1 -- no longer needs this"</li>
+        <li>"Active DBA; still primary administrator for these servers"</li>
+        <li>"Temporary access for Q2 project; project completed May 28"</li>
+    </ul>
+
+    <!-- ---- DECISION FLOWCHART ---- -->
+    <h3>2.6 Decision Guide: Should I Approve or Revoke?</h3>
+    <p>Follow this flowchart when you are unsure about an item:</p>
+
+    <div class="flowchart">
+        <div class="fc-node fc-question">Is this person still on your team?</div>
+        <div class="fc-answer">
+            <div class="fc-arrow no">NO</div>
+            <div class="fc-action reassign"><strong>Reassign</strong> to their current manager with a note about the reporting change.</div>
+        </div>
+        <div class="fc-answer">
+            <div class="fc-arrow yes">YES</div>
+            <div class="fc-action next">Continue below.</div>
+        </div>
+
+        <div class="fc-node fc-question">Do you recognize this system or access item?</div>
+        <div class="fc-answer">
+            <div class="fc-arrow no">NO</div>
+            <div class="fc-action reassign"><strong>Reassign</strong> to the system owner or technical lead who manages it.</div>
+        </div>
+        <div class="fc-answer">
+            <div class="fc-arrow yes">YES</div>
+            <div class="fc-action next">Continue below.</div>
+        </div>
+
+        <div class="fc-node fc-question">Does this person use this access for their current job?</div>
+        <div class="fc-answer">
+            <div class="fc-arrow no">NO</div>
+            <div class="fc-action revoke"><strong>Revoke.</strong> Add a comment: "No longer needed for current role."</div>
+        </div>
+        <div class="fc-answer">
+            <div class="fc-arrow yes">YES</div>
+            <div class="fc-action next">Continue below.</div>
+        </div>
+
+        <div class="fc-node fc-question">Is there a lower-level access that would work instead?</div>
+        <div class="fc-answer">
+            <div class="fc-arrow yes">YES</div>
+            <div class="fc-action revoke"><strong>Revoke</strong> this item. Work with IAM to request the lower-level alternative.</div>
+        </div>
+        <div class="fc-answer">
+            <div class="fc-arrow no">NO</div>
+            <div class="fc-action approve"><strong>Approve.</strong> Add a brief comment explaining why: "Active project lead, needs prod DB access through Q3."</div>
+        </div>
+    </div>
+
+    <!-- ---- EMBEDDED CHECKLIST ---- -->
+    <h3>2.7 Checklist for Elevated Access</h3>
+    <p>For items flagged as "privileged," run through this quick checklist:</p>
+
+    <ul class="checklist">
+        <li><strong>Current role match:</strong> Does this access fit their current job (not a previous role)?</li>
+        <li><strong>Active use:</strong> Have they used it recently, or has it been sitting idle?</li>
+        <li><strong>Minimum needed:</strong> Is this the least amount of access that works, or is there a narrower option?</li>
+        <li><strong>Time-bound?</strong> Should this expire on a specific date, or is it ongoing?</li>
+        <li><strong>Conflict check:</strong> Does approving this create a conflict with other access they have?</li>
+        <li><strong>Peer comparison:</strong> Do others in the same role have this, or is this person an outlier?</li>
+    </ul>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Tip</div>
+        You do not need every checkbox for every item. For routine access, a quick
+        role-match check is enough. The full checklist is for elevated or unfamiliar items.
+    </div>
+</div>
+
+<!-- ════════ 3. SIGN-OFF ════════ -->
+<div class="tab-panel" id="panel-signoff">
+    <h2>3. Signing Off and Completing Your Review</h2>
+    <p class="section-intro">What happens when you finish, and what happens if you miss the deadline.</p>
+
+    <div class="flow">
+        <div class="flow-step"><span class="fn">1</span>Review Items</div>
+        <div class="flow-step"><span class="fn">2</span>Make Decisions</div>
+        <div class="flow-step decision"><span class="fn">3</span>Summary Page</div>
+        <div class="flow-step"><span class="fn">4</span>Click Finish</div>
+        <div class="flow-step done"><span class="fn">5</span>Done</div>
+    </div>
+
+    <p><strong>After you click Finish:</strong></p>
+    <ul>
+        <li>Your review moves to the <strong>Completed</strong> tab -- you are done</li>
+        <li>Your decisions become <strong>permanent</strong> -- you cannot change them after this point</li>
+        <li>Approved items: nothing changes, access stays in place</li>
+        <li>Revoked items: the system begins removing the access (automatic or manual depending on the system)</li>
+        <li>Your decisions, timestamps, and comments are permanently recorded</li>
+    </ul>
+
+    <div class="mockup-label">Sign-off summary page</div>
+    <div class="mockup">
+        <div class="mk-content">
+            <div style="font-weight:700; font-size:0.95rem; margin-bottom:14px;">Review Summary</div>
+            <div class="mk-signoff-stats">
+                <div class="mk-signoff-stat"><div class="mk-signoff-num" style="color:var(--text);">5</div><div class="mk-signoff-label">Items Reviewed</div></div>
+                <div class="mk-signoff-stat"><div class="mk-signoff-num" style="color:var(--success);">3</div><div class="mk-signoff-label">Approved</div></div>
+                <div class="mk-signoff-stat"><div class="mk-signoff-num" style="color:var(--danger);">2</div><div class="mk-signoff-label">Revoked</div></div>
+            </div>
+            <table class="mk-table">
+                <thead><tr><th>Person</th><th>Access Item</th><th>Decision</th><th>Comment</th></tr></thead>
+                <tbody>
+                    <tr><td>Jane Smith</td><td>Domain Admins</td><td><span class="mk-decision-badge mk-decision-revoked">REVOKED</span></td><td style="font-size:0.72rem; color:var(--text-muted);">Transferred teams; no longer needed</td></tr>
+                    <tr><td>Jane Smith</td><td>VPN_Users</td><td><span class="mk-decision-badge mk-decision-approved">APPROVED</span></td><td>--</td></tr>
+                    <tr><td>John Park</td><td>Server Operators</td><td><span class="mk-decision-badge mk-decision-revoked">REVOKED</span></td><td style="font-size:0.72rem; color:var(--text-muted);">No longer needed for current role</td></tr>
+                    <tr><td>John Park</td><td>Exchange_Users</td><td><span class="mk-decision-badge mk-decision-approved">APPROVED</span></td><td>--</td></tr>
+                    <tr><td>Alex Chen</td><td>Dev_Tools</td><td><span class="mk-decision-badge mk-decision-approved">APPROVED</span></td><td style="font-size:0.72rem; color:var(--text-muted);">Active developer</td></tr>
+                </tbody>
+            </table>
+            <div style="margin-top:14px; padding:10px 14px; background:var(--warning-bg); border-radius:6px; font-size:0.78rem; color:#5c3600;">
+                Your decisions will be final after signing off. Please review carefully.
+            </div>
+            <div style="text-align:right; margin-top:12px;">
+                <span class="mk-btn mk-btn-primary" style="padding:8px 24px; font-size:0.82rem;">Sign Off and Finish</span>
+            </div>
+        </div>
+    </div>
+
+    <h3>What If You Miss the Deadline?</h3>
+    <ul>
+        <li>An administrator will handle your undecided items (typically by keeping access in place)</li>
+        <li>Incomplete reviews are visible to administrators and compliance teams</li>
+        <li>Complete your reviews before the deadline -- daily reviews typically have a 24-72 hour window</li>
+    </ul>
+
+    <div class="callout callout-warn">
+        <div class="callout-label">Best practice</div>
+        Try to complete your review the same day you receive the notification. Most reviews
+        take 5-10 minutes. Think of it as a quick daily check, like reviewing timesheets.
+    </div>
+</div>
+
+<!-- ════════ 4. SCENARIOS ════════ -->
+<div class="tab-panel" id="panel-scenarios">
+    <h2>4. Common Scenarios</h2>
+    <p class="section-intro">Eight real-world situations you might encounter and exactly how to handle them.</p>
+
+    <div class="card">
+        <div class="card-title">New hire with too much access <span class="card-outcome mixed">Mixed</span></div>
+        <p>Your new team member Alex shows up with 8 permissions including server administration access.
+        Alex is a junior developer -- the onboarding template was too broad.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li>Click on Alex to see all access items</li>
+            <li><strong>Revoke</strong> the admin access that does not match the junior developer role</li>
+            <li><strong>Approve</strong> the development tools that Alex actually needs</li>
+            <li>Comment: "New hire; right-sizing to junior developer role"</li>
+        </ol>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Team member transferred in with old access <span class="card-outcome mixed">Mixed</span></div>
+        <p>Jamie transferred from Infrastructure to your team 3 months ago. A new developer tool
+        triggers this campaign, but you notice Jamie still has 4 infrastructure permissions.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li><strong>Approve</strong> the new developer tool (matches current role)</li>
+            <li><strong>Revoke</strong> the 4 infrastructure permissions (leftover from old role)</li>
+            <li>Comment on each: "Role transfer from Infrastructure; no longer needed"</li>
+        </ol>
+    </div>
+
+    <div class="card">
+        <div class="card-title">"I only use it during emergencies" <span class="card-outcome revoke">Revoke</span></div>
+        <p>Chris, a senior engineer, has administrator access. "I only use it during outages -- maybe once a quarter."</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li><strong>Revoke</strong> the standing admin access</li>
+            <li>Work with the IAM team to set up an emergency access process for Chris</li>
+            <li>Tell Chris: "We're replacing your standing access with an on-demand process. You'll get it when you need it."</li>
+        </ol>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Access that is clearly appropriate <span class="card-outcome approve">Approve</span></div>
+        <p>Database admin Pat has DB Admin access on three production servers that Pat manages daily.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li>Confirm Pat is still the active DBA for these servers (yes)</li>
+            <li><strong>Approve</strong> all three with a comment: "Active DBA; primary admin per current assignment"</li>
+        </ol>
+        <p style="margin-top:8px; font-style:italic; color:var(--text-muted);">Not every review ends in a revocation. Approving is the right answer when the access matches the job.</p>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Access you do not recognize <span class="card-outcome reassign">Reassign</span></div>
+        <p>You see "SCCM_PatchAdmin_Tier2" in your review. You have never heard of this system.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li><strong>Reassign</strong> to the person who manages that system</li>
+            <li>Note: "Reassigning -- I don't manage this system. Contact me at [your email] with questions."</li>
+        </ol>
+        <p style="margin-top:8px; font-style:italic; color:var(--text-muted);">Reassigning is always better than guessing.</p>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Your team only uses CRM, but you see a bunch of other stuff <span class="card-outcome mixed">Mixed</span></div>
+        <p>You manage a customer service team. You know they use the CRM and phone system. Your
+        campaign shows 5 items -- you recognize 2 of them, the other 3 are system names you
+        have never seen.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li><strong>Approve</strong> the 2 items you recognize (CRM access, phone system)</li>
+            <li>For the 3 items you do not recognize: either <strong>Reassign</strong> to a technical lead,
+                or ask the team member "Do you use [system name]?" -- a quick Teams message
+                or email is enough</li>
+            <li>If they say "no" or "I don't know what that is" -- <strong>Revoke</strong> with a comment</li>
+        </ol>
+        <p style="margin-top:8px; font-style:italic; color:var(--text-muted);">You do not need to know every system. Approve what you are confident about, and get help with the rest.</p>
+    </div>
+
+    <div class="card">
+        <div class="card-title">You are a new manager and inherited a team <span class="card-outcome reassign">Reassign / Approve</span></div>
+        <p>You were recently promoted or transferred. You get your first campaign with items for
+        15 people across systems you barely know. You do not yet know what your team does day-to-day.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li>Do not panic -- this is a normal situation for new managers</li>
+            <li>For access you understand: make your best decision</li>
+            <li>For everything else: <strong>Reassign</strong> to the team lead or the person's previous manager</li>
+            <li>Contact the IAM team (<strong>[IAM-TEAM-EMAIL]</strong>) and let them know you are new to the role.
+                They can help you understand what your team's typical access profile looks like.</li>
+        </ol>
+    </div>
+
+    <div class="card">
+        <div class="card-title">You accidentally revoked something your team member needs <span class="card-outcome mixed">Recovery</span></div>
+        <p>You revoked a permission, signed off, and now your team member cannot access a system
+        they need for their job today.</p>
+        <div class="card-meta">What to do:</div>
+        <ol>
+            <li>If you have not signed off yet: click <strong>Revisit Decision</strong> and change the revocation to an approval</li>
+            <li>If you already signed off: contact the IAM team immediately at <strong>[IAM-TEAM-EMAIL]</strong></li>
+            <li>The team member can submit a new access request, which typically takes <strong>[X hours/days]</strong> to process</li>
+            <li>For urgent needs, the IAM team may be able to expedite the request</li>
+        </ol>
+        <p style="margin-top:8px; font-style:italic; color:var(--text-muted);">Mistakes happen. The important thing is to address them quickly. This is not a career-ending event.</p>
+    </div>
+</div>
+
+<!-- ════════ 5. WHY DAILY ════════ -->
+<div class="tab-panel" id="panel-why-daily">
+    <h2>5. Why We Review Access Daily</h2>
+    <p class="section-intro">Understanding why daily reviews exist helps you appreciate
+    the value of what you are doing. This section is optional background reading.</p>
+
+    <p>Traditional access reviews happen quarterly or annually. A user gets elevated access
+    on January 3; the next review is April 1 -- for <strong>88 days</strong>, that access sits
+    unexamined. If the account is compromised, the impact could affect the entire organization.</p>
+
+    <p><strong>Daily delta reviews</strong> (we review only <em>new or changed</em> access each day) flip
+    this model:</p>
+
+    <table>
+        <thead><tr><th>Approach</th><th>How Much to Review</th><th>Reviewer Fatigue</th><th>Time Until Review</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Quarterly full</strong></td><td>Hundreds of items</td><td>High -- leads to rubber-stamping</td><td>Up to 90 days</td></tr>
+            <tr><td><strong>Daily delta</strong></td><td>1-5 items (typical)</td><td>Low -- focused, quick decisions</td><td>Less than 24 hours</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Key point</div>
+        Daily reviews are <em>smaller</em>, not more work. You review fewer items more frequently,
+        which leads to better decisions and stronger compliance evidence.
+    </div>
+
+    <h3>What Triggers a Campaign for You</h3>
+    <p>You receive a campaign only when someone on your team gets <strong>new elevated access</strong> -- for
+    example, being added to an Active Directory group that grants administrative permissions.
+    The system detects the change, groups affected team members by manager, and creates your review.</p>
+    <p>If nothing changed for your team, you get no campaign. No changes = no action needed.</p>
+
+    <div class="flow">
+        <div class="flow-step"><span class="fn">1</span>Access Granted</div>
+        <div class="flow-step"><span class="fn">2</span>Change Detected</div>
+        <div class="flow-step"><span class="fn">3</span>Grouped by Manager</div>
+        <div class="flow-step decision"><span class="fn">4</span>Campaign Created</div>
+        <div class="flow-step"><span class="fn">5</span>You Review</div>
+        <div class="flow-step done"><span class="fn">6</span>Decision Recorded</div>
+    </div>
+
+    <h3>Why Elevated Access Gets Extra Attention</h3>
+    <p>Standard access (email, your CRM, HR self-service) poses relatively low risk.
+    Elevated access -- permissions that let someone administer servers, manage all user
+    accounts, or access sensitive data across the organization -- is different:</p>
+
+    <table>
+        <thead><tr><th>Risk Factor</th><th>Standard Access</th><th>Elevated Access</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Impact if compromised</strong></td><td>One person's data</td><td>Entire organization, all servers, all users</td></tr>
+            <tr><td><strong>Target for attackers</strong></td><td>Low priority</td><td>First thing attackers look for</td></tr>
+            <tr><td><strong>Compliance requirements</strong></td><td>Periodic review</td><td>Frequent review with documentation (SOX, SOC 2, etc.)</td></tr>
+            <tr><td><strong>Recovery if breached</strong></td><td>Hours</td><td>Days to weeks</td></tr>
+        </tbody>
+    </table>
+
+    <div class="stats-row">
+        <div class="stat"><div class="stat-num">74%</div><div class="stat-label">of data breaches involve misuse<br>of privileged credentials<br><span style="font-size:0.6rem;">(Verizon DBIR, multi-year trend)</span></div></div>
+        <div class="stat"><div class="stat-num">5-10</div><div class="stat-label">minutes is all most daily<br>reviews take to complete</div></div>
+        <div class="stat"><div class="stat-num">&lt;24h</div><div class="stat-label">from access change to<br>manager review and decision</div></div>
+    </div>
+</div>
+
+<!-- ════════ 6. WHY MANAGERS ════════ -->
+<div class="tab-panel" id="panel-mgr-shift">
+    <h2>6. Why Managers Review (Not Application Owners)</h2>
+    <p class="section-intro">Understanding why <em>you</em> are being asked to review, rather
+    than the IT team or the system administrator.</p>
+
+    <p>Some organizations have the system administrator review who has access to their system.
+    The problem: the administrator knows the <em>system</em> but not the <em>people</em>. They cannot
+    answer the most important question:</p>
+
+    <blockquote>"Does this person still need this access for their current role?"</blockquote>
+
+    <div class="compare">
+        <div class="compare-card bad">
+            <h4>System Admin Review</h4>
+            <p>"Is this account set up correctly?"</p>
+            <p style="margin-top:6px; font-size:0.82rem; opacity:0.75;">Cannot tell whether the person still needs the access for their job.</p>
+        </div>
+        <div class="compare-card good">
+            <h4>Manager Review</h4>
+            <p>"Should this person have this access?"</p>
+            <p style="margin-top:6px; font-size:0.82rem; opacity:0.75;">You know your team, their projects, and whether access matches current work.</p>
+        </div>
+    </div>
+
+    <p>Only you can answer:</p>
+    <ul>
+        <li>What is this team member working on right now?</li>
+        <li>Did they recently change roles or projects?</li>
+        <li>Was this access a temporary need that has expired?</li>
+        <li>Could they do their job with a lower level of access?</li>
+    </ul>
+
+    <div class="callout callout-note">
+        <div class="callout-label">How it works</div>
+        The system automatically sends each manager a review containing only their direct
+        reports. You never see someone else's team. If a team member has no manager
+        assigned in the HR system, the review goes to an administrator instead.
+    </div>
+</div>
+
+<!-- ════════ 7. COMMUNICATION ════════ -->
+<div class="tab-panel" id="panel-communicate">
+    <h2>7. Talking to Your Team about Access</h2>
+    <p class="section-intro">How to have productive conversations with your team members about
+    their access rights -- especially when you need to revoke something.</p>
+
+    <h3>7.1 Four Questions to Ask</h3>
+    <p>When you are reviewing access for a team member -- or when they ask for new access -- these
+    four questions will guide your decision:</p>
+
+    <div class="card">
+        <div class="card-title">The Four Questions</div>
+        <ol>
+            <li><strong>"What specifically do you need to accomplish?"</strong><br>
+                <span style="color:var(--text-muted); font-size:0.88rem;">Understand the task. Often the real need is narrower than the access requested.</span></li>
+            <li><strong>"Is there a way to do this with less access?"</strong><br>
+                <span style="color:var(--text-muted); font-size:0.88rem;">Read-only instead of read-write? Delegated role instead of full admin?</span></li>
+            <li><strong>"How long will you need this?"</strong><br>
+                <span style="color:var(--text-muted); font-size:0.88rem;">"For this project" or "until next month" means it should have an end date.</span></li>
+            <li><strong>"What happens if you lose this access tomorrow?"</strong><br>
+                <span style="color:var(--text-muted); font-size:0.88rem;">If the answer is "nothing," that is your signal to revoke.</span></li>
+        </ol>
+    </div>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">When you cannot ask directly</div>
+        If you are reviewing at 8pm and the team member is offline, use the information
+        in the review interface: check the "last activity" date (has this access been used
+        recently?) and the "peer comparison" data (do others in the same role have this?).
+    </div>
+
+    <h3>7.2 Setting the Tone</h3>
+    <p>Frame access reviews as <strong>professional hygiene</strong> -- something routine and
+    reasonable, not a punishment:</p>
+    <table class="tone-table">
+        <thead><tr><th>Instead of...</th><th>Try...</th></tr></thead>
+        <tbody>
+            <tr><td>"I'm revoking your access"</td><td>"Let's right-size your access to match your current role"</td></tr>
+            <tr><td>"Security says you can't have this"</td><td>"We're reducing the team's risk exposure -- here's what that means"</td></tr>
+            <tr><td>"You don't need admin access"</td><td>"What specific tasks need admin access? Let's find the right level"</td></tr>
+        </tbody>
+    </table>
+
+    <h3>7.3 What to Tell Your Team</h3>
+    <blockquote>
+        "We've moved to daily access reviews for elevated permissions. When you get new
+        access, I'll review it within 24 hours. This is actually better for everyone --
+        instead of a big quarterly review, I'm looking at 1-2 items while I still have
+        context on what you're working on."
+    </blockquote>
+
+    <h3>7.4 Common Pushback and Responses</h3>
+    <div class="card">
+        <div class="card-title">"I might need it later"</div>
+        <p>Access can be re-requested when a specific need comes up -- typically within
+        <strong>[X hours]</strong>. Keeping access "just in case" for months is unnecessary risk.</p>
+    </div>
+    <div class="card">
+        <div class="card-title">"Everyone on my old team had this"</div>
+        <p>Role transfers are the #1 source of access buildup. What was right for your old
+        role is not necessarily right for your current one.</p>
+    </div>
+    <div class="card">
+        <div class="card-title">"It's too much hassle to request every time"</div>
+        <p>If someone needs recurring access, the IAM team can set up a proper role for them.
+        That is better than a permanent broad permission.</p>
+    </div>
+</div>
+
+<!-- ════════ 8. REVIEW QUALITY ════════ -->
+<div class="tab-panel" id="panel-quality">
+    <h2>8. What Good Reviews Look Like</h2>
+    <p class="section-intro">A quick note on review quality -- what the compliance team
+    looks for and how to ensure your reviews count.</p>
+
+    <p>The goal of access reviews is not to revoke as much as possible. The goal is to make
+    <strong>informed, documented decisions</strong> -- some approvals, some revocations, each with
+    a reason.</p>
+
+    <h3>What a Good Review Looks Like</h3>
+    <table>
+        <thead><tr><th>Indicator</th><th>What It Shows</th></tr></thead>
+        <tbody>
+            <tr><td>Each item reviewed individually</td><td>You considered each decision on its merits</td></tr>
+            <tr><td>Brief comments on non-obvious decisions</td><td>Your reasoning is documented for compliance</td></tr>
+            <tr><td>Mix of approvals and revocations over time</td><td>You are genuinely evaluating, not auto-approving</td></tr>
+            <tr><td>Completed before the deadline</td><td>Timely, not last-minute</td></tr>
+        </tbody>
+    </table>
+
+    <h3>What Raises Questions</h3>
+    <p>Compliance teams monitor review patterns. The following patterns may trigger a
+    follow-up conversation (not a punishment -- just a check-in):</p>
+    <table>
+        <thead><tr><th>Pattern</th><th>Why It Raises Questions</th></tr></thead>
+        <tbody>
+            <tr><td>Everything approved in under a minute</td><td>Suggests items were not individually evaluated</td></tr>
+            <tr><td>100% approval rate across many campaigns</td><td>Statistically unlikely that no access ever needs adjustment</td></tr>
+            <tr><td>No comments on any decisions</td><td>No documented reasoning for compliance records</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-note">
+        <div class="callout-label">The bottom line</div>
+        Take a moment to look at each item, especially anything flagged as privileged.
+        Add a brief comment when the reason for your decision is not obvious. That is all
+        it takes to demonstrate a thoughtful review. Your decisions are part of the
+        organization's compliance record, and a well-documented review protects both you
+        and the company.
+    </div>
+
+    <h3>Why This Matters for Everyone</h3>
+    <div class="compare">
+        <div class="compare-card info">
+            <h4>For Your Team</h4>
+            <p>Clean access profiles mean less personal risk. If a team member's account is compromised,
+            less access = less damage and less time spent in forensic interviews.</p>
+        </div>
+        <div class="compare-card info">
+            <h4>For You</h4>
+            <p>A documented, recent review decision with a clear comment is your best defense if
+            anyone ever asks "why does this person have this access?"</p>
+        </div>
+        <div class="compare-card info">
+            <h4>For the Organization</h4>
+            <p>Daily reviews provide continuous compliance evidence. Regulatory requirements
+            (SOX, SOC 2, ISO 27001) require documented access review -- this is how we meet them.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ════════ 9. FAQ ════════ -->
+<div class="tab-panel" id="panel-faq">
+    <h2>9. Frequently Asked Questions</h2>
+    <p class="section-intro">Click any question to see the answer.</p>
+
+    <div class="faq">
+        <div class="faq-item open">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">How often will I receive reviews?</button>
+            <div class="faq-a">Only when a direct report receives new elevated access. If your team's access is stable, you may go days or weeks without one. When changes happen, you will receive a review within 24 hours.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">How long do I have to complete it?</button>
+            <div class="faq-a">Check the deadline on the campaign card. Daily reviews typically have a 24-72 hour window. Try to complete it the same day -- it usually takes 5-10 minutes.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">What if I make a mistake?</button>
+            <div class="faq-a"><strong>Before sign-off:</strong> Click <strong>Revisit Decision</strong> to change it. <strong>After sign-off:</strong> Contact the IAM team at <strong>[IAM-TEAM-EMAIL]</strong>. Access can be re-requested through the normal process. Mistakes happen -- they are fixable, not career-ending.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">My team member says they need access I revoked. What now?</button>
+            <div class="faq-a">They submit a new access request through the normal process. This is the correct workflow -- it creates a documented trail. For urgent needs, the IAM team can expedite.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">I received a review for someone who no longer reports to me.</button>
+            <div class="faq-a">Reassign it to their current manager with a note about the reporting change. This happens when the HR system has not yet updated.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">Why can I only "Acknowledge" some items, not Approve or Revoke?</button>
+            <div class="faq-a">Some access is automatically assigned based on the person's job title or department (sometimes called "birthright" access). You cannot remove it through a review -- it is controlled by the HR/identity system. If the assignment seems wrong, contact the IAM team to review the rules.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">Can I delegate reviews to someone on my team?</button>
+            <div class="faq-a">You can reassign individual items. If you regularly need to delegate, ask the IAM team to update the routing so reviews go directly to the right person.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">I see system names I don't recognize. What do I do?</button>
+            <div class="faq-a">Reassign those items to the person who manages that system, or ask the team member if they use it. If nobody recognizes it, revoke it -- if it turns out to be needed, it can be re-requested. See <a href="javascript:void(0)" onclick="switchTab('scenarios')">Scenario 6</a> for a detailed walkthrough.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">What is the difference between a role, an access profile, and an entitlement?</button>
+            <div class="faq-a">
+                <strong>Entitlement:</strong> A single permission (e.g., membership in a group like "CRM_Users").<br>
+                <strong>Access Profile:</strong> A bundle of permissions from one system (e.g., "Standard CRM Access" = 3 permissions).<br>
+                <strong>Role:</strong> A business-level bundle that can include permissions from multiple systems (e.g., "Customer Service Rep" = CRM access + phone system access).<br><br>
+                Think of it as: permissions are individual ingredients, access profiles are recipes, and roles are complete meals.
+            </div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">What does the "privileged" flag mean?</button>
+            <div class="faq-a">The IT team has marked certain permissions as elevated risk -- things like server administration, database admin, or access to sensitive data across the organization. Items with this flag deserve your closest attention. If you are not sure why something is flagged, ask the IAM team.</div>
+        </div>
+        <div class="faq-item">
+            <button class="faq-q" onclick="this.parentElement.classList.toggle('open')">Can I do reviews on my phone?</button>
+            <div class="faq-a">SailPoint ISC is a web application. If your organization allows mobile access to it, you can review from any device with a browser. Check with the IAM team if you are unsure.</div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════ 10. GLOSSARY ════════ -->
+<div class="tab-panel" id="panel-glossary">
+    <h2>10. Glossary</h2>
+    <p class="section-intro">Plain-English definitions for terms you will encounter in the review process.</p>
+
+    <div class="glossary-grid">
+        <div class="gloss-item"><div class="gloss-term">Access Profile</div><div class="gloss-def">A bundle of permissions from one system. For example, "Standard CRM Access" might include 3 specific CRM permissions grouped together.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Approve</div><div class="gloss-def">Your confirmation that a person should keep their access. Nothing changes -- the access stays in place.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Birthright Access</div><div class="gloss-def">Access automatically given based on someone's job title or department. You cannot change it through a review -- it is controlled by HR/identity rules.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Campaign</div><div class="gloss-def">A review cycle. You receive a campaign when your team members' access needs to be reviewed. Each campaign has a deadline.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Certification</div><div class="gloss-def">Your specific review assignment within a campaign -- the list of people and access items you need to evaluate.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Daily Delta Review</div><div class="gloss-def">A review that only covers access that changed in the last 24 hours (new permissions, not existing ones). "Delta" means "change."</div></div>
+        <div class="gloss-item"><div class="gloss-term">Entitlement</div><div class="gloss-def">A single, specific permission in a system. For example, membership in an Active Directory group called "CRM_Users" is one entitlement.</div></div>
+        <div class="gloss-item"><div class="gloss-term">IAM Team</div><div class="gloss-def">The Identity and Access Management team -- the IT group responsible for managing who has access to what. Contact them at <strong>[IAM-TEAM-EMAIL]</strong>.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Identity</div><div class="gloss-def">A person (your team member) as represented in the access management system. Sometimes you will see this term instead of "person" or "user."</div></div>
+        <div class="gloss-item"><div class="gloss-term">Least Privilege</div><div class="gloss-def">The principle that people should have only the access they need for their current job -- no more. Like only having keys to the rooms you actually use.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Privileged Access</div><div class="gloss-def">Elevated permissions that let someone administer servers, manage user accounts, or access sensitive data organization-wide. Higher risk = more scrutiny.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Privilege Creep</div><div class="gloss-def">The gradual buildup of access over time -- especially when people change roles but keep their old permissions. This is what daily reviews help prevent.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Reassign</div><div class="gloss-def">Sending a review item to a different person who is better positioned to evaluate it. Not a failure -- it is the responsible choice when you lack context.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Revoke</div><div class="gloss-def">Your decision to remove someone's access. After you sign off, the system begins removing it (automatically for connected systems, manually for others).</div></div>
+        <div class="gloss-item"><div class="gloss-term">Role</div><div class="gloss-def">A business-level access bundle that can span multiple systems. For example, "Customer Service Rep" might include CRM access + phone system access + knowledge base access.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Sign-Off</div><div class="gloss-def">Clicking "Finish" to submit your final decisions. After this, your review is complete and cannot be changed. Your decisions are permanently recorded.</div></div>
+        <div class="gloss-item"><div class="gloss-term">SOX / SOC 2</div><div class="gloss-def">Regulatory standards (Sarbanes-Oxley and Service Organization Control) that require organizations to document access reviews. Your reviews are part of this evidence.</div></div>
+        <div class="gloss-item"><div class="gloss-term">Source</div><div class="gloss-def">A connected system -- like Active Directory, your CRM, or your HR system -- from which user accounts and permissions are imported into SailPoint.</div></div>
+    </div>
+</div>
+
+</div><!-- end .content-wrap -->
+
+<!-- ════════ FOOTER ════════ -->
+<div class="app-footer">
+    Manager's Guide to Access Certification Reviews v2.0
+    &middot; Identity &amp; Access Management Team &middot; Internal Use Only
+</div>
+
+<!-- ════════ JAVASCRIPT ════════ -->
+<script>
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+    var panel = document.getElementById('panel-' + tabId);
+    if (panel) panel.classList.add('active');
+    var btn = document.querySelector('.tab-btn[data-tab="' + tabId + '"]');
+    if (btn) btn.classList.add('active');
+    window.scrollTo(0, 0);
+}
+document.getElementById('tabBar').addEventListener('click', function(e) {
+    var btn = e.target.closest('.tab-btn');
+    if (!btn) return;
+    switchTab(btn.getAttribute('data-tab'));
+});
+document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var tabs = Array.from(document.querySelectorAll('.tab-btn'));
+    var active = document.querySelector('.tab-btn.active');
+    var idx = tabs.indexOf(active);
+    if (e.key === 'ArrowRight' && idx < tabs.length - 1) switchTab(tabs[idx+1].getAttribute('data-tab'));
+    else if (e.key === 'ArrowLeft' && idx > 0) switchTab(tabs[idx-1].getAttribute('data-tab'));
+});
+</script>
+</body>
+</html>

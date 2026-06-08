@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Disconnected App Data Feed -- Quick Reference</title>
+<style>
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:       #336699;
+    --primary-dark:  #1e2a3a;
+    --accent:        #5B9BD5;
+    --success:       #2e7d32;
+    --success-bg:    #e8f5e9;
+    --danger:        #b71c1c;
+    --danger-bg:     #ffebee;
+    --warning:       #e65100;
+    --warning-bg:    #fff3e0;
+    --text:          #1a1a2e;
+    --text-muted:    #4a5568;
+    --border:        #c5d3e0;
+    --surface:       #ffffff;
+    --bg-light:      #eef2f7;
+    --bg-banner:     #dde8f2;
+}
+
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text);
+    background: #fff;
+    padding: 6px;
+}
+
+/* ============================================================
+   OUTER WRAPPER
+   ============================================================ */
+.card-wrapper {
+    width: 100%;
+    max-width: 10in;
+    margin: 0 auto;
+}
+
+/* ============================================================
+   TITLE BANNER
+   ============================================================ */
+.title-banner {
+    background: var(--primary-dark);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 4px 4px 0 0;
+    border-bottom: 3px solid var(--accent);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.title-banner h1 {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.title-banner .subtitle {
+    font-size: 9.5px;
+    color: #b0c4d8;
+    font-style: italic;
+}
+
+/* ============================================================
+   TWO-COLUMN LAYOUT
+   ============================================================ */
+.columns {
+    display: flex;
+    gap: 0;
+    border: 1.5px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    overflow: hidden;
+}
+
+.col-left {
+    width: 55%;
+    border-right: 1.5px solid var(--border);
+    padding: 7px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.col-right {
+    width: 45%;
+    padding: 7px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* ============================================================
+   SECTION HEADERS
+   ============================================================ */
+.section-header {
+    background: var(--primary);
+    color: #fff;
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 0;
+    margin-bottom: 0;
+}
+
+.section-box {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.section-body {
+    padding: 4px 7px;
+    background: var(--surface);
+}
+
+/* ============================================================
+   DELIVER META
+   ============================================================ */
+.deliver-row {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    font-size: 9.5px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border);
+    line-height: 1.3;
+}
+.deliver-row:last-child {
+    border-bottom: none;
+}
+
+.deliver-label {
+    font-weight: 700;
+    color: var(--text-muted);
+    font-size: 8.5px;
+    text-transform: uppercase;
+    min-width: 52px;
+    flex-shrink: 0;
+}
+
+.deliver-value {
+    color: var(--primary-dark);
+}
+
+code, .mono {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9px;
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 3px;
+    color: var(--primary);
+}
+
+/* ============================================================
+   COLUMN SPEC TABLE
+   ============================================================ */
+.col-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9px;
+}
+
+.col-table thead tr th {
+    background: var(--bg-banner);
+    color: var(--primary-dark);
+    font-weight: 700;
+    font-size: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 4px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.col-table tbody tr td {
+    padding: 2px 4px;
+    vertical-align: top;
+    border-bottom: 1px solid #eaecef;
+    line-height: 1.25;
+}
+
+.col-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.col-table tbody tr.opt-row td {
+    color: var(--text-muted);
+}
+
+.badge {
+    font-size: 7.5px;
+    font-weight: 700;
+    padding: 1px 3px;
+    border-radius: 2px;
+    white-space: nowrap;
+    display: inline-block;
+    line-height: 1.2;
+}
+.badge-req  { background: #e3edf7; color: var(--primary); border: 1px solid var(--accent); }
+.badge-opt  { background: var(--bg-light); color: var(--text-muted); border: 1px solid var(--border); }
+.badge-warn { background: var(--warning-bg); color: var(--warning); border: 1px solid #ffcc80; }
+
+/* ============================================================
+   RULES LIST
+   ============================================================ */
+.rules-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.rules-list li {
+    font-size: 9.5px;
+    line-height: 1.3;
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--border);
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+}
+.rules-list li:last-child { border-bottom: none; }
+
+.rule-bullet {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 11px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   DELIVER PATH BOX
+   ============================================================ */
+.path-box {
+    background: var(--bg-banner);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 4px 7px;
+    font-size: 9px;
+    line-height: 1.5;
+}
+
+.path-box .path-label {
+    font-weight: 700;
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 1px;
+}
+
+.path-box .path-value {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9px;
+    color: var(--primary-dark);
+    word-break: break-all;
+}
+
+.path-sep {
+    border-top: 1px dotted var(--border);
+    margin: 3px 0;
+}
+
+/* ============================================================
+   INTEGRATION PATTERNS
+   ============================================================ */
+.patterns-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+}
+
+.pattern-box {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.pattern-title {
+    background: var(--bg-light);
+    color: var(--primary-dark);
+    font-weight: 700;
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 5px;
+    border-bottom: 1px solid var(--border);
+}
+
+.pattern-flow {
+    padding: 3px 5px;
+    font-size: 8.5px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.pattern-arrow {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+/* ============================================================
+   VALIDATE BOX
+   ============================================================ */
+.validate-box {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.validate-cmd {
+    background: #f0f4f8;
+    border-bottom: 1px solid var(--border);
+    padding: 4px 7px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 8.5px;
+    color: var(--primary-dark);
+    word-break: break-all;
+    line-height: 1.4;
+}
+
+.checks-list {
+    list-style: none;
+    padding: 3px 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.checks-list li {
+    font-size: 9px;
+    line-height: 1.3;
+    display: flex;
+    gap: 4px;
+    align-items: baseline;
+    color: var(--text-muted);
+}
+
+.check-mark {
+    color: var(--success);
+    font-weight: 700;
+    font-size: 10px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+/* ============================================================
+   MISTAKES
+   ============================================================ */
+.mistakes-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mistake-item {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+    font-size: 9.5px;
+    padding: 2px 4px;
+    background: var(--danger-bg);
+    border-left: 3px solid var(--danger);
+    border-radius: 2px;
+    line-height: 1.3;
+}
+
+.mistake-x {
+    color: var(--danger);
+    font-weight: 700;
+    font-size: 10px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+/* ============================================================
+   HELP BOX
+   ============================================================ */
+.help-box {
+    background: #fff8e6;
+    border: 1.5px solid #f5c842;
+    border-radius: 4px;
+    padding: 5px 8px;
+}
+
+.help-box .help-title {
+    font-weight: 700;
+    font-size: 10px;
+    color: var(--primary-dark);
+    border-bottom: 1px solid #f5c842;
+    padding-bottom: 3px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.help-row {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+    font-size: 9.5px;
+    margin-bottom: 2px;
+    line-height: 1.3;
+}
+
+.help-label {
+    font-weight: 700;
+    color: var(--text-muted);
+    min-width: 68px;
+    font-size: 9px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+.help-value {
+    color: var(--primary-dark);
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 9px;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.card-footer {
+    text-align: center;
+    font-size: 8px;
+    color: #888;
+    margin-top: 3px;
+    padding-top: 2px;
+    border-top: 1px solid var(--border);
+    letter-spacing: 0.03em;
+}
+
+/* ============================================================
+   PRINT STYLES
+   ============================================================ */
+@media print {
+    @page {
+        size: letter portrait;
+        margin: 0.4in;
+    }
+
+    html, body {
+        font-size: 10px;
+        background: #fff;
+        padding: 0;
+        margin: 0;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .card-wrapper {
+        width: 100%;
+        max-width: none;
+    }
+
+    .columns, .col-left, .col-right,
+    .section-box, .title-banner, .card-footer,
+    .help-box, .validate-box, .path-box {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .col-left, .col-right {
+        gap: 4px;
+    }
+}
+</style>
+</head>
+<body>
+
+<div class="card-wrapper">
+
+    <!-- TITLE BANNER -->
+    <div class="title-banner">
+        <h1>Disconnected App Data Feed -- Quick Reference</h1>
+        <div class="subtitle">For application owners &nbsp;|&nbsp; Tape to monitor &nbsp;|&nbsp; Full guide: AppOwner-Integration-Guide.html</div>
+    </div>
+
+    <!-- TWO-COLUMN BODY -->
+    <div class="columns">
+
+        <!-- ==================== LEFT COLUMN (55%) ==================== -->
+        <div class="col-left">
+
+            <!-- WHAT TO DELIVER -->
+            <div class="section-box">
+                <div class="section-header">What to Deliver</div>
+                <div class="section-body">
+                    <div class="deliver-row">
+                        <span class="deliver-label">When</span>
+                        <span class="deliver-value">Daily by <strong>04:00 UTC</strong> -- every day, even if nothing changed</span>
+                    </div>
+                    <div class="deliver-row">
+                        <span class="deliver-label">File 1</span>
+                        <span class="deliver-value"><code>accounts.csv</code> &nbsp;-- one row per user (ALL current users, not just changes)</span>
+                    </div>
+                    <div class="deliver-row">
+                        <span class="deliver-label">File 2</span>
+                        <span class="deliver-value"><code>entitlements.csv</code> &nbsp;-- one row per role, group, or permission</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ACCOUNT FILE COLUMNS -->
+            <div class="section-box">
+                <div class="section-header">Account File Columns &nbsp;(accounts.csv)</div>
+                <div class="section-body" style="padding: 0;">
+                    <table class="col-table">
+                        <thead>
+                            <tr>
+                                <th style="width:28%;">Column Name</th>
+                                <th style="width:12%;">Req?</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>id</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Unique account identifier -- must be stable (not email)</td>
+                            </tr>
+                            <tr>
+                                <td><code>name</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Account username or login name</td>
+                            </tr>
+                            <tr>
+                                <td><code>givenName</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>First name</td>
+                            </tr>
+                            <tr>
+                                <td><code>familyName</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Last name / surname</td>
+                            </tr>
+                            <tr>
+                                <td><code>e-mail</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Corporate email -- used for identity correlation. Case-sensitive column name: <code>e-mail</code> (with hyphen)</td>
+                            </tr>
+                            <tr>
+                                <td><code>department</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Business unit or department name</td>
+                            </tr>
+                            <tr>
+                                <td><code>groups</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Comma-separated role or group names. Wrap entire value in double quotes if multiple: <code>"Role1,Role2"</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>IIQDisabled</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Account enabled/disabled state: <code>false</code> = active, <code>true</code> = disabled. Use true/false -- not yes/no</td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>accountType</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>e.g., Standard, Service, Admin</td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>created</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>ISO 8601: <code>2024-01-15T09:30:00Z</code></td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>lastLogin</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>ISO 8601 date-time of last authentication</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ENTITLEMENT FILE COLUMNS -->
+            <div class="section-box">
+                <div class="section-header">Entitlement File Columns &nbsp;(entitlements.csv)</div>
+                <div class="section-body" style="padding: 0;">
+                    <table class="col-table">
+                        <thead>
+                            <tr>
+                                <th style="width:28%;">Column Name</th>
+                                <th style="width:12%;">Req?</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>id</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Unique entitlement ID -- must match values used in accounts <code>groups</code> column</td>
+                            </tr>
+                            <tr>
+                                <td><code>name</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Internal name of the role, group, or permission</td>
+                            </tr>
+                            <tr>
+                                <td><code>displayName</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Human-readable label shown to reviewers in certification campaigns</td>
+                            </tr>
+                            <tr>
+                                <td><code>description</code></td>
+                                <td><span class="badge badge-req">REQ</span></td>
+                                <td>Plain-English description of what this entitlement grants. Helps reviewers make decisions.</td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>owner</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>Email of the entitlement owner for escalation routing</td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>type</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>e.g., Role, Group, Permission, Entitlement</td>
+                            </tr>
+                            <tr class="opt-row">
+                                <td><code>riskLevel</code></td>
+                                <td><span class="badge badge-opt">OPT</span></td>
+                                <td>Numeric 0-100 or LOW / MEDIUM / HIGH. Flags privileged items in reviews.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- FILE RULES -->
+            <div class="section-box">
+                <div class="section-header">File Rules</div>
+                <div class="section-body">
+                    <ul class="rules-list">
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>Encoding:</strong> UTF-8 &nbsp;-- in Excel choose <em>Save As &gt; CSV UTF-8 (Comma delimited)</em></span>
+                        </li>
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>Delimiter:</strong> comma. Do not use semicolons or tabs.</span>
+                        </li>
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>Header row required:</strong> exact column names are case-sensitive (<code>e-mail</code> not <code>Email</code>, <code>IIQDisabled</code> not <code>iiqDisabled</code>)</span>
+                        </li>
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>Multi-valued groups:</strong> wrap the entire cell value in double quotes -- <code>"AdminRole,ReadOnly,DataViewer"</code></span>
+                        </li>
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>IIQDisabled values:</strong> <code>true</code> or <code>false</code> only -- not <code>yes</code>, <code>no</code>, <code>1</code>, or <code>0</code></span>
+                        </li>
+                        <li>
+                            <span class="rule-bullet">-</span>
+                            <span><strong>Full export every time:</strong> never send only changed rows. SailPoint treats missing rows as deleted accounts.</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+        </div><!-- /col-left -->
+
+        <!-- ==================== RIGHT COLUMN (45%) ==================== -->
+        <div class="col-right">
+
+            <!-- WHERE TO DELIVER -->
+            <div class="section-box">
+                <div class="section-header">Where to Deliver</div>
+                <div class="section-body">
+                    <div class="path-box">
+                        <div class="path-label">UNC / File Share</div>
+                        <div class="path-value">\\fileserver\sailpoint-imports\{AppName}\</div>
+                        <div class="path-sep"></div>
+                        <div class="path-label">SFTP</div>
+                        <div class="path-value">sftp://[SFTP-HOST]/imports/{AppName}/</div>
+                        <div class="path-sep"></div>
+                        <div class="path-label">Files Required</div>
+                        <div class="path-value">accounts.csv &nbsp; entitlements.csv</div>
+                    </div>
+                    <div style="font-size:8.5px; color:var(--text-muted); margin-top:3px;">Replace <code>{AppName}</code> with your application's registered name (ask the IAM team if unsure).</div>
+                </div>
+            </div>
+
+            <!-- INTEGRATION PATTERNS -->
+            <div class="section-box">
+                <div class="section-header">Integration Patterns</div>
+                <div class="section-body">
+                    <div class="patterns-grid">
+
+                        <div class="pattern-box">
+                            <div class="pattern-title">MuleSoft API</div>
+                            <div class="pattern-flow">
+                                App API <span class="pattern-arrow">-&gt;</span> MuleSoft
+                                <span class="pattern-arrow">-&gt;</span> CSV
+                                <span class="pattern-arrow">-&gt;</span> SailPoint
+                            </div>
+                        </div>
+
+                        <div class="pattern-box">
+                            <div class="pattern-title">GoAnywhere MFT</div>
+                            <div class="pattern-flow">
+                                App Export <span class="pattern-arrow">-&gt;</span> GoAnywhere
+                                <span class="pattern-arrow">-&gt;</span> Validate
+                                <span class="pattern-arrow">-&gt;</span> Transfer
+                            </div>
+                        </div>
+
+                        <div class="pattern-box">
+                            <div class="pattern-title">MuleSoft + GoAnywhere</div>
+                            <div class="pattern-flow">
+                                API Extract <span class="pattern-arrow">-&gt;</span> MuleSoft
+                                <span class="pattern-arrow">-&gt;</span> GoAnywhere
+                                <span class="pattern-arrow">-&gt;</span> Transfer
+                            </div>
+                        </div>
+
+                        <div class="pattern-box">
+                            <div class="pattern-title">Database Extract</div>
+                            <div class="pattern-flow">
+                                DB Query <span class="pattern-arrow">-&gt;</span> CSV
+                                <span class="pattern-arrow">-&gt;</span> Transfer
+                                <span class="pattern-arrow">-&gt;</span> SailPoint
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- VALIDATE BEFORE GO-LIVE -->
+            <div class="section-box">
+                <div class="section-header">Validate Before Go-Live</div>
+                <div class="section-body" style="padding: 0;">
+                    <div class="validate-cmd">.\Scripts\Invoke-SPDisconnectedAppRegistry.ps1 -Action Test -AppName "YourApp"</div>
+                    <ul class="checks-list">
+                        <li><span class="check-mark">+</span>Required columns present and correctly named</li>
+                        <li><span class="check-mark">+</span>File encoding is UTF-8 (not UTF-16)</li>
+                        <li><span class="check-mark">+</span>No duplicate account IDs</li>
+                        <li><span class="check-mark">+</span>Email addresses match expected format</li>
+                        <li><span class="check-mark">+</span>Entitlement IDs cross-reference accounts groups column</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- COMMON MISTAKES -->
+            <div class="section-box">
+                <div class="section-header">Common Mistakes</div>
+                <div class="section-body">
+                    <ul class="mistakes-list">
+                        <li class="mistake-item">
+                            <span class="mistake-x">X</span>
+                            <span><strong>Excel default CSV is UTF-16, not UTF-8.</strong> Always use <em>Save As &gt; CSV UTF-8 (Comma delimited)</em></span>
+                        </li>
+                        <li class="mistake-item">
+                            <span class="mistake-x">X</span>
+                            <span><strong>Sending only changed rows.</strong> Always send the full population -- SailPoint treats missing rows as deleted accounts.</span>
+                        </li>
+                        <li class="mistake-item">
+                            <span class="mistake-x">X</span>
+                            <span><strong>Wrong column name casing.</strong> It must be <code>e-mail</code> (with hyphen), not <code>Email</code> or <code>email</code>.</span>
+                        </li>
+                        <li class="mistake-item">
+                            <span class="mistake-x">X</span>
+                            <span><strong>Sending an empty file when nothing changed.</strong> Still send the full export -- an empty accounts file removes all accounts.</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- NEED HELP -->
+            <div class="help-box">
+                <div class="help-title">Need Help?</div>
+                <div class="help-row">
+                    <div class="help-label">IAM Team</div>
+                    <div class="help-value">[IAM-TEAM-EMAIL]</div>
+                </div>
+                <div class="help-row">
+                    <div class="help-label">Phone</div>
+                    <div class="help-value">[IAM-TEAM-PHONE]</div>
+                </div>
+                <div class="help-row">
+                    <div class="help-label">Integration Team</div>
+                    <div class="help-value">[INTEGRATION-TEAM-EMAIL]</div>
+                </div>
+                <div class="help-row">
+                    <div class="help-label">Full Guide</div>
+                    <div class="help-value"><a href="AppOwner-Integration-Guide.html" style="color:var(--primary);">AppOwner-Integration-Guide.html</a></div>
+                </div>
+            </div>
+
+        </div><!-- /col-right -->
+
+    </div><!-- /columns -->
+
+    <!-- FOOTER -->
+    <div class="card-footer">
+        Disconnected App Data Feed -- Quick Reference v1.0 &nbsp;|&nbsp;
+        SailPoint ISC &nbsp;|&nbsp;
+        Full Guide: <a href="AppOwner-Integration-Guide.html" style="color:#5B9BD5;">AppOwner-Integration-Guide.html</a>
+    </div>
+
+</div><!-- /card-wrapper -->
+
+</body>
+</html>

@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Access Certification Reviews - Manager Training</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --dark:       #1e2a3a;
+    --dark2:      #263545;
+    --primary:    #336699;
+    --accent:     #5B9BD5;
+    --green:      #339933;
+    --red:        #CC3333;
+    --yellow:     #e68a00;
+    --white:      #ffffff;
+    --offwhite:   #f4f6f9;
+    --border:     #dce3eb;
+    --text:       #2c3e50;
+    --muted:      #596980;
+    --shadow:     0 2px 12px rgba(0,0,0,0.10);
+    --shadow-lg:  0 4px 24px rgba(0,0,0,0.16);
+    --radius:     8px;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: #0d1520;
+}
+
+/* ---- SLIDE CONTAINER ---- */
+#deck {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.slide {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 48px 64px 80px;
+    background: var(--white);
+}
+.slide.active {
+    display: flex;
+}
+
+/* ---- SLIDE TYPES ---- */
+.slide-dark {
+    background: linear-gradient(145deg, #14202e 0%, #1e2a3a 55%, #263545 100%);
+    color: var(--white);
+}
+.slide-dark .slide-tag {
+    color: var(--accent);
+    border-color: rgba(91,155,213,0.35);
+}
+
+/* ---- CHROME ---- */
+#controls {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: 52px;
+    background: var(--dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 100;
+    border-top: 2px solid var(--primary);
+}
+#counter {
+    color: #a0b4c8;
+    font-size: 13px;
+    font-weight: 500;
+    min-width: 90px;
+    text-align: center;
+    letter-spacing: 0.4px;
+}
+.nav-btn {
+    background: rgba(91,155,213,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(91,155,213,0.3);
+    border-radius: 4px;
+    padding: 6px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    letter-spacing: 0.5px;
+}
+.nav-btn:hover { background: rgba(91,155,213,0.22); border-color: var(--accent); }
+.nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+#notes-toggle {
+    position: fixed;
+    top: 14px; right: 18px;
+    background: rgba(255,255,255,0.08);
+    color: #a0b4c8;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    z-index: 100;
+    letter-spacing: 0.5px;
+    transition: background 0.15s;
+}
+#notes-toggle:hover { background: rgba(255,255,255,0.14); }
+
+#notes-panel {
+    position: fixed;
+    bottom: 52px; left: 0; right: 0;
+    max-height: 0;
+    overflow: hidden;
+    background: #0d1520;
+    border-top: 2px solid var(--primary);
+    transition: max-height 0.25s ease;
+    z-index: 99;
+}
+#notes-panel.open {
+    max-height: 140px;
+}
+#notes-content {
+    padding: 12px 32px 14px;
+    color: #cdd8e6;
+    font-size: 13px;
+    line-height: 1.6;
+}
+#notes-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--accent);
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+/* ---- COMMON SLIDE ELEMENTS ---- */
+.slide-tag {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 700;
+    color: var(--primary);
+    border: 1px solid rgba(51,102,153,0.3);
+    border-radius: 3px;
+    padding: 3px 10px;
+    margin-bottom: 22px;
+    align-self: flex-start;
+}
+h1.slide-title {
+    font-size: clamp(28px, 4vw, 48px);
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: -0.5px;
+    margin-bottom: 16px;
+    max-width: 820px;
+}
+h2.slide-heading {
+    font-size: clamp(22px, 2.8vw, 36px);
+    font-weight: 700;
+    color: var(--dark);
+    margin-bottom: 28px;
+    align-self: flex-start;
+    width: 100%;
+}
+.slide-dark h2.slide-heading { color: var(--white); }
+
+.slide-subtitle {
+    font-size: clamp(15px, 1.6vw, 20px);
+    color: #a0b4c8;
+    margin-bottom: 10px;
+}
+.slide-byline {
+    font-size: 13px;
+    color: #7090aa;
+    margin-top: 28px;
+    letter-spacing: 0.3px;
+}
+.slide-byline span { color: var(--accent); }
+
+/* ---- CARD ROWS ---- */
+.card-row {
+    display: flex;
+    gap: 20px;
+    width: 100%;
+    margin-top: 8px;
+}
+.card {
+    flex: 1;
+    background: var(--offwhite);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 20px;
+    box-shadow: var(--shadow);
+}
+.card-icon {
+    font-size: 22px;
+    margin-bottom: 8px;
+    display: block;
+}
+.card-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.card-body {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--muted);
+}
+.card-body strong { color: var(--text); }
+
+/* tinted cards */
+.card-green  { border-left: 4px solid var(--green);  background: #f0faf0; }
+.card-red    { border-left: 4px solid var(--red);    background: #fdf3f3; }
+.card-blue   { border-left: 4px solid var(--primary); background: #f0f5fb; }
+.card-yellow { border-left: 4px solid var(--yellow);  background: #fffbf0; }
+.card-dark   { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); color: #e0eaf4; }
+.card-dark .card-body { color: #a0b4c8; }
+
+/* action cards (slide 6) */
+.action-card {
+    flex: 1;
+    border-radius: var(--radius);
+    padding: 28px 22px;
+    text-align: center;
+    box-shadow: var(--shadow-lg);
+}
+.action-card .action-symbol {
+    font-size: 28px;
+    font-weight: 900;
+    display: block;
+    margin-bottom: 10px;
+}
+.action-card .action-title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+.action-card .action-tag {
+    font-size: 12px;
+    margin-bottom: 10px;
+    opacity: 0.9;
+}
+.action-card .action-when {
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.82;
+}
+.action-approve { background: var(--green);   color: #fff; }
+.action-revoke  { background: var(--red);     color: #fff; }
+.action-reassign{ background: var(--primary); color: #fff; }
+
+/* ---- SPLIT LAYOUT (slide 3) ---- */
+.split {
+    display: flex;
+    gap: 28px;
+    width: 100%;
+}
+.split-pane {
+    flex: 1;
+    border-radius: var(--radius);
+    padding: 24px 20px;
+    text-align: center;
+}
+.split-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.3px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+.split-role {
+    font-size: 19px;
+    font-weight: 800;
+    margin-bottom: 12px;
+}
+.split-question {
+    font-size: 14px;
+    font-style: italic;
+    color: var(--muted);
+    margin-bottom: 10px;
+}
+.split-verdict {
+    font-size: 13px;
+    line-height: 1.5;
+}
+.split-it   { background: #f4f6f9; border: 2px solid #b0bec5; }
+.split-mgr  { background: #edf6ef; border: 3px solid var(--green); }
+
+.bottom-bar {
+    width: 100%;
+    background: var(--dark);
+    color: #cdd8e6;
+    border-radius: var(--radius);
+    padding: 14px 22px;
+    font-size: 14px;
+    text-align: center;
+    margin-top: 20px;
+    border-left: 5px solid var(--accent);
+}
+
+/* ---- MOCKUP STYLES (slide 4) ---- */
+.mockup-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    padding: 20px 24px;
+    max-width: 520px;
+    width: 100%;
+    margin: 0 auto;
+    position: relative;
+}
+.mockup-header {
+    background: var(--dark);
+    color: #fff;
+    border-radius: 7px 7px 0 0;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    margin: -20px -24px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.mockup-header-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #a0b4c8; }
+.mockup-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f3f6;
+    font-size: 13px;
+}
+.mockup-row:last-of-type { border-bottom: none; }
+.mockup-row-label { color: var(--muted); font-size: 12px; }
+.mockup-row-value { font-weight: 600; color: var(--text); }
+.mockup-row-value.overdue { color: var(--red); }
+.mockup-btn {
+    display: inline-block;
+    margin-top: 14px;
+    background: var(--primary);
+    color: #fff;
+    border-radius: 5px;
+    padding: 8px 28px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+.annot {
+    font-size: 11.5px;
+    color: var(--primary);
+    font-weight: 600;
+    margin-left: 6px;
+}
+.annotation-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+}
+.annotation-row::before { content: ""; display: inline-block; width: 16px; height: 1px; background: var(--accent); flex-shrink: 0; }
+
+/* ---- REVIEW SCREEN MOCKUP (slide 5) ---- */
+.review-mockup {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    max-width: 600px;
+    width: 100%;
+    overflow: hidden;
+}
+.review-topbar {
+    background: var(--dark);
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+}
+.identity-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid #f0f3f6;
+    font-size: 13px;
+    cursor: pointer;
+}
+.identity-row.expanded { background: #f6f9ff; }
+.identity-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    margin-right: 10px;
+    flex-shrink: 0;
+}
+.identity-name { font-weight: 600; flex: 1; }
+.identity-count { font-size: 11px; color: var(--muted); }
+.access-item {
+    display: flex;
+    align-items: center;
+    padding: 7px 16px 7px 54px;
+    border-bottom: 1px solid #f0f3f6;
+    font-size: 12px;
+    background: #f9fbff;
+}
+.badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+.badge-priv { background: #fff0e0; color: #b35c00; border: 1px solid #e8a04b; }
+.badge-std  { background: #edf6ef; color: #2a7a2a; border: 1px solid #7bc87b; }
+.access-name { flex: 1; }
+.btn-row {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px 10px 54px;
+    background: #f9fbff;
+    border-bottom: 1px solid var(--border);
+}
+.mini-btn {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+}
+.mini-approve { background: var(--green); color: #fff; }
+.mini-revoke  { background: var(--red);   color: #fff; }
+.mini-reassign{ background: var(--primary); color: #fff; }
+
+/* ---- FLOWCHART (slide 7) ---- */
+.flow-wrap {
+    width: 100%;
+    display: flex;
+    gap: 0;
+    align-items: flex-start;
+    justify-content: center;
+}
+.flow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+}
+.flow-box {
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 150px;
+    position: relative;
+}
+.flow-start  { background: var(--dark); color: #fff; }
+.flow-q      { background: #e8f0f8; color: var(--dark); border: 2px solid var(--primary); }
+.flow-end-green  { background: var(--green); color: #fff; min-width: 120px; }
+.flow-end-red    { background: var(--red);   color: #fff; min-width: 120px; }
+.flow-end-blue   { background: var(--primary); color: #fff; min-width: 120px; }
+.flow-arrow {
+    width: 2px;
+    height: 18px;
+    background: #b0bec5;
+    position: relative;
+    margin: 0 auto;
+}
+.flow-arrow::after {
+    content: "";
+    position: absolute;
+    bottom: -1px; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #b0bec5;
+}
+.flow-label-no  { font-size: 10px; color: var(--red);   font-weight: 700; letter-spacing: 0.5px; text-align: center; }
+.flow-label-yes { font-size: 10px; color: var(--green); font-weight: 700; letter-spacing: 0.5px; text-align: center; }
+
+.flow-grid {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+    align-items: center;
+}
+.flow-h-arrow {
+    height: 2px;
+    width: 30px;
+    background: #b0bec5;
+    position: relative;
+}
+.flow-h-arrow::after {
+    content: "";
+    position: absolute;
+    right: -1px; top: 50%;
+    transform: translateY(-50%);
+    border: 5px solid transparent;
+    border-left-color: #b0bec5;
+}
+
+/* ---- SCENARIO GRID (slide 8) ---- */
+.scenario-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    width: 100%;
+}
+.scenario-card {
+    border-radius: var(--radius);
+    padding: 18px 18px;
+    border: 1px solid var(--border);
+    background: var(--offwhite);
+}
+.scenario-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: var(--text);
+}
+.scenario-action {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 2px 9px;
+    border-radius: 3px;
+    margin-bottom: 6px;
+}
+.scenario-body { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* ---- SIGNING OFF (slide 9) ---- */
+.sign-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    width: 100%;
+    margin: 18px 0 24px;
+    justify-content: center;
+}
+.sign-step {
+    background: var(--dark);
+    color: #fff;
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 90px;
+}
+.sign-step.highlighted {
+    background: var(--primary);
+    font-size: 14px;
+    padding: 12px 20px;
+}
+.sign-arrow-h {
+    width: 28px;
+    height: 2px;
+    background: var(--accent);
+    position: relative;
+    flex-shrink: 0;
+}
+.sign-arrow-h::after {
+    content: "";
+    position: absolute;
+    right: -1px; top: 50%;
+    transform: translateY(-50%);
+    border: 5px solid transparent;
+    border-left-color: var(--accent);
+}
+.sign-notes {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+}
+.sign-note {
+    flex: 1;
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    font-size: 13px;
+    line-height: 1.55;
+}
+.sign-note-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+    margin-bottom: 5px;
+}
+
+/* ---- REASSURE (slide 10) ---- */
+.reassure-box {
+    background: var(--offwhite);
+    border: 2px solid var(--green);
+    border-radius: 12px;
+    padding: 30px 36px;
+    max-width: 680px;
+    width: 100%;
+    text-align: center;
+}
+.reassure-headline {
+    font-size: clamp(22px, 3vw, 34px);
+    font-weight: 800;
+    color: var(--dark);
+    margin-bottom: 20px;
+    line-height: 1.2;
+}
+.reassure-points {
+    list-style: none;
+    margin-bottom: 22px;
+}
+.reassure-points li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 15px;
+    color: var(--text);
+    line-height: 1.5;
+}
+.reassure-points li:last-child { border-bottom: none; }
+.reassure-points li strong { color: var(--dark); }
+.reassure-contact {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 8px;
+    font-family: monospace;
+    letter-spacing: 0.3px;
+}
+
+/* ---- RESOURCES (slide 11) ---- */
+.resource-list {
+    width: 100%;
+    list-style: none;
+}
+.resource-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    background: var(--offwhite);
+    border: 1px solid var(--border);
+    margin-bottom: 10px;
+}
+.resource-icon {
+    width: 36px; height: 36px;
+    border-radius: 7px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 900;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.resource-name { font-size: 14px; font-weight: 700; color: var(--text); }
+.resource-desc { font-size: 12px; color: var(--muted); }
+.resource-link {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+    text-decoration: none;
+    border: 1px solid rgba(51,102,153,0.3);
+    border-radius: 4px;
+    padding: 4px 12px;
+    white-space: nowrap;
+}
+.resource-link:hover { background: rgba(51,102,153,0.07); }
+.intranet-note {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 14px;
+    width: 100%;
+    text-align: center;
+}
+.intranet-note span { color: var(--primary); font-weight: 600; }
+
+/* ---- QUESTIONS (slide 12) ---- */
+.questions-center {
+    text-align: center;
+    max-width: 620px;
+}
+.questions-center h2 {
+    font-size: clamp(26px, 3.5vw, 42px);
+    font-weight: 800;
+    color: var(--white);
+    margin-bottom: 10px;
+}
+.questions-center .q-sub {
+    font-size: 17px;
+    color: #a0b4c8;
+    margin-bottom: 30px;
+}
+.contact-block {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(91,155,213,0.3);
+    border-radius: var(--radius);
+    padding: 22px 28px;
+    margin: 0 auto 22px;
+}
+.contact-block .contact-line {
+    font-size: 14px;
+    color: #cdd8e6;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.contact-block .contact-line:last-child { border-bottom: none; }
+.contact-block .contact-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 60px;
+}
+.q-offer {
+    font-size: 15px;
+    color: #a8c0d6;
+    font-style: italic;
+    margin-bottom: 28px;
+}
+.q-footer {
+    font-size: 11px;
+    color: #5a7080;
+    position: absolute;
+    bottom: 62px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+/* ---- PRINT STYLES ---- */
+@media print {
+    html, body { overflow: visible; height: auto; background: #fff; }
+    #deck { position: static; overflow: visible; height: auto; }
+    #controls, #notes-toggle, #notes-panel { display: none !important; }
+    .slide {
+        position: relative;
+        display: flex !important;
+        page-break-after: always;
+        height: 100vh;
+        break-after: page;
+        padding-bottom: 32px;
+    }
+    .slide:last-child { page-break-after: auto; break-after: auto; }
+}
+</style>
+</head>
+<body>
+
+<button id="notes-toggle" title="Press N to toggle presenter notes">Notes [N]</button>
+
+<div id="deck">
+
+  <!-- ============================================================
+       SLIDE 1 - Title
+       ============================================================ -->
+  <div class="slide slide-dark active"
+       data-notes="Welcome everyone. This is a 15-minute walkthrough for managers who will be receiving daily access certification campaigns. By the end you'll know what to do, why it matters, and how long it takes. No technical background required.">
+
+    <div class="slide-tag">IAM Team | Manager Training</div>
+
+    <h1 class="slide-title">Daily Access<br>Certification Reviews</h1>
+    <p class="slide-subtitle">A 15-Minute Guide for Managers</p>
+
+    <div class="slide-byline">
+      <span>[ORGANIZATION NAME]</span> &nbsp;|&nbsp; <span>[DATE]</span> &nbsp;|&nbsp; IAM Team
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 2 - Why Are We Here?
+       ============================================================ -->
+  <div class="slide"
+       data-notes="The core change is frequency and volume. Quarterly reviews create a backlog problem -- managers rush through hundreds of items. Daily reviews give you 1 to 5 items at a time, so each decision gets real thought. Target time is 5 to 10 minutes per review session.">
+
+    <div class="slide-tag">Context</div>
+    <h2 class="slide-heading">Why Are We Here?</h2>
+
+    <div class="bottom-bar" style="margin-bottom:22px; margin-top:0; background:#e8f2fc; color:#1e2a3a; border-left-color: var(--primary);">
+      When someone on your team gets new elevated access, <strong>you'll review it within 24 hours</strong>
+    </div>
+
+    <div class="card-row">
+      <div class="card card-red">
+        <div class="card-label" style="color:var(--red);">Old Way</div>
+        <div class="card-body">
+          <strong>Quarterly reviews.</strong><br>
+          100+ items per batch.<br>
+          Rubber-stamping risk -- too much to evaluate carefully.
+        </div>
+      </div>
+      <div class="card card-green">
+        <div class="card-label" style="color:var(--green);">New Way</div>
+        <div class="card-body">
+          <strong>Daily reviews.</strong><br>
+          1-5 items per session.<br>
+          Focused, informed decisions on each access grant.
+        </div>
+      </div>
+      <div class="card card-blue">
+        <div class="card-label" style="color:var(--primary);">Time Investment</div>
+        <div class="card-body">
+          <strong>5-10 minutes</strong> per review session.<br>
+          Only triggered when someone on your team receives new access.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 3 - Why Managers?
+       ============================================================ -->
+  <div class="slide"
+       data-notes="This is the most important conceptual point. IT knows whether the account works. Only the manager knows whether the person should have it. Stress that this is not a technical question -- it is a business judgment. You know the person, their projects, and their current role.">
+
+    <div class="slide-tag">Your Role</div>
+    <h2 class="slide-heading">Why Managers? (Not IT)</h2>
+
+    <div class="split">
+      <div class="split-pane split-it">
+        <div class="split-label" style="color:var(--muted);">System Admin</div>
+        <div class="split-role" style="color:var(--muted);">IT / Help Desk</div>
+        <div class="split-question">"Is the account configured correctly?"</div>
+        <div class="split-verdict" style="color:var(--red); font-weight:600;">
+          Cannot answer whether the person <em>needs</em> this access
+        </div>
+      </div>
+      <div class="split-pane split-mgr">
+        <div class="split-label" style="color:var(--green);">The Right Reviewer</div>
+        <div class="split-role" style="color:var(--dark);">Manager -- You</div>
+        <div class="split-question">"Should this person have this access?"</div>
+        <div class="split-verdict" style="color:var(--green); font-weight:600;">
+          Knows the person, their role, their current projects
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      You are the only person who can answer whether your team member still needs this access
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 4 - Campaign Card Mockup
+       ============================================================ -->
+  <div class="slide"
+       data-notes="Show managers what the email and the card will look like. They do not need to find the certification themselves -- the email contains a direct link. Walk through each labelled field: campaign name, item count, deadline, and the Review button.">
+
+    <div class="slide-tag">What You Will See</div>
+    <h2 class="slide-heading">The Campaign Card</h2>
+
+    <div style="display:flex; gap:40px; width:100%; align-items:flex-start; justify-content:center;">
+
+      <div class="mockup-card">
+        <div class="mockup-header">
+          <div>
+            <div class="mockup-header-label">Pending Review</div>
+            AD Delta Certification -- Jane Smith
+          </div>
+          <div style="font-size:11px;color:#a0b4c8;">SailPoint ISC</div>
+        </div>
+
+        <div class="mockup-row">
+          <span class="mockup-row-label">Campaign</span>
+          <span class="mockup-row-value">AD Delta Cert -- J.Smith<span class="annot">[1]</span></span>
+        </div>
+        <div class="mockup-row">
+          <span class="mockup-row-label">Items to review</span>
+          <span class="mockup-row-value">3 access items<span class="annot">[2]</span></span>
+        </div>
+        <div class="mockup-row">
+          <span class="mockup-row-label">Deadline</span>
+          <span class="mockup-row-value overdue">24 hours remaining<span class="annot">[3]</span></span>
+        </div>
+        <div class="mockup-row">
+          <span class="mockup-row-label">Status</span>
+          <span class="mockup-row-value" style="color:var(--green);">Active</span>
+        </div>
+        <div><span class="mockup-btn">Review Now<span class="annot" style="color:#cde;">[4]</span></span></div>
+      </div>
+
+      <div style="flex:1; max-width:280px; padding-top:20px;">
+        <div class="annotation-row">[1] Named after the team member and event</div>
+        <div class="annotation-row">[2] Number of items needing a decision</div>
+        <div class="annotation-row">[3] Deadline -- aim to complete within the window</div>
+        <div class="annotation-row">[4] Direct link -- opens the review screen</div>
+        <div style="margin-top:20px; padding:12px 14px; background:#fffbf0; border-left:4px solid var(--yellow); border-radius:6px; font-size:13px; color:var(--text);">
+          You will get an <strong>email notification</strong> with a direct link. No need to log in and search.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 5 - Review Screen Mockup
+       ============================================================ -->
+  <div class="slide"
+       data-notes="Walk through the three-pane layout. Left: identity list. Centre: expanded access items. Right (not shown here for simplicity): sign-off. Highlight the PRIVILEGED badge -- this is the one that matters most. The three buttons on each row are the core actions, which we cover on the next slide.">
+
+    <div class="slide-tag">What You Will See</div>
+    <h2 class="slide-heading">The Review Screen</h2>
+
+    <div style="display:flex; gap:32px; width:100%; align-items:flex-start; justify-content:center;">
+
+      <div class="review-mockup">
+        <div class="review-topbar">
+          <span>AD Delta Cert -- Team Review</span>
+          <span style="font-size:11px;color:#a0b4c8;">3 identities</span>
+        </div>
+
+        <div class="identity-row">
+          <div class="identity-avatar">AS</div>
+          <div class="identity-name">Alice Smith</div>
+          <div class="identity-count">2 items</div>
+        </div>
+
+        <div class="identity-row expanded">
+          <div class="identity-avatar" style="background:var(--green);">BJ</div>
+          <div class="identity-name">Bob Jones &nbsp;<span style="font-size:11px;color:var(--primary);">-- expanded</span></div>
+          <div class="identity-count">2 items</div>
+        </div>
+        <div class="access-item">
+          <span class="access-name">CN=Tier1-Helpdesk,OU=Groups,DC=corp</span>
+          <span class="badge badge-std">Standard</span>
+        </div>
+        <div class="access-item">
+          <span class="access-name">CN=Domain Admins,OU=Groups,DC=corp</span>
+          <span class="badge badge-priv">PRIVILEGED</span>
+        </div>
+        <div class="btn-row">
+          <button class="mini-btn mini-approve">Approve</button>
+          <button class="mini-btn mini-revoke">Revoke</button>
+          <button class="mini-btn mini-reassign">Reassign</button>
+        </div>
+
+        <div class="identity-row">
+          <div class="identity-avatar" style="background:#7a6aac;">CK</div>
+          <div class="identity-name">Carol King</div>
+          <div class="identity-count">1 item</div>
+        </div>
+      </div>
+
+      <div style="flex:1; max-width:240px; padding-top:16px; display:flex; flex-direction:column; gap:10px;">
+        <div class="annotation-row">Each identity expands to show their access items</div>
+        <div class="annotation-row">PRIVILEGED badge flags elevated entitlements</div>
+        <div class="annotation-row">Three action buttons per entitlement row</div>
+        <div style="margin-top:8px; padding:12px 14px; background:#fff0e0; border-left:4px solid var(--yellow); border-radius:6px; font-size:13px; color:var(--text);">
+          Pay extra attention to anything marked <strong>PRIVILEGED</strong> -- these carry the most risk.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 6 - The Three Actions
+       ============================================================ -->
+  <div class="slide"
+       data-notes="These are the only three choices. Approve and Revoke are clear. Reassign is the safety valve -- if you do not recognise the system or have no context, send it to the system owner. It is better to reassign than to guess. Stress that none of these take effect until Sign Off.">
+
+    <div class="slide-tag">Your Decisions</div>
+    <h2 class="slide-heading">The Three Actions</h2>
+
+    <div class="card-row" style="gap:24px; margin-top:0;">
+      <div class="action-card action-approve">
+        <span class="action-symbol">&#10003;</span>
+        <div class="action-title">Approve</div>
+        <div class="action-tag">Yes, keep this access</div>
+        <div class="action-when">
+          Use when: the person uses this system for their current job and the access level is appropriate.
+        </div>
+      </div>
+      <div class="action-card action-revoke">
+        <span class="action-symbol">&#10007;</span>
+        <div class="action-title">Revoke</div>
+        <div class="action-tag">No, remove this</div>
+        <div class="action-when">
+          Use when: no longer needed, too broad, person changed roles, or a lower-privilege option exists.
+        </div>
+      </div>
+      <div class="action-card action-reassign">
+        <span class="action-symbol">&#8594;</span>
+        <div class="action-title">Reassign</div>
+        <div class="action-tag">Send to someone else</div>
+        <div class="action-when">
+          Use when: you do not recognise the system, or the person works in a different business area.
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px; padding:12px 20px; background:#f4f6f9; border-radius:var(--radius); font-size:13px; color:var(--muted); text-align:center; width:100%;">
+      None of these changes take effect until you click <strong style="color:var(--dark);">Sign Off</strong> -- you can revise any decision before then.
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 7 - Decision Flowchart
+       ============================================================ -->
+  <div class="slide"
+       data-notes="This is the mental model to give managers. Walk through each branch. The key insight is that Reassign is not a cop-out -- it is the correct answer when the reviewer lacks context. Encourage managers to add a short comment explaining any Revoke decision, which speeds up any audit queries later.">
+
+    <div class="slide-tag">Decision Guide</div>
+    <h2 class="slide-heading">The Decision Flowchart</h2>
+
+    <div style="width:100%; overflow-x:auto;">
+      <table style="border-collapse:separate; border-spacing:0; width:100%; table-layout:fixed;">
+        <tr>
+          <td colspan="7" style="text-align:center; padding-bottom:6px;">
+            <div class="flow-box flow-start" style="display:inline-block; padding:10px 28px;">Start: access item in front of you</div>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="7" style="text-align:center; height:24px;">
+            <div class="flow-arrow" style="margin:0 auto;"></div>
+          </td>
+        </tr>
+        <!-- Row 1: Still on team? -->
+        <tr>
+          <td style="width:20%; text-align:right; padding-right:8px; vertical-align:middle;">
+            <div class="flow-box flow-end-blue" style="font-size:12px; min-width:0; padding:8px 10px; display:inline-block;">Reassign<br><span style="font-size:10px;font-weight:400;">to new manager</span></div>
+          </td>
+          <td style="width:4%; vertical-align:middle; text-align:center;">
+            <div class="flow-h-arrow" style="transform:scaleX(-1); margin:0 auto;"></div>
+          </td>
+          <td style="width:8%; vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--red);">NO</td>
+          <td style="width:24%; text-align:center; vertical-align:middle; padding:0 4px;">
+            <div class="flow-box flow-q" style="font-size:12px;">Still on your team?</div>
+          </td>
+          <td style="width:8%; vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--green);">YES</td>
+          <td style="width:4%; vertical-align:middle;"></td>
+          <td style="width:32%;"></td>
+        </tr>
+        <tr>
+          <td></td><td></td><td></td>
+          <td style="text-align:center; height:22px;"><div class="flow-arrow" style="margin:0 auto;"></div></td>
+          <td></td><td></td><td></td>
+        </tr>
+        <!-- Row 2: Recognise system? -->
+        <tr>
+          <td style="text-align:right; padding-right:8px; vertical-align:middle;">
+            <div class="flow-box flow-end-blue" style="font-size:12px; min-width:0; padding:8px 10px; display:inline-block;">Reassign<br><span style="font-size:10px;font-weight:400;">to system owner</span></div>
+          </td>
+          <td style="vertical-align:middle; text-align:center;">
+            <div class="flow-h-arrow" style="transform:scaleX(-1); margin:0 auto;"></div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--red);">NO</td>
+          <td style="text-align:center; vertical-align:middle; padding:0 4px;">
+            <div class="flow-box flow-q" style="font-size:12px;">Recognise the system?</div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--green);">YES</td>
+          <td></td><td></td>
+        </tr>
+        <tr>
+          <td></td><td></td><td></td>
+          <td style="text-align:center; height:22px;"><div class="flow-arrow" style="margin:0 auto;"></div></td>
+          <td></td><td></td><td></td>
+        </tr>
+        <!-- Row 3: Uses it for current job? -->
+        <tr>
+          <td style="text-align:right; padding-right:8px; vertical-align:middle;">
+            <div class="flow-box flow-end-red" style="font-size:12px; min-width:0; padding:8px 10px; display:inline-block;">Revoke</div>
+          </td>
+          <td style="vertical-align:middle; text-align:center;">
+            <div class="flow-h-arrow" style="transform:scaleX(-1); margin:0 auto;"></div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--red);">NO</td>
+          <td style="text-align:center; vertical-align:middle; padding:0 4px;">
+            <div class="flow-box flow-q" style="font-size:12px;">Uses it for current job?</div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--green);">YES</td>
+          <td></td><td></td>
+        </tr>
+        <tr>
+          <td></td><td></td><td></td>
+          <td style="text-align:center; height:22px;"><div class="flow-arrow" style="margin:0 auto;"></div></td>
+          <td></td><td></td><td></td>
+        </tr>
+        <!-- Row 4: Lower level available? -->
+        <tr>
+          <td style="text-align:right; padding-right:8px; vertical-align:middle;">
+            <div class="flow-box flow-end-red" style="font-size:12px; min-width:0; padding:8px 10px; display:inline-block;">Revoke<br><span style="font-size:10px;font-weight:400;">+ comment</span></div>
+          </td>
+          <td style="vertical-align:middle; text-align:center;">
+            <div class="flow-h-arrow" style="transform:scaleX(-1); margin:0 auto;"></div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--green);">YES</td>
+          <td style="text-align:center; vertical-align:middle; padding:0 4px;">
+            <div class="flow-box flow-q" style="font-size:12px;">Lower-level option exists?</div>
+          </td>
+          <td style="vertical-align:middle; text-align:center; font-size:10px; font-weight:700; color:var(--red);">NO</td>
+          <td style="vertical-align:middle;">
+            <div class="flow-h-arrow" style="margin:0;"></div>
+          </td>
+          <td style="vertical-align:middle; padding-left:8px;">
+            <div class="flow-box flow-end-green" style="font-size:12px; min-width:0; padding:8px 10px; display:inline-block;">Approve<br><span style="font-size:10px;font-weight:400;">+ comment</span></div>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 8 - Common Scenarios
+       ============================================================ -->
+  <div class="slide"
+       data-notes="Run through each scenario briefly. The emergency-use scenario is the one managers push back on most -- reassure them that on-demand access (break-glass) exists as an alternative. If IT provisioned it without a request from the manager, that is also a signal to revoke and ask questions.">
+
+    <div class="slide-tag">Worked Examples</div>
+    <h2 class="slide-heading">Common Scenarios</h2>
+
+    <div class="scenario-grid">
+
+      <div class="scenario-card">
+        <div class="scenario-title">New hire with admin-level access</div>
+        <span class="scenario-action" style="background:#fdf3f3;color:var(--red);">Revoke Admin / Approve Standard</span>
+        <div class="scenario-body">New hires should start with least-privilege. Revoke elevated items; approve what fits their role. IT can re-provision if genuinely needed.</div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-title">Access left over from a previous role</div>
+        <span class="scenario-action" style="background:#fdf3f3;color:var(--red);">Revoke</span>
+        <div class="scenario-body">If the person moved teams or changed responsibilities, old system access no longer applies. Revoke the leftovers and note the reason.</div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-title">"I only use this in emergencies"</div>
+        <span class="scenario-action" style="background:#fdf3f3;color:var(--red);">Revoke</span>
+        <div class="scenario-body">Standing privilege for rare events is unnecessary risk. Revoke it; contact IAM to set up on-demand (break-glass) access for genuine emergency scenarios.</div>
+      </div>
+
+      <div class="scenario-card">
+        <div class="scenario-title">Access you do not recognise</div>
+        <span class="scenario-action" style="background:#f0f5fb;color:var(--primary);">Reassign</span>
+        <div class="scenario-body">Reassign to the system owner listed in the campaign. Never approve something you do not recognise -- that is exactly what Reassign is for.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 9 - Signing Off
+       ============================================================ -->
+  <div class="slide"
+       data-notes="The sign-off step is the point of no return. Emphasise that everything before sign-off is just staging. They can click any item and change the decision. After sign-off the record is final. The 24-72 hour window varies by campaign type -- daily delta certs are tighter than broader quarterly-style certs.">
+
+    <div class="slide-tag">Completing Your Review</div>
+    <h2 class="slide-heading">Signing Off</h2>
+
+    <div class="sign-flow">
+      <div class="sign-step">Review</div>
+      <div class="sign-arrow-h"></div>
+      <div class="sign-step">Decide</div>
+      <div class="sign-arrow-h"></div>
+      <div class="sign-step">Summary</div>
+      <div class="sign-arrow-h"></div>
+      <div class="sign-step highlighted">Sign Off</div>
+      <div class="sign-arrow-h"></div>
+      <div class="sign-step" style="background:var(--green);">Done</div>
+    </div>
+
+    <div class="sign-notes">
+      <div class="sign-note" style="background:#edf6ef; border:1px solid #9fd49f;">
+        <div class="sign-note-label" style="color:var(--green);">Before Sign Off</div>
+        Click any item and choose <strong>Revisit Decision</strong> to change your mind. Nothing has been actioned yet. All decisions remain editable.
+      </div>
+      <div class="sign-note" style="background:#fdf3f3; border:1px solid #e09090;">
+        <div class="sign-note-label" style="color:var(--red);">After Sign Off</div>
+        Decisions are <strong>final and recorded</strong> in the audit log. Revokes are actioned automatically. Contact the IAM team if a correction is needed.
+      </div>
+      <div class="sign-note" style="background:#f0f5fb; border:1px solid #90b0d4;">
+        <div class="sign-note-label" style="color:var(--primary);">Deadline</div>
+        Complete your review within <strong>24-72 hours</strong> of receiving the notification. Overdue items escalate to the IAM team automatically.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 10 - You Cannot Break Anything
+       ============================================================ -->
+  <div class="slide"
+       data-notes="This is the reassurance slide. Many managers are nervous about clicking the wrong thing. Address this head-on. The staging model means nothing is irreversible until sign-off, and even after sign-off the IAM team can intervene. Use this slide to take questions about the process before moving to resources.">
+
+    <div class="slide-tag">Before You Worry</div>
+    <h2 class="slide-heading" style="text-align:center; align-self:center;">You Cannot Break Anything</h2>
+
+    <div class="reassure-box">
+      <div class="reassure-headline">
+        Nothing changes until you click <span style="color:var(--green);">Sign Off</span>
+      </div>
+      <ul class="reassure-points">
+        <li>
+          <strong>Before Sign Off:</strong> click <em>Revisit Decision</em> on any row to change your mind as many times as you like.
+        </li>
+        <li>
+          <strong>After Sign Off:</strong> contact the IAM team -- mistakes are fixable. Revokes can be reversed by re-provisioning access.
+        </li>
+        <li>
+          <strong>Not sure?</strong> Use <em>Reassign</em> rather than guessing. That is the correct answer when you lack context.
+        </li>
+      </ul>
+      <div class="reassure-contact">
+        [IAM-TEAM-EMAIL] &nbsp;&nbsp;|&nbsp;&nbsp; [IAM-TEAM-PHONE]
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 11 - Resources
+       ============================================================ -->
+  <div class="slide"
+       data-notes="Point out that all of these are linked from a single intranet page -- managers only need to bookmark one URL. The tabbed guide is the comprehensive reference. The quick-ref card is the one-pager to keep on hand. Mention that the ISC screen guide is especially useful for the first review session.">
+
+    <div class="slide-tag">Supporting Materials</div>
+    <h2 class="slide-heading">Resources Available to You</h2>
+
+    <ul class="resource-list">
+      <li class="resource-item">
+        <div class="resource-icon">G</div>
+        <div>
+          <div class="resource-name">Manager's Guide (Comprehensive)</div>
+          <div class="resource-desc">Tabbed reference: Quick Start, Step-by-Step, Decision Flowchart, FAQ</div>
+        </div>
+        <a class="resource-link" href="[LINK]">[LINK]</a>
+      </li>
+      <li class="resource-item">
+        <div class="resource-icon">Q</div>
+        <div>
+          <div class="resource-name">Quick-Reference Card</div>
+          <div class="resource-desc">1-page printable -- the three actions and decision guide on a single sheet</div>
+        </div>
+        <a class="resource-link" href="[LINK]">[LINK]</a>
+      </li>
+      <li class="resource-item">
+        <div class="resource-icon">D</div>
+        <div>
+          <div class="resource-name">Decision Tree</div>
+          <div class="resource-desc">Visual flowchart for making Approve / Revoke / Reassign decisions</div>
+        </div>
+        <a class="resource-link" href="[LINK]">[LINK]</a>
+      </li>
+      <li class="resource-item">
+        <div class="resource-icon">S</div>
+        <div>
+          <div class="resource-name">ISC Screen Guide</div>
+          <div class="resource-desc">Annotated screenshots of each step in the certification review workflow</div>
+        </div>
+        <a class="resource-link" href="[LINK]">[LINK]</a>
+      </li>
+    </ul>
+
+    <p class="intranet-note">All documents are available at <span>[INTRANET LINK]</span></p>
+  </div>
+
+  <!-- ============================================================
+       SLIDE 12 - Questions
+       ============================================================ -->
+  <div class="slide slide-dark"
+       data-notes="Open floor for questions. Common questions: What if I am out of office? (Work Reassignment -- ask IAM to set it up.) What if my team member disagrees? (The manager decision stands; employee can raise with IAM.) How long until a Revoke takes effect? (Varies by source connector, typically minutes to hours for AD.) Remind everyone the IAM team will walk them through the first review if needed.">
+
+    <div class="questions-center">
+      <h2>Questions?</h2>
+      <p class="q-sub">Need Help?</p>
+
+      <div class="contact-block">
+        <div class="contact-line">
+          <span class="contact-label">Email</span>
+          <span>[IAM-TEAM-EMAIL]</span>
+        </div>
+        <div class="contact-line">
+          <span class="contact-label">Phone</span>
+          <span>[IAM-TEAM-PHONE]</span>
+        </div>
+        <div class="contact-line">
+          <span class="contact-label">Teams</span>
+          <span>[IAM-TEAM-CHANNEL]</span>
+        </div>
+      </div>
+
+      <p class="q-offer">We are happy to walk you through your first review.</p>
+    </div>
+
+    <p class="q-footer">This presentation and all supporting materials are available at <span style="color:var(--accent);">[LINK]</span></p>
+  </div>
+
+</div><!-- end #deck -->
+
+<!-- ---- CONTROLS ---- -->
+<div id="controls">
+  <button class="nav-btn" id="btn-prev" disabled>Prev</button>
+  <span id="counter">Slide 1 of 12</span>
+  <button class="nav-btn" id="btn-next">Next</button>
+</div>
+
+<!-- ---- NOTES PANEL ---- -->
+<div id="notes-panel">
+  <div id="notes-content">
+    <div id="notes-label">Presenter Notes</div>
+    <div id="notes-text"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var slides     = document.querySelectorAll(".slide");
+  var total      = slides.length;
+  var current    = 0;
+  var notesOpen  = false;
+
+  var btnPrev    = document.getElementById("btn-prev");
+  var btnNext    = document.getElementById("btn-next");
+  var counter    = document.getElementById("counter");
+  var notesPanel = document.getElementById("notes-panel");
+  var notesText  = document.getElementById("notes-text");
+  var notesToggle= document.getElementById("notes-toggle");
+
+  function goTo(n) {
+    if (n < 0 || n >= total) return;
+    slides[current].classList.remove("active");
+    current = n;
+    slides[current].classList.add("active");
+    counter.textContent = "Slide " + (current + 1) + " of " + total;
+    btnPrev.disabled = (current === 0);
+    btnNext.disabled = (current === total - 1);
+    if (notesOpen) showNotes();
+  }
+
+  function showNotes() {
+    var note = slides[current].getAttribute("data-notes") || "(No notes for this slide.)";
+    notesText.textContent = note;
+  }
+
+  function toggleNotes() {
+    notesOpen = !notesOpen;
+    if (notesOpen) {
+      notesPanel.classList.add("open");
+      notesToggle.textContent = "Notes [N] -- ON";
+      showNotes();
+    } else {
+      notesPanel.classList.remove("open");
+      notesToggle.textContent = "Notes [N]";
+    }
+  }
+
+  btnPrev.addEventListener("click", function () { goTo(current - 1); });
+  btnNext.addEventListener("click", function () { goTo(current + 1); });
+  notesToggle.addEventListener("click", toggleNotes);
+
+  document.addEventListener("keydown", function (e) {
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+      case " ":
+        e.preventDefault();
+        goTo(current + 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        e.preventDefault();
+        goTo(current - 1);
+        break;
+      case "n":
+      case "N":
+        toggleNotes();
+        break;
+      case "Home":
+        e.preventDefault();
+        goTo(0);
+        break;
+      case "End":
+        e.preventDefault();
+        goTo(total - 1);
+        break;
+    }
+  });
+
+  // Initialize
+  goTo(0);
+}());
+</script>
+</body>
+</html>

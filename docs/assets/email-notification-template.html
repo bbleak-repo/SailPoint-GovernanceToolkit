@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SailPoint ISC Campaign Notification -- Email Preview and Templates</title>
+<style>
+  /* ============================================================
+     GLOBAL RESET AND BASE
+  ============================================================ */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f0f2f5;
+    color: #1a2332;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ============================================================
+     PAGE LAYOUT
+  ============================================================ */
+  .page-wrapper {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 32px 24px;
+  }
+
+  .page-title {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1a2332;
+    margin-bottom: 6px;
+  }
+
+  .page-subtitle {
+    font-size: 14px;
+    color: #5a6a7e;
+    margin-bottom: 40px;
+    border-bottom: 1px solid #d0d7e3;
+    padding-bottom: 20px;
+  }
+
+  /* ============================================================
+     SECTION HEADINGS
+  ============================================================ */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .section-number {
+    background: #1a2332;
+    color: #ffffff;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .section-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a2332;
+  }
+
+  .section-description {
+    font-size: 13px;
+    color: #5a6a7e;
+    margin-top: 2px;
+  }
+
+  /* ============================================================
+     PART 1: OUTLOOK FRAME
+  ============================================================ */
+  .outlook-frame {
+    background: #ffffff;
+    border: 1px solid #c8cdd6;
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    overflow: hidden;
+    margin-bottom: 36px;
+  }
+
+  /* Title bar */
+  .outlook-titlebar {
+    background: #1a2332;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .outlook-titlebar-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #4a5568;
+  }
+
+  .dot.red   { background: #e05252; }
+  .dot.amber { background: #e8a020; }
+  .dot.green { background: #40a860; }
+
+  .outlook-titlebar-label {
+    color: #a0aab8;
+    font-size: 12px;
+    margin-left: 6px;
+  }
+
+  /* Ribbon / toolbar area */
+  .outlook-ribbon {
+    background: #f5f6f8;
+    border-bottom: 1px solid #dde1e8;
+    padding: 6px 16px;
+    display: flex;
+    gap: 20px;
+  }
+
+  .ribbon-btn {
+    font-size: 11px;
+    color: #4a5568;
+    cursor: default;
+    padding: 2px 4px;
+  }
+
+  .ribbon-btn.active {
+    color: #1a2332;
+    font-weight: 600;
+    border-bottom: 2px solid #0066cc;
+  }
+
+  /* Header fields */
+  .outlook-header {
+    background: #ffffff;
+    border-bottom: 1px solid #eaecf0;
+    padding: 14px 20px;
+  }
+
+  .header-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    position: relative;
+  }
+
+  .header-row:last-child { margin-bottom: 0; }
+
+  .header-label {
+    color: #6b7a90;
+    width: 56px;
+    flex-shrink: 0;
+    padding-top: 1px;
+  }
+
+  .header-value {
+    color: #1a2332;
+    font-weight: 500;
+    flex: 1;
+  }
+
+  .header-subject {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a2332;
+  }
+
+  /* Email body canvas */
+  .outlook-body {
+    background: #e8eaf0;
+    padding: 28px 20px;
+    position: relative;
+  }
+
+  .email-card {
+    background: #ffffff;
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.10);
+    max-width: 580px;
+    margin: 0 auto;
+    overflow: visible;
+    position: relative;
+  }
+
+  /* Email internal sections */
+  .email-logo-bar {
+    background: #1a2332;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .email-logo-text {
+    color: #ffffff;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  .email-logo-sub {
+    color: #7a9ab8;
+    font-size: 11px;
+    font-weight: 400;
+    display: block;
+    margin-top: 2px;
+  }
+
+  .email-logo-badge {
+    background: #0066cc;
+    color: #ffffff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 3px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+
+  .email-body-content {
+    padding: 28px 32px;
+  }
+
+  .email-greeting {
+    font-size: 15px;
+    color: #1a2332;
+    margin-bottom: 12px;
+  }
+
+  .email-intro {
+    font-size: 13px;
+    color: #3a4a5e;
+    margin-bottom: 22px;
+    line-height: 1.6;
+  }
+
+  /* Campaign details box */
+  .campaign-box {
+    border: 1px solid #d0d7e3;
+    border-left: 4px solid #0066cc;
+    border-radius: 4px;
+    padding: 18px 20px;
+    background: #f7f9fc;
+    margin-bottom: 24px;
+    position: relative;
+  }
+
+  .campaign-box-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #6b7a90;
+    margin-bottom: 12px;
+  }
+
+  .campaign-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .campaign-row:last-child { margin-bottom: 0; }
+
+  .campaign-row-label {
+    color: #6b7a90;
+    width: 110px;
+    flex-shrink: 0;
+    font-size: 12px;
+  }
+
+  .campaign-row-value {
+    color: #1a2332;
+    font-weight: 600;
+  }
+
+  .priority-badge {
+    display: inline-block;
+    background: #fff3cd;
+    border: 1px solid #e8a020;
+    color: #7a5000;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 3px;
+  }
+
+  /* CTA button */
+  .email-cta-wrap {
+    text-align: center;
+    margin: 24px 0 20px;
+  }
+
+  .email-cta-btn {
+    display: inline-block;
+    background: #0066cc;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 12px 36px;
+    border-radius: 4px;
+    text-decoration: none;
+    letter-spacing: 0.3px;
+    cursor: default;
+  }
+
+  .email-link-line {
+    font-size: 12px;
+    color: #5a6a7e;
+    text-align: center;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  .email-link-line a {
+    color: #0066cc;
+    text-decoration: underline;
+    cursor: default;
+  }
+
+  .email-footer {
+    background: #f7f9fc;
+    border-top: 1px solid #eaecf0;
+    padding: 14px 32px;
+    font-size: 11px;
+    color: #8a9aae;
+    text-align: center;
+  }
+
+  /* ============================================================
+     ANNOTATION CALLOUTS
+  ============================================================ */
+  .callout {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #e03030;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    z-index: 10;
+    cursor: default;
+  }
+
+  /* Callout positions are relative to the parent element that has position:relative */
+  /* Subject line */
+  .callout-1 { top: 2px; right: -14px; }
+  /* Campaign name */
+  .callout-2 { top: 24px; right: -14px; }
+  /* Item count */
+  .callout-3 { top: 50px; right: -14px; }
+  /* Deadline */
+  .callout-4 { top: 76px; right: -14px; }
+  /* CTA button */
+  .callout-5 { top: -12px; right: -14px; }
+  /* URL line */
+  .callout-6 { top: -10px; right: -14px; }
+
+  /* ============================================================
+     ANNOTATION LEGEND
+  ============================================================ */
+  .annotation-legend {
+    background: #ffffff;
+    border: 1px solid #d0d7e3;
+    border-radius: 6px;
+    padding: 24px 28px;
+    margin-top: 8px;
+    margin-bottom: 48px;
+  }
+
+  .annotation-legend-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1a2332;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eaecf0;
+  }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 32px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .legend-number {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #e03030;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .legend-text {
+    flex: 1;
+  }
+
+  .legend-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1a2332;
+  }
+
+  .legend-desc {
+    font-size: 12px;
+    color: #5a6a7e;
+    margin-top: 2px;
+    line-height: 1.5;
+  }
+
+  /* ============================================================
+     PART 2: EMAIL TEMPLATES
+  ============================================================ */
+  .template-section {
+    margin-bottom: 48px;
+  }
+
+  .template-card {
+    background: #ffffff;
+    border: 1px solid #d0d7e3;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 28px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+  }
+
+  .template-card-header {
+    background: #1a2332;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .template-card-title {
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .template-card-tag {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .tag-pre  { background: #1a5276; color: #aed6f1; }
+  .tag-first { background: #1e6e3a; color: #a9dfbf; }
+  .tag-overdue { background: #7b241c; color: #f1948a; }
+
+  .template-meta {
+    background: #f7f9fc;
+    border-bottom: 1px solid #eaecf0;
+    padding: 12px 24px;
+    font-size: 12px;
+  }
+
+  .template-meta-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .template-meta-row:last-child { margin-bottom: 0; }
+
+  .template-meta-label {
+    color: #6b7a90;
+    width: 58px;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+
+  .template-meta-value {
+    color: #1a2332;
+  }
+
+  .template-usage-note {
+    padding: 10px 24px;
+    font-size: 12px;
+    color: #5a6a7e;
+    background: #fffbf0;
+    border-bottom: 1px solid #f0e8d0;
+    border-left: 3px solid #e8a020;
+  }
+
+  /* Code block style for copy-paste */
+  .template-body {
+    padding: 0 24px 24px;
+  }
+
+  .copy-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #6b7a90;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    margin-top: 18px;
+    margin-bottom: 6px;
+  }
+
+  .copy-block {
+    background: #f4f6f9;
+    border: 1px solid #d0d7e3;
+    border-radius: 4px;
+    padding: 14px 16px;
+    font-family: "SF Mono", "Consolas", "Menlo", "Courier New", monospace;
+    font-size: 12px;
+    color: #2a3a4e;
+    white-space: pre-wrap;
+    line-height: 1.65;
+    word-break: break-word;
+    position: relative;
+  }
+
+  .copy-block .placeholder {
+    background: #fff3cd;
+    border: 1px solid #e8a020;
+    border-radius: 2px;
+    padding: 0 3px;
+    color: #7a5000;
+    font-style: normal;
+  }
+
+  /* Divider */
+  .section-divider {
+    border: none;
+    border-top: 2px solid #d0d7e3;
+    margin: 48px 0 40px;
+  }
+
+  /* Tip box */
+  .tip-box {
+    background: #eef4fb;
+    border: 1px solid #b8d0ea;
+    border-left: 4px solid #0066cc;
+    border-radius: 4px;
+    padding: 14px 18px;
+    font-size: 13px;
+    color: #1a3a5e;
+    margin-bottom: 28px;
+    line-height: 1.6;
+  }
+
+  .tip-box strong {
+    font-weight: 700;
+  }
+
+  /* Footer */
+  .page-footer {
+    text-align: center;
+    font-size: 12px;
+    color: #8a9aae;
+    padding: 24px 0 12px;
+    border-top: 1px solid #d0d7e3;
+    margin-top: 48px;
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    .legend-grid { grid-template-columns: 1fr; }
+    .email-body-content { padding: 20px 18px; }
+    .email-logo-bar { padding: 16px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-wrapper">
+
+  <!-- ======================================================
+       PAGE TITLE
+  ====================================================== -->
+  <div class="page-title">SailPoint ISC -- Campaign Notification Email</div>
+  <div class="page-subtitle">
+    Reference guide for IAM teams and managers. Part 1 shows what the notification email looks like with labeled callouts.
+    Part 2 contains ready-to-send communication templates for the IAM team.
+  </div>
+
+
+  <!-- ======================================================
+       PART 1: ANNOTATED EMAIL PREVIEW
+  ====================================================== -->
+  <div class="section-header">
+    <div class="section-number">1</div>
+    <div>
+      <div class="section-title">What the Notification Email Looks Like</div>
+      <div class="section-description">Simulated view in an Outlook-style email client. Numbered callouts correspond to the legend below.</div>
+    </div>
+  </div>
+
+  <div class="tip-box">
+    <strong>For managers:</strong> When a Daily AD Delta Cert campaign is created, SailPoint automatically sends this email to the assigned reviewer. Check your inbox and junk folder for messages from <strong>noreply@sailpoint.com</strong> with the subject line starting with "Action Required: Access Review".
+  </div>
+
+  <!-- OUTLOOK FRAME -->
+  <div class="outlook-frame">
+
+    <!-- Title bar (simulates app chrome) -->
+    <div class="outlook-titlebar">
+      <div class="outlook-titlebar-dots">
+        <div class="dot red"></div>
+        <div class="dot amber"></div>
+        <div class="dot green"></div>
+      </div>
+      <div class="outlook-titlebar-label">Microsoft Outlook -- Action Required: Access Review -- Daily AD Delta Cert (Jun 5, 2026)</div>
+    </div>
+
+    <!-- Ribbon -->
+    <div class="outlook-ribbon">
+      <span class="ribbon-btn active">Message</span>
+      <span class="ribbon-btn">Reply</span>
+      <span class="ribbon-btn">Reply All</span>
+      <span class="ribbon-btn">Forward</span>
+      <span class="ribbon-btn">Delete</span>
+    </div>
+
+    <!-- Header fields -->
+    <div class="outlook-header">
+
+      <div class="header-row" style="position:relative;">
+        <span class="header-label">From:</span>
+        <span class="header-value">SailPoint Identity Security Cloud &lt;noreply@sailpoint.com&gt;</span>
+      </div>
+
+      <div class="header-row" style="position:relative;">
+        <span class="header-label">To:</span>
+        <span class="header-value">manager@company.com</span>
+      </div>
+
+      <div class="header-row" style="position:relative; overflow:visible;">
+        <span class="header-label">Subject:</span>
+        <span class="header-value header-subject" style="position:relative;">
+          Action Required: Access Review -- Daily AD Delta Cert (Jun 5, 2026)
+          <span class="callout callout-1">1</span>
+        </span>
+      </div>
+
+      <div class="header-row">
+        <span class="header-label">Date:</span>
+        <span class="header-value">June 5, 2026, 8:00 AM</span>
+      </div>
+
+    </div>
+
+    <!-- Email body canvas -->
+    <div class="outlook-body">
+
+      <!-- The email card itself, shifted right to leave room for callouts on the left -->
+      <div style="max-width:640px; margin:0 auto; padding-right:50px; position:relative;">
+
+        <div class="email-card">
+
+          <!-- Logo bar -->
+          <div class="email-logo-bar">
+            <div>
+              <div class="email-logo-text">SailPoint</div>
+              <span class="email-logo-sub">Identity Security Cloud</span>
+            </div>
+            <div class="email-logo-badge">Notification</div>
+          </div>
+
+          <!-- Body content -->
+          <div class="email-body-content">
+
+            <div class="email-greeting">Hello [Manager Name],</div>
+            <div class="email-intro">
+              You have a new access certification campaign requiring your review. Please log in to SailPoint
+              and complete your decisions before the deadline shown below.
+            </div>
+
+            <!-- Campaign details box -->
+            <div class="campaign-box" style="position:relative;">
+
+              <div class="campaign-box-title">Campaign Details</div>
+
+              <div class="campaign-row" style="position:relative;">
+                <span class="campaign-row-label">Campaign:</span>
+                <span class="campaign-row-value" style="position:relative;">
+                  Daily AD Delta Cert -- 2026-06-05
+                  <span class="callout callout-2">2</span>
+                </span>
+              </div>
+
+              <div class="campaign-row" style="position:relative; overflow:visible;">
+                <span class="campaign-row-label">Items to Review:</span>
+                <span class="campaign-row-value" style="position:relative;">
+                  3 identities, 5 access items
+                  <span class="callout callout-3">3</span>
+                </span>
+              </div>
+
+              <div class="campaign-row" style="position:relative; overflow:visible;">
+                <span class="campaign-row-label">Deadline:</span>
+                <span class="campaign-row-value" style="position:relative;">
+                  June 7, 2026 (48 hours)
+                  <span class="callout callout-4">4</span>
+                </span>
+              </div>
+
+              <div class="campaign-row">
+                <span class="campaign-row-label">Priority:</span>
+                <span class="campaign-row-value">
+                  <span class="priority-badge">High -- privileged access detected</span>
+                </span>
+              </div>
+
+            </div><!-- /campaign-box -->
+
+            <!-- CTA button -->
+            <div class="email-cta-wrap" style="position:relative;">
+              <span class="callout callout-5">5</span>
+              <a class="email-cta-btn" href="#">Review Now</a>
+            </div>
+
+            <!-- Direct URL -->
+            <div class="email-link-line" style="position:relative;">
+              <span class="callout callout-6">6</span>
+              You can also access your certifications at:<br>
+              <a href="#">https://[org].identitynow.com/ui/certifications</a>
+            </div>
+
+          </div><!-- /email-body-content -->
+
+          <!-- Footer -->
+          <div class="email-footer">
+            This is an automated notification. For help, contact your IAM team.
+          </div>
+
+        </div><!-- /email-card -->
+
+      </div><!-- /padding-right wrapper -->
+
+    </div><!-- /outlook-body -->
+
+  </div><!-- /outlook-frame -->
+
+
+  <!-- ANNOTATION LEGEND -->
+  <div class="annotation-legend">
+    <div class="annotation-legend-title">Callout Legend -- What to Look For</div>
+    <div class="legend-grid">
+
+      <div class="legend-item">
+        <div class="legend-number">1</div>
+        <div class="legend-text">
+          <div class="legend-label">Subject line</div>
+          <div class="legend-desc">Search your inbox for "Action Required: Access Review" -- this is how all SailPoint campaign notifications are labeled. Check your Junk folder if you do not see it.</div>
+        </div>
+      </div>
+
+      <div class="legend-item">
+        <div class="legend-number">2</div>
+        <div class="legend-text">
+          <div class="legend-label">Campaign name</div>
+          <div class="legend-desc">The exact name you will see after clicking through to SailPoint. "Daily AD Delta Cert" identifies this as an AD-change-driven review, not an annual campaign.</div>
+        </div>
+      </div>
+
+      <div class="legend-item">
+        <div class="legend-number">3</div>
+        <div class="legend-text">
+          <div class="legend-label">Item count</div>
+          <div class="legend-desc">The number of identities and access items you need to certify. Delta campaigns are small by design -- typically 1-10 items per reviewer, taking 5-10 minutes.</div>
+        </div>
+      </div>
+
+      <div class="legend-item">
+        <div class="legend-number">4</div>
+        <div class="legend-text">
+          <div class="legend-label">Deadline</div>
+          <div class="legend-desc">Complete your review before this date. Overdue campaigns may be auto-completed by the IAM team or escalated. Uncertified access may be auto-revoked per policy.</div>
+        </div>
+      </div>
+
+      <div class="legend-item">
+        <div class="legend-number">5</div>
+        <div class="legend-text">
+          <div class="legend-label">"Review Now" button</div>
+          <div class="legend-desc">Click to go directly to your open campaigns in SailPoint. You will be prompted to log in with your corporate SSO credentials if not already signed in.</div>
+        </div>
+      </div>
+
+      <div class="legend-item">
+        <div class="legend-number">6</div>
+        <div class="legend-text">
+          <div class="legend-label">Direct URL</div>
+          <div class="legend-desc">Use this link if the "Review Now" button does not work in your email client. Bookmark <strong>[org].identitynow.com/ui/certifications</strong> for quick access.</div>
+        </div>
+      </div>
+
+    </div><!-- /legend-grid -->
+  </div><!-- /annotation-legend -->
+
+
+  <!-- ======================================================
+       PART 2: EMAIL TEMPLATES FOR IAM TEAM
+  ====================================================== -->
+  <hr class="section-divider">
+
+  <div class="section-header">
+    <div class="section-number">2</div>
+    <div>
+      <div class="section-title">Ready-to-Send Communication Templates</div>
+      <div class="section-description">
+        Three templates for the IAM team. Copy the subject and body text, customize the highlighted placeholders, and send via your standard email client.
+        Placeholders appear as <code style="background:#fff3cd;border:1px solid #e8a020;border-radius:2px;padding:1px 4px;font-size:12px;">[LIKE THIS]</code>.
+      </div>
+    </div>
+  </div>
+
+
+  <!-- TEMPLATE A -->
+  <div class="template-card">
+
+    <div class="template-card-header">
+      <div class="template-card-title">Template A -- Pre-Launch Announcement</div>
+      <span class="template-card-tag tag-pre">Send 1 week before go-live</span>
+    </div>
+
+    <div class="template-meta">
+      <div class="template-meta-row">
+        <span class="template-meta-label">Audience:</span>
+        <span class="template-meta-value">All managers who will receive certification campaigns</span>
+      </div>
+      <div class="template-meta-row">
+        <span class="template-meta-label">Purpose:</span>
+        <span class="template-meta-value">Set expectations before the first campaign arrives -- reduces help desk tickets</span>
+      </div>
+    </div>
+
+    <div class="template-usage-note">
+      Send at least 5 business days before the first daily delta cert goes live. Include a link to the Manager Attestation Guide if available.
+    </div>
+
+    <div class="template-body">
+
+      <div class="copy-label">Subject line</div>
+      <div class="copy-block">Starting <span class="placeholder">[DATE, e.g. June 12]</span>: Daily Access Reviews for Privileged Permissions</div>
+
+      <div class="copy-label">Email body</div>
+      <div class="copy-block">Hello,
+
+Starting <span class="placeholder">[DATE]</span>, you will begin receiving periodic email notifications from SailPoint (noreply@sailpoint.com) asking you to review access for your direct reports.
+
+WHAT IS CHANGING?
+
+Our Identity Security team has enabled Daily AD Delta Certifications. This means that whenever a member of your team is granted elevated or privileged access in Active Directory, you will receive a short certification request -- usually 1 to 5 items -- to confirm that access is appropriate.
+
+This replaces the annual bulk review for these specific access types. Each review should take 5 to 10 minutes.
+
+WHAT YOU NEED TO DO
+
+When you receive an email with the subject "Action Required: Access Review," click the "Review Now" button and log in with your corporate credentials. For each identity listed, choose one of two options:
+
+  - Certify: The access is appropriate. No action is taken.
+  - Revoke: The access should be removed. IT will process the removal automatically.
+
+You will have 48 hours to complete each review. If you do not respond, the IAM team will follow up.
+
+HELPFUL RESOURCES
+
+  - Manager Quick-Start Guide: <span class="placeholder">[LINK TO GUIDE]</span>
+  - SailPoint Certifications Portal: https://<span class="placeholder">[ORG]</span>.identitynow.com/ui/certifications
+  - Questions or concerns: Contact <span class="placeholder">[IAM TEAM EMAIL or SERVICE DESK]</span>
+
+Thank you for supporting our access governance program.
+
+<span class="placeholder">[YOUR NAME]</span>
+<span class="placeholder">[TITLE]</span>
+Identity and Access Management
+<span class="placeholder">[COMPANY NAME]</span></div>
+
+    </div><!-- /template-body -->
+  </div><!-- /template-card A -->
+
+
+  <!-- TEMPLATE B -->
+  <div class="template-card">
+
+    <div class="template-card-header">
+      <div class="template-card-title">Template B -- First Campaign Notification</div>
+      <span class="template-card-tag tag-first">Send with the first live campaign</span>
+    </div>
+
+    <div class="template-meta">
+      <div class="template-meta-row">
+        <span class="template-meta-label">Audience:</span>
+        <span class="template-meta-value">Managers receiving their first real certification campaign</span>
+      </div>
+      <div class="template-meta-row">
+        <span class="template-meta-label">Purpose:</span>
+        <span class="template-meta-value">Accompany the SailPoint system notification with a human touchpoint and quick-start guidance</span>
+      </div>
+    </div>
+
+    <div class="template-usage-note">
+      Send on the same day the campaign activates. Send from a real IAM team address (not a no-reply) so managers can reply with questions.
+    </div>
+
+    <div class="template-body">
+
+      <div class="copy-label">Subject line</div>
+      <div class="copy-block">Your First Access Review is Ready -- Quick Start Guide Inside</div>
+
+      <div class="copy-label">Email body</div>
+      <div class="copy-block">Hello <span class="placeholder">[Manager Name]</span>,
+
+Your first Daily AD Delta Certification is now live in SailPoint. You should have already received an automated notification from noreply@sailpoint.com -- this message is a friendly follow-up from the IAM team.
+
+YOUR CAMPAIGN AT A GLANCE
+
+  Campaign name: <span class="placeholder">[Campaign Name, e.g. Daily AD Delta Cert -- 2026-06-05]</span>
+  Items to review: <span class="placeholder">[N identities, N access items]</span>
+  Deadline: <span class="placeholder">[DATE, e.g. June 7, 2026]</span>
+
+HOW TO COMPLETE IT (5 to 10 minutes)
+
+1. Click the "Review Now" button in the SailPoint email, or go directly to:
+   https://<span class="placeholder">[ORG]</span>.identitynow.com/ui/certifications
+
+2. Log in with your corporate SSO account.
+
+3. For each item, read the identity name and the access entitlement listed.
+
+4. Choose "Certify" if the access looks correct, or "Revoke" if it should be removed.
+
+5. Click "Complete" when all items have a decision.
+
+That is all. SailPoint handles the rest automatically.
+
+NEED HELP?
+
+  - Step-by-step guide with screenshots: <span class="placeholder">[LINK TO GUIDE]</span>
+  - Call or message the IAM team directly: <span class="placeholder">[PHONE / TEAMS / EMAIL]</span>
+
+We appreciate you taking a few minutes to complete this review. These certifications help us ensure that elevated access is always intentional and justified.
+
+<span class="placeholder">[YOUR NAME]</span>
+Identity and Access Management</div>
+
+    </div><!-- /template-body -->
+  </div><!-- /template-card B -->
+
+
+  <!-- TEMPLATE C -->
+  <div class="template-card">
+
+    <div class="template-card-header">
+      <div class="template-card-title">Template C -- Missed Deadline Reminder</div>
+      <span class="template-card-tag tag-overdue">Send when campaign is overdue</span>
+    </div>
+
+    <div class="template-meta">
+      <div class="template-meta-row">
+        <span class="template-meta-label">Audience:</span>
+        <span class="template-meta-value">Managers who have not completed a campaign past its deadline</span>
+      </div>
+      <div class="template-meta-row">
+        <span class="template-meta-label">Purpose:</span>
+        <span class="template-meta-value">Prompt completion while communicating consequences of continued inaction</span>
+      </div>
+    </div>
+
+    <div class="template-usage-note">
+      Send within 24 hours of the deadline passing. Escalate to the manager's director if no response is received within another 24 hours. Consult your policy before revoking access automatically.
+    </div>
+
+    <div class="template-body">
+
+      <div class="copy-label">Subject line</div>
+      <div class="copy-block">Overdue: Access Review for <span class="placeholder">[Campaign Name]</span> -- Action Needed</div>
+
+      <div class="copy-label">Email body</div>
+      <div class="copy-block">Hello <span class="placeholder">[Manager Name]</span>,
+
+Your access review campaign is now past its deadline and requires immediate attention.
+
+CAMPAIGN DETAILS
+
+  Campaign: <span class="placeholder">[Campaign Name, e.g. Daily AD Delta Cert -- 2026-06-05]</span>
+  Original deadline: <span class="placeholder">[DATE]</span>
+  Status: Overdue -- <span class="placeholder">[N]</span> items still require a decision
+
+WHAT HAPPENS NEXT
+
+Per our Access Governance Policy (<span class="placeholder">[POLICY REF, e.g. POL-IAM-003]</span>), access certifications not completed within the review window are subject to the following:
+
+  - The IAM team will attempt to contact you or your delegate.
+  - If no response is received within <span class="placeholder">[N, e.g. 24]</span> additional hours, the uncertified access may be auto-revoked pending leadership approval.
+  - Repeated missed reviews are reported to the CISO and recorded in the access governance audit log.
+
+We understand that competing priorities can cause delays. If you are unavailable, please forward this message to a designated delegate or contact us immediately so we can reassign the campaign.
+
+COMPLETE YOUR REVIEW NOW
+
+  Link: https://<span class="placeholder">[ORG]</span>.identitynow.com/ui/certifications
+
+  Need to reassign? Contact: <span class="placeholder">[IAM TEAM EMAIL or PHONE]</span>
+
+Thank you for your prompt attention to this matter.
+
+<span class="placeholder">[YOUR NAME]</span>
+<span class="placeholder">[TITLE]</span>
+Identity and Access Management
+<span class="placeholder">[COMPANY NAME]</span></div>
+
+    </div><!-- /template-body -->
+  </div><!-- /template-card C -->
+
+
+  <!-- ======================================================
+       PAGE FOOTER
+  ====================================================== -->
+  <div class="page-footer">
+    SailPoint ISC -- Campaign Notification Reference &nbsp;|&nbsp;
+    SailPoint Governance Toolkit &nbsp;|&nbsp;
+    Generated 2026-06-06
+  </div>
+
+</div><!-- /page-wrapper -->
+
+</body>
+</html>

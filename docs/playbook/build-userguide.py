@@ -28,7 +28,7 @@ OUT     = REPO / "docs" / "USER-GUIDE.html"
 # Constants
 # ---------------------------------------------------------------------------
 TITLE    = "SailPoint ISC Governance Toolkit — User Guide"
-SUBTITLE = "Comprehensive reference: Foundations · CLI Reference · GUI Reference · App Onboarding · Disconnected Ops · Reporting & Analytics · Production Runbook"
+SUBTITLE = "Comprehensive reference: Foundations · CLI Reference · GUI Reference · App Onboarding · Disconnected Ops · Reporting & Analytics · Production Runbook · Manager Guide"
 VERSION  = "2.0.0"
 DATE     = "2026-05-21"
 
@@ -410,6 +410,26 @@ def parse_runbook():
                         "body": intro_body, "group": "Production Runbook"})
     return secs
 
+def parse_manager_guide():
+    lines = read_md("08-manager-attestation-guide.md")
+    segs  = split_h2(lines)
+    secs  = []
+    intro_body = []
+    for raw_title, body in segs:
+        if not raw_title:
+            intro_body = list(body)
+            continue
+        tl = raw_title.strip().lower()
+        sid = make_sid("mgr", raw_title)
+        nav = raw_title
+        h2  = inline_md(raw_title)
+        secs.append({"id": sid, "nav": nav, "h2": h2, "body": body, "group": "Manager Guide"})
+    if intro_body:
+        secs.insert(0, {"id": "mgr-overview", "nav": "Overview",
+                        "h2": "Manager Attestation Guide &mdash; Overview",
+                        "body": intro_body, "group": "Manager Guide"})
+    return secs
+
 # ---------------------------------------------------------------------------
 # Build sidebar + mobile nav HTML
 # ---------------------------------------------------------------------------
@@ -548,7 +568,8 @@ def build():
     dops  = parse_disconnected_ops()
     rpt   = parse_reporting()
     run   = parse_runbook()
-    all_secs = found + cli + gui + onb + dops + rpt + run
+    mgr   = parse_manager_guide()
+    all_secs = found + cli + gui + onb + dops + rpt + run + mgr
 
     sidebar_html, mobile_html = build_sidebar(all_secs)
     sections_html = "".join(render_section(s) for s in all_secs)
@@ -645,7 +666,7 @@ document.addEventListener('DOMContentLoaded', function() {{
     print(f"Sections: {len(all_secs)}  "
           f"(Foundations: {len(found)}, CLI: {len(cli)}, GUI: {len(gui)}, "
           f"Onboarding: {len(onb)}, DisconnectedOps: {len(dops)}, "
-          f"Reporting: {len(rpt)}, Runbook: {len(run)})")
+          f"Reporting: {len(rpt)}, Runbook: {len(run)}, ManagerGuide: {len(mgr)})")
     ids_str = "\n  ".join(all_ids)
     print(f"Section IDs:\n  {ids_str}")
 

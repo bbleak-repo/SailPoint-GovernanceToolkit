@@ -721,7 +721,7 @@ body {
   <div id="report-header">
     <div class="title-block">
       <div class="report-title">SailPoint ISC Governance Toolkit — User Guide</div>
-      <div class="report-sub">Comprehensive reference: Foundations · CLI Reference · GUI Reference · App Onboarding · Disconnected Ops · Reporting &amp; Analytics · Production Runbook</div>
+      <div class="report-sub">Comprehensive reference: Foundations · CLI Reference · GUI Reference · App Onboarding · Disconnected Ops · Reporting &amp; Analytics · Production Runbook · Manager Guide</div>
     </div>
     <div class="meta-items">
       <div class="meta-item"><strong>Version</strong>2.0.0</div>
@@ -809,6 +809,18 @@ body {
 <a href="javascript:void(0)" onclick="showSection('run-operational-troubleshooting'); return false;">Operational Troublesho</a>
 <a href="javascript:void(0)" onclick="showSection('run-weekly-operations'); return false;">Weekly Operations</a>
 <a href="javascript:void(0)" onclick="showSection('run-monthly-operations'); return false;">Monthly Operations</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-overview'); return false;">Overview</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-quick-start-complete-your-review-in-5-minutes'); return false;">1. Quick start: comple</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-navigating-the-sailpoint-interface'); return false;">2. Navigating the Sail</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-making-decisions-approve-revoke-reassign'); return false;">3. Making decisions: a</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-signing-off-and-completing-your-review'); return false;">4. Signing off and com</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-common-scenarios'); return false;">5. Common scenarios</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-why-we-review-access-daily'); return false;">6. Why we review acces</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-why-managers-review-not-system-admins'); return false;">7. Why managers review</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-talking-to-your-team-about-access'); return false;">8. Talking to your tea</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-what-good-reviews-look-like'); return false;">9. What good reviews l</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-frequently-asked-questions'); return false;">10. Frequently asked q</a>
+<a href="javascript:void(0)" onclick="showSection('mgr-glossary'); return false;">11. Glossary</a>
 
   </div>
 </div>
@@ -908,6 +920,19 @@ body {
 <a href="javascript:void(0)" onclick="showSection('run-operational-troubleshooting'); return false;"><span class="sidebar-num">76</span><span>Operational Troubleshooting</span></a>
 <a href="javascript:void(0)" onclick="showSection('run-weekly-operations'); return false;"><span class="sidebar-num">77</span><span>Weekly Operations</span></a>
 <a href="javascript:void(0)" onclick="showSection('run-monthly-operations'); return false;"><span class="sidebar-num">78</span><span>Monthly Operations</span></a>
+<div class="sidebar-group-label">Manager Guide</div>
+<a href="javascript:void(0)" onclick="showSection('mgr-overview'); return false;"><span class="sidebar-num">79</span><span>Overview</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-quick-start-complete-your-review-in-5-minutes'); return false;"><span class="sidebar-num">80</span><span>1. Quick start: complete your review in 5 minutes</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-navigating-the-sailpoint-interface'); return false;"><span class="sidebar-num">81</span><span>2. Navigating the SailPoint interface</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-making-decisions-approve-revoke-reassign'); return false;"><span class="sidebar-num">82</span><span>3. Making decisions: approve, revoke, reassign</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-signing-off-and-completing-your-review'); return false;"><span class="sidebar-num">83</span><span>4. Signing off and completing your review</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-common-scenarios'); return false;"><span class="sidebar-num">84</span><span>5. Common scenarios</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-why-we-review-access-daily'); return false;"><span class="sidebar-num">85</span><span>6. Why we review access daily</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-why-managers-review-not-system-admins'); return false;"><span class="sidebar-num">86</span><span>7. Why managers review (not system admins)</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-talking-to-your-team-about-access'); return false;"><span class="sidebar-num">87</span><span>8. Talking to your team about access</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-what-good-reviews-look-like'); return false;"><span class="sidebar-num">88</span><span>9. What good reviews look like</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-frequently-asked-questions'); return false;"><span class="sidebar-num">89</span><span>10. Frequently asked questions</span></a>
+<a href="javascript:void(0)" onclick="showSection('mgr-glossary'); return false;"><span class="sidebar-num">90</span><span>11. Glossary</span></a>
 
     </div>
   </div>
@@ -5223,13 +5248,326 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPWeekly
 <h2>Monthly Operations</h2>
 <ol><li><strong>Compliance evidence packaging</strong> -- Run <code>Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 30 -IncludeLeadershipRollup -IncludeDataQuality -IncludePolicyCheck</code> to generate the monthly evidence package. Archive the output for auditor access.</li><li><strong>Trend review</strong> -- Run <code>Invoke-SPGovernanceMetrics.ps1 -TrendDaysBack 90 -TrendGranularity Monthly -IncludeCompletionForecast -OutputMode HTML</code> to review KPI trends. Look for declining completion rates or increasing review times.</li><li><strong>Config drift check</strong> -- Compare the current <code>settings.json</code> against the last known-good version. Pay attention to: <code>Safety</code> settings (should not be loosened without documentation), <code>DeltaCert.SourceIds</code> (should match current AD sources), and <code>DisconnectedApps.Applications</code> (should match current app inventory).</li><li><strong>Source coverage review</strong> -- Run <code>Invoke-SPCampaignSearch.ps1 -SourceCoverage -OutputMode HTML</code> to verify all sources have been covered by recent campaigns. Gaps may indicate new sources that need delta-cert configuration.</li><li><strong>Disconnected app inventory reconciliation</strong> -- Run <code>Invoke-SPDisconnectedAppRegistry.ps1 -Action List</code> and compare against the current list of applications that should be certified. Onboard new apps, decommission retired ones.</li></ol>
 </div>
+<div id="section-mgr-overview" class="report-section" style="display:none">
+<h2>Manager Attestation Guide &mdash; Overview</h2>
+<h2 id="manager-s-guide-to-access-certification-reviews">Manager's Guide to Access Certification Reviews</h2>
+<div class="callout callout-danger"><div class="callout-label">Security</div><p><strong>Audience:</strong> All people-managers who receive certification campaigns in SailPoint Identity Security Cloud (ISC). If this is your first time receiving an access review email, you are not alone. This guide walks you through exactly what to do -- step by step, in plain language. Most reviews take <strong>5-10 minutes</strong>. You cannot break anything while reviewing.</p>
+<table>
+<thead><tr>
+<th><strong>Need help?</strong> Contact the IAM team: <strong>[IAM-TEAM-EMAIL]</strong></th>
+<th><strong>[IAM-TEAM-PHONE]</strong></th>
+</tr></thead><tbody>
+</tbody></table></div>
+</div>
+<div id="section-mgr-quick-start-complete-your-review-in-5-minutes" class="report-section" style="display:none">
+<h2>1. Quick start: complete your review in 5 minutes</h2>
+<p>You got an email saying you have access to review. Here is exactly what to do.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Tip:</strong> You cannot break anything while reviewing. Access is only affected after you click <strong>Sign Off</strong> at the very end. Until then, you can change any decision.</p></div>
+<ol><li><strong>Click the link in your email</strong> -- or go to <code>[YOUR-ORG.identitynow.com]</code> and log in with your corporate credentials. You may need multi-factor authentication.</li><li><strong>You will see your team members who received new access.</strong> Click on a person to see the details of what access they were given.</li><li><strong>For each item, click Approve or Revoke.</strong> Approve (checkmark) means "yes, keep this access." Revoke (X) means "no, remove it." If you do not recognize the system, click <strong>Reassign</strong> to send it to someone who can evaluate it.</li><li><strong>Add a brief comment for important decisions.</strong> A one-line note is enough: "Still working on Project X" or "Transferred teams, no longer needed."</li><li><strong>Click Sign Off when you have decided on every item.</strong> Review your decisions on the summary page, then click <strong>Finish</strong>. Your decisions are now final. You are done.</li></ol>
+</div>
+<div id="section-mgr-navigating-the-sailpoint-interface" class="report-section" style="display:none">
+<h2>2. Navigating the SailPoint interface</h2>
+<h3 id="getting-to-your-campaign">Getting to your campaign</h3>
+<ol><li>Click the link in your notification email, or go to <code>[YOUR-ORG.identitynow.com]</code></li><li>Log in with your corporate credentials (multi-factor authentication may be required)</li><li>Click <strong>Certifications</strong> in the navigation menu</li><li>Select the <strong>Active</strong> tab -- this shows campaigns waiting for your review</li></ol>
+<h3 id="campaign-cards">Campaign cards</h3>
+<p>Each campaign appears as a card showing: campaign name, number of items to review, deadline, and progress. Click <strong>Details</strong> or <strong>Review</strong> to open it.</p>
+<h3 id="two-ways-to-review-people-vs-access">Two ways to review: people vs. access</h3>
+<p>Inside a campaign, you can switch between two views:</p>
+<table>
+<thead><tr>
+<th>View</th>
+<th>What you see</th>
+<th>Best for</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Identities</strong> (recommended)</td>
+<td>Your team members -- click a person to see all their access</td>
+<td>"Let me handle everything about Jane, then John"</td>
+</tr>
+<tr>
+<td><strong>Access Items</strong></td>
+<td>Permissions and access -- click one to see which team members have it</td>
+<td>"Do all 5 people really need this same admin access?"</td>
+</tr>
+</tbody></table>
+<h3 id="what-you-see-for-each-item">What you see for each item</h3>
+<table>
+<thead><tr>
+<th>Information</th>
+<th>What it means</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Privileged flag</strong></td>
+<td>Elevated risk -- pay extra attention</td>
+</tr>
+<tr>
+<td><strong>New access flag</strong></td>
+<td>Recently added (this is why it appeared in your campaign)</td>
+</tr>
+<tr>
+<td><strong>Last activity</strong></td>
+<td>When the person last used this access -- months-old = question it</td>
+</tr>
+<tr>
+<td><strong>Peer comparison</strong></td>
+<td>Whether others in the same role have this access</td>
+</tr>
+<tr>
+<td><strong>How it was granted</strong></td>
+<td>Requested = you can approve or revoke. Auto-assigned = acknowledge only</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Tip:</strong> If you see a "privileged" flag on access that has not been used in 60+ days, that is a strong signal to either revoke it or check with the team member.</p></div>
+</div>
+<div id="section-mgr-making-decisions-approve-revoke-reassign" class="report-section" style="display:none">
+<h2>3. Making decisions: approve, revoke, reassign</h2>
+<h3 id="approve">Approve</h3>
+<p>Click the <strong>checkmark icon</strong>. This means "yes, this person should have this access." Nothing changes -- the access stays in place and your approval is recorded.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> Some items show <strong>Acknowledge</strong> instead of Approve. These are access items that were automatically assigned based on job title or department. You cannot remove them through this review -- contact the IAM team if the assignment seems wrong.</p></div>
+<h3 id="revoke">Revoke</h3>
+<p>Click the <strong>X icon</strong>. This means "no, remove this access."</p>
+<p>After you sign off:</p>
+<ul><li><strong>Connected systems</strong> (like Active Directory): access is removed automatically</li><li><strong>Other systems</strong> (apps without a direct connection): a task is created for the system owner to remove it manually</li></ul>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Tip:</strong> Mistakes are fixable. Before sign-off, click <strong>Revisit Decision</strong> to change it. After sign-off, contact the IAM team at <strong>[IAM-TEAM-EMAIL]</strong> -- access can be re-requested through the standard process (typically takes <strong>[X hours/days]</strong>).</p></div>
+<h3 id="reassign">Reassign</h3>
+<p>If you are not the right person to evaluate an item, send it to someone who is. Use reassign when you do not recognize the system, the person recently transferred to you, or you are going on leave.</p>
+<p><strong>Rules:</strong> You cannot reassign to the person being reviewed (no self-certification). You cannot reassign after you have signed off.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Tip:</strong> Reassigning is not a sign of failure -- it is the responsible thing to do when you lack context. Always better than guessing.</p></div>
+<h3 id="bulk-decisions">Bulk decisions</h3>
+<p>Select multiple items with checkboxes and click <strong>Bulk Decisions</strong> to approve or revoke. Use carefully for elevated access -- review those individually.</p>
+<h3 id="comments">Comments</h3>
+<p>Add a short note to any decision. Required for some revocations, recommended for elevated access. One sentence is enough:</p>
+<ul><li>"Employee transferred to Marketing June 1 -- no longer needs this"</li><li>"Active DBA; still primary administrator for these servers"</li></ul>
+<h3 id="decision-flowchart-should-i-approve-or-revoke">Decision flowchart: should I approve or revoke?</h3>
+<p>Follow this guide when unsure:</p>
+<ol><li><strong>Is this person still on your team?</strong> No --&gt; <strong>Reassign</strong> to their current manager</li><li><strong>Do you recognize this system?</strong> No --&gt; <strong>Reassign</strong> to the system owner, or ask the team member</li><li><strong>Does this person use this access for their current job?</strong> No --&gt; <strong>Revoke</strong> with comment</li><li><strong>Is there a lower-level access that would work?</strong> Yes --&gt; <strong>Revoke</strong> and request the alternative via IAM</li><li>None of the above --&gt; <strong>Approve</strong> with a brief comment explaining why</li></ol>
+<h3 id="checklist-for-elevated-access">Checklist for elevated access</h3>
+<p>For items flagged as "privileged," run through this quick checklist:</p>
+<ul><li>[ ] <strong>Current role match:</strong> Does this access fit their current job (not a previous role)?</li><li>[ ] <strong>Active use:</strong> Have they used it recently, or has it been sitting idle?</li><li>[ ] <strong>Minimum needed:</strong> Is this the least amount of access that works?</li><li>[ ] <strong>Time-bound?</strong> Should this expire on a specific date?</li><li>[ ] <strong>Conflict check:</strong> Does approving this create a conflict with other access they have?</li><li>[ ] <strong>Peer comparison:</strong> Do others in the same role have this, or is this person an outlier?</li></ul>
+</div>
+<div id="section-mgr-signing-off-and-completing-your-review" class="report-section" style="display:none">
+<h2>4. Signing off and completing your review</h2>
+<p>When you have made decisions on all items:</p>
+<ol><li>The system shows a <strong>summary page</strong> with your decisions</li><li>Review carefully -- this is your last chance to change anything</li><li>Click <strong>Finish</strong> to submit</li></ol>
+<p>After sign-off:</p>
+<ul><li>Your certification moves to the <strong>Completed</strong> tab</li><li>Your decisions become <strong>permanent</strong> -- no further changes possible</li><li>Approved items stay in place; revoked items begin removal</li><li>Your decisions, timestamps, and comments are permanently recorded</li></ul>
+<h3 id="what-if-you-miss-the-deadline">What if you miss the deadline?</h3>
+<p>An administrator handles undecided items (typically by keeping access in place). Incomplete reviews are visible to compliance teams. Try to complete your review the same day -- most take 5-10 minutes.</p>
+</div>
+<div id="section-mgr-common-scenarios" class="report-section" style="display:none">
+<h2>5. Common scenarios</h2>
+<h3 id="new-hire-with-too-much-access">New hire with too much access</h3>
+<p>Alex has admin permissions from a broad onboarding template. <strong>Revoke</strong> the admin access that does not match the role, <strong>Approve</strong> what fits. Comment: "New hire; right-sizing to junior developer role."</p>
+<h3 id="team-member-transferred-with-old-access">Team member transferred with old access</h3>
+<p>Jamie transferred from Infrastructure 3 months ago. <strong>Approve</strong> the new developer tool, <strong>Revoke</strong> the 4 old infrastructure permissions. Comment: "Role transfer; no longer needed."</p>
+<h3 id="i-only-use-it-during-emergencies">"I only use it during emergencies"</h3>
+<p>Chris has standing admin access used once a quarter. <strong>Revoke</strong> and work with the IAM team to set up on-demand emergency access.</p>
+<h3 id="access-that-is-clearly-appropriate">Access that is clearly appropriate</h3>
+<p>DBA Pat actively manages three production servers. <strong>Approve</strong> with comment: "Active DBA; primary administrator per current assignment." The goal is informed decisions, not maximum revocations.</p>
+<h3 id="access-you-do-not-recognize">Access you do not recognize</h3>
+<p>You see "SCCM_PatchAdmin_Tier2" -- a system you have never heard of. <strong>Reassign</strong> to the system owner. Reassigning is always better than guessing.</p>
+<h3 id="your-team-only-uses-crm-but-you-see-unfamiliar-items">Your team only uses CRM, but you see unfamiliar items</h3>
+<p><strong>Approve</strong> what you recognize (CRM, phone system). For unknown items, ask the team member or <strong>Reassign</strong> to a technical lead.</p>
+<h3 id="you-are-a-new-manager-and-inherited-a-team">You are a new manager and inherited a team</h3>
+<p>Make decisions where you can. <strong>Reassign</strong> unfamiliar items to the previous manager or team lead. Contact the IAM team -- they can help you understand your team's typical access profile.</p>
+<h3 id="you-accidentally-revoked-something-needed">You accidentally revoked something needed</h3>
+<p>Before sign-off: click <strong>Revisit Decision</strong>. After sign-off: contact the IAM team immediately. Access can be re-requested (typically <strong>[X hours/days]</strong>). Mistakes are fixable -- this is not a career-ending event.</p>
+</div>
+<div id="section-mgr-why-we-review-access-daily" class="report-section" style="display:none">
+<h2>6. Why we review access daily</h2>
+<p>Traditional access reviews happen quarterly -- a user gets elevated access on January 3 and the next review is April 1. For 88 days, that access sits unexamined.</p>
+<p><strong>Daily delta reviews</strong> change the equation: we review only access that changed in the last 24 hours. Typically 1-5 items, taking 5-10 minutes. You only receive a campaign when something changes. No changes = no campaign = no action needed.</p>
+<table>
+<thead><tr>
+<th>Approach</th>
+<th>Scope per review</th>
+<th>Reviewer fatigue</th>
+<th>Time until review</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Quarterly full</strong></td>
+<td>Hundreds of items</td>
+<td>High (rubber-stamping risk)</td>
+<td>Up to 90 days</td>
+</tr>
+<tr>
+<td><strong>Daily delta</strong></td>
+<td>1-5 items (typical)</td>
+<td>Low (focused decisions)</td>
+<td>Less than 24 hours</td>
+</tr>
+</tbody></table>
+<h3 id="why-elevated-access-gets-extra-attention">Why elevated access gets extra attention</h3>
+<p>Standard access (email, CRM, HR self-service) poses relatively low risk. Elevated access -- permissions that let someone administer servers, manage all user accounts, or access sensitive data organization-wide -- is different:</p>
+<table>
+<thead><tr>
+<th>Risk factor</th>
+<th>Standard access</th>
+<th>Elevated access</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Impact if compromised</strong></td>
+<td>One person's data</td>
+<td>Entire organization</td>
+</tr>
+<tr>
+<td><strong>Target for attackers</strong></td>
+<td>Low priority</td>
+<td>First thing attackers look for</td>
+</tr>
+<tr>
+<td><strong>Compliance requirements</strong></td>
+<td>Periodic review</td>
+<td>Frequent review with documentation</td>
+</tr>
+<tr>
+<td><strong>Recovery if breached</strong></td>
+<td>Hours</td>
+<td>Days to weeks</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-mgr-why-managers-review-not-system-admins" class="report-section" style="display:none">
+<h2>7. Why managers review (not system admins)</h2>
+<p>System administrators know the system but not the people. Only you, as the manager, can answer the critical question: "Should this person have this access for their current role?"</p>
+<p>You know:</p>
+<ul><li>What your team member is working on right now</li><li>Whether they recently changed roles or projects</li><li>Whether the access was a temporary need that has expired</li><li>Whether someone else could do the task with lower-level access</li></ul>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> The system automatically sends each manager a review containing only their direct reports. You never see someone else's team.</p></div>
+</div>
+<div id="section-mgr-talking-to-your-team-about-access" class="report-section" style="display:none">
+<h2>8. Talking to your team about access</h2>
+<h3 id="four-questions-to-ask">Four questions to ask</h3>
+<ol><li><strong>"What specifically do you need to accomplish?"</strong> -- Understand the task, not the access.</li><li><strong>"Is there a way to do this with less access?"</strong> -- Read-only instead of read-write?</li><li><strong>"How long will you need this?"</strong> -- "For this project" means it should have an end date.</li><li><strong>"What happens if you lose this access tomorrow?"</strong> -- "Nothing" = your signal to revoke.</li></ol>
+<h3 id="setting-the-tone">Setting the tone</h3>
+<p>Frame access reviews as <strong>professional hygiene</strong>, not punishment:</p>
+<table>
+<thead><tr>
+<th>Instead of...</th>
+<th>Try...</th>
+</tr></thead><tbody>
+<tr>
+<td>"I'm revoking your access"</td>
+<td>"Let's right-size your access to match your current role"</td>
+</tr>
+<tr>
+<td>"Security says you can't have this"</td>
+<td>"We're reducing the team's risk exposure"</td>
+</tr>
+<tr>
+<td>"You don't need admin access"</td>
+<td>"What specific tasks need admin? Let's find the right level"</td>
+</tr>
+</tbody></table>
+</div>
+<div id="section-mgr-what-good-reviews-look-like" class="report-section" style="display:none">
+<h2>9. What good reviews look like</h2>
+<p>The goal is <strong>informed, documented decisions</strong> -- not maximum revocations.</p>
+<table>
+<thead><tr>
+<th>Good pattern</th>
+<th>What it shows</th>
+</tr></thead><tbody>
+<tr>
+<td>Each item reviewed individually</td>
+<td>You considered each decision on its merits</td>
+</tr>
+<tr>
+<td>Brief comments on key decisions</td>
+<td>Your reasoning is documented for compliance</td>
+</tr>
+<tr>
+<td>Mix of approvals and revocations over time</td>
+<td>You are genuinely evaluating</td>
+</tr>
+<tr>
+<td>Completed before the deadline</td>
+<td>Timely and responsible</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> Your certification decisions are part of the organization's compliance record. Taking a moment to look at each item and adding a brief comment for non-obvious decisions is all it takes to demonstrate a thoughtful review. This protects both you and the company.</p></div>
+</div>
+<div id="section-mgr-frequently-asked-questions" class="report-section" style="display:none">
+<h2>10. Frequently asked questions</h2>
+<p><strong>Q: How often will I receive reviews?</strong> Only when a direct report receives new elevated access. If your team's access is stable, you may go days or weeks without one.</p>
+<p><strong>Q: How long do I have?</strong> Check the deadline on the campaign card. Typically 24-72 hours. Try to complete it the same day -- most take 5-10 minutes.</p>
+<p><strong>Q: What if I make a mistake?</strong> Before sign-off: click <strong>Revisit Decision</strong>. After sign-off: contact the IAM team at <strong>[IAM-TEAM-EMAIL]</strong>. Access can be re-requested. Mistakes are fixable.</p>
+<p><strong>Q: My team member says they need access I revoked.</strong> They submit a new access request through the normal process. For urgent needs, the IAM team can expedite.</p>
+<p><strong>Q: I received a review for someone who no longer reports to me.</strong> Reassign it to their current manager with a note about the reporting change.</p>
+<p><strong>Q: Why can I only Acknowledge some items?</strong> Items automatically assigned based on job title or department cannot be changed through reviews. Contact the IAM team if the assignment seems wrong.</p>
+<p><strong>Q: I see system names I don't recognize.</strong> Reassign to the system owner, or ask the team member if they use it.</p>
+<p><strong>Q: What does the "privileged" flag mean?</strong> The IT team flagged this as elevated risk (server admin, database admin, etc.). Give these items extra attention.</p>
+<p><strong>Q: What is the difference between a role, an access profile, and an entitlement?</strong></p>
+<ul><li><strong>Entitlement:</strong> One permission (e.g., membership in "CRM_Users")</li><li><strong>Access Profile:</strong> A bundle from one system (e.g., "Standard CRM Access" = 3 permissions)</li><li><strong>Role:</strong> A business-level bundle across systems (e.g., "Customer Service Rep" = CRM + phone + KB)</li></ul>
+<p>Think of it as: permissions are individual ingredients, access profiles are recipes, and roles are complete meals.</p>
+</div>
+<div id="section-mgr-glossary" class="report-section" style="display:none">
+<h2>11. Glossary</h2>
+<table>
+<thead><tr>
+<th>Term</th>
+<th>Definition</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Access Profile</strong></td>
+<td>A bundle of permissions from one system (e.g., "Standard CRM Access")</td>
+</tr>
+<tr>
+<td><strong>Birthright Access</strong></td>
+<td>Access automatically given based on job title/department -- cannot be changed through a review</td>
+</tr>
+<tr>
+<td><strong>Campaign</strong></td>
+<td>A review cycle with a deadline. You receive one when your team's access needs checking.</td>
+</tr>
+<tr>
+<td><strong>Daily Delta Review</strong></td>
+<td>A review of only access that changed in the last 24 hours. "Delta" means "change."</td>
+</tr>
+<tr>
+<td><strong>Entitlement</strong></td>
+<td>A single, specific permission in a system (e.g., membership in a group called "CRM_Users")</td>
+</tr>
+<tr>
+<td><strong>IAM Team</strong></td>
+<td>The Identity and Access Management team. Contact: <strong>[IAM-TEAM-EMAIL]</strong></td>
+</tr>
+<tr>
+<td><strong>Identity</strong></td>
+<td>A person as represented in the access management system (SailPoint's word for "employee")</td>
+</tr>
+<tr>
+<td><strong>Least Privilege</strong></td>
+<td>Only the access needed for your current job -- like only having keys to rooms you actually use</td>
+</tr>
+<tr>
+<td><strong>Privileged Access</strong></td>
+<td>Elevated permissions (server admin, database admin, etc.). Higher risk = more scrutiny.</td>
+</tr>
+<tr>
+<td><strong>Privilege Creep</strong></td>
+<td>Gradual buildup of access over time, especially during role changes. Daily reviews prevent this.</td>
+</tr>
+<tr>
+<td><strong>Role</strong></td>
+<td>A business-level access bundle spanning multiple systems (e.g., "Customer Service Rep" = CRM + phone + KB)</td>
+</tr>
+<tr>
+<td><strong>SOX / SOC 2</strong></td>
+<td>Regulatory standards requiring documented access reviews. Your reviews are part of this evidence.</td>
+</tr>
+<tr>
+<td><strong>Source</strong></td>
+<td>A connected system (Active Directory, your CRM, HR system) from which permissions are imported.</td>
+</tr>
+</tbody></table>
+</div>
 
   </div>
 </div>
 
 <script>
 
-var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-1-architecture-at-a-glance", "found-2-day-1-deployment-checklist", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "found-notification-setup", "found-report-catalog", "found-error-reference", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab", "onb-overview", "onb-what-this-is", "onb-what-you-need-to-deliver", "onb-account-file", "onb-entitlement-file", "onb-file-format-rules", "onb-full-export-required", "onb-entitlement-design-guidance", "onb-multiple-account-types", "onb-where-to-deliver", "onb-export-workflow-patterns", "onb-validate-before-going-live", "onb-disconnected-app-workflow-diagrams", "onb-common-mistakes", "onb-registration-and-lifecycle", "onb-support", "dops-overview", "dops-pipeline-overview", "dops-registering-applications", "dops-single-app-processing", "dops-batch-processing", "dops-delta-detection-deep-dive", "dops-post-campaign-operations", "dops-delivery-monitoring", "dops-cross-app-analytics", "dops-isc-source-integration", "dops-what-can-go-wrong", "rpt-overview", "rpt-report-types-at-a-glance", "rpt-campaign-audit-reports", "rpt-leadership-rollup-reports", "rpt-delta-certification-reports", "rpt-disconnected-app-reports", "rpt-governance-health-and-compliance", "rpt-analytics-and-bi-export", "rpt-adaptive-reports", "rpt-weekly-and-periodic-reports", "rpt-choosing-the-right-report", "run-overview", "run-morning-checklist", "run-alert-response-matrix", "run-where-to-look", "run-operational-troubleshooting", "run-weekly-operations", "run-monthly-operations"];
+var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-1-architecture-at-a-glance", "found-2-day-1-deployment-checklist", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "found-notification-setup", "found-report-catalog", "found-error-reference", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab", "onb-overview", "onb-what-this-is", "onb-what-you-need-to-deliver", "onb-account-file", "onb-entitlement-file", "onb-file-format-rules", "onb-full-export-required", "onb-entitlement-design-guidance", "onb-multiple-account-types", "onb-where-to-deliver", "onb-export-workflow-patterns", "onb-validate-before-going-live", "onb-disconnected-app-workflow-diagrams", "onb-common-mistakes", "onb-registration-and-lifecycle", "onb-support", "dops-overview", "dops-pipeline-overview", "dops-registering-applications", "dops-single-app-processing", "dops-batch-processing", "dops-delta-detection-deep-dive", "dops-post-campaign-operations", "dops-delivery-monitoring", "dops-cross-app-analytics", "dops-isc-source-integration", "dops-what-can-go-wrong", "rpt-overview", "rpt-report-types-at-a-glance", "rpt-campaign-audit-reports", "rpt-leadership-rollup-reports", "rpt-delta-certification-reports", "rpt-disconnected-app-reports", "rpt-governance-health-and-compliance", "rpt-analytics-and-bi-export", "rpt-adaptive-reports", "rpt-weekly-and-periodic-reports", "rpt-choosing-the-right-report", "run-overview", "run-morning-checklist", "run-alert-response-matrix", "run-where-to-look", "run-operational-troubleshooting", "run-weekly-operations", "run-monthly-operations", "mgr-overview", "mgr-quick-start-complete-your-review-in-5-minutes", "mgr-navigating-the-sailpoint-interface", "mgr-making-decisions-approve-revoke-reassign", "mgr-signing-off-and-completing-your-review", "mgr-common-scenarios", "mgr-why-we-review-access-daily", "mgr-why-managers-review-not-system-admins", "mgr-talking-to-your-team-about-access", "mgr-what-good-reviews-look-like", "mgr-frequently-asked-questions", "mgr-glossary"];
 function showSection(id) {
     sections.forEach(function(s) {
         var el = document.getElementById('section-' + s);

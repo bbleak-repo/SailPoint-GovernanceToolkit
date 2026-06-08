@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manager Quick Reference - Access Certification Reviews</title>
+<style>
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --primary:       #336699;
+    --primary-dark:  #1e2a3a;
+    --accent:        #5B9BD5;
+    --success:       #2e7d32;
+    --success-bg:    #e8f5e9;
+    --danger:        #b71c1c;
+    --danger-bg:     #ffebee;
+    --warning:       #e65100;
+    --warning-bg:    #fff3e0;
+    --text:          #1a1a2e;
+    --text-muted:    #4a5568;
+    --border:        #c5d3e0;
+    --surface:       #ffffff;
+    --bg-light:      #eef2f7;
+    --bg-banner:     #dde8f2;
+}
+
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text);
+    background: #fff;
+    padding: 6px;
+}
+
+/* ============================================================
+   OUTER WRAPPER
+   ============================================================ */
+.card-wrapper {
+    width: 100%;
+    max-width: 10in;
+    margin: 0 auto;
+}
+
+/* ============================================================
+   TITLE BANNER
+   ============================================================ */
+.title-banner {
+    background: var(--primary-dark);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 4px 4px 0 0;
+    border-bottom: 3px solid var(--accent);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.title-banner h1 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.title-banner .subtitle {
+    font-size: 9.5px;
+    color: #b0c4d8;
+    font-style: italic;
+}
+
+/* ============================================================
+   TWO-COLUMN LAYOUT
+   ============================================================ */
+.columns {
+    display: flex;
+    gap: 0;
+    border: 1.5px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    overflow: hidden;
+}
+
+.col-left {
+    width: 60%;
+    border-right: 1.5px solid var(--border);
+    padding: 7px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.col-right {
+    width: 40%;
+    padding: 7px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* ============================================================
+   SECTION HEADERS
+   ============================================================ */
+.section-header {
+    background: var(--primary);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 3px;
+    margin-bottom: 4px;
+}
+
+.section-box {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.section-box .section-header {
+    border-radius: 0;
+    margin-bottom: 0;
+}
+
+.section-body {
+    padding: 5px 7px;
+    background: var(--surface);
+}
+
+/* ============================================================
+   TAGLINE
+   ============================================================ */
+.tagline {
+    background: var(--bg-banner);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--primary-dark);
+    text-align: center;
+    font-style: italic;
+}
+
+/* ============================================================
+   STEP BY STEP
+   ============================================================ */
+.steps-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.steps-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+.step-num {
+    background: var(--primary);
+    color: #fff;
+    font-weight: 700;
+    font-size: 9px;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.step-text {
+    color: var(--text);
+}
+
+.step-text code {
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 3px;
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+    color: var(--primary);
+}
+
+/* ============================================================
+   THREE BUTTONS TABLE
+   ============================================================ */
+.buttons-grid {
+    display: grid;
+    grid-template-columns: 28px 1fr 1fr;
+    gap: 2px 5px;
+    align-items: start;
+}
+
+.btn-icon {
+    font-size: 14px;
+    font-weight: 900;
+    text-align: center;
+    line-height: 1;
+    padding-top: 2px;
+}
+.btn-icon.approve { color: var(--success); }
+.btn-icon.revoke  { color: var(--danger); }
+.btn-icon.reassign { color: var(--primary); }
+
+.btn-label {
+    font-weight: 700;
+    font-size: 10px;
+}
+.btn-label.approve { color: var(--success); }
+.btn-label.revoke  { color: var(--danger); }
+.btn-label.reassign { color: var(--primary); }
+
+.btn-desc {
+    font-size: 9.5px;
+    color: var(--text-muted);
+    line-height: 1.3;
+}
+
+.btn-row-label {
+    font-size: 9px;
+    color: var(--text-muted);
+    grid-column: 2 / span 2;
+    margin-top: -1px;
+    margin-bottom: 2px;
+}
+
+/* ============================================================
+   FLAGS TABLE
+   ============================================================ */
+.flags-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5px;
+}
+
+.flags-table td {
+    padding: 2px 5px;
+    vertical-align: top;
+    line-height: 1.3;
+}
+
+.flags-table tr:not(:last-child) td {
+    border-bottom: 1px solid var(--border);
+}
+
+.flag-tag {
+    font-weight: 700;
+    font-size: 8.5px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    white-space: nowrap;
+    display: inline-block;
+}
+.flag-tag.privileged { background: var(--danger-bg); color: var(--danger); border: 1px solid #ef9a9a; }
+.flag-tag.new-flag   { background: var(--warning-bg); color: var(--warning); border: 1px solid #ffcc80; }
+.flag-tag.auto       { background: var(--bg-light); color: var(--text-muted); border: 1px solid var(--border); }
+
+/* ============================================================
+   DECISION FLOWCHART
+   ============================================================ */
+.flowchart {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    font-size: 9.5px;
+}
+
+.flow-start {
+    background: var(--primary-dark);
+    color: #fff;
+    text-align: center;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.flow-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 1px 0;
+}
+
+.flow-q {
+    background: var(--bg-banner);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 3px 6px;
+    flex: 1;
+    font-weight: 600;
+    font-size: 9.5px;
+    color: var(--primary-dark);
+    line-height: 1.25;
+}
+
+.flow-no {
+    font-size: 8.5px;
+    font-weight: 700;
+    color: var(--danger);
+    white-space: nowrap;
+    padding: 0 2px;
+}
+
+.flow-yes {
+    font-size: 8.5px;
+    font-weight: 700;
+    color: var(--success);
+    white-space: nowrap;
+    padding: 0 2px;
+}
+
+.flow-arrow {
+    font-size: 10px;
+    color: var(--text-muted);
+    line-height: 1;
+}
+
+.flow-outcome {
+    border-radius: 3px;
+    padding: 3px 7px;
+    font-weight: 700;
+    font-size: 9.5px;
+    text-align: center;
+    white-space: nowrap;
+    min-width: 68px;
+}
+.flow-outcome.reassign { background: #e3edf7; color: var(--primary); border: 1px solid var(--accent); }
+.flow-outcome.revoke   { background: var(--danger-bg); color: var(--danger); border: 1px solid #ef9a9a; }
+.flow-outcome.approve  { background: var(--success-bg); color: var(--success); border: 1px solid #a5d6a7; }
+
+.flow-connector {
+    width: 1.5px;
+    background: var(--border);
+    height: 6px;
+    margin: 0 auto;
+}
+
+.flow-yes-branch {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 1px 0;
+    padding-left: 12px;
+}
+
+.flow-indent {
+    padding-left: 10px;
+}
+
+.flow-final {
+    margin-top: 3px;
+    background: var(--success-bg);
+    border: 1px solid #a5d6a7;
+    border-radius: 3px;
+    padding: 3px 6px;
+    text-align: center;
+    color: var(--success);
+    font-weight: 700;
+    font-size: 10px;
+}
+
+/* ============================================================
+   SCENARIOS
+   ============================================================ */
+.scenarios-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.scenario-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+    align-items: baseline;
+    font-size: 9.5px;
+    padding: 3px 5px;
+    background: var(--bg-light);
+    border-radius: 3px;
+    border-left: 3px solid var(--accent);
+    line-height: 1.3;
+}
+
+.scenario-situation {
+    color: var(--text);
+    font-style: italic;
+}
+
+.scenario-action {
+    font-weight: 700;
+    white-space: nowrap;
+    font-size: 9px;
+}
+.scenario-action.revoke  { color: var(--danger); }
+.scenario-action.approve { color: var(--success); }
+.scenario-action.reassign { color: var(--primary); }
+
+/* ============================================================
+   HELP BOX
+   ============================================================ */
+.help-box {
+    background: #fff8e6;
+    border: 1.5px solid #f5c842;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+
+.help-box .help-title {
+    font-weight: 700;
+    font-size: 10px;
+    color: var(--primary-dark);
+    border-bottom: 1px solid #f5c842;
+    padding-bottom: 3px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.help-row {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+    font-size: 9.5px;
+    margin-bottom: 2px;
+    line-height: 1.3;
+}
+
+.help-label {
+    font-weight: 700;
+    color: var(--text-muted);
+    min-width: 40px;
+    font-size: 9px;
+    text-transform: uppercase;
+}
+
+.help-value {
+    color: var(--primary-dark);
+    font-family: 'Consolas', monospace;
+    font-size: 9px;
+}
+
+.help-note {
+    margin-top: 4px;
+    font-size: 9px;
+    color: var(--warning);
+    font-style: italic;
+    line-height: 1.3;
+    border-top: 1px dotted #f5c842;
+    padding-top: 3px;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.card-footer {
+    text-align: center;
+    font-size: 8px;
+    color: #888;
+    margin-top: 3px;
+    padding-top: 2px;
+    border-top: 1px solid var(--border);
+    letter-spacing: 0.03em;
+}
+
+/* ============================================================
+   PRINT STYLES
+   ============================================================ */
+@media print {
+    @page {
+        size: letter portrait;
+        margin: 0.4in;
+    }
+
+    html, body {
+        font-size: 10px;
+        background: #fff;
+        padding: 0;
+        margin: 0;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .card-wrapper {
+        width: 100%;
+        max-width: none;
+    }
+
+    /* Prevent any page breaks inside the card */
+    .columns, .col-left, .col-right,
+    .section-box, .title-banner, .card-footer {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    /* Force single page -- compress if needed */
+    .col-left, .col-right {
+        gap: 5px;
+    }
+
+    .help-box {
+        page-break-inside: avoid;
+    }
+}
+</style>
+</head>
+<body>
+
+<div class="card-wrapper">
+
+    <!-- TITLE BANNER -->
+    <div class="title-banner">
+        <h1>Access Review Quick Reference</h1>
+        <div class="subtitle">Most reviews take 5-10 minutes &nbsp;|&nbsp; You cannot break anything before Sign Off</div>
+    </div>
+
+    <!-- TWO-COLUMN BODY -->
+    <div class="columns">
+
+        <!-- ==================== LEFT COLUMN ==================== -->
+        <div class="col-left">
+
+            <!-- STEP BY STEP -->
+            <div class="section-box">
+                <div class="section-header">Step by Step</div>
+                <div class="section-body">
+                    <ol class="steps-list">
+                        <li>
+                            <div class="step-num">1</div>
+                            <div class="step-text">Click the link in your email or navigate to <code>[YOUR-ORG.identitynow.com]</code></div>
+                        </li>
+                        <li>
+                            <div class="step-num">2</div>
+                            <div class="step-text">Go to <strong>Certifications</strong> and open the <strong>Active</strong> tab -- find your campaign by name</div>
+                        </li>
+                        <li>
+                            <div class="step-num">3</div>
+                            <div class="step-text">Click a team member's name to see all of their access items listed</div>
+                        </li>
+                        <li>
+                            <div class="step-num">4</div>
+                            <div class="step-text">For each access item, choose: <strong>Approve</strong> (checkmark), <strong>Revoke</strong> (X), or <strong>Reassign</strong> (arrow)</div>
+                        </li>
+                        <li>
+                            <div class="step-num">5</div>
+                            <div class="step-text">Add a brief comment for any <strong>PRIVILEGED</strong>-flagged items or items you are revoking</div>
+                        </li>
+                        <li>
+                            <div class="step-num">6</div>
+                            <div class="step-text">Click <strong>Sign Off</strong> then <strong>Finish</strong> once all items in the campaign are decided</div>
+                        </li>
+                    </ol>
+                </div>
+            </div>
+
+            <!-- THREE BUTTONS -->
+            <div class="section-box">
+                <div class="section-header">The Three Buttons</div>
+                <div class="section-body">
+                    <div class="buttons-grid">
+
+                        <div class="btn-icon approve">[+]</div>
+                        <div class="btn-label approve">Approve</div>
+                        <div class="btn-desc">Yes, keep this access</div>
+                        <div></div>
+                        <div class="btn-row-label">Use when access matches the person's current role and they actively use it</div>
+
+                        <div class="btn-icon revoke">[X]</div>
+                        <div class="btn-label revoke">Revoke</div>
+                        <div class="btn-desc">No, remove this access</div>
+                        <div></div>
+                        <div class="btn-row-label">Use when access is no longer needed, is too broad, or was from a previous role</div>
+
+                        <div class="btn-icon reassign">[>]</div>
+                        <div class="btn-label reassign">Reassign</div>
+                        <div class="btn-desc">Send to someone else</div>
+                        <div></div>
+                        <div class="btn-row-label">Use when you do not recognize the system or the correct reviewer is another manager</div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- FLAGS -->
+            <div class="section-box">
+                <div class="section-header">What the Flags Mean</div>
+                <div class="section-body">
+                    <table class="flags-table">
+                        <tr>
+                            <td style="width:82px;"><span class="flag-tag privileged">PRIVILEGED</span></td>
+                            <td>Elevated risk -- admin or sensitive access. Review carefully and add a comment with your decision.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="flag-tag new-flag">NEW</span></td>
+                            <td>Recently added to the person's profile. This is the primary reason this item appears in your review.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="flag-tag auto">AUTO-ASSIGNED</span></td>
+                            <td>System-managed role. You can only <strong>Acknowledge</strong> -- you cannot revoke. Contact the IAM team if concerned.</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+        </div><!-- /col-left -->
+
+        <!-- ==================== RIGHT COLUMN ==================== -->
+        <div class="col-right">
+
+            <!-- DECISION FLOWCHART -->
+            <div class="section-box">
+                <div class="section-header">Decision Flowchart</div>
+                <div class="section-body">
+                    <div class="flowchart">
+
+                        <div class="flow-start">For each access item...</div>
+                        <div class="flow-connector"></div>
+
+                        <div class="flow-row">
+                            <div class="flow-q">Is this person still on your team?</div>
+                            <div class="flow-no">NO</div>
+                            <div class="flow-arrow">-&gt;</div>
+                            <div class="flow-outcome reassign">Reassign</div>
+                        </div>
+                        <div class="flow-connector"></div>
+
+                        <div class="flow-row">
+                            <div class="flow-q">Do you recognize this system?</div>
+                            <div class="flow-no">NO</div>
+                            <div class="flow-arrow">-&gt;</div>
+                            <div class="flow-outcome reassign">Reassign</div>
+                        </div>
+                        <div class="flow-connector"></div>
+
+                        <div class="flow-row">
+                            <div class="flow-q">Does the person use it for their current job?</div>
+                            <div class="flow-no">NO</div>
+                            <div class="flow-arrow">-&gt;</div>
+                            <div class="flow-outcome revoke">Revoke</div>
+                        </div>
+                        <div class="flow-connector"></div>
+
+                        <div class="flow-row">
+                            <div class="flow-q">Is this a higher level than needed?</div>
+                            <div class="flow-yes">YES</div>
+                            <div class="flow-arrow">-&gt;</div>
+                            <div class="flow-outcome revoke">Revoke</div>
+                        </div>
+                        <div class="flow-connector"></div>
+
+                        <div class="flow-final">All YES -- Approve (add comment for PRIVILEGED items)</div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- COMMON SCENARIOS -->
+            <div class="section-box">
+                <div class="section-header">Common Scenarios</div>
+                <div class="section-body">
+                    <ul class="scenarios-list">
+                        <li class="scenario-item">
+                            <span class="scenario-situation">New hire has admin or elevated access</span>
+                            <span class="scenario-action revoke">Revoke admin; approve basic access</span>
+                        </li>
+                        <li class="scenario-item">
+                            <span class="scenario-situation">Access left over from a previous role</span>
+                            <span class="scenario-action revoke">Revoke the old access</span>
+                        </li>
+                        <li class="scenario-item">
+                            <span class="scenario-situation">You don't recognize the system or app</span>
+                            <span class="scenario-action reassign">Reassign to system owner</span>
+                        </li>
+                        <li class="scenario-item">
+                            <span class="scenario-situation">Access clearly fits the current role</span>
+                            <span class="scenario-action approve">Approve + brief comment</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- NEED HELP -->
+            <div class="help-box">
+                <div class="help-title">Need Help?</div>
+                <div class="help-row">
+                    <div class="help-label">Email</div>
+                    <div class="help-value">[IAM-TEAM-EMAIL]</div>
+                </div>
+                <div class="help-row">
+                    <div class="help-label">Phone</div>
+                    <div class="help-value">[IAM-TEAM-PHONE]</div>
+                </div>
+                <div class="help-row">
+                    <div class="help-label">Teams</div>
+                    <div class="help-value">[IAM-TEAM-CHANNEL]</div>
+                </div>
+                <div class="help-note">If you accidentally revoked something: contact the IAM team right away. Mistakes are fixable before the campaign closes.</div>
+            </div>
+
+        </div><!-- /col-right -->
+
+    </div><!-- /columns -->
+
+    <!-- FOOTER -->
+    <div class="card-footer">
+        Quick Reference v2.0 &nbsp;|&nbsp;
+        Full Guide: <a href="Manager-Attestation-Guide-Tabbed-v2.html" style="color:#5B9BD5;">Manager-Attestation-Guide-Tabbed-v2.html</a> &nbsp;|&nbsp;
+        Decision Tree: <a href="Manager-Decision-Tree.html" style="color:#5B9BD5;">Manager-Decision-Tree.html</a> &nbsp;|&nbsp;
+        All Docs: <a href="Manager-Certification-Index.html" style="color:#5B9BD5;">Index</a>
+    </div>
+
+</div><!-- /card-wrapper -->
+
+</body>
+</html>
