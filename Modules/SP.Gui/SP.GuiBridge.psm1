@@ -2579,22 +2579,22 @@ function Resolve-SPRelativePath {
 function Invoke-SPGuiReportDistribution {
     <#
     .SYNOPSIS
-        GUI bridge for Invoke-SPReportDistribution. Runs report distribution and
-        returns a result hashtable the Governance tab can surface in its status label.
+        GUI bridge for Invoke-SPReportDistribution -- mirrors the CLI script exactly.
+        Returns a hashtable the Governance tab surfaces in its status label.
     .OUTPUTS
-        @{ Success; Data=@{PreviewOnly;RecipientCount;ReportsGenerated;EmailsSent}; Error }
+        @{ Success; Data=@{PreviewOnly;RecipientCount;ReportsGenerated;EmailsSent;OutputPath}; Error }
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
-        [Parameter()] [string[]]$Status         = @('COMPLETED', 'ACTIVE'),
-        [Parameter()] [int]    $DaysBack         = 7,
-        [Parameter()] [int]    $LeadershipDepth  = 4,
-        [Parameter()] [string[]]$TargetBands     = @(),
-        [Parameter()] [string] $CampaignName,
-        [Parameter()] [switch] $PreviewOnly,
-        [Parameter()] [switch] $SendReports,
-        [Parameter()] [string] $CorrelationID
+        [Parameter()] [string[]] $Status          = @('COMPLETED', 'ACTIVE'),
+        [Parameter()] [int]      $DaysBack         = 7,
+        [Parameter()] [int]      $LeadershipDepth  = 4,
+        [Parameter()] [string[]] $TargetBands      = @(),
+        [Parameter()] [string]   $CampaignName,
+        [Parameter()] [switch]   $PreviewOnly,
+        [Parameter()] [switch]   $SendReports,
+        [Parameter()] [string]   $CorrelationID
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -2602,96 +2602,245 @@ function Invoke-SPGuiReportDistribution {
     }
 
     try {
-        # Build params for the underlying distribution function chain
-        $campArgs = @{
-            Status          = $Status
-            DaysBack        = $DaysBack
-            CorrelationID   = $CorrelationID
-        }
+        $config = Get-SPConfig
+
+        # ── 1. Campaigns ─────────────────────────────────────────────────────
+        $campArgs = @{ Status = $Status; DaysBack = $DaysBack; CorrelationID = $CorrelationID }
         if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $campArgs['CampaignName'] = $CampaignName }
 
-        $campaigns = @()
         $cr = Get-SPAuditCampaigns @campArgs
-        if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
-
+        $campaigns = @(if ($cr.Success -and $null -ne $cr.Data) { $cr.Data })
         if ($campaigns.Count -eq 0) {
-            $filterDesc = "Status: $($Status -join ', ') | Last $DaysBack days"
-            if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $filterDesc += " | Name: '$CampaignName'" }
-            return @{ Success = $false; Data = @{}; Error = "No campaigns found ($filterDesc). Widen the Days Back window or adjust the Status filter." }
+            $fd = "Status: $($Status -join ', ') | Last $DaysBack days$(if($CampaignName){" | Name: '$CampaignName'"})"
+            return @{ Success=$false; Data=@{}; Error="No campaigns found ($fd). Widen Days Back or change Status." }
         }
 
-        # Resolve audits + org tree
-        $audits = New-Object System.Collections.Generic.List[hashtable]
+        # ── 2. Certs, items, account resolution (mirrors CLI loop) ───────────
+        $allCampaignAudits  = [System.Collections.Generic.List[object]]::new()
+        $allIdentityIds     = [System.Collections.Generic.List[string]]::new()
+
         foreach ($camp in $campaigns) {
-            $certR = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
-            $wrapped = New-Object System.Collections.Generic.List[object]
-            foreach ($cert in @(if ($certR.Success) { $certR.Data } else { @() })) {
-                $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
-                foreach ($item in @(if ($itemR.Success) { $itemR.Data } else { @() })) {
-                    $wrapped.Add(@{ Item = $item; CertificationId = [string]$cert.id; CertificationName = [string]$cert.name; CampaignName = [string]$camp.name })
+            $certR   = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
+            $certs   = @(if ($certR.Success) { $certR.Data } else { @() })
+
+            $wrappedItems = [System.Collections.Generic.List[object]]::new()
+            $certReviewerEmailMap = @{}
+
+            foreach ($cert in $certs) {
+                $certName = if ($null -ne $cert.name) { [string]$cert.name } else { '' }
+                if ($null -ne $cert.id -and $null -ne $cert.reviewer -and
+                    $null -ne $cert.reviewer.email -and
+                    -not [string]::IsNullOrWhiteSpace([string]$cert.reviewer.email)) {
+                    $certReviewerEmailMap[[string]$cert.id] = [string]$cert.reviewer.email
                 }
-            }
-            $dg = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = ''; CompletionDate = '' }
-            $audits.Add(@{ CampaignName = [string]$camp.name; CampaignId = [string]$camp.id; Decisions = $dg })
-        }
-
-        # Build org tree and resolve leadership
-        $orgTree      = Build-SPOrgTree -CampaignAudits $audits.ToArray() -CorrelationID $CorrelationID
-        $bandTree     = Resolve-SPIdentityBand -OrgTree $orgTree -CorrelationID $CorrelationID
-        $leaderGroups = Group-SPAuditByLeadership -BandTree $bandTree -TargetBands $TargetBands -CorrelationID $CorrelationID
-
-        $recipientCount = @($leaderGroups).Count
-
-        if ($PreviewOnly) {
-            $preview = @($leaderGroups | ForEach-Object { "  $($_.LeaderName) (Band $($_.Band)): $($_.IdentityCount) identit$(if($_.IdentityCount -ne 1){'ies'}else{'y'})" })
-            Write-SPLog -Message ("Distribution preview ($recipientCount recipient(s)):`n" + ($preview -join "`n")) `
-                -Severity INFO -Component 'SP.GuiBridge' -Action 'ReportDistributionPreview' -CorrelationID $CorrelationID
-            return @{
-                Success = $true
-                Data    = @{ PreviewOnly = $true; RecipientCount = $recipientCount; ReportsGenerated = 0; EmailsSent = 0 }
-                Error   = $null
-            }
-        }
-
-        # Generate per-leader reports
-        $config      = Get-SPConfig
-        $auditBase   = if ($config.Audit.PSObject.Properties.Name -contains 'OutputPath') { [string]$config.Audit.OutputPath } else { '.\Audit' }
-        $outputPath  = [System.IO.Path]::GetFullPath((Join-Path $auditBase 'leadership'))
-        if (-not (Test-Path $outputPath)) { New-Item -ItemType Directory -Path $outputPath -Force | Out-Null }
-
-        $reportsGenerated = 0
-        $emailsSent       = 0
-        $theme            = 'dark'
-
-        foreach ($group in @($leaderGroups)) {
-            try {
-                $outFile = Join-Path $outputPath ("band-$($group.Band)-$($group.LeaderName)-$(Get-Date -Format 'yyyyMMdd-HHmmss').html")
-                Export-SPLeadershipBandHtml -LeaderGroup $group -OutputPath $outFile -Theme $theme -CorrelationID $CorrelationID | Out-Null
-                $reportsGenerated++
-
-                if ($SendReports) {
-                    $smtpCfg = $config.Audit.Smtp
-                    if ($null -ne $smtpCfg -and [bool]$smtpCfg.Enabled) {
-                        Send-SPReport -FilePath $outFile -To $group.LeaderEmail -SmtpConfig $smtpCfg -CorrelationID $CorrelationID | Out-Null
-                        $emailsSent++
+                $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+                if ($itemR.Success -and $null -ne $itemR.Data) {
+                    foreach ($rawItem in $itemR.Data) {
+                        $wrappedItems.Add(@{
+                            Item              = $rawItem
+                            CertificationId   = [string]$cert.id
+                            CertificationName = $certName
+                            CampaignName      = [string]$camp.name
+                        })
                     }
                 }
-            } catch {
-                Write-SPLog -Message "Failed to generate/send report for $($group.LeaderName): $($_.Exception.Message)" `
-                    -Severity WARN -Component 'SP.GuiBridge' -Action 'ReportDistribution' -CorrelationID $CorrelationID
+            }
+
+            # Resolve identity accounts for accurate email/UPN (same as CLI)
+            $uniqueIds = @($wrappedItems | ForEach-Object {
+                $ii = $_.Item
+                $id = if ($null -ne $ii.identitySummary -and $null -ne $ii.identitySummary.identityId) { $ii.identitySummary.identityId }
+                      elseif ($null -ne $ii.identitySummary -and $null -ne $ii.identitySummary.id) { $ii.identitySummary.id }
+                      else { $null }
+                $id
+            } | Where-Object { $_ } | Sort-Object -Unique)
+
+            $accountMap = @{}
+            if ($uniqueIds.Count -gt 0) {
+                $acctR = Resolve-SPAuditIdentityAccounts -IdentityIds $uniqueIds -CorrelationID $CorrelationID
+                if ($acctR.Success) { $accountMap = $acctR.Data }
+            }
+
+            $campMeta = @{
+                StartDate      = if ($null -ne $camp.created)   { [string]$camp.created }   else { '' }
+                DueDate        = if ($null -ne $camp.deadline)  { [string]$camp.deadline }  elseif ($null -ne $camp.due) { [string]$camp.due } else { '' }
+                CompletionDate = if ($null -ne $camp.completed) { [string]$camp.completed } else { '' }
+            }
+
+            $decisionGroups  = Group-SPAuditDecisions -Items $wrappedItems.ToArray() `
+                                   -AccountMap $accountMap -CampaignMetadata $campMeta `
+                                   -CertReviewerEmailMap $certReviewerEmailMap
+            $reviewerMetrics = Measure-SPAuditReviewerMetrics -Certifications $certs
+
+            $allCampaignAudits.Add(@{
+                CampaignName    = [string]$camp.name
+                CampaignId      = [string]$camp.id
+                Status          = if ($null -ne $camp.status) { [string]$camp.status } else { '' }
+                Created         = if ($null -ne $camp.created) { [string]$camp.created } else { '' }
+                Completed       = if ($null -ne $camp.completed) { [string]$camp.completed } else { '' }
+                Decisions       = $decisionGroups
+                ReviewerMetrics = $reviewerMetrics
+            })
+
+            # Collect identity IDs from decisions for org tree
+            foreach ($cat in @('Approved','Revoked','Pending')) {
+                if ($decisionGroups.ContainsKey($cat) -and $null -ne $decisionGroups[$cat]) {
+                    foreach ($item in @($decisionGroups[$cat])) {
+                        if ($null -ne $item.IdentityId -and
+                            -not [string]::IsNullOrWhiteSpace($item.IdentityId) -and
+                            -not $allIdentityIds.Contains($item.IdentityId)) {
+                            $allIdentityIds.Add($item.IdentityId)
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($allIdentityIds.Count -eq 0) {
+            return @{ Success=$false; Data=@{}; Error='No identity IDs found in campaign decisions -- nothing to distribute.' }
+        }
+
+        # ── 3. Org tree (correct signature: -IdentityIds, -MaxDepth) ────────
+        $orgTreeResult = Build-SPOrgTree -IdentityIds $allIdentityIds.ToArray() `
+                             -MaxDepth $LeadershipDepth -CorrelationID $CorrelationID
+        if (-not $orgTreeResult.Success) {
+            return @{ Success=$false; Data=@{}; Error="Org tree build failed: $($orgTreeResult.Error)" }
+        }
+        $orgTree = $orgTreeResult.Data
+
+        # ── 4. Band resolution (reads config like CLI) ───────────────────────
+        $bandMapping     = $null
+        $iscBandAttr     = 'jobLevel'
+        if ($null -ne $config.Leadership) {
+            if ($config.Leadership.PSObject.Properties.Name -contains 'DefaultBandMapping' -and
+                $null -ne $config.Leadership.DefaultBandMapping) {
+                $bandMapping = @{}
+                foreach ($prop in $config.Leadership.DefaultBandMapping.PSObject.Properties) {
+                    $bandMapping[[int]$prop.Name] = [string]$prop.Value
+                }
+            }
+            if ($config.Leadership.PSObject.Properties.Name -contains 'ISCBandAttribute' -and
+                -not [string]::IsNullOrWhiteSpace($config.Leadership.ISCBandAttribute)) {
+                $iscBandAttr = [string]$config.Leadership.ISCBandAttribute
+            }
+        }
+        $bandParams = @{ OrgTree = $orgTree; ISCBandAttribute = $iscBandAttr }
+        if ($null -ne $bandMapping) { $bandParams['BandMapping'] = $bandMapping }
+        $bandResult = Resolve-SPIdentityBand @bandParams
+        $bandData   = if ($bandResult.Success) { $bandResult.Data } else { @{ Bands=@{}; Sources=@{}; Summary=@{} } }
+
+        # ── 5. Merge decisions across all campaigns ──────────────────────────
+        $merged = @{
+            Approved = [System.Collections.Generic.List[object]]::new()
+            Revoked  = [System.Collections.Generic.List[object]]::new()
+            Pending  = [System.Collections.Generic.List[object]]::new()
+        }
+        foreach ($audit in $allCampaignAudits) {
+            $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+            if ($null -eq $d) { continue }
+            foreach ($cat in @('Approved','Revoked','Pending')) {
+                if ($d.ContainsKey($cat) -and $null -ne $d[$cat]) {
+                    foreach ($item in @($d[$cat])) { $merged[$cat].Add($item) }
+                }
+            }
+        }
+        $mergedDecisions = @{
+            Approved = $merged['Approved'].ToArray()
+            Revoked  = $merged['Revoked'].ToArray()
+            Pending  = $merged['Pending'].ToArray()
+        }
+
+        # Merge reviewer metrics
+        $mergedReviewerMetrics = $null
+        if ($allCampaignAudits.Count -eq 1 -and $allCampaignAudits[0].ContainsKey('ReviewerMetrics')) {
+            $mergedReviewerMetrics = $allCampaignAudits[0]['ReviewerMetrics']
+        }
+
+        # ── 6. Group by leadership (correct signature) ───────────────────────
+        $groupParams = @{ Decisions = $mergedDecisions; OrgTree = $orgTree }
+        if ($null -ne $mergedReviewerMetrics) { $groupParams['ReviewerMetrics'] = $mergedReviewerMetrics }
+        $leadershipData = Group-SPAuditByLeadership @groupParams
+
+        # ── 7. Preview (uses Show-SPReportDistributionPreview like the CLI) ──
+        if ($PreviewOnly) {
+            $previewLines = @(Show-SPReportDistributionPreview -OrgTree $orgTree -LeadershipData $leadershipData -IncludeEmail)
+            $recipientCount = @($leadershipData.Leaders).Count
+            Write-SPLog -Message "Distribution preview ($recipientCount recipient(s)): $($previewLines -join '; ')" `
+                -Severity INFO -Component 'SP.GuiBridge' -Action 'DistributionPreview' -CorrelationID $CorrelationID
+            return @{ Success=$true; Data=@{ PreviewOnly=$true; RecipientCount=$recipientCount; ReportsGenerated=0; EmailsSent=0; OutputPath='' }; Error=$null }
+        }
+
+        # ── 8. Timestamped output path (prevents same-run overwrites) ────────
+        $auditBase   = if ($config.Audit.PSObject.Properties.Name -contains 'OutputPath') { [string]$config.Audit.OutputPath } else { '.\Audit' }
+        if (-not [System.IO.Path]::IsPathRooted($auditBase)) {
+            # Resolve relative to toolkit root (PSScriptRoot of SP.GuiBridge = Modules\SP.Gui\)
+            $tkRoot    = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+            $auditBase = [System.IO.Path]::GetFullPath((Join-Path $tkRoot $auditBase.TrimStart('.\').TrimStart('./')))
+        }
+        $runStamp            = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $leadershipOutputPath = Join-Path $auditBase "leadership\DistRun-$runStamp"
+        if (-not (Test-Path $leadershipOutputPath)) { New-Item -ItemType Directory -Path $leadershipOutputPath -Force | Out-Null }
+
+        # Campaign label + date range for report headers
+        $campaignLabel = if ($allCampaignAudits.Count -eq 1) { $allCampaignAudits[0]['CampaignName'] }
+                         else { "$($allCampaignAudits.Count) Campaigns (Combined)" }
+        $dateRange = ''
+        $allCreated = @($allCampaignAudits | ForEach-Object { if ($_['Created']) { $_['Created'] } } | Where-Object { $_ } | Sort-Object)
+        if ($allCreated.Count -gt 0) {
+            $dateRange = "$(($allCreated[0] -split 'T')[0]) to $((Get-Date).ToString('yyyy-MM-dd'))"
+        }
+
+        # ── 9. Generate reports (Export-SPLeadershipBandHtml handles naming) ─
+        $bandReportParams = @{
+            LeadershipData = $leadershipData
+            Decisions      = $mergedDecisions
+            OrgTree        = $orgTree
+            BandData       = $bandData
+            CampaignName   = $campaignLabel
+            DateRange      = $dateRange
+            OutputPath     = $leadershipOutputPath
+            CorrelationID  = $CorrelationID
+            DetailLevel    = 'Verbose'
+        }
+        if ($null -ne $TargetBands -and @($TargetBands).Count -gt 0) {
+            $bandReportParams['TargetBands'] = $TargetBands
+        }
+
+        $bandResult = Export-SPLeadershipBandHtml @bandReportParams
+        if (-not $bandResult.Success) {
+            return @{ Success=$false; Data=@{}; Error="Report generation failed: $($bandResult.Error)" }
+        }
+
+        $generatedFiles   = @($bandResult.Data.Files)
+        $reportsGenerated = [int]$bandResult.Data.ReportCount
+        $emailsSent       = 0
+
+        # ── 10. Send (SMTP, same guard as CLI) ───────────────────────────────
+        if ($SendReports -and $generatedFiles.Count -gt 0) {
+            $smtpCfg = $config.Audit.Smtp
+            if ($null -ne $smtpCfg -and [bool]$smtpCfg.Enabled) {
+                foreach ($filePath in $generatedFiles) {
+                    try {
+                        Send-SPReport -ReportFiles @($filePath) -CorrelationID $CorrelationID | Out-Null
+                        $emailsSent++
+                    } catch {
+                        Write-SPLog -Message "Send failed for $([System.IO.Path]::GetFileName($filePath)): $($_.Exception.Message)" `
+                            -Severity WARN -Component 'SP.GuiBridge' -Action 'ReportDistribution' -CorrelationID $CorrelationID
+                    }
+                }
             }
         }
 
         return @{
             Success = $true
-            Data    = @{ PreviewOnly = $false; RecipientCount = $recipientCount; ReportsGenerated = $reportsGenerated; EmailsSent = $emailsSent }
+            Data    = @{ PreviewOnly=$false; RecipientCount=@($leadershipData.Leaders).Count; ReportsGenerated=$reportsGenerated; EmailsSent=$emailsSent; OutputPath=$leadershipOutputPath }
             Error   = $null
         }
     }
     catch {
         Write-SPLog -Message "Invoke-SPGuiReportDistribution failed: $($_.Exception.Message)" `
             -Severity ERROR -Component 'SP.GuiBridge' -Action 'ReportDistribution' -CorrelationID $CorrelationID
-        return @{ Success = $false; Data = @{}; Error = $_.Exception.Message }
+        return @{ Success=$false; Data=@{}; Error=$_.Exception.Message }
     }
 }
 

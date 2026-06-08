@@ -2777,6 +2777,10 @@ function Export-SPLeadershipLevelHtml {
         $filePrefix.Substring(0, $filePrefix.Length - 1)
     } else { $filePrefix }
 
+    # Run-level timestamp -- computed ONCE here so all files in this level share the
+    # same stamp (consistent cross-linking) but each leader is still unique by name+id.
+    $runStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+
     # Determine if this is the top generated level (executive summary)
     $isTopLevel = ($Level -eq $StartLevel)
     # Determine if this is the lowest generated level (include identity detail)
@@ -3292,11 +3296,17 @@ $footerHtml
 </html>
 "@
 
-        # Determine filename
+        # Determine filename.
+        # Use leader-ID suffix to guarantee uniqueness even when multiple leaders share
+        # the same display name, and a run timestamp so repeated runs don't overwrite
+        # the previous day's reports. The top-level executive summary also gets a stamp
+        # so two runs on the same day can coexist under the caller's timestamped dir.
+        $safeId = ($leaderId -replace '[^a-zA-Z0-9_-]', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($safeId)) { $safeId = 'leader' }
         $fileName = if ($isTopLevel) {
-            'executive-summary.html'
+            "executive-summary-$safeId-$runStamp.html"
         } else {
-            "$filePrefixSingular-$safeName.html"
+            "$filePrefixSingular-$safeName-$safeId-$runStamp.html"
         }
 
         $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
