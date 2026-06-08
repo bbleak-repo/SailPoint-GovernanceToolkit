@@ -1948,10 +1948,15 @@ function Measure-SPCampaignMetrics {
             # --- Identify fastest / slowest reviewer ---
             $fastestReviewer = ''
             $slowestReviewer = ''
-            $reviewerCount   = 0
+
+            # Reviewer COUNT is always the number of certifications (one per reviewer),
+            # regardless of whether any have signed off. Measure-SPAuditReviewerMetrics
+            # only includes certs with a sign-off timestamp -- so for ACTIVE campaigns
+            # (zero completions) it returns an empty set, which previously made
+            # ReviewerCount = 0 even though reviewers ARE assigned.
+            $reviewerCount = @($certs | Where-Object { $null -ne $_ }).Count
 
             if ($null -ne $reviewerMetrics.ReviewerMetrics -and $reviewerMetrics.ReviewerMetrics.Count -gt 0) {
-                $reviewerCount = $reviewerMetrics.ReviewerMetrics.Count
 
                 $sorted = @($reviewerMetrics.ReviewerMetrics |
                     Where-Object { $null -ne $_.AvgHours } |
