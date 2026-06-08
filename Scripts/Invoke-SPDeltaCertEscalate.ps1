@@ -58,6 +58,17 @@
 .PARAMETER TokenExpiryMinutes
     Minutes until the browser token is considered expired. Default: 10.
     ISC browser tokens are typically valid for ~12 minutes.
+.PARAMETER Csv
+    When set, writes a structured CSV file to {DeltaCert.OutputPath}\escalation-audit-YYYYMMDD-HHmmss.csv
+    containing one row per certification found, with the full reviewer → skip-level chain
+    resolved. Columns include: CampaignName, CampaignStatus, CertificationId,
+    ReviewerName, ReviewerIdentityId, SkipLevelName, SkipLevelIdentityId, SkipLevelResolved,
+    HoursOpen, HoursUntilDeadline, EscalationReason, CertSigned, Outcome.
+    Works in both -WhatIf and live modes. Combines well with -DaysBack for a full
+    30-day org chart audit report: -DaysBack 30 -WhatIf -Csv
+.PARAMETER CsvPath
+    Override the auto-generated CSV path. When specified alongside -Csv, writes the
+    CSV to this exact path instead of the auto-generated one in DeltaCert.OutputPath.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -75,8 +86,14 @@
     # Org chart audit: show the reviewer->skip-level chain for ALL certs in last 30 days.
     # Validates that ISC can resolve the skip-level for every reviewer. No write calls.
 .EXAMPLE
-    .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf
-    # Org chart audit against a peer's campaign name prefix.
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv
+    # Org chart audit + CSV report: all chain data in a reviewable spreadsheet.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf -Csv
+    # Org chart audit against a peer's campaign name prefix with CSV output.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
+    # Live escalation with CSV evidence log of what was processed.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
     # Escalate stale certifications using a browser token.
@@ -118,6 +135,12 @@ param(
 
     [Parameter()]
     [int]$TokenExpiryMinutes = 10,
+
+    [Parameter()]
+    [switch]$Csv,
+
+    [Parameter()]
+    [string]$CsvPath,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -341,6 +364,111 @@ if (-not $staleResult.Success) {
 
 $staleCerts = @($staleResult.Data)
 
+#region CSV output (built before runner so -WhatIf and -Csv can co-exist)
+
+$effectiveCsvPath = $CsvPath   # hoisted so the JSONL audit block can reference it
+
+if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $staleCerts.Count -gt 0) {
+
+    # Resolve output path
+    $effectiveCsvPath = $CsvPath
+    if ([string]::IsNullOrWhiteSpace($effectiveCsvPath)) {
+        $csvOutputDir = '.\DeltaCert'
+        if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+            $null -ne $config.DeltaCert -and
+            $null -ne $config.DeltaCert.PSObject.Properties['OutputPath'] -and
+            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+            $csvOutputDir = [string]$config.DeltaCert.OutputPath
+        }
+        if (-not (Test-Path -LiteralPath $csvOutputDir -PathType Container)) {
+            New-Item -Path $csvOutputDir -ItemType Directory -Force | Out-Null
+        }
+        $csvStamp           = (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $effectiveCsvPath   = Join-Path $csvOutputDir "escalation-audit-$csvStamp.csv"
+    }
+
+    Write-Host "  Building CSV org chain report..." -ForegroundColor Cyan
+
+    $csvRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($sc in $staleCerts) {
+        $reviewerId  = $sc.ReviewerIdentityId
+        $skipName    = ''
+        $skipId      = ''
+        $skipFound   = $false
+        $outcome     = 'Pending'
+
+        # Determine skip-level (reviewer's manager) — same resolution the runner uses
+        if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
+            try {
+                $detail = Get-SPDeltaIdentityDetail -IdentityId $reviewerId -CorrelationID $correlationID
+                if ($detail.Found -and -not [string]::IsNullOrWhiteSpace($detail.ManagerId)) {
+                    $skipId    = $detail.ManagerId
+                    $skipFound = $true
+                    try {
+                        $mgDetail  = Get-SPDeltaIdentityDetail -IdentityId $detail.ManagerId -CorrelationID $correlationID
+                        $skipName  = if ($mgDetail.Found) { $mgDetail.DisplayName } else { $detail.ManagerId }
+                    } catch { $skipName = $detail.ManagerId }
+                }
+            } catch { }
+        }
+
+        # Determine what would/did happen
+        $levelsConsumed  = if ($sc.ReviewerClassification -eq 'Reassigned') { 1 } else { 0 }
+        $levelsRemaining = $effectiveMaxLevels - $levelsConsumed
+
+        if ([string]::IsNullOrWhiteSpace($reviewerId)) {
+            $outcome = 'Skip-NoReviewerId'
+        }
+        elseif ($levelsRemaining -le 0) {
+            $outcome = 'Skip-MaxLevelsReached'
+        }
+        elseif (-not $skipFound) {
+            $outcome = 'Skip-NoManagerInISC'
+        }
+        elseif (($WhatIfPreference -eq $true)) {
+            $outcome = 'WouldEscalate'
+        }
+        else {
+            $outcome = 'Escalated'
+        }
+
+        $csvRows.Add([PSCustomObject]@{
+            CampaignName         = $sc.CampaignName
+            CampaignStatus       = $sc.CampaignStatus
+            CertificationId      = $sc.CertificationId
+            ReviewerName         = $sc.ReviewerName
+            ReviewerIdentityId   = $sc.ReviewerIdentityId
+            Classification       = $sc.ReviewerClassification
+            SkipLevelName        = $skipName
+            SkipLevelIdentityId  = $skipId
+            SkipLevelResolved    = $skipFound
+            HoursOpen            = $sc.HoursOpen
+            HoursUntilDeadline   = $sc.HoursUntilDeadline
+            EscalationReason     = $sc.EscalationReason
+            CertSigned           = $sc.CertSigned
+            Outcome              = $outcome
+        })
+    }
+
+    try {
+        $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8
+        Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
+        Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
+            -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+            -CorrelationID $correlationID
+    }
+    catch {
+        Write-Host "  WARNING: Failed to write CSV: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Failed to write escalation audit CSV '$effectiveCsvPath': $($_.Exception.Message)" `
+            -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+            -CorrelationID $correlationID
+    }
+    Write-Host ''
+}
+
+#endregion
+
 if ($staleCerts.Count -eq 0) {
     Write-Host ''
     if ($DaysBack -gt 0) {
@@ -411,6 +539,7 @@ try {
         Skipped                     = $skippedIds.Count
         Errors                      = $errorMsgs
         WhatIf                      = ($WhatIfPreference -eq $true)
+        CsvPath                     = if (-not [string]::IsNullOrWhiteSpace($effectiveCsvPath)) { $effectiveCsvPath } else { $null }
         DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
