@@ -98,20 +98,28 @@
                             <ContentPresenter VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <!-- Hovering a non-selected item -->
                             <Trigger Property="IsHighlighted" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#3D3D5C"/>
                                 <Setter Property="Foreground" Value="#FFFFFF"/>
                             </Trigger>
+                            <!-- Selected item (not hovered): left-border accent, keep dark bg.
+                                 Avoids forcing a colored background into the closed ComboBox
+                                 selection box (which would look wrong against the dark ComboBox). -->
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#5B9BD5"/>
-                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="3,0,0,0"/>
+                                <Setter Property="Foreground" Value="#E0E0FF"/>
                             </Trigger>
+                            <!-- Hovering the currently-selected item: blue highlight -->
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsSelected"    Value="True"/>
                                     <Condition Property="IsHighlighted" Value="True"/>
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="Bd" Property="Background" Value="#6DACE0"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="3,0,0,0"/>
                                 <Setter Property="Foreground" Value="#FFFFFF"/>
                             </MultiTrigger>
                         </ControlTemplate.Triggers>
