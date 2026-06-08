@@ -3650,6 +3650,27 @@ function Initialize-GovernanceTab {
         }.GetNewClosure())
     }
 
+    # Distribution buttons
+    $btnDistPreview  = Find-Control -Parent $TabContent -Name 'BtnDistributionPreview'
+    $btnDistGenerate = Find-Control -Parent $TabContent -Name 'BtnDistributionGenerate'
+    $btnDistSend     = Find-Control -Parent $TabContent -Name 'BtnDistributionSend'
+
+    if ($btnDistPreview) {
+        $btnDistPreview.Add_Click({
+            & $module { param($tc) Invoke-GuiReportDistribution -TabContent $tc -Mode Preview } $TabContent
+        }.GetNewClosure())
+    }
+    if ($btnDistGenerate) {
+        $btnDistGenerate.Add_Click({
+            & $module { param($tc) Invoke-GuiReportDistribution -TabContent $tc -Mode Generate } $TabContent
+        }.GetNewClosure())
+    }
+    if ($btnDistSend) {
+        $btnDistSend.Add_Click({
+            & $module { param($tc) Invoke-GuiReportDistribution -TabContent $tc -Mode Send } $TabContent
+        }.GetNewClosure())
+    }
+
     # Set initial status text
     $statusLabel = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
     if ($null -ne $statusLabel) {
@@ -3657,6 +3678,135 @@ function Initialize-GovernanceTab {
     }
 
     Load-GovernanceReports -TabContent $TabContent
+}
+
+function Invoke-GuiReportDistribution {
+    <#
+    .SYNOPSIS
+        Shows the ReportDistributionDialog then runs report distribution in a background
+        runspace. Mode: Preview (no files), Generate (files, no email), Send (files + email).
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [ValidateSet('Preview','Generate','Send')]
+        [string]$Mode = 'Preview'
+    )
+
+    $distLabel = Find-Control -Parent $TabContent -Name 'GovDistributionStatusLabel'
+
+    # Open config dialog
+    $_govDays = 7
+    try {
+        $_c = Get-SPConfig
+        if ($_c.Audit.PSObject.Properties.Name -contains 'DefaultDaysBack' -and [int]$_c.Audit.DefaultDaysBack -gt 0) {
+            $_govDays = [int]$_c.Audit.DefaultDaysBack
+        }
+    } catch { }
+
+    $dialogXaml = Get-XamlPath -FileName 'ReportDistributionDialog.xaml'
+    if (-not (Test-Path $dialogXaml)) {
+        if ($null -ne $distLabel) { $distLabel.Text = 'ReportDistributionDialog.xaml not found in Gui\.' }
+        return
+    }
+
+    # Pre-select the radio button matching the clicked button
+    $modeDefault = @{ RbDistPreview=$false; RbDistGenerate=$false; RbDistSend=$false }
+    switch ($Mode) {
+        'Preview'  { $modeDefault['RbDistPreview']  = $true }
+        'Generate' { $modeDefault['RbDistGenerate'] = $true }
+        'Send'     { $modeDefault['RbDistSend']     = $true }
+    }
+
+    $dialogResult = Show-SPGuiDialog `
+        -XamlPath     $dialogXaml `
+        -ControlNames @('TxtDistCampaignName','CboDistStatus','TxtDistDaysBack',
+                        'TxtDistDepth','TxtDistBands',
+                        'RbDistPreview','RbDistGenerate','RbDistSend') `
+        -Defaults     @{
+            CboDistStatus   = 'COMPLETED'
+            TxtDistDaysBack = [string]$_govDays
+            TxtDistDepth    = '4'
+        } `
+        -OkButtonName 'BtnOK' -CancelButtonName 'BtnCancel'
+    if ($null -eq $dialogResult) { return }
+
+    # Parse dialog values
+    $campaignName = [string]$dialogResult['TxtDistCampaignName']
+    $status       = [string]$dialogResult['CboDistStatus']
+    if ($status -eq '(All)') { $status = $null }
+    $daysBack   = 7;  [int]::TryParse([string]$dialogResult['TxtDistDaysBack'], [ref]$daysBack) | Out-Null
+    $depth      = 4;  [int]::TryParse([string]$dialogResult['TxtDistDepth'],    [ref]$depth)    | Out-Null
+    $bandsRaw   = ([string]$dialogResult['TxtDistBands']).Trim()
+    $bands      = if ([string]::IsNullOrWhiteSpace($bandsRaw)) { @() } else { @($bandsRaw -split ',' | ForEach-Object { $_.Trim() }) }
+
+    $previewOnly  = [bool]$dialogResult['RbDistPreview']
+    $sendReports  = [bool]$dialogResult['RbDistSend']
+
+    $modeLabel = if ($previewOnly) { 'Previewing' } elseif ($sendReports) { 'Generating + Sending' } else { 'Generating' }
+    if ($null -ne $distLabel) { $distLabel.Text = "$modeLabel reports (DaysBack=$daysBack)..." }
+
+    # Run in background runspace
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'; $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',    $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',     $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('DistLabel',      $distLabel)
+    $runspace.SessionStateProxy.SetVariable('CampaignName',   $campaignName)
+    $runspace.SessionStateProxy.SetVariable('Status',         $status)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',       $daysBack)
+    $runspace.SessionStateProxy.SetVariable('Depth',          $depth)
+    $runspace.SessionStateProxy.SetVariable('Bands',          $bands)
+    $runspace.SessionStateProxy.SetVariable('PreviewOnly',    $previewOnly)
+    $runspace.SessionStateProxy.SetVariable('SendReports',    $sendReports)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $psInstance.AddScript({
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1', 'SP.DeltaCert\SP.DeltaCert.psd1',
+                'SP.DisconnectedApps\SP.DisconnectedApps.psd1',
+                'SP.ReportComponents\SP.ReportComponents.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $params = @{
+            Status            = if ($Status) { @($Status) } else { @('COMPLETED','ACTIVE') }
+            DaysBack          = $DaysBack
+            LeadershipDepth   = $Depth
+            PreviewOnly       = $PreviewOnly
+            SendReports       = $SendReports
+            CorrelationID     = [guid]::NewGuid().ToString()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $params['CampaignName'] = $CampaignName }
+        if (@($Bands).Count -gt 0) { $params['TargetBands'] = $Bands }
+
+        $result = Invoke-SPGuiReportDistribution @params
+
+        $dispatcher = $MainWindow.Dispatcher
+        $captured   = $result
+        $captLbl    = $DistLabel
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $captLbl) {
+                if ($null -ne $captured -and $captured.Success) {
+                    $captLbl.Text = if ($captured.Data.PreviewOnly) {
+                        "Preview: $($captured.Data.RecipientCount) leader(s) would receive reports."
+                    } else {
+                        "Done: $($captured.Data.ReportsGenerated) report(s) written$(if ($captured.Data.EmailsSent -gt 0){", $($captured.Data.EmailsSent) sent"}else{''})."
+                    }
+                } elseif ($null -ne $captured) {
+                    $captLbl.Text = "Failed: $($captured.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+    }) | Out-Null
+
+    $psInstance.BeginInvoke() | Out-Null
 }
 
 function Invoke-GuiHealthCheck {

@@ -86,7 +86,8 @@
         'Invoke-SPGuiSdkWorkItemAction',
         'Invoke-SPGuiSdkWorkflowAction',
         'Invoke-SPGuiSdkFilterAction',
-        'Initialize-SPAdaptiveTab'
+        'Initialize-SPAdaptiveTab',
+        'Invoke-SPGuiReportDistribution'
     )
 
     # Cmdlets to export from this module

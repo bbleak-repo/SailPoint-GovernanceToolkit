@@ -2574,6 +2574,129 @@ function Resolve-SPRelativePath {
 
 #endregion
 
+#region Report Distribution Bridge
+
+function Invoke-SPGuiReportDistribution {
+    <#
+    .SYNOPSIS
+        GUI bridge for Invoke-SPReportDistribution. Runs report distribution and
+        returns a result hashtable the Governance tab can surface in its status label.
+    .OUTPUTS
+        @{ Success; Data=@{PreviewOnly;RecipientCount;ReportsGenerated;EmailsSent}; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()] [string[]]$Status         = @('COMPLETED', 'ACTIVE'),
+        [Parameter()] [int]    $DaysBack         = 7,
+        [Parameter()] [int]    $LeadershipDepth  = 4,
+        [Parameter()] [string[]]$TargetBands     = @(),
+        [Parameter()] [string] $CampaignName,
+        [Parameter()] [switch] $PreviewOnly,
+        [Parameter()] [switch] $SendReports,
+        [Parameter()] [string] $CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # Build params for the underlying distribution function chain
+        $campArgs = @{
+            Status          = $Status
+            DaysBack        = $DaysBack
+            CorrelationID   = $CorrelationID
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $campArgs['CampaignName'] = $CampaignName }
+
+        $campaigns = @()
+        $cr = Get-SPAuditCampaigns @campArgs
+        if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
+
+        if ($campaigns.Count -eq 0) {
+            $filterDesc = "Status: $($Status -join ', ') | Last $DaysBack days"
+            if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $filterDesc += " | Name: '$CampaignName'" }
+            return @{ Success = $false; Data = @{}; Error = "No campaigns found ($filterDesc). Widen the Days Back window or adjust the Status filter." }
+        }
+
+        # Resolve audits + org tree
+        $audits = New-Object System.Collections.Generic.List[hashtable]
+        foreach ($camp in $campaigns) {
+            $certR = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
+            $wrapped = New-Object System.Collections.Generic.List[object]
+            foreach ($cert in @(if ($certR.Success) { $certR.Data } else { @() })) {
+                $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+                foreach ($item in @(if ($itemR.Success) { $itemR.Data } else { @() })) {
+                    $wrapped.Add(@{ Item = $item; CertificationId = [string]$cert.id; CertificationName = [string]$cert.name; CampaignName = [string]$camp.name })
+                }
+            }
+            $dg = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = ''; CompletionDate = '' }
+            $audits.Add(@{ CampaignName = [string]$camp.name; CampaignId = [string]$camp.id; Decisions = $dg })
+        }
+
+        # Build org tree and resolve leadership
+        $orgTree      = Build-SPOrgTree -CampaignAudits $audits.ToArray() -CorrelationID $CorrelationID
+        $bandTree     = Resolve-SPIdentityBand -OrgTree $orgTree -CorrelationID $CorrelationID
+        $leaderGroups = Group-SPAuditByLeadership -BandTree $bandTree -TargetBands $TargetBands -CorrelationID $CorrelationID
+
+        $recipientCount = @($leaderGroups).Count
+
+        if ($PreviewOnly) {
+            $preview = @($leaderGroups | ForEach-Object { "  $($_.LeaderName) (Band $($_.Band)): $($_.IdentityCount) identit$(if($_.IdentityCount -ne 1){'ies'}else{'y'})" })
+            Write-SPLog -Message ("Distribution preview ($recipientCount recipient(s)):`n" + ($preview -join "`n")) `
+                -Severity INFO -Component 'SP.GuiBridge' -Action 'ReportDistributionPreview' -CorrelationID $CorrelationID
+            return @{
+                Success = $true
+                Data    = @{ PreviewOnly = $true; RecipientCount = $recipientCount; ReportsGenerated = 0; EmailsSent = 0 }
+                Error   = $null
+            }
+        }
+
+        # Generate per-leader reports
+        $config      = Get-SPConfig
+        $auditBase   = if ($config.Audit.PSObject.Properties.Name -contains 'OutputPath') { [string]$config.Audit.OutputPath } else { '.\Audit' }
+        $outputPath  = [System.IO.Path]::GetFullPath((Join-Path $auditBase 'leadership'))
+        if (-not (Test-Path $outputPath)) { New-Item -ItemType Directory -Path $outputPath -Force | Out-Null }
+
+        $reportsGenerated = 0
+        $emailsSent       = 0
+        $theme            = 'dark'
+
+        foreach ($group in @($leaderGroups)) {
+            try {
+                $outFile = Join-Path $outputPath ("band-$($group.Band)-$($group.LeaderName)-$(Get-Date -Format 'yyyyMMdd-HHmmss').html")
+                Export-SPLeadershipBandHtml -LeaderGroup $group -OutputPath $outFile -Theme $theme -CorrelationID $CorrelationID | Out-Null
+                $reportsGenerated++
+
+                if ($SendReports) {
+                    $smtpCfg = $config.Audit.Smtp
+                    if ($null -ne $smtpCfg -and [bool]$smtpCfg.Enabled) {
+                        Send-SPReport -FilePath $outFile -To $group.LeaderEmail -SmtpConfig $smtpCfg -CorrelationID $CorrelationID | Out-Null
+                        $emailsSent++
+                    }
+                }
+            } catch {
+                Write-SPLog -Message "Failed to generate/send report for $($group.LeaderName): $($_.Exception.Message)" `
+                    -Severity WARN -Component 'SP.GuiBridge' -Action 'ReportDistribution' -CorrelationID $CorrelationID
+            }
+        }
+
+        return @{
+            Success = $true
+            Data    = @{ PreviewOnly = $false; RecipientCount = $recipientCount; ReportsGenerated = $reportsGenerated; EmailsSent = $emailsSent }
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiReportDistribution failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'ReportDistribution' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = @{}; Error = $_.Exception.Message }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -2592,5 +2715,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiGovernanceReport',
     'Export-SPGuiDashboardData',
     'Get-SPGuiGovernanceReports',
-    'Get-SPGuiDisconnectedAppStatus'
+    'Get-SPGuiDisconnectedAppStatus',
+    'Invoke-SPGuiReportDistribution'
 )

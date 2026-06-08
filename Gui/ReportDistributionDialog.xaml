@@ -1,0 +1,272 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Leadership Report Distribution"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        MinWidth="480"
+        Background="#1E1E2E"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        FontSize="13">
+
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#AAAACC"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="FieldBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#2D2D44"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderBrush" Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style x:Key="HintText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#666688"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontStyle" Value="Italic"/>
+            <Setter Property="Margin" Value="0,2,0,10"/>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#5B9BD5"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#6DACE0"/></Trigger>
+                            <Trigger Property="IsPressed"   Value="True"><Setter Property="Background" Value="#4A85BB"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Background" Value="#2D2D44"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="BorderBrush" Value="#3D3D5C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#3D3D5C"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Implicit ComboBoxItem style: forces dark theme into dropdown popup rows. -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#2D2D44"/>
+            <Setter Property="Foreground" Value="#E0E0E0"/>
+            <Setter Property="Padding"    Value="8,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3D3D5C"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush"     Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="3,0,0,0"/>
+                                <Setter Property="Foreground" Value="#E0E0FF"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsSelected"    Value="True"/>
+                                    <Condition Property="IsHighlighted" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background"     Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderBrush"    Value="#5B9BD5"/>
+                                <Setter TargetName="Bd" Property="BorderThickness" Value="3,0,0,0"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Implicit ComboBox style with dark ControlTemplate -->
+        <Style TargetType="ComboBox">
+            <Setter Property="Background"               Value="#2D2D44"/>
+            <Setter Property="Foreground"               Value="#E0E0E0"/>
+            <Setter Property="BorderBrush"              Value="#3D3D5C"/>
+            <Setter Property="BorderThickness"          Value="1"/>
+            <Setter Property="Padding"                  Value="6,4"/>
+            <Setter Property="FontSize"                 Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid x:Name="templateRoot" SnapsToDevicePixels="True">
+                            <ToggleButton x:Name="toggleButton"
+                                          Background="{TemplateBinding Background}"
+                                          BorderBrush="{TemplateBinding BorderBrush}"
+                                          BorderThickness="{TemplateBinding BorderThickness}"
+                                          Focusable="False" OverridesDefaultStyle="True"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="bd"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="2">
+                                            <Path x:Name="arrow" Fill="#AAAACC"
+                                                  HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                  Data="M 0 0 L 6 5 L 12 0 Z"
+                                                  Width="12" Height="6" Margin="0,0,8,0"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd"    Property="BorderBrush" Value="#5B9BD5"/>
+                                                <Setter TargetName="arrow" Property="Fill"        Value="#5B9BD5"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="bd"    Property="BorderBrush" Value="#5B9BD5"/>
+                                                <Setter TargetName="arrow" Property="Fill"        Value="#5B9BD5"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter x:Name="contentPresenter"
+                                              Margin="8,0,26,0"
+                                              HorizontalAlignment="Left" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              IsHitTestVisible="False"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
+                            <Popup x:Name="PART_Popup" AllowsTransparency="True"
+                                   IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Placement="Bottom">
+                                <Border Background="#2D2D44" BorderBrush="#5B9BD5" BorderThickness="1"
+                                        MinWidth="{Binding ActualWidth, ElementName=templateRoot}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer>
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Padding="20" Background="#1E1E2E">
+        <StackPanel>
+            <!-- Campaign filter row -->
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Campaign Name Contains (optional):" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtDistCampaignName" Style="{StaticResource FieldBox}"
+                             ToolTip="Filter to campaigns whose name contains this text. Leave blank for all campaigns."/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Status:" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox x:Name="CboDistStatus" SelectedIndex="0"
+                              ToolTip="Campaign status to include in the distribution">
+                        <ComboBoxItem Content="COMPLETED"/>
+                        <ComboBoxItem Content="ACTIVE"/>
+                        <ComboBoxItem Content="(All)"/>
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel Grid.Column="4">
+                    <TextBlock Text="Days Back:" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtDistDaysBack" Style="{StaticResource FieldBox}"
+                             Text="7"
+                             ToolTip="How many days back to search for campaigns (by creation date). Use 30-90 if recent runs show no results."/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="6">
+                    <TextBlock Text="Depth:" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TxtDistDepth" Style="{StaticResource FieldBox}"
+                             Text="4"
+                             ToolTip="Leadership tree depth (org levels to walk up from reviewed identities). Default 4."/>
+                </StackPanel>
+            </Grid>
+
+            <!-- Target Bands (optional) -->
+            <TextBlock Text="Target Bands (optional, e.g. B,C — leave blank for all):" Style="{StaticResource FieldLabel}"/>
+            <TextBox x:Name="TxtDistBands" Style="{StaticResource FieldBox}" Margin="0,0,0,4"
+                     ToolTip="Comma-separated leadership bands to include (A=VP, B=Director, C=Manager). Leave blank to include all bands."/>
+            <TextBlock Text="Bands: A=VP/Executive  B=Director  C=Manager  D=Senior  E=Individual (uses ISC jobLevel attribute)"
+                       Style="{StaticResource HintText}"/>
+
+            <!-- Mode selection -->
+            <TextBlock Text="Mode:" Style="{StaticResource FieldLabel}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                <RadioButton x:Name="RbDistPreview"   Content="Preview only"
+                             Foreground="#E0E0E0" IsChecked="True" Margin="0,0,20,0"
+                             GroupName="DistMode" FontSize="12"
+                             ToolTip="Show who would receive reports without writing any files"/>
+                <RadioButton x:Name="RbDistGenerate"  Content="Generate reports"
+                             Foreground="#E0E0E0" Margin="0,0,20,0"
+                             GroupName="DistMode" FontSize="12"
+                             ToolTip="Write per-leader HTML files to the Audit output folder (no email)"/>
+                <RadioButton x:Name="RbDistSend"      Content="Generate + Send email"
+                             Foreground="#E0E0E0"
+                             GroupName="DistMode" FontSize="12"
+                             ToolTip="Write files AND email each leader their own report (requires Audit.Smtp.Enabled = true in settings.local.json)"/>
+            </StackPanel>
+
+            <!-- Action buttons -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="1" x:Name="BtnOK"     Content="Run"
+                        Style="{StaticResource PrimaryButton}" IsDefault="True"
+                        ToolTip="Run the selected distribution mode with the above settings."/>
+                <Button Grid.Column="3" x:Name="BtnCancel" Content="Cancel"
+                        Style="{StaticResource SecondaryButton}" IsCancel="True"
+                        ToolTip="Close without running."/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

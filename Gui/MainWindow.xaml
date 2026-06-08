@@ -1023,6 +1023,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
@@ -1201,8 +1202,46 @@
                                    FontSize="12" Margin="8,0,0,0"/>
                     </Grid>
 
-                    <!-- Row 4: Recent Governance Reports -->
-                    <Grid Grid.Row="4">
+                    <!-- Row 4: Leadership Report Distribution -->
+                    <Border Grid.Row="4" Background="#252538" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1"
+                            Padding="12,10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Leadership Reports:"
+                                       Foreground="#5B9BD5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" FontSize="12"
+                                       Margin="0,0,12,0"/>
+                            <Button Grid.Column="1" x:Name="BtnDistributionPreview"
+                                    Content="Preview"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="0,0,6,0" Padding="12,5" FontSize="11"
+                                    ToolTip="Show who would receive reports without generating any files"/>
+                            <Button Grid.Column="2" x:Name="BtnDistributionGenerate"
+                                    Content="Generate Reports"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="0,0,6,0" Padding="12,5" FontSize="11"
+                                    ToolTip="Generate per-leader HTML report files in the Audit output folder (no email)"/>
+                            <TextBlock Grid.Column="3" x:Name="GovDistributionStatusLabel"
+                                       Foreground="#AAAACC" FontSize="11" FontStyle="Italic"
+                                       VerticalAlignment="Center" Margin="8,0,0,0"
+                                       Text="Ready. Preview shows who would receive reports."/>
+                            <Button Grid.Column="4" x:Name="BtnDistributionSend"
+                                    Content="Generate + Send"
+                                    Style="{StaticResource ToolkitButton}"
+                                    Padding="12,5" FontSize="11"
+                                    ToolTip="Generate reports AND email each leader their own summary (requires Audit.Smtp.Enabled = true in settings.local.json)"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Row 5: Recent Governance Reports -->
+                    <Grid Grid.Row="5">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
