@@ -759,8 +759,16 @@ function Get-SPDeltaCertStaleCertifications {
         -CorrelationID $CorrelationID
 
     try {
-        # Step 1: Find active delta cert campaigns
-        $searchResult = Search-SPCampaigns -Keyword $CampaignNamePrefix -Status @('ACTIVE') `
+        # Step 1: Find active delta cert campaigns.
+        # Use Get-SPAuditCampaigns with CampaignNameStartsWith (sw = prefix match, indexed)
+        # rather than Search-SPCampaigns (co = contains, full-text scan). The contains filter
+        # can cause ISC to return 400 "request timed out" when the server-side query exceeds
+        # its execution window. Prefix matching is both faster and correct here -- we know the
+        # exact prefix; we don't need a substring search.
+        $searchResult = Get-SPAuditCampaigns `
+            -CampaignNameStartsWith $CampaignNamePrefix `
+            -Status @('ACTIVE') `
+            -DaysBack 0 `
             -CorrelationID $CorrelationID
 
         if (-not $searchResult.Success) {

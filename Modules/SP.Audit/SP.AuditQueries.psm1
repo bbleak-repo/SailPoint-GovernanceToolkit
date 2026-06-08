@@ -244,7 +244,7 @@ function Get-SPAuditCampaigns {
     .SYNOPSIS
         Retrieves certification campaigns with optional name, status, and date filters.
     .DESCRIPTION
-        GETs /v3/campaigns with detail=FULL and auto-paginates across all pages.
+        GETs /v3/campaigns and auto-paginates across all pages.
         Name and status filters are applied server-side via the ISC 'filters' query
         parameter.  Date filtering is applied client-side because the ISC campaign
         API does not support filtering on the 'created' field directly.
