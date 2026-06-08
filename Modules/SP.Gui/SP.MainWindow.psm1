@@ -4790,13 +4790,16 @@ function Invoke-SdkGridRefresh {
 
                 if ($ps.HadErrors) {
                     $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
-                    # Auth/connection failures are an EXPECTED state (mock not running,
-                    # credentials not configured, missing sp:scopes:all scope). Show a
-                    # sub-tab-only hint instead of escalating to the main status bar --
-                    # that would make the dashboard look broken when it's just the SDK
-                    # tab waiting for credentials.
-                    $isAuthErr = $errMsg -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
-                    if ($isAuthErr) {
+                    # Classify the error so we can show a targeted, sub-tab-only message
+                    # without alarming the main status bar for expected configuration gaps.
+                    $isAuthErr   = $errMsg -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
+                    $isScopeErr  = $errMsg -match '(?i)403|forbidden'
+                    if ($isScopeErr) {
+                        # 403 = token is valid but the OAuth client lacks the required scope.
+                        # SDK endpoints need sp:scopes:all (or specific idn:* scopes).
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
+                            -Message 'Access denied (403). Add sp:scopes:all to your Personal Access Token in ISC Admin → Security Settings → Personal Access Tokens.'
+                    } elseif ($isAuthErr) {
                         Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
                             -Message 'Not connected — configure credentials in the Settings tab, then click Refresh.'
                     } else {
@@ -4805,9 +4808,13 @@ function Invoke-SdkGridRefresh {
                     }
                 }
                 elseif ($null -ne $result -and -not $result.Success) {
-                    $errDetail = [string]$result.Error
-                    $isAuthErr = $errDetail -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
-                    if ($isAuthErr) {
+                    $errDetail  = [string]$result.Error
+                    $isAuthErr  = $errDetail -match '(?i)access.?token|401|authenticat|not.*authoriz|credential|scope|connect'
+                    $isScopeErr = $errDetail -match '(?i)403|forbidden'
+                    if ($isScopeErr) {
+                        Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
+                            -Message 'Access denied (403). Add sp:scopes:all to your Personal Access Token in ISC Admin → Security Settings → Personal Access Tokens.'
+                    } elseif ($isAuthErr) {
                         Set-SdkSubTabStatus -TabContent $tab -StatusName $statusName `
                             -Message 'Not connected — configure credentials in the Settings tab, then click Refresh.'
                     } else {
