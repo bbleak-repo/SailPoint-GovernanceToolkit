@@ -10,8 +10,9 @@ the way they do and where the system has hard limits.
 
 ---
 
-## 1. What problem Delta Cert solves
+## 1. What problem Delta Cert solves — and what it doesn't
 
+### The problem it solves
 Quarterly access reviews are the traditional approach: once every 90 days, every manager
 reviews every entitlement their direct reports hold. The problem is clear — a user could
 receive broad AD admin access on day 1 of a quarter and hold it unchallenged for 89 days
@@ -24,9 +25,46 @@ or revoke the new access within the deadline (typically 24–48 hours).
 
 **What it achieves:**
 - New access reviewed within hours, not months
-- Reviewers see a small, targeted queue instead of hundreds of existing entitlements
+- Only managers with affected staff get campaigns — NOT all 200 managers daily
 - Every grant is logged in a JSONL audit trail with the reviewer's decision
 - Escalation to skip-level managers if a reviewer misses the deadline
+
+### What it does NOT replace — both are always needed
+
+Delta cert is **event-driven** (fires when access is granted). Periodic full cert is
+**time-driven** (fires on a calendar regardless of what changed). Neither replaces the
+other:
+
+| | Delta cert (daily) | Periodic cert (quarterly/annual) |
+|---|---|---|
+| **Trigger** | New AD grant detected | Calendar schedule |
+| **Answers** | "Should they keep what they just received?" | "Should they keep everything they've accumulated?" |
+| **Covers** | Access granted since last run | All current access, including pre-toolkit access |
+| **Compliance control** | New access reviewed promptly | All access periodically re-certified |
+
+Delta cert runs indefinitely as long as new grants occur. Periodic full cert (`-FullCert`)
+runs quarterly or annually as your compliance framework requires (SOX, SOC 2, etc. typically
+require both). The two work together — neither is "once and done."
+
+### Volume reality check (200 managers)
+
+A common concern: "Won't this create 200 campaigns every day?"
+
+No — **daily delta only creates campaigns for managers who have at least one direct report
+that received new access today**. If 8 people across the organization got new AD group
+memberships today and they report to 4 different managers, you get 4 campaigns. On quiet
+days you get 0. Quarterly `-FullCert` does touch all managers with AD staff — that's the
+planned large run, not the daily operation.
+
+Campaign count guidance:
+- **Daily delta, typical day**: 0–15 campaigns (only affected managers)
+- **Daily delta, mass onboarding**: potentially more — consider `-MinIdentities` threshold
+  (planned feature) to suppress singleton campaigns for low-risk groups
+- **Quarterly -FullCert**: ~150–200 campaigns (one per manager with AD staff)
+
+If you're seeing daily campaigns for the same managers every day, it means your AD has
+frequent group membership churn (automated provisioning, project assignments). That's
+useful signal — those managers are the ones certifying the most frequently-granted access.
 
 ---
 
@@ -246,7 +284,70 @@ this to run for several minutes and create dozens of campaigns.
 
 ---
 
-## 6. Understanding the escalation timing
+## 6. How escalation works — and yes, ISC sends the email
+
+### What the toolkit actually does
+
+When `Invoke-SPDeltaCertEscalate.ps1` runs, it calls ISC's reassignment API
+(`/v3/certifications/{id}/reassign`). This moves the certification items from the
+original reviewer (the manager who didn't act) to their skip-level manager. The toolkit
+itself sends no email — **ISC sends the notification automatically** as part of the
+reassignment.
+
+The complete chain:
+
+```
+Toolkit calls ISC reassignment API
+    ↓
+ISC moves the certification to the skip-level manager's queue
+    ↓
+ISC triggers its standard "certification assignment" notification
+    ↓
+Skip-level manager receives: "You have a new certification to review"
+    (same email template they'd receive for any new campaign assignment)
+```
+
+### What the email contains
+
+The notification email uses ISC's built-in certification assignment template —
+the same one managers receive when a campaign is originally created. You configure
+the template in **ISC Admin Console → Notifications → Certification**. ISC sends it;
+the toolkit has no control over the content or whether it's sent.
+
+**If no email arrives after escalation:**
+1. Check ISC Admin → Notifications → Certification is enabled
+2. Check the skip-level manager has a valid email address in ISC (identity attribute)
+3. Check ISC's notification delivery history (Admin → Notification Delivery)
+
+### ISC constraints the escalation respects
+
+The toolkit handles two ISC API limits automatically:
+
+| Constraint | What it means | How toolkit handles it |
+|---|---|---|
+| Max 50 items per sync reassignment | A certification with >50 review items can't use the sync reassignment API | Automatically switches to the async reassignment API for large certifications |
+| Max escalation levels | ISC tracks how many times a cert has been reassigned | `MaxEscalationLevels` in settings.json (default 2) prevents infinite escalation chains |
+| Governance Group certifications | Cannot be reassigned via this API | Toolkit logs a warning and skips; manual reassignment required in ISC UI |
+
+### What "Reassigned" classification means
+
+When a certification has already been escalated once, ISC marks it as
+`ReviewerClassification = 'Reassigned'`. The toolkit treats this as "one level already
+consumed" — so if `MaxEscalationLevels = 2` and the cert is already Reassigned, it gets
+one more escalation hop (to the next level up the org tree) and then stops.
+
+### WhatIf mode for escalation
+
+```powershell
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 0 -EscalateBeforeDeadlineHours 11 -WhatIf
+```
+
+WhatIf shows exactly who would be escalated and to which skip-level manager — without
+calling the reassignment API and without triggering any ISC notifications.
+
+---
+
+## 7. Scheduling escalation correctly (the timing trap)
 
 This is the second most common misunderstanding after the "all entitlements" issue above.
 
