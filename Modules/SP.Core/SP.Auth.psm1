@@ -94,6 +94,25 @@ function Get-SPCredentialsFromVault {
         throw 'Authentication.Vault.VaultPath is not configured in settings.json'
     }
 
+    # Resolve VaultPath to an absolute path anchored at the toolkit root.
+    # The raw config value is often a relative path (e.g. ".\Data\sp-vault.enc").
+    # [System.IO.File]::ReadAllBytes() resolves relative paths from the .NET
+    # process working directory (Environment.CurrentDirectory), which is
+    # C:\Windows\System32 when PowerShell is launched from a system context --
+    # not the toolkit root. Using PSScriptRoot (Modules\SP.Core\) + two levels
+    # up gives the toolkit root regardless of how or where PowerShell was started.
+    $vaultPath = [string]$vaultSection.VaultPath
+    if (-not [System.IO.Path]::IsPathRooted($vaultPath)) {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $vaultPath   = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot ($vaultPath.TrimStart('.\').TrimStart('./'))))
+    }
+
+    if (-not (Test-Path -LiteralPath $vaultPath -PathType Leaf)) {
+        throw ("Vault file not found at '$vaultPath'. " +
+               "Run New-SPVault.ps1 to create it, or set Authentication.Vault.VaultPath " +
+               "to an absolute path in Config\settings.local.json.")
+    }
+
     # Prompt for vault passphrase at runtime
     $passphrase = Read-Host -Prompt 'Enter vault passphrase' -AsSecureString
 
@@ -101,7 +120,7 @@ function Get-SPCredentialsFromVault {
         -Component 'SP.Auth' -Action 'GetCredentials' -CorrelationID $CorrelationID
 
     $result = Get-SPVaultCredential `
-        -VaultPath    $vaultSection.VaultPath `
+        -VaultPath    $vaultPath `
         -Passphrase   $passphrase `
         -Key          $vaultSection.CredentialKey
 
