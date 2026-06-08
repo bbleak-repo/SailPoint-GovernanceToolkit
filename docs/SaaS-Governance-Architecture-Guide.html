@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Practical SaaS governance architecture for resource-constrained organizations. Role-level governance through IdP group mapping without custom connectors.">
+<title>SaaS Governance Architecture Guide -- Practical Identity Governance at Scale</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--primary:#336699;--accent:#5B9BD5;--success:#339933;--success-bg:#edf6ef;--danger:#CC3333;--danger-bg:#fdf0ef;--warning:#e68a00;--warning-bg:#fff8ec;--header-bg:#1e2a3a;--text:#2c3e50;--text-muted:#596980;--bg:#f4f6f9;--surface:#fff;--border:#dce3eb;--border-light:#eaecf0;--tab-bg:#263545;--shadow-sm:0 1px 3px rgba(0,0,0,0.06);--shadow-md:0 2px 8px rgba(0,0,0,0.08);--radius:8px}
+html{font-size:15px;scroll-behavior:smooth}body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;color:var(--text);background:var(--bg);line-height:1.7}
+.app-header{background:linear-gradient(135deg,#14202e 0%,#1e2a3a 50%,#263545 100%);color:#fff;padding:24px 36px 18px;border-bottom:3px solid var(--accent)}
+.header-inner{max-width:1100px;margin:0 auto;display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px}
+.header-title{font-size:1.3rem;font-weight:700;color:var(--accent)}.header-sub{font-size:0.78rem;color:rgba(255,255,255,0.6);margin-top:3px}
+.tab-bar{background:var(--tab-bg);display:flex;flex-wrap:wrap;padding:0 24px;position:sticky;top:0;z-index:100;box-shadow:var(--shadow-md)}
+.tab-btn{background:transparent;border:none;color:rgba(255,255,255,0.55);font-family:inherit;font-size:0.76rem;font-weight:500;padding:12px 13px;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;transition:all 0.2s}
+.tab-btn:hover{background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.85)}.tab-btn.active{color:#fff;border-bottom-color:var(--accent);font-weight:600}
+.content-wrap{max-width:940px;margin:0 auto;padding:32px 36px 60px}
+.tab-panel{display:none;animation:fadeIn 0.25s ease}.tab-panel.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+h2{font-size:1.35rem;font-weight:700;color:var(--header-bg);margin:0 0 8px;padding-bottom:12px;border-bottom:3px solid var(--accent)}
+.section-intro{font-size:0.92rem;color:var(--text-muted);margin-bottom:24px}
+h3{font-size:1.05rem;font-weight:600;color:var(--primary);margin:26px 0 10px}h4{font-size:0.92rem;font-weight:600;color:var(--text);margin:16px 0 6px}
+p{margin:0 0 14px}ul,ol{margin:0 0 14px;padding-left:22px}li{margin-bottom:5px}
+table{width:100%;border-collapse:collapse;margin:14px 0 18px;font-size:0.85rem;border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm)}
+th{background:#34495e;color:#fff;text-align:left;padding:9px 12px;font-weight:600;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.4px}
+td{padding:9px 12px;border-bottom:1px solid var(--border-light);vertical-align:top;background:var(--surface)}
+tr:nth-child(even) td{background:#f9f9fb}tr:last-child td{border-bottom:none}
+.callout{border-radius:var(--radius);padding:14px 18px;margin:16px 0;font-size:0.88rem;border-left:4px solid;box-shadow:var(--shadow-sm)}
+.callout-label{font-weight:700;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px}
+.callout-tip{background:var(--success-bg);border-color:var(--success)}.callout-tip .callout-label{color:var(--success)}
+.callout-note{background:#edf2f9;border-color:var(--primary)}.callout-note .callout-label{color:var(--primary)}
+.callout-warn{background:var(--warning-bg);border-color:var(--warning)}.callout-warn .callout-label{color:var(--warning)}
+.callout-danger{background:var(--danger-bg);border-color:var(--danger)}.callout-danger .callout-label{color:var(--danger)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;margin:14px 0;box-shadow:var(--shadow-sm)}
+.card-title{font-size:0.95rem;font-weight:700;color:var(--header-bg);margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid var(--border-light)}
+.compare{display:flex;gap:14px;margin:16px 0}.compare-card{flex:1;border-radius:var(--radius);padding:16px 18px;border:1px solid;box-shadow:var(--shadow-sm)}
+.compare-card.good{background:var(--success-bg);border-color:#a3d9a5}.compare-card.bad{background:var(--danger-bg);border-color:#e6a5a5}
+.compare-card.info{background:#edf2f9;border-color:#a5c8e6}.compare-card.warn{background:var(--warning-bg);border-color:#f0d4a0}
+.compare-card h4{margin:0 0 6px}.compare-card p{margin:0;font-size:0.88rem}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;color:#fff}
+.badge-t1{background:#339933}.badge-t2{background:#00A1E0}.badge-t3{background:#e68a00}.badge-t4{background:#607D8B}.badge-gap{background:#CC3333}
+code{background:#f0f2f5;color:#5d4037;padding:2px 5px;border-radius:3px;font-family:Consolas,monospace;font-size:0.85rem}
+pre{background:#1e2a3a;color:#e0e4ea;padding:14px 16px;border-radius:var(--radius);overflow-x:auto;font-size:0.82rem;line-height:1.5;margin:14px 0}
+pre code{background:transparent;color:inherit;padding:0}
+blockquote{background:#f7f8fa;border-left:3px solid #b0bec5;margin:14px 0;padding:12px 18px;font-style:italic;color:var(--text-muted);border-radius:0 var(--radius) var(--radius) 0}
+.welcome-hero{background:linear-gradient(135deg,var(--header-bg) 0%,#263545 100%);color:#fff;border-radius:var(--radius);padding:32px 28px;margin-bottom:24px;border-bottom:3px solid var(--accent)}
+.welcome-hero h2{color:var(--accent);border-bottom:none;margin-bottom:10px;padding-bottom:0;font-size:1.4rem}
+.welcome-hero p{color:rgba(255,255,255,0.75);font-size:0.92rem;max-width:680px}
+.tier-visual{display:flex;gap:0;margin:20px 0;border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-md)}
+.tier-block{flex:1;padding:16px 14px;text-align:center;color:#fff;font-size:0.82rem}
+.tier-block.t1{background:#264d73}.tier-block.t2{background:#00A1E0}.tier-block.t3{background:#e68a00}.tier-block.t4{background:#607D8B}
+.tier-block .tb-label{font-weight:700;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.3px;opacity:0.7}
+.tier-block .tb-title{font-weight:700;font-size:0.95rem;margin:2px 0}
+.tier-block .tb-count{font-size:0.75rem;opacity:0.8}
+.effort-badge{display:inline-block;padding:1px 7px;border-radius:3px;font-size:0.65rem;font-weight:600}
+.effort-low{background:var(--success-bg);color:var(--success)}.effort-med{background:var(--warning-bg);color:var(--warning)}.effort-high{background:var(--danger-bg);color:var(--danger)}
+.app-footer{text-align:center;padding:20px;font-size:0.72rem;color:#999;border-top:1px solid var(--border);margin-top:40px}
+@media(max-width:768px){.content-wrap{padding:20px 16px}.compare,.tier-visual{flex-direction:column}}
+@media print{.tab-bar{display:none}.tab-panel{display:block!important}.app-header{position:static}}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+    <div class="header-inner">
+        <div>
+            <div class="header-title">SaaS Governance Architecture Guide</div>
+            <div class="header-sub">Practical identity governance at scale without custom connectors or unlimited budget</div>
+        </div>
+    </div>
+</header>
+
+<nav class="tab-bar" id="tabBar">
+    <button class="tab-btn active" data-tab="home">Home</button>
+    <button class="tab-btn" data-tab="problem">The Problem</button>
+    <button class="tab-btn" data-tab="tiers">4-Tier Model</button>
+    <button class="tab-btn" data-tab="rolegroups">Role-Level Groups</button>
+    <button class="tab-btn" data-tab="appmatrix">App-by-App Matrix</button>
+    <button class="tab-btn" data-tab="config">Configuration</button>
+    <button class="tab-btn" data-tab="gaps">Honest Gaps</button>
+    <button class="tab-btn" data-tab="longtail">The Long Tail</button>
+    <button class="tab-btn" data-tab="cost">Cost Model</button>
+    <button class="tab-btn" data-tab="roadmap">Implementation Roadmap</button>
+</nav>
+
+<div class="content-wrap">
+
+<!-- ════════ HOME ════════ -->
+<div class="tab-panel active" id="panel-home">
+    <div class="welcome-hero">
+        <h2>Governing 100+ Apps Without 100 Connectors</h2>
+        <p>This guide is for IAM teams at organizations with 1,000-10,000 identities, 1-3 IAM
+        engineers, 100+ SaaS applications, and a SailPoint ISC budget that does not include
+        building 50 custom connectors at $15-60K each.</p>
+        <p style="margin-top:10px; color:rgba(255,255,255,0.55); font-size:0.82rem;">
+        The answer is not "connect everything to SailPoint." The answer is a tiered
+        governance model where your IdP does the heavy lifting and SailPoint provides
+        the governance framework on top.</p>
+    </div>
+
+    <div class="callout callout-note">
+        <div class="callout-label">Who this is for</div>
+        <ul style="margin:6px 0 0; padding-left:18px;">
+            <li><strong>IAM architects</strong> designing a governance program for 100+ apps</li>
+            <li><strong>CISOs</strong> who need to explain the strategy to auditors and the board</li>
+            <li><strong>IAM engineers</strong> implementing the technical configuration</li>
+            <li><strong>Anyone</strong> who has been told "just build a connector" and knows that is not realistic</li>
+        </ul>
+    </div>
+
+    <h3>The Core Insight</h3>
+    <p>Most modern SaaS apps support <strong>SSO group-to-role mapping</strong>. If you design your
+    IdP groups at the <em>role level</em> (not just the app level), then certifying the group
+    membership in SailPoint IS certifying the in-app authorization -- without a single custom
+    connector.</p>
+
+    <div class="compare">
+        <div class="compare-card bad">
+            <h4 style="color:#a12c2c;">Surface-Level Governance</h4>
+            <p>One group per app: <code>Salesforce_Users</code></p>
+            <p style="margin-top:6px; font-size:0.82rem; opacity:0.75;">Certify: "Does Jane have access to Salesforce?" -- says nothing about what she can do inside it.</p>
+        </div>
+        <div class="compare-card good">
+            <h4 style="color:#1a7a1a;">Role-Level Governance</h4>
+            <p>Groups per role: <code>SF_Admin</code>, <code>SF_Standard</code>, <code>SF_ReadOnly</code></p>
+            <p style="margin-top:6px; font-size:0.82rem; opacity:0.75;">Certify: "Does Jane have Salesforce Admin access?" -- now you are governing authorization.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ════════ THE PROBLEM ════════ -->
+<div class="tab-panel" id="panel-problem">
+    <h2>The Problem: Three Colliding Constraints</h2>
+    <p class="section-intro">Understanding why the obvious answers do not work for most organizations.</p>
+
+    <h3>Constraint 1: Source Limits</h3>
+    <p>SailPoint ISC limits the number of connected sources by tier. Every connector -- including
+    flat file imports for disconnected apps -- consumes a source slot.</p>
+    <table>
+        <thead><tr><th>ISC Tier</th><th>Source Limit</th><th>After 8 core sources</th><th>Per-Identity Cost</th></tr></thead>
+        <tbody>
+            <tr><td>Standard</td><td>15</td><td><strong>7 remaining</strong></td><td>Custom quote</td></tr>
+            <tr><td>Business</td><td>50</td><td><strong>42 remaining</strong></td><td>$6-9/identity/month</td></tr>
+            <tr><td>Business Plus</td><td>200+</td><td><strong>192+ remaining</strong></td><td>$9-13/identity/month</td></tr>
+        </tbody>
+    </table>
+    <p>An org with 100 disconnected apps consuming flat file sources would exhaust even the
+    Business tier. Business Plus at $9-13/identity/month for 5,000 identities is $540K-780K/year
+    -- out of reach for many mid-market organizations.</p>
+
+    <h3>Constraint 2: Engineering Capacity</h3>
+    <p>Custom connectors cost $15K-60K each in professional services, or weeks of internal
+    engineering time. At 50+ apps, that is $750K-3M in connector development -- and ongoing
+    maintenance when APIs change.</p>
+    <p>Most mid-market IAM teams have 1-3 engineers. They cannot build and maintain 50 custom
+    connectors while also running the governance program.</p>
+
+    <h3>Constraint 3: App Team Burden</h3>
+    <p>Every flat file integration requires the app team to build and maintain a daily export
+    pipeline. For 100 app teams, that is 100 separate conversations, 100 export scripts to
+    maintain, and 100 potential failure points.</p>
+
+    <h3>What Does NOT Work</h3>
+    <table>
+        <thead><tr><th>Approach</th><th>Why It Fails at Scale</th></tr></thead>
+        <tbody>
+            <tr><td>"Connect everything to SailPoint"</td><td>Source limits + connector costs + engineering capacity</td></tr>
+            <tr><td>"Flat file everything"</td><td>Still consumes source slots + 100 app teams maintaining exports</td></tr>
+            <tr><td>"Only govern the top 10"</td><td>Auditors ask about the other 90. Compliance gap is documented.</td></tr>
+            <tr><td>"IdP groups = governance"</td><td>Gives you authentication-level governance (yes/no app access), not authorization-level (what role inside the app)</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-note">
+        <div class="callout-label">The question this guide answers</div>
+        How do you get <strong>meaningful authorization-level governance</strong> across 100+ apps
+        without spending $500K+ on connectors and dedicating a full-time engineering team
+        to building and maintaining them?
+    </div>
+</div>
+
+<!-- ════════ 4-TIER MODEL ════════ -->
+<div class="tab-panel" id="panel-tiers">
+    <h2>The 4-Tier Governance Model</h2>
+    <p class="section-intro">Not every app needs the same level of governance. The key is
+    matching the governance investment to the risk.</p>
+
+    <div class="tier-visual">
+        <div class="tier-block t1"><div class="tb-label">Tier 1</div><div class="tb-title">Deep Connectors</div><div class="tb-count">5-10 apps</div></div>
+        <div class="tier-block t2"><div class="tb-label">Tier 2</div><div class="tb-title">Role-Level IdP Groups</div><div class="tb-count">50-200 apps</div></div>
+        <div class="tier-block t3"><div class="tb-label">Tier 3</div><div class="tb-title">App-Level IdP Groups</div><div class="tb-count">Long tail</div></div>
+        <div class="tier-block t4"><div class="tb-label">Tier 4</div><div class="tb-title">Discovery / Manual</div><div class="tb-count">Shadow IT</div></div>
+    </div>
+
+    <!-- TIER 1 -->
+    <div class="card" style="border-left: 4px solid #264d73;">
+        <div class="card-title"><span class="badge badge-t1">Tier 1</span> Deep Connectors -- Full Entitlement Governance</div>
+        <p><strong>What:</strong> SailPoint connects directly to the application with a native connector.
+        Aggregates users, entitlements, roles, permissions. Full provisioning. Entitlement-level
+        certification.</p>
+        <p><strong>Apps:</strong> 5-10 critical systems where in-app permissions are complex and high-risk.
+        Active Directory, Entra ID, SAP, Salesforce, ServiceNow, CyberArk, Workday.</p>
+        <p><strong>Source slots:</strong> 5-10 (one per app)</p>
+        <p><strong>Effort per app:</strong> <span class="effort-badge effort-med">1-8 weeks config</span></p>
+        <p><strong>Governance level:</strong> Full authorization governance. Certify individual permissions,
+        roles, profiles, entitlements within the app.</p>
+        <p><strong>When to use:</strong> The app has a complex access model (roles + permissions + profiles),
+        the data is SOX/compliance-critical, and incorrect in-app permissions create real business risk.</p>
+    </div>
+
+    <!-- TIER 2 -->
+    <div class="card" style="border-left: 4px solid #00A1E0;">
+        <div class="card-title"><span class="badge badge-t2">Tier 2</span> Role-Level IdP Groups -- Authorization Governance via Proxy</div>
+        <p><strong>What:</strong> Instead of connecting to the app, you create IdP groups that map to
+        <em>specific roles within the app</em>. The app is configured to assign roles based on SSO
+        group claims or SCIM group membership. SailPoint certifies the group membership --
+        which IS the role assignment.</p>
+        <p><strong>Apps:</strong> 50-200 SaaS apps federated to Okta or Entra ID that support group-to-role mapping.</p>
+        <p><strong>Source slots:</strong> 0 additional (uses existing Okta/Entra source)</p>
+        <p><strong>Effort per app:</strong> <span class="effort-badge effort-low">2-4 hours config</span></p>
+        <p><strong>Governance level:</strong> Authorization governance at the role level. "Does Jane need
+        Salesforce <em>Admin</em> access?" not just "Does Jane need Salesforce?"</p>
+        <p><strong>When to use:</strong> The app supports SSO group-to-role mapping (most modern SaaS apps do),
+        the access model is role-based (3-10 distinct roles), and you need more than yes/no app access
+        governance but cannot justify a full connector.</p>
+
+        <div class="callout callout-tip">
+            <div class="callout-label">This is the key innovation</div>
+            Tier 2 gives you <strong>80% of the governance value of a full connector at 5% of the
+            cost and effort</strong>. The only thing you lose is the ability to see and manage
+            app-native entitlements that do not map to IdP groups (e.g., Salesforce record-level
+            sharing rules, ServiceNow ACLs). For most SaaS apps, role-level governance is sufficient.
+        </div>
+    </div>
+
+    <!-- TIER 3 -->
+    <div class="card" style="border-left: 4px solid #e68a00;">
+        <div class="card-title"><span class="badge badge-t3">Tier 3</span> App-Level IdP Groups -- Authentication Governance</div>
+        <p><strong>What:</strong> One IdP group per app (e.g., <code>App_Zoom_Users</code>). SailPoint certifies
+        whether the person should have access to the app at all. No visibility into in-app roles.</p>
+        <p><strong>Apps:</strong> Low-risk SaaS apps where "can this person log in?" is the only governance
+        question (Zoom, Webex, marketing tools, project management, etc.).</p>
+        <p><strong>Source slots:</strong> 0 additional</p>
+        <p><strong>Effort per app:</strong> <span class="effort-badge effort-low">30 min config</span></p>
+        <p><strong>Governance level:</strong> Authentication governance only. Yes/no access. No in-app role visibility.</p>
+        <p><strong>When to use:</strong> The app has a flat access model (all users get the same permissions),
+        the risk is low (no sensitive data, no admin functions worth governing), or the app does
+        not support group-to-role mapping.</p>
+    </div>
+
+    <!-- TIER 4 -->
+    <div class="card" style="border-left: 4px solid #607D8B;">
+        <div class="card-title"><span class="badge badge-t4">Tier 4</span> Discovery and Manual Governance -- The Unmanaged</div>
+        <p><strong>What:</strong> Apps that are not federated to the IdP, not connected to SailPoint, and
+        discovered through SSPM tools, browser extension telemetry, or expense report analysis.
+        Governed through manual periodic reviews (spreadsheet-based attestation).</p>
+        <p><strong>Apps:</strong> Shadow IT, free-tier SaaS, vendor portals, legacy web apps, apps
+        authenticated via local credentials or social login.</p>
+        <p><strong>Source slots:</strong> 0</p>
+        <p><strong>Governance level:</strong> Discovery and inventory only. Manual certification outside SailPoint.
+        Goal: identify and either federate (move to Tier 2/3) or decommission.</p>
+    </div>
+
+    <h3>Source Slot Budget</h3>
+    <table>
+        <thead><tr><th>Tier</th><th>Apps Governed</th><th>Source Slots Used</th><th>Governance Level</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge badge-t1">Tier 1</span></td><td>5-10</td><td>5-10</td><td>Full entitlement</td></tr>
+            <tr><td><span class="badge badge-t2">Tier 2</span></td><td>50-200</td><td><strong>0</strong></td><td>Role-level authorization</td></tr>
+            <tr><td><span class="badge badge-t3">Tier 3</span></td><td>Long tail</td><td><strong>0</strong></td><td>App-level authentication</td></tr>
+            <tr><td><span class="badge badge-t4">Tier 4</span></td><td>Shadow IT</td><td><strong>0</strong></td><td>Discovery / manual</td></tr>
+            <tr style="font-weight:700;"><td>Total</td><td>100-400+</td><td><strong>5-10</strong></td><td>Mixed (appropriate to risk)</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-note">
+        <div class="callout-label">The math</div>
+        An org on SailPoint Business tier (50 sources) can govern 300+ apps using 10 source
+        slots: 8 Tier 1 deep connectors + 1 Okta source + 1 Entra source. The remaining 40
+        slots are available for flat file sources for apps that truly cannot federate.
+    </div>
+</div>
+
+<!-- ════════ ROLE-LEVEL GROUPS ════════ -->
+<div class="tab-panel" id="panel-rolegroups">
+    <h2>Tier 2 Deep-Dive: Role-Level IdP Group Governance</h2>
+    <p class="section-intro">The technical pattern that makes authorization governance possible
+    without custom connectors.</p>
+
+    <h3>How It Works</h3>
+    <ol>
+        <li><strong>Design role-level groups in your IdP</strong> -- not one group per app, but one group
+            per <em>role</em> per app. <code>SF_Admin</code>, <code>SF_Standard</code>, <code>SF_ReadOnly</code>
+            instead of just <code>Salesforce_Users</code>.</li>
+        <li><strong>Configure the app to assign roles based on group membership</strong> -- most SaaS apps
+            support this via SAML group claims, OIDC group scopes, or SCIM group push.</li>
+        <li><strong>SailPoint aggregates the groups as entitlements</strong> -- one Okta/Entra source
+            surfaces all groups. Each group becomes a certifiable, requestable, provisionable
+            entitlement in SailPoint.</li>
+        <li><strong>Create Access Profiles in SailPoint</strong> -- map each group to an Access Profile
+            (e.g., "Salesforce Admin Access" = <code>SF_Admin</code> group).</li>
+        <li><strong>Create Access Applications</strong> -- each app gets a governance container in SailPoint
+            linked to its Access Profiles.</li>
+        <li><strong>Certify, request, and automate</strong> -- managers certify "Does Jane need Salesforce
+            Admin?" not just "Does Jane need Salesforce?" Lifecycle policies grant/revoke based
+            on role changes.</li>
+    </ol>
+
+    <h3>Group Naming Convention</h3>
+    <p>Consistency is critical when you have 200+ groups. Recommended pattern:</p>
+    <pre><code>SP_{AppShortName}_{RoleName}
+
+Examples:
+SP_Salesforce_Admin
+SP_Salesforce_Standard
+SP_Salesforce_ReadOnly
+SP_ServiceNow_ITIL
+SP_ServiceNow_Admin
+SP_ServiceNow_Approver
+SP_Jira_ProjectAdmin
+SP_Jira_Developer
+SP_Jira_Viewer
+SP_Snowflake_Analyst
+SP_Snowflake_Admin
+SP_GitHub_OrgOwner
+SP_GitHub_Member
+SP_Zoom_Licensed
+SP_Zoom_Basic</code></pre>
+
+    <p>The <code>SP_</code> prefix identifies SailPoint-managed groups and prevents collision with
+    groups created for other purposes. SailPoint documentation recommends a <code>SLPT_</code> prefix;
+    use whatever is consistent in your org.</p>
+
+    <h3>What the Manager Sees in Certification</h3>
+    <p>Instead of a generic "Okta group: salesforce_users" (meaningless to most managers), they see:</p>
+    <table>
+        <thead><tr><th>Identity</th><th>Access</th><th>Decision</th></tr></thead>
+        <tbody>
+            <tr><td>Jane Smith</td><td><strong>Salesforce -- System Administrator</strong><br><span style="font-size:0.75rem; color:var(--text-muted);">Full admin access including user management and system config</span></td><td>Approve / Revoke</td></tr>
+            <tr><td>Jane Smith</td><td><strong>Jira -- Project Admin</strong><br><span style="font-size:0.75rem; color:var(--text-muted);">Can manage project settings, workflows, and user access</span></td><td>Approve / Revoke</td></tr>
+            <tr><td>Jane Smith</td><td><strong>Snowflake -- Analyst</strong><br><span style="font-size:0.75rem; color:var(--text-muted);">Read-only access to data warehouse, can run queries</span></td><td>Approve / Revoke</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">The key</div>
+        The display name and description in SailPoint come from the Access Profile, not from
+        the raw group name. You control what the manager sees. Make it human-readable and
+        decision-relevant: "Salesforce -- System Administrator" is certifiable.
+        "SP_Salesforce_Admin" is not.
+    </div>
+
+    <h3>How the App Assigns Roles from Groups</h3>
+    <p>The mechanism varies by app, but the pattern is the same: the IdP tells the app
+    "this user is in group X" and the app maps group X to role Y.</p>
+
+    <table>
+        <thead><tr><th>Mechanism</th><th>How It Works</th><th>Apps That Support It</th></tr></thead>
+        <tbody>
+            <tr><td><strong>SAML Group Claims</strong></td><td>IdP sends a group list in the SAML assertion. App reads the claim and assigns roles based on group membership.</td><td>Salesforce, ServiceNow, Snowflake, Jira Cloud, most enterprise SaaS</td></tr>
+            <tr><td><strong>SCIM Group Push</strong></td><td>IdP pushes group membership to the app via SCIM 2.0 API. App maps SCIM groups to internal roles.</td><td>Snowflake, ServiceNow, Salesforce, GitHub, Atlassian, Slack, Zoom</td></tr>
+            <tr><td><strong>OIDC Group Scope</strong></td><td>IdP includes groups in the OIDC token. App reads the token and assigns roles.</td><td>Modern SaaS apps using OIDC, custom apps</td></tr>
+            <tr><td><strong>IdP App-Level Role Mapping</strong></td><td>The IdP itself maps users to app roles (e.g., Okta app assignments with role attributes). No SAML claim needed -- the IdP provisions the role directly.</td><td>Okta-integrated apps, Entra Enterprise Apps with App Roles</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-warn">
+        <div class="callout-label">Important limitation</div>
+        SAML group claims have limits: Okta returns max 100 groups per user. Entra SAML
+        token limit is 150 groups, JWT is 200. Exceeding these limits causes <strong>complete
+        omission of all groups</strong>, not truncation. Use group filtering in your IdP to
+        only send relevant groups per app.
+    </div>
+</div>
+
+<!-- ════════ APP MATRIX ════════ -->
+<div class="tab-panel" id="panel-appmatrix">
+    <h2>App-by-App: Which Tier and What Supports Role Mapping?</h2>
+    <p class="section-intro">Practical classification for the 30 most common enterprise SaaS applications.</p>
+
+    <table>
+        <thead><tr><th>Application</th><th>Recommended Tier</th><th>SAML Group Claims</th><th>SCIM Groups</th><th>Typical Roles</th><th>Setup Effort</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Active Directory</strong></td><td><span class="badge badge-t1">T1</span></td><td>N/A (on-prem)</td><td>N/A</td><td>Groups (hundreds)</td><td><span class="effort-badge effort-med">1-2 weeks</span></td></tr>
+            <tr><td><strong>Entra ID</strong></td><td><span class="badge badge-t1">T1</span></td><td>N/A (source)</td><td>N/A</td><td>Groups, App Roles</td><td><span class="effort-badge effort-med">1-2 weeks</span></td></tr>
+            <tr><td><strong>Salesforce</strong></td><td><span class="badge badge-t1">T1</span> or <span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Standard, Custom, ReadOnly</td><td><span class="effort-badge effort-low">2-4 hrs (T2)</span></td></tr>
+            <tr><td><strong>ServiceNow</strong></td><td><span class="badge badge-t1">T1</span> or <span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>ITIL, Admin, Approver, ReadOnly</td><td><span class="effort-badge effort-low">2-4 hrs (T2)</span></td></tr>
+            <tr><td><strong>SAP S/4HANA</strong></td><td><span class="badge badge-t1">T1</span></td><td>Limited</td><td>No</td><td>Roles + Auth Objects (complex)</td><td><span class="effort-badge effort-high">4-8 weeks</span></td></tr>
+            <tr><td><strong>CyberArk</strong></td><td><span class="badge badge-t1">T1</span></td><td>No</td><td>Yes (Identity)</td><td>Safe memberships</td><td><span class="effort-badge effort-med">2-4 weeks</span></td></tr>
+            <tr><td><strong>Workday</strong></td><td><span class="badge badge-t1">T1</span></td><td>N/A (auth source)</td><td>N/A</td><td>N/A (HR source)</td><td><span class="effort-badge effort-med">2-4 weeks</span></td></tr>
+            <tr><td><strong>Okta</strong></td><td><span class="badge badge-t1">T1</span></td><td>N/A (IdP source)</td><td>N/A</td><td>Groups, App Assignments</td><td><span class="effort-badge effort-med">1-2 weeks</span></td></tr>
+            <tr style="background:#e8f4f8;"><td colspan="6" style="font-weight:700; color:var(--primary); padding:6px 12px;">-- Tier 2 Candidates (role-level IdP groups) --</td></tr>
+            <tr><td><strong>Snowflake</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>AccountAdmin, SecurityAdmin, Analyst, Viewer</td><td><span class="effort-badge effort-low">2-3 hrs</span></td></tr>
+            <tr><td><strong>GitHub</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Owner, Member, Billing Manager + Team-level</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>Jira / Confluence</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Developer, Viewer per project</td><td><span class="effort-badge effort-low">2-3 hrs</span></td></tr>
+            <tr><td><strong>Slack</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Owner, Admin, Member, Guest</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>AWS</strong></td><td><span class="badge badge-t1">T1</span> or <span class="badge badge-t2">T2</span></td><td>Yes (IAM roles)</td><td>No</td><td>IAM Roles (Admin, PowerUser, ReadOnly)</td><td><span class="effort-badge effort-low">2-4 hrs (T2)</span></td></tr>
+            <tr><td><strong>Google Workspace</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes (Workspace)</td><td>SuperAdmin, Admin, User</td><td><span class="effort-badge effort-low">2-3 hrs</span></td></tr>
+            <tr><td><strong>Box</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>No</td><td>Admin, CoAdmin, User</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>Datadog</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Standard, ReadOnly</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>PagerDuty</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Manager, Responder, Observer</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>Splunk Cloud</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, PowerUser, User</td><td><span class="effort-badge effort-low">2-3 hrs</span></td></tr>
+            <tr><td><strong>Monday.com</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Member, Viewer, Guest</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr><td><strong>DocuSign</strong></td><td><span class="badge badge-t2">T2</span></td><td>Yes</td><td>Yes</td><td>Admin, Sender, Viewer</td><td><span class="effort-badge effort-low">1-2 hrs</span></td></tr>
+            <tr style="background:#fff8ec;"><td colspan="6" style="font-weight:700; color:var(--warning); padding:6px 12px;">-- Tier 3 Candidates (app-level access only) --</td></tr>
+            <tr><td><strong>Zoom</strong></td><td><span class="badge badge-t3">T3</span></td><td>Limited</td><td>Yes</td><td>Licensed vs Basic (license tier, not role)</td><td><span class="effort-badge effort-low">30 min</span></td></tr>
+            <tr><td><strong>Webex</strong></td><td><span class="badge badge-t3">T3</span></td><td>Limited</td><td>No</td><td>Host, Attendee (license-based)</td><td><span class="effort-badge effort-low">30 min</span></td></tr>
+            <tr><td><strong>Miro</strong></td><td><span class="badge badge-t3">T3</span></td><td>Yes</td><td>No</td><td>Admin, Member (flat model)</td><td><span class="effort-badge effort-low">30 min</span></td></tr>
+            <tr><td><strong>Figma</strong></td><td><span class="badge badge-t3">T3</span></td><td>Yes</td><td>Yes</td><td>Admin, Editor, Viewer</td><td><span class="effort-badge effort-low">30 min</span></td></tr>
+            <tr><td><strong>Canva</strong></td><td><span class="badge badge-t3">T3</span></td><td>Yes</td><td>No</td><td>Admin, Member</td><td><span class="effort-badge effort-low">30 min</span></td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ════════ CONFIGURATION ════════ -->
+<div class="tab-panel" id="panel-config">
+    <h2>Configuration Walkthrough</h2>
+    <p class="section-intro">Step-by-step: setting up Tier 2 role-level governance for a
+    SaaS application using Okta as the IdP.</p>
+
+    <h3>Step 1: Create Role-Level Groups in Okta</h3>
+    <pre><code># Create groups for each role level in the app
+SP_Salesforce_Admin        -> Maps to Salesforce System Administrator profile
+SP_Salesforce_Standard     -> Maps to Salesforce Standard User profile
+SP_Salesforce_ReadOnly     -> Maps to Salesforce Read-Only profile
+
+# Assign users to the appropriate group
+# (This is what SailPoint will govern)</code></pre>
+
+    <h3>Step 2: Configure the App to Honor Group Claims</h3>
+    <p>In the SaaS app's SSO/SAML settings, configure group-to-role mapping:</p>
+    <table>
+        <thead><tr><th>IdP Group</th><th>App Role/Profile</th><th>Where to Configure</th></tr></thead>
+        <tbody>
+            <tr><td><code>SP_Salesforce_Admin</code></td><td>System Administrator profile</td><td>Salesforce > SSO Settings > JIT provisioning or SCIM attribute mapping</td></tr>
+            <tr><td><code>SP_Salesforce_Standard</code></td><td>Standard User profile</td><td>Same</td></tr>
+            <tr><td><code>SP_Salesforce_ReadOnly</code></td><td>Read-Only profile</td><td>Same</td></tr>
+        </tbody>
+    </table>
+
+    <h3>Step 3: Configure SailPoint Access Profiles</h3>
+    <p>In SailPoint ISC, create Access Profiles that wrap each Okta group entitlement:</p>
+    <table>
+        <thead><tr><th>Access Profile Name</th><th>Description (what managers see)</th><th>Source</th><th>Entitlement</th></tr></thead>
+        <tbody>
+            <tr><td>Salesforce -- System Administrator</td><td>Full admin access: user management, system configuration, data exports</td><td>Okta</td><td><code>SP_Salesforce_Admin</code></td></tr>
+            <tr><td>Salesforce -- Standard User</td><td>Standard CRM access: contacts, leads, opportunities, reports</td><td>Okta</td><td><code>SP_Salesforce_Standard</code></td></tr>
+            <tr><td>Salesforce -- Read Only</td><td>View-only access to CRM data and reports. Cannot create or modify records.</td><td>Okta</td><td><code>SP_Salesforce_ReadOnly</code></td></tr>
+        </tbody>
+    </table>
+
+    <h3>Step 4: Create Access Application in SailPoint</h3>
+    <p>Create a governance container for the app:</p>
+    <ol>
+        <li>Navigate to Applications > Access Applications > Create</li>
+        <li>Name: "Salesforce"</li>
+        <li>Source: your Okta source</li>
+        <li>Link the three Access Profiles created above</li>
+        <li>Configure governance: enable for certification campaigns, enable for access requests</li>
+    </ol>
+
+    <h3>Step 5: Repeat</h3>
+    <p>Each app takes 2-4 hours of configuration. For 50 apps at 3 hours each, that is
+    <strong>150 hours of IAM team time</strong> -- roughly 4 weeks of dedicated work, or 2 months
+    at 50% capacity. No engineering, no custom code, no professional services.</p>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">The economics</div>
+        50 apps x 3 hours = 150 hours of IAM configuration time.<br>
+        vs. 50 custom connectors x $30K average = $1.5 million in professional services.<br>
+        vs. 50 flat file sources x 8 hours/app + ongoing maintenance = 400 hours + app team burden forever.<br>
+        <strong>Tier 2 is 75x cheaper than custom connectors and 3x less effort than flat files.</strong>
+    </div>
+</div>
+
+<!-- ════════ HONEST GAPS ════════ -->
+<div class="tab-panel" id="panel-gaps">
+    <h2>Honest Gaps: What This Model Cannot Do</h2>
+    <p class="section-intro">No governance model is perfect. Here is where Tier 2 falls short
+    and what to do about it.</p>
+
+    <table>
+        <thead><tr><th>Gap</th><th>What It Means</th><th>Mitigation</th></tr></thead>
+        <tbody>
+            <tr><td><strong>No in-app fine-grained visibility</strong></td><td>You govern role-level access (Admin vs Standard) but cannot see or certify individual permissions within the role (e.g., Salesforce record-level sharing rules, specific API permissions).</td><td>For apps where this matters (Salesforce, SAP), upgrade to Tier 1 with a full connector.</td></tr>
+            <tr><td><strong>Group-to-role mapping drift</strong></td><td>If someone manually changes a user's role inside the app (bypassing the IdP group), SailPoint does not detect it.</td><td>Periodic manual reconciliation: compare IdP group membership to actual in-app roles. Some apps expose this via API for automated checking.</td></tr>
+            <tr><td><strong>Not all apps support group-to-role mapping</strong></td><td>Legacy SaaS, small vendors, and some enterprise apps do not support SAML group claims or SCIM group push.</td><td>These apps fall to Tier 3 (app-level yes/no governance) or require a flat file/custom connector.</td></tr>
+            <tr><td><strong>Group proliferation</strong></td><td>100 apps x 4 roles average = 400 IdP groups. This is manageable but requires disciplined naming conventions and periodic cleanup.</td><td>Enforce the naming convention. Use SailPoint Roles to bundle related groups. Automate group lifecycle.</td></tr>
+            <tr><td><strong>No provisioning to the app</strong></td><td>Tier 2 provisions to the IdP (adds/removes group membership). The app must react to the group change. If the app does not support JIT or SCIM, the user may need to log out and back in for changes to take effect.</td><td>Use SCIM where available (near-real-time). For SAML-only, changes take effect on next login.</td></tr>
+            <tr><td><strong>Revocation gap</strong></td><td>Removing a user from an IdP group removes their SSO access (they cannot log in). But some apps keep a local account active until explicitly deprovisioned.</td><td>For sensitive apps, pair Tier 2 with periodic app-level reconciliation or use SCIM for real deprovisioning.</td></tr>
+            <tr><td><strong>Auditor acceptance varies</strong></td><td>Some auditors accept IdP group-level certification as sufficient for SOX/SOC2. Others want to see in-app entitlement-level evidence.</td><td>Discuss with your auditors early. Frame Tier 2 as "role-based access certification" with evidence of the group-to-role mapping configuration as supplementary documentation.</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-note">
+        <div class="callout-label">The 80/20 principle applies to gaps too</div>
+        Most of these gaps only matter for your top 5-10 critical applications -- which are
+        already on Tier 1 with full connectors. For the other 90+ apps, role-level governance
+        is sufficient, and auditors will accept it when you can demonstrate the group-to-role
+        mapping is configured and enforced.
+    </div>
+</div>
+
+<!-- ════════ LONG TAIL ════════ -->
+<div class="tab-panel" id="panel-longtail">
+    <h2>Governing the Long Tail</h2>
+    <p class="section-intro">What to do with the 50-100 apps that do not neatly fit into Tiers 1-3.</p>
+
+    <h3>Pattern A: Federate First, Govern Second</h3>
+    <p>The fastest way to bring an ungoverned app into the governance framework is to federate
+    it to your IdP. Once it is behind Okta/Entra SSO, you can immediately apply Tier 2 or Tier 3
+    governance. The priority order:</p>
+    <ol>
+        <li>Does the app support SAML/OIDC? -> Federate it -> Tier 2 or 3</li>
+        <li>Does the app support SCIM? -> Enable SCIM provisioning -> Tier 2 with group push</li>
+        <li>Neither? -> Flat file export (one source slot) or manual governance (Tier 4)</li>
+    </ol>
+
+    <h3>Pattern B: SSPM as the Discovery Layer</h3>
+    <p>Tools like Nudge Security, Grip Security, and Valence discover SaaS applications
+    across your organization -- including shadow IT, OAuth grants, and apps authenticated
+    via personal credentials.</p>
+    <p>The SSPM tool becomes your Tier 4 layer:</p>
+    <ul>
+        <li><strong>Discover:</strong> Find every SaaS app in use (not just IT-managed ones)</li>
+        <li><strong>Classify:</strong> Risk-rank each app based on data sensitivity, user count, and security posture</li>
+        <li><strong>Promote:</strong> High-risk apps get federated and moved to Tier 2; low-risk apps stay at Tier 3/4</li>
+        <li><strong>Monitor:</strong> Continuously watch for new SaaS adoption and OAuth sprawl</li>
+    </ul>
+
+    <h3>Pattern C: Composite Sources for Flat File Apps</h3>
+    <p>If you must govern apps via flat file but are hitting source limits, consider a
+    <strong>composite source pattern</strong>: aggregate multiple small apps into a single
+    flat file source with an application identifier column.</p>
+    <p>Instead of 20 flat file sources (20 source slots), create 1 source with a
+    <code>applicationName</code> column that identifies which app each account belongs to. Use
+    SailPoint Access Profiles to separate the apps logically. This is not officially supported
+    as a best practice, but some organizations use it to stay within source limits.</p>
+
+    <div class="callout callout-warn">
+        <div class="callout-label">Trade-off</div>
+        Composite sources make the data model more complex and can cause issues with
+        entitlement cross-referencing. Use this pattern only when source limits are a
+        hard constraint and you cannot upgrade your ISC tier.
+    </div>
+
+    <h3>Pattern D: Governance Beyond SailPoint</h3>
+    <p>For some organizations, the honest answer is: <strong>SailPoint governs the core, and
+    a parallel process governs the long tail.</strong></p>
+    <ul>
+        <li>SailPoint handles Tier 1 and Tier 2 apps (automated, continuous, audit-grade)</li>
+        <li>A quarterly manual review process handles Tier 3 and 4 apps:
+            <ul>
+                <li>App owner exports user list</li>
+                <li>IAM team facilitates manager review (spreadsheet or lightweight tool)</li>
+                <li>Evidence archived in GRC tool or shared drive</li>
+            </ul>
+        </li>
+        <li>This is how most 1,000-5,000 identity organizations actually operate</li>
+        <li>Auditors accept this when you can demonstrate: (a) risk-based tiering, (b) consistent
+            review cadence, (c) evidence retention</li>
+    </ul>
+</div>
+
+<!-- ════════ COST MODEL ════════ -->
+<div class="tab-panel" id="panel-cost">
+    <h2>Cost Model: Realistic Numbers</h2>
+    <p class="section-intro">What this actually costs for a 3,000-identity organization
+    with 150 SaaS applications.</p>
+
+    <h3>Scenario: Mid-Market Enterprise</h3>
+    <table>
+        <thead><tr><th></th><th>Apps</th><th>Source Slots</th><th>Implementation Cost</th><th>Annual Cost</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge badge-t1">Tier 1</span> Deep connectors</td><td>8</td><td>8</td><td>$40K-80K (PS + config)</td><td>$0 (included)</td></tr>
+            <tr><td><span class="badge badge-t2">Tier 2</span> Role-level IdP groups</td><td>60</td><td>0</td><td>$0 (internal IAM time: ~180 hrs)</td><td>$0</td></tr>
+            <tr><td><span class="badge badge-t3">Tier 3</span> App-level IdP groups</td><td>50</td><td>0</td><td>$0 (internal IAM time: ~25 hrs)</td><td>$0</td></tr>
+            <tr><td><span class="badge badge-t4">Tier 4</span> Manual / SSPM</td><td>30+</td><td>0</td><td>$15K-30K (SSPM tool)</td><td>$15K-30K</td></tr>
+            <tr style="font-weight:700;"><td>Total</td><td>148+</td><td><strong>8</strong></td><td><strong>$55K-110K</strong></td><td><strong>$15K-30K</strong></td></tr>
+        </tbody>
+    </table>
+
+    <h3>Comparison: What It Would Cost Without the Tiered Model</h3>
+    <table>
+        <thead><tr><th>Approach</th><th>Source Slots</th><th>Year 1 Cost</th><th>Annual Ongoing</th></tr></thead>
+        <tbody>
+            <tr><td>"Connect everything" (50 custom connectors + 8 native)</td><td>58</td><td>$800K-1.5M</td><td>$100K-200K maintenance</td></tr>
+            <tr><td>"Flat file everything" (100 flat file sources + 8 native)</td><td>108</td><td>$150K-300K</td><td>$50K-100K (export maintenance)</td></tr>
+            <tr><td><strong>4-Tier model (this guide)</strong></td><td><strong>8</strong></td><td><strong>$55K-110K</strong></td><td><strong>$15K-30K</strong></td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">The bottom line</div>
+        The 4-tier model governs 150+ apps for <strong>$55K-110K year 1</strong> vs. $800K-1.5M
+        for the "connect everything" approach. The governance quality for Tier 2 apps is
+        <strong>authorization-level</strong> (role-specific), not just authentication-level
+        (yes/no app access). This is the pragmatic answer for organizations that cannot
+        spend $1M+ on identity governance.
+    </div>
+
+    <h3>SailPoint ISC Tier Selection</h3>
+    <p>With only 8 source slots needed, even the Standard tier (15 sources) works -- leaving
+    7 slots for future flat file sources or additional connectors. The Business tier gives
+    comfortable headroom at 50 sources.</p>
+
+    <table>
+        <thead><tr><th>ISC Tier</th><th>Sources Needed</th><th>Headroom</th><th>Annual License (3K identities)</th></tr></thead>
+        <tbody>
+            <tr><td>Standard (15 sources)</td><td>8</td><td>7 spare</td><td>Custom quote (est. $100K-200K)</td></tr>
+            <tr><td>Business (50 sources)</td><td>8</td><td>42 spare</td><td>$216K-324K ($6-9/identity/mo)</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ════════ ROADMAP ════════ -->
+<div class="tab-panel" id="panel-roadmap">
+    <h2>Implementation Roadmap</h2>
+    <p class="section-intro">A phased approach to implementing the 4-tier model over 6 months.</p>
+
+    <h3>Phase 1: Foundation (Months 1-2)</h3>
+    <div class="card">
+        <div class="card-title">Connect Tier 1 sources + establish IdP governance foundation</div>
+        <ul>
+            <li>Deploy SailPoint ISC with core Tier 1 connectors (AD, Entra, Workday/SAP HR, Okta)</li>
+            <li>Establish identity correlation and lifecycle states (JML)</li>
+            <li>Design the group naming convention (<code>SP_{App}_{Role}</code>)</li>
+            <li>Document the tier classification criteria</li>
+        </ul>
+    </div>
+
+    <h3>Phase 2: First Wave of Tier 2 (Month 3)</h3>
+    <div class="card">
+        <div class="card-title">10 highest-risk SaaS apps via role-level IdP groups</div>
+        <ul>
+            <li>Classify your SaaS portfolio: risk-rank all apps by data sensitivity, user count, and admin capability</li>
+            <li>Select top 10 apps for Tier 2 (Salesforce, Jira, Snowflake, AWS, etc.)</li>
+            <li>Create role-level groups in Okta/Entra for each app (3-5 groups per app = 30-50 groups)</li>
+            <li>Configure group-to-role mapping in each app (SAML claims or SCIM push)</li>
+            <li>Create Access Profiles and Access Applications in SailPoint</li>
+            <li>Run a test certification campaign to validate</li>
+        </ul>
+    </div>
+
+    <h3>Phase 3: Scale Tier 2 + Add Tier 3 (Months 4-5)</h3>
+    <div class="card">
+        <div class="card-title">Expand to 50+ Tier 2 apps and 50+ Tier 3 apps</div>
+        <ul>
+            <li>Batch the remaining SaaS apps: 10-15 per week</li>
+            <li>Apps that support group-to-role mapping -> Tier 2</li>
+            <li>Apps with flat access models or no role mapping -> Tier 3</li>
+            <li>Remaining Tier 1 connectors (Salesforce full connector, ServiceNow, CyberArk)</li>
+            <li>Begin regular certification campaigns across all tiers</li>
+        </ul>
+    </div>
+
+    <h3>Phase 4: Long Tail + Discovery (Month 6+)</h3>
+    <div class="card">
+        <div class="card-title">Tier 4 discovery, manual governance for stragglers, optimization</div>
+        <ul>
+            <li>Deploy SSPM tool (or analyze IdP/CASB logs) to discover ungoverned SaaS</li>
+            <li>Classify discovered apps: federate to IdP (promote to Tier 2/3) or accept risk with manual review</li>
+            <li>Establish quarterly manual review cadence for Tier 4 apps</li>
+            <li>Optimize: review group-to-role mappings, clean up unused groups, refine certification campaigns</li>
+            <li>Document the architecture for auditors: tier rationale, evidence of governance at each tier</li>
+        </ul>
+    </div>
+
+    <h3>Effort Estimate</h3>
+    <table>
+        <thead><tr><th>Phase</th><th>Duration</th><th>IAM Team Hours</th><th>External Cost</th></tr></thead>
+        <tbody>
+            <tr><td>Phase 1: Foundation</td><td>2 months</td><td>~200 hrs</td><td>$40K-80K (PS for Tier 1 connectors)</td></tr>
+            <tr><td>Phase 2: First Wave Tier 2</td><td>1 month</td><td>~60 hrs</td><td>$0</td></tr>
+            <tr><td>Phase 3: Scale</td><td>2 months</td><td>~120 hrs</td><td>$0-20K (remaining Tier 1 connectors)</td></tr>
+            <tr><td>Phase 4: Long Tail</td><td>Ongoing</td><td>~40 hrs/quarter</td><td>$15K-30K/yr (SSPM tool)</td></tr>
+        </tbody>
+    </table>
+</div>
+
+</div><!-- end .content-wrap -->
+
+<div class="app-footer">
+    SaaS Governance Architecture Guide v1.0 &middot; Identity &amp; Access Management &middot; Internal Use Only<br>
+    <span style="font-size:0.65rem;">Cost estimates are illustrative and vary by organization size, vendor negotiations, and implementation complexity.</span>
+</div>
+
+<script>
+function switchTab(t){document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active')});document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active')});var p=document.getElementById('panel-'+t);if(p)p.classList.add('active');var b=document.querySelector('.tab-btn[data-tab="'+t+'"]');if(b)b.classList.add('active');window.scrollTo(0,0)}
+document.getElementById('tabBar').addEventListener('click',function(e){var b=e.target.closest('.tab-btn');if(!b)return;switchTab(b.getAttribute('data-tab'))});
+document.addEventListener('keydown',function(e){if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;var t=Array.from(document.querySelectorAll('.tab-btn'));var a=document.querySelector('.tab-btn.active');var i=t.indexOf(a);if(e.key==='ArrowRight'&&i<t.length-1)switchTab(t[i+1].getAttribute('data-tab'));else if(e.key==='ArrowLeft'&&i>0)switchTab(t[i-1].getAttribute('data-tab'))});
+</script>
+</body>
+</html>

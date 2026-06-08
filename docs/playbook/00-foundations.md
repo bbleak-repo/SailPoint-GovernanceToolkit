@@ -42,6 +42,7 @@ rules.
 | **Network / TLS** | Outbound HTTPS to your ISC tenant. The toolkit forces **TLS 1.2 (and 1.3 where available)** automatically. |
 | **ISC credentials** | An ISC **Personal Access Token (PAT)** — a `client_credentials` OAuth client that yields a `ClientId` + `ClientSecret` pair — or a short-lived **bearer token** copied from the browser. The PAT must be created by an identity with the **`CERT_ADMIN`** or **`ORG_ADMIN`** role and granted the scopes for what you intend to do (read-only audit vs. campaign creation vs. delta cert). See §5 for the scope matrix and `docs/SANDBOX-API-SETUP.md` for the click-by-click setup. |
 | **Pester** (optional) | 5.x — only needed to run the test suite. |
+| **Execution policy** | PowerShell execution policy must allow running unsigned scripts. Set `RemoteSigned` for the toolkit user (`Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`), or pass `-ExecutionPolicy Bypass` when invoking scripts from Task Scheduler. |
 
 ---
 
@@ -59,6 +60,53 @@ rules.
    ```powershell
    .\Scripts\Invoke-SPCampaignAudit.ps1 -Help
    ```
+
+---
+
+## 3.1 Architecture at a Glance
+
+The toolkit is a **modular monolith** -- a set of PowerShell modules that compose into
+scripts and the GUI. Every script and the dashboard share the same module chain.
+
+| Module | Purpose | Used by | Notes |
+|---|---|---|---|
+| **SP.Core** | Configuration, logging, authentication, vault, TLS enforcement | Everything | Infrastructure -- you never call this directly. |
+| **SP.Api** | HTTP client, campaign/certification/decision API wrappers, rate limiting, pagination | All scripts that talk to ISC | Infrastructure -- you never call this directly. |
+| **SP.Testing** | Test-case loader, batch runner, assertions, evidence writer | `Invoke-GovernanceTest.ps1`, the Campaigns GUI tab | Infrastructure for the test harness. |
+| **SP.Audit** | Audit queries, analytics, identity-account resolution, HTML/text report generation | `Invoke-SPCampaignAudit.ps1`, `Invoke-SPCampaignSearch.ps1`, governance reports, the Audit GUI tab | The core reporting engine. |
+| **SP.DeltaCert** | Delta-cert queries (account activities, identity resolution, band classification), campaign runner, escalation, delta report | `Invoke-SPADDeltaCert.ps1`, `Invoke-SPDeltaCertEscalate.ps1`, `Invoke-SPDeltaReport.ps1`, the Delta Cert GUI tab | |
+| **SP.DisconnectedApps** | CSV validation, snapshot/diff, identity correlation, campaign creation, batch orchestration, analytics, reports | `Invoke-SPDisconnectedAppCert.ps1`, `Invoke-SPDisconnectedAppBatch.ps1`, `Invoke-SPDisconnectedAppRegistry.ps1`, the Delta Cert GUI tab | |
+| **SP.Sdk** | Vendor SDK wrappers -- campaign templates, cert summaries, approvals, work items, workflows, campaign filters, OOO fallback | `Invoke-SPSdkCampaignTemplates.ps1`, `Invoke-SPSdkWorkItems.ps1`, `Invoke-SPSdkWorkflows.ps1`, the SDK Features GUI tab | |
+| **SP.AdaptiveReports** | Composable adaptive report engine, baseline report library, dataset builder | `Invoke-SPAdaptiveReport.ps1`, the Adaptive Reports GUI tab | |
+| **SP.ReportComponents** | Individual HTML report components -- KPI cards, heatmap, tree, diff, top-N, group table, framework CSS | SP.AdaptiveReports (indirectly) | Infrastructure -- you never call this directly. Component files: `RC00-Framework.ps1` through `RC06-GroupTable.ps1`. |
+| **SP.Gui** | WPF window construction, GUI bridge (translates button clicks to module calls), SDK bridge | `Show-SPDashboard.ps1` | Infrastructure for the GUI. |
+
+**Module dependency chain:**
+`SP.Core` (config, auth, logging) --> `SP.Api` (HTTP + ISC endpoints) --> domain modules
+(`SP.Audit`, `SP.DeltaCert`, `SP.DisconnectedApps`, `SP.Sdk`, `SP.Testing`) -->
+`SP.AdaptiveReports` + `SP.ReportComponents` (report rendering) --> `SP.Gui` (presentation).
+
+---
+
+## 3.2 Day 1 Deployment Checklist
+
+Use this checklist to verify everything is ready before the first real run.
+
+- [ ] **PowerShell version** -- Windows PowerShell 5.1 Desktop edition (`$PSVersionTable.PSVersion` shows 5.1.x)
+- [ ] **.NET Framework** -- 4.8+ installed (required for the GUI; pre-installed on Windows 10 1903+ and all Windows 11)
+- [ ] **Extraction** -- Toolkit zip extracted to a local directory (e.g. `C:\Toolkit\`); folder structure matches section 3
+- [ ] **Execution policy** -- Set to `RemoteSigned` for the toolkit user, or plan to pass `-ExecutionPolicy Bypass` when invoking from Task Scheduler
+- [ ] **Config created** -- `Config\settings.local.json` exists with real tenant values (copy from `settings.json`, replace all `CHANGE_ME` placeholders)
+- [ ] **PAT created** -- ISC Personal Access Token created with the required scopes for your use case (see section 5.1)
+- [ ] **Vault set up** -- `New-SPVault.ps1` run and passphrase stored in a password manager (or ConfigFile mode chosen for scheduled tasks)
+- [ ] **Connectivity test** -- `Test-SPConnectivity.ps1` returns success against your tenant
+- [ ] **Smoke test** -- `Invoke-GovernanceTest.ps1 -Tags smoke` runs clean (against mock or tenant)
+- [ ] **Safety settings reviewed** -- `Safety.RequireWhatIfOnProd` is `true`, `Safety.AllowCompleteCampaign` is `false` (until you explicitly need it)
+- [ ] **Output directories** -- `Logs\`, `Audit\`, `DeltaCert\`, `Reports\` will be auto-created on first run; confirm the toolkit user has write permission to the toolkit root
+- [ ] **Network** -- Outbound HTTPS to `<tenant>.api.identitynow.com` is open; TLS 1.2 is enforced automatically
+- [ ] **Notification** -- SMTP server or webhook URL configured if you want email/webhook alerts (section 11)
+- [ ] **Disconnected apps** -- If applicable, apps registered via `Invoke-SPDisconnectedAppRegistry.ps1 -Action Register` and CSV delivery path confirmed
+- [ ] **Scheduled task** -- Task Scheduler job created for `Invoke-SPDailyOrchestrator.ps1` (see CLI Playbook section 7)
 
 ---
 
@@ -193,6 +241,39 @@ custom vault path for shared/team locations. The `*.enc` file is gitignored.
 > **Store the passphrase in a password manager.** It is never logged and cannot be
 > recovered — lose it and you must recreate the vault (and rotate the PAT secret).
 
+### 5.3.1 Vault vs. ConfigFile for scheduled tasks
+
+The vault requires an **interactive passphrase prompt** at runtime. This makes it
+unsuitable for fully unattended scheduled tasks (Task Scheduler, cron) where no human
+is present to type the passphrase.
+
+For **non-interactive scheduled tasks**, use `ConfigFile` mode with
+`settings.local.json` and restrict file permissions to the service account:
+
+```powershell
+# Restrict settings.local.json to the service account only
+icacls .\Config\settings.local.json /inheritance:r /grant:r "DOMAIN\svc-sailpoint:(R)"
+```
+
+Use the vault for interactive runs and demos. Use ConfigFile (with restricted
+permissions) for automation.
+
+### 5.3.2 Credential Rotation Procedure
+
+When your ISC PAT expires or is compromised, follow this procedure:
+
+1. **Create a new PAT** in the ISC admin console (Admin > Preferences > Personal Access
+   Tokens) with the same scopes as the old one.
+2. **Update the credential store.** If using the vault, re-run `New-SPVault.ps1` (it
+   warns before overwriting). If using ConfigFile, update `ClientId` and `ClientSecret`
+   in `settings.local.json`.
+3. **Test connectivity** with `Test-SPConnectivity.ps1` to confirm the new credential
+   works.
+4. **Verify scheduled tasks** still run successfully -- trigger the orchestrator manually
+   once (`Invoke-SPDailyOrchestrator.ps1 -SkipCleanup -SkipDeltaCert ...`) and confirm
+   exit code 0.
+5. **Delete the old PAT** in the ISC admin console once the new one is confirmed working.
+
 ### 5.4 Token
 Paste a short-lived **bearer token** (copied from an active ISC web session: F12 →
 Network → copy the `Authorization` value) via the `-Token` parameter on most scripts,
@@ -215,6 +296,52 @@ quick ad-hoc/`account-activities` runs, not automation.
 
 `Global.EnvironmentName` feeds the **Safety** model: a non-mock environment with
 `RequireWhatIfOnProd = true` will demand confirmation before mutating actions.
+
+### 6.1 Mock Server Setup
+
+The mock server is a **Pode**-based HTTP server that emulates the SailPoint ISC v3 API.
+It lives in the separate `API-MockServer` repository with a `SailPoint-ISC` profile.
+
+**Installing and starting the mock server:**
+
+```powershell
+# 1. Install Pode (one-time)
+Install-Module -Name Pode -Scope CurrentUser -Force
+
+# 2. Start the mock server (from the API-MockServer directory)
+cd <path-to-API-MockServer>
+pwsh -NoProfile -File Start-MockServer.ps1
+# Server listens on http://localhost:8080 by default
+```
+
+**Seed data inventory:**
+
+| Entity | Count | Details |
+|---|---|---|
+| Identities | 82 | 1 President, 3 VPs, 12 Directors, 60 ICs, 2 orphans (no manager), 2 service accounts |
+| Campaigns | 4 | 1 ACTIVE (SOURCE_OWNER), 1 COMPLETED (MANAGER), 1 STAGED (SEARCH), 1 ACTIVE delta cert |
+| Certifications | 18 | 4 signed-off, 14 unsigned |
+| Account activities | multiple | GRANT_ACCESS and REVOKE_ACCESS events with relative timestamps |
+
+**Which scripts work against the mock:**
+
+All CLI scripts and the full GUI work against the mock. Scripts that create campaigns
+will create them in the mock's in-memory state; restarting the mock server resets all
+state to the seed data.
+
+**Switching between mock and real:**
+
+```powershell
+# Run against mock
+.\Scripts\Invoke-SPCampaignAudit.ps1 -ConfigPath .\Config\settings-mock.json -Status COMPLETED
+
+# Run against real tenant
+.\Scripts\Invoke-SPCampaignAudit.ps1 -ConfigPath .\Config\settings.local.json -Status COMPLETED
+```
+
+The key difference in `settings-mock.json` is that all URLs point to `http://localhost:8080`
+instead of `https://<tenant>.api.identitynow.com`, and `Safety.RequireWhatIfOnProd` is
+`false` since the mock is safe to mutate.
 
 ---
 
@@ -295,6 +422,161 @@ Most reporting scripts take `-OutputMode`:
   check the exit code, not just stdout.
 - **Connectivity:** `Test-SPConnectivity.ps1` verifies auth + tenant reachability before
   a real run.
+
+---
+
+## 11. Notification Setup
+
+The toolkit can send notifications via email (SMTP) and/or webhook. Notifications are
+triggered by scripts that support `-SendNotification` (data quality, weekly digest,
+governance metrics) and by the daily orchestrator summary.
+
+### 11.1 SMTP configuration
+
+Add your SMTP server details to the `Notification.Smtp` section of `settings.local.json`:
+
+```json
+{
+    "Notification": {
+        "Backends": ["Log", "Email"],
+        "Smtp": {
+            "Server": "smtp.corp.com",
+            "Port": 587,
+            "From": "sailpoint-toolkit@corp.com",
+            "UseSsl": true
+        }
+    }
+}
+```
+
+> The `Audit.Smtp` section can override these for audit-specific report delivery. When
+> `Audit.Smtp.Server` is empty, audit report delivery falls back to `Notification.Smtp`.
+
+### 11.2 Webhook configuration
+
+For Slack, Teams, or any HTTP endpoint, configure `Notification.Webhook`:
+
+```json
+{
+    "Notification": {
+        "Backends": ["Log", "Webhook"],
+        "Webhook": {
+            "Url": "https://hooks.slack.com/services/T00/B00/xxx",
+            "Method": "POST",
+            "Headers": { "Content-Type": "application/json" },
+            "IncludePayload": true
+        }
+    }
+}
+```
+
+### 11.3 Testing notifications
+
+```powershell
+# Test SMTP delivery via a data quality report (low-impact read-only operation)
+.\Scripts\Invoke-SPDataQualityReport.ps1 -SendNotification -NotifyRecipients 'you@corp.com'
+
+# Test webhook delivery via the weekly digest
+.\Scripts\Invoke-SPWeeklyDigest.ps1 -SendNotification
+```
+
+Successful delivery logs a `Severity=INFO` entry with `Action=SendNotification` in the
+daily log. Failed delivery logs a `Severity=ERROR` with the SMTP/HTTP error details.
+
+---
+
+## 12. Report Catalog
+
+The toolkit generates many report types. Use this catalog to find the right report for
+your audience and frequency.
+
+| Report Name | Script | Audience | Frequency | Contents |
+|---|---|---|---|---|
+| Campaign Audit | `Invoke-SPCampaignAudit.ps1` | Compliance, auditors | After campaigns complete | Per-campaign HTML/text + combined summary + JSONL audit trail |
+| Leadership Rollup | `Invoke-SPCampaignAudit.ps1 -IncludeLeadershipRollup` | VP/Director leadership | After campaigns complete | Per-leader decision summaries rolled up the org tree |
+| Delta Report | `Invoke-SPDeltaReport.ps1` | Daily operations | Daily | Grants, revocations, pending certs, anomalies (HTML + JSONL) |
+| Governance Health Check | `Invoke-SPGovernanceHealthCheck.ps1` | Governance leads | Weekly/before audits | Six-dimension health report with pass/fail/warn + overall grade |
+| Governance Report | `Invoke-SPGovernanceReport.ps1` | Auditors, governance leads | Quarterly/on-demand | Combined audit + leadership + policy + data quality package |
+| Data Quality Report | `Invoke-SPDataQualityReport.ps1` | IAM operations | Weekly/on-demand | Orphan accounts, identity-attribute quality, source-aggregation health |
+| Governance Metrics | `Invoke-SPGovernanceMetrics.ps1` | KPI dashboards | Daily (automated) | KPI time-series capture + trend reports + completion forecasts |
+| Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, identity risk, reviewer performance, remediation |
+| Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered per-leader reports, optionally emailed |
+| Adaptive Report (composable) | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N, drill-down tree, group table |
+| Adaptive Baseline: Inventory | `Invoke-SPAdaptiveReport.ps1 -BaselineReport inventory` | Access review | On-demand | Full entitlement/access-profile/role inventory |
+| Adaptive Baseline: Privileged | `Invoke-SPAdaptiveReport.ps1 -BaselineReport privileged` | Security | Quarterly | Privileged-access review |
+| Adaptive Baseline: Orphaned | `Invoke-SPAdaptiveReport.ps1 -BaselineReport orphaned` | IAM operations | Monthly | Orphaned/disabled-account access |
+| Adaptive Baseline: SoD | `Invoke-SPAdaptiveReport.ps1 -BaselineReport sod` | Compliance | Quarterly | Separation-of-duties toxic-combination analysis |
+| Adaptive Baseline: Roster | `Invoke-SPAdaptiveReport.ps1 -BaselineReport roster` | Certification admin | On-demand | Certification roster |
+| Adaptive Baseline: Access Cert | `Invoke-SPAdaptiveReport.ps1 -BaselineReport access-cert` | Compliance | After campaigns | Access-certification attestation |
+| Adaptive Baseline: Exec Summary | `Invoke-SPAdaptiveReport.ps1 -BaselineReport exec-summary` | Executives | Quarterly | Governance executive summary |
+| Orchestrator Daily Summary | `Invoke-SPDailyOrchestrator.ps1` | Operations | Daily (automated) | Consolidated 11-step status + JSONL audit trail |
+
+---
+
+## 13. Error Reference
+
+### 13.1 Log file format
+
+Logs are **structured JSONL** (one JSON object per line) written to daily rotating files
+in the `Logs\` directory. File naming: `<FilePrefix>-YYYY-MM-DD.log` (e.g.
+`GovernanceToolkit-2026-06-05.log`).
+
+Each log entry contains:
+
+| Field | Description |
+|---|---|
+| `Timestamp` | UTC ISO 8601 with milliseconds (`2026-06-05T14:30:00.123Z`) |
+| `Severity` | `DEBUG`, `INFO`, `WARN`, or `ERROR` |
+| `Component` | Source module (e.g. `SP.Auth`, `SP.Campaigns`, `SP.DeltaCertRunner`) |
+| `Action` | Operation being performed (e.g. `GetToken`, `CreateCampaign`) |
+| `Message` | Human-readable description |
+| `CorrelationID` | UUID linking related entries across a single operation |
+| `User` | Windows identity running the script |
+| `Environment` | `Global.EnvironmentName` value |
+| `Host` | Machine name |
+
+**Severity levels:**
+- `DEBUG` -- Verbose diagnostics (only logged when `DebugMode = true` or `MinimumSeverity = DEBUG`)
+- `INFO` -- Normal operations (token acquired, campaign created, report generated)
+- `WARN` -- Non-fatal issues (skipped identity, rate limit approached, fallback used)
+- `ERROR` -- Failures requiring attention (auth failure, API error, campaign creation failed)
+
+### 13.2 Enabling debug mode
+
+Set `Global.DebugMode` to `true` in `settings.local.json` (or toggle it in the GUI
+Settings tab). This sets the logging minimum severity to `DEBUG` and enables verbose
+output from all modules.
+
+```json
+{
+    "Global": {
+        "DebugMode": true
+    },
+    "Logging": {
+        "MinimumSeverity": "DEBUG"
+    }
+}
+```
+
+### 13.3 Common errors and resolutions
+
+| Error Message | Cause | Resolution |
+|---|---|---|
+| `CHANGE_ME value detected` | Config still has placeholder values | Replace all `CHANGE_ME` in `settings.local.json` with real tenant values |
+| `Token acquisition failed` / `401 Unauthorized` | Invalid or expired PAT credentials | Verify `ClientId`/`ClientSecret`; check PAT not expired in ISC admin console; confirm scopes |
+| `The underlying connection was closed` | TLS mismatch or network block | Toolkit auto-enforces TLS 1.2; check firewall allows HTTPS to `*.api.identitynow.com` |
+| `429 Too Many Requests` | ISC rate limit exceeded (95 req/10s) | The toolkit auto-retries with exponential backoff; if persistent, increase `Api.RetryDelaySeconds` |
+| `MaxPaginationPages exceeded` | More pages than the safety ceiling | Increase `Api.MaxPaginationPages` or narrow your query (add filters, reduce `DaysBack`) |
+| `MaxCampaignsPerRun exceeded` | Too many campaigns would be created | Increase `Safety.MaxCampaignsPerRun` after reviewing the plan, or narrow the scope |
+| `AllowCompleteCampaign is false` | Tried to complete/bulk-approve a campaign | Set `Safety.AllowCompleteCampaign = true` in config if you intend to allow terminal actions |
+| `No campaigns found matching filter` | Campaign name/status filter returned empty | Verify the campaign name, status, and `DaysBack` window; use `-CampaignNameContains` for fuzzy search |
+| `Vault decryption failed` | Wrong passphrase or corrupted vault file | Re-enter passphrase; if lost, recreate vault with `New-SPVault.ps1` and rotate the PAT |
+| `AccountDeletionThresholdPct exceeded` | Disconnected app CSV has too many removals vs. previous snapshot | Verify the CSV is a full export (not a delta); if legitimate mass removal, temporarily increase `AccountDeletionThresholdPct` |
+| `Identity not found for correlation` | Disconnected app email does not match any ISC identity | Verify the `e-mail` in the CSV matches the ISC identity's email; check `CorrelationAttribute` setting |
+| `sp:scopes:all required` | Script needs account-activities endpoint | Add `sp:scopes:all` to the PAT scopes, or use a browser `-Token` instead |
+| `Invoke-RestMethod: The operation has timed out` | API call exceeded `TimeoutSeconds` | Increase `Api.TimeoutSeconds` (default 60); check network latency to ISC |
+| `Execution policy violation` | Script blocked by PowerShell execution policy | Set `RemoteSigned` for the current user or pass `-ExecutionPolicy Bypass` |
+| `WPF STA thread required` | GUI launched from a non-STA PowerShell session | Use `Show-SPDashboard.ps1` (it auto-relaunches in STA); do not run the GUI from PowerShell ISE |
 
 ---
 

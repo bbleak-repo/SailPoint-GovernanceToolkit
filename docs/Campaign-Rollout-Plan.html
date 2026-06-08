@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Access Certification -- Rollout Plan &amp; Communication Kit</title>
+<style>
+body {
+    font-family: 'Segoe UI', Calibri, -apple-system, system-ui, sans-serif;
+    color: #2c3e50;
+    background: #ffffff;
+    line-height: 1.7;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 40px 48px;
+    font-size: 14.5px;
+}
+
+.cover {
+    background: linear-gradient(135deg, #1e2a3a 0%, #2c3e50 60%, #34495e 100%);
+    color: #fff;
+    padding: 44px 40px 36px;
+    border-radius: 8px;
+    margin-bottom: 32px;
+    border-bottom: 4px solid #5B9BD5;
+}
+.cover h1 { font-size: 26px; font-weight: 700; color: #5B9BD5; margin: 0 0 8px; }
+.cover-sub { font-size: 14px; color: rgba(255,255,255,0.7); margin: 0 0 16px; }
+.cover-meta { display: flex; gap: 24px; flex-wrap: wrap; font-size: 12px; color: rgba(255,255,255,0.5); }
+.cover-meta strong { color: rgba(255,255,255,0.8); margin-right: 3px; }
+
+h2 { font-size: 21px; font-weight: 700; color: #1e2a3a; margin: 44px 0 14px; padding-bottom: 10px; border-bottom: 3px solid #5B9BD5; }
+h3 { font-size: 16px; font-weight: 600; color: #336699; margin: 26px 0 10px; }
+h4 { font-size: 14px; font-weight: 600; color: #34495e; margin: 18px 0 6px; }
+
+table { width: 100%; border-collapse: collapse; margin: 14px 0 18px; font-size: 13.5px; }
+th { background: #34495e; color: #fff; text-align: left; padding: 9px 13px; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; }
+td { padding: 9px 13px; border-bottom: 1px solid #e0e4ea; vertical-align: top; }
+tr:nth-child(even) td { background: #f9f9fb; }
+
+.callout { border-radius: 6px; padding: 14px 18px; margin: 16px 0; font-size: 13.5px; border-left: 4px solid; }
+.callout-label { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+.callout-tip { background: #edf6ef; border-color: #339933; }
+.callout-tip .callout-label { color: #339933; }
+.callout-note { background: #edf2f9; border-color: #336699; }
+.callout-note .callout-label { color: #336699; }
+.callout-warn { background: #fff8ec; border-color: #e68a00; }
+.callout-warn .callout-label { color: #e68a00; }
+
+.phase-header {
+    background: #f7f8fa;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 24px 0 16px;
+}
+.phase-header .phase-num { font-size: 12px; color: #336699; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+.phase-header .phase-title { font-size: 18px; font-weight: 700; color: #1e2a3a; margin-top: 2px; }
+.phase-header .phase-timing { font-size: 13px; color: #596980; margin-top: 4px; }
+
+.email-template {
+    background: #f7f8fa;
+    border: 1px solid #dce3eb;
+    border-radius: 6px;
+    margin: 14px 0;
+    overflow: hidden;
+}
+.email-header {
+    background: #34495e;
+    color: #fff;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.email-body {
+    padding: 16px 18px;
+    font-size: 13.5px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    font-family: inherit;
+}
+.email-body .placeholder { color: #336699; font-weight: 600; }
+
+.checklist { list-style: none; padding-left: 0; }
+.checklist li { position: relative; padding-left: 26px; margin-bottom: 8px; }
+.checklist li::before { content: ''; position: absolute; left: 0; top: 4px; width: 15px; height: 15px; border: 2px solid #b0bec5; border-radius: 3px; background: #fff; }
+
+.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+.metric-card { background: #f7f8fa; border: 1px solid #dce3eb; border-radius: 6px; padding: 14px 16px; }
+.metric-card .mc-label { font-size: 12px; color: #596980; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+.metric-card .mc-target { font-size: 20px; font-weight: 800; color: #336699; margin-top: 2px; }
+.metric-card .mc-desc { font-size: 12px; color: #596980; margin-top: 4px; }
+
+.timeline { border-left: 3px solid #5B9BD5; margin-left: 16px; padding-left: 24px; }
+.timeline-item { position: relative; margin-bottom: 20px; }
+.timeline-item::before { content: ''; position: absolute; left: -31px; top: 6px; width: 12px; height: 12px; background: #5B9BD5; border-radius: 50%; border: 2px solid #fff; }
+.timeline-item .tl-date { font-size: 12px; font-weight: 700; color: #336699; }
+.timeline-item .tl-action { font-size: 14px; color: #2c3e50; margin-top: 2px; }
+
+.divider { border: none; border-top: 1px solid #e0e4ea; margin: 36px 0; }
+
+.footer { margin-top: 44px; padding-top: 18px; border-top: 2px solid #e0e4ea; font-size: 11px; color: #999; text-align: center; }
+
+@media print {
+    body { max-width: 100%; padding: 20px; }
+    .cover { page-break-after: always; }
+    h2 { page-break-after: avoid; }
+    .email-template, .phase-header { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<!-- ════════ COVER ════════ -->
+<div class="cover">
+    <h1>Daily Access Certification -- Rollout Plan</h1>
+    <p class="cover-sub">Communication kit, timeline, email templates, and success metrics
+    for launching daily privileged access reviews with people-managers.</p>
+    <div class="cover-meta">
+        <span><strong>Owner:</strong> IAM Team</span>
+        <span><strong>Audience:</strong> IAM Team, IT Leadership, Change Management</span>
+        <span><strong>Classification:</strong> Internal</span>
+        <span><strong>Version:</strong> 1.0</span>
+    </div>
+</div>
+
+<!-- ════════ EXECUTIVE SUMMARY ════════ -->
+<h2>Executive Summary</h2>
+
+<p>We are transitioning from <strong>quarterly full-scope access reviews</strong> to <strong>daily
+delta reviews</strong> for privileged access. Instead of reviewing hundreds of items once a
+quarter (leading to rubber-stamping and reviewer fatigue), managers will review only
+<em>newly granted</em> privileged access items each day -- typically 1-5 items, taking 5-10
+minutes.</p>
+
+<p>This rollout plan covers:</p>
+<ul>
+    <li>A 4-phase rollout over 6 weeks (pilot, expand, full launch, steady state)</li>
+    <li>Ready-to-send email templates for every stage</li>
+    <li>Manager-facing documentation suite (guide, quick-reference card, decision tree)</li>
+    <li>Success metrics and KPIs to track program effectiveness</li>
+    <li>Escalation procedures and support model</li>
+</ul>
+
+
+<hr class="divider">
+
+<!-- ════════ DOCUMENTATION SUITE ════════ -->
+<h2>Documentation Suite</h2>
+
+<p>The following materials are ready for distribution. Customize the <code>[PLACEHOLDER]</code>
+values before use.</p>
+
+<table>
+    <thead>
+        <tr><th>Document</th><th>Audience</th><th>Purpose</th><th>When to Share</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Manager's Guide</strong><br><span style="font-size:12px; color:#596980;">Manager-Attestation-Guide-Tabbed-v2.html</span></td>
+            <td>All managers</td>
+            <td>Comprehensive guide: why, how, scenarios, FAQ, glossary</td>
+            <td>Pre-launch email + intranet posting</td>
+        </tr>
+        <tr>
+            <td><strong>Quick-Reference Card</strong><br><span style="font-size:12px; color:#596980;">Manager-QuickRef-Card.html</span></td>
+            <td>All managers</td>
+            <td>1-page printable cheat sheet for desk reference</td>
+            <td>Attached to first campaign email</td>
+        </tr>
+        <tr>
+            <td><strong>Decision Tree</strong><br><span style="font-size:12px; color:#596980;">Manager-Decision-Tree.html</span></td>
+            <td>All managers</td>
+            <td>Visual flowchart: approve, revoke, or reassign</td>
+            <td>Attached to first campaign email</td>
+        </tr>
+        <tr>
+            <td><strong>ISC Screen Guide</strong><br><span style="font-size:12px; color:#596980;">docs/assets/isc-mockups.html</span></td>
+            <td>All managers</td>
+            <td>Annotated mockups of every screen they will encounter</td>
+            <td>Embedded in main guide; linked from quick-start</td>
+        </tr>
+        <tr>
+            <td><strong>Email Templates</strong><br><span style="font-size:12px; color:#596980;">docs/assets/email-notification-template.html</span></td>
+            <td>IAM team</td>
+            <td>Pre-written communications for every rollout stage</td>
+            <td>IAM team uses throughout rollout</td>
+        </tr>
+        <tr>
+            <td><strong>This Rollout Plan</strong><br><span style="font-size:12px; color:#596980;">Campaign-Rollout-Plan.html</span></td>
+            <td>IAM team, leadership</td>
+            <td>Timeline, metrics, escalation, change management</td>
+            <td>Internal planning document</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-note">
+    <div class="callout-label">Before distributing</div>
+    Search all documents for <code>[</code> brackets and replace every placeholder.
+    Use the checklist below to ensure nothing goes out with raw placeholder text.
+</div>
+
+<h3>Placeholder Customization Checklist</h3>
+<p>Complete this checklist before distributing any document. Each placeholder appears in
+multiple files -- update all instances.</p>
+
+<table>
+    <thead>
+        <tr><th>Placeholder</th><th>Replace With</th><th>Appears In</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>[YOUR-ORG.identitynow.com]</code></td><td>Your SailPoint ISC tenant URL</td><td>Tabbed Guide, Linear Guide, Quick-Ref Card, Training Deck, Email Templates</td></tr>
+        <tr><td><code>[IAM-TEAM-EMAIL]</code></td><td>IAM team email address</td><td>All 8 manager-facing documents + Rollout Plan</td></tr>
+        <tr><td><code>[IAM-TEAM-PHONE]</code></td><td>IAM team phone or extension</td><td>Tabbed Guide, Linear Guide, Quick-Ref, Decision Tree, Training Deck, Email Templates</td></tr>
+        <tr><td><code>[IAM-TEAM-CHANNEL]</code></td><td>Teams/Slack channel name</td><td>Tabbed Guide, Linear Guide, Quick-Ref Card, Training Deck</td></tr>
+        <tr><td><code>[X hours/days]</code></td><td>Access re-request turnaround time</td><td>Tabbed Guide, Linear Guide, Playbook Source</td></tr>
+        <tr><td><code>[DATE]</code></td><td>Go-live date for daily reviews</td><td>Rollout Plan, Email Templates, Training Deck</td></tr>
+        <tr><td><code>[ORGANIZATION NAME]</code></td><td>Your company name</td><td>Training Deck title slide</td></tr>
+        <tr><td><code>[CISO / VP NAME]</code></td><td>Executive sponsor name and title</td><td>Rollout Plan (Template D)</td></tr>
+        <tr><td><code>[IAM TEAM LEAD NAME]</code></td><td>IAM team lead who signs emails</td><td>Rollout Plan (all email templates)</td></tr>
+        <tr><td><code>[LINK TO GUIDE]</code></td><td>Intranet/SharePoint URL for the guide</td><td>Email Templates, Training Deck</td></tr>
+        <tr><td><code>[LINK TO QUICK-REF]</code></td><td>URL for quick-reference card</td><td>Email Templates, Training Deck</td></tr>
+        <tr><td><code>[INTRANET LINK]</code></td><td>Documentation landing page URL</td><td>Training Deck</td></tr>
+        <tr><td><code>[SOX / SOC 2 / your compliance framework]</code></td><td>Your applicable regulatory framework</td><td>Rollout Plan (Template D)</td></tr>
+    </tbody>
+</table>
+
+<div class="callout callout-tip">
+    <div class="callout-label">Quick find</div>
+    In any HTML file, use Ctrl+H (Find and Replace) to search for <code>[</code> and
+    replace each placeholder. There should be zero <code>[</code> brackets remaining
+    in the final versions (except in code examples).
+</div>
+
+
+<hr class="divider">
+
+<!-- ════════ ROLLOUT TIMELINE ════════ -->
+<h2>Rollout Timeline</h2>
+
+<!-- PHASE 1 -->
+<div class="phase-header">
+    <div class="phase-num">Phase 1</div>
+    <div class="phase-title">Pilot (Weeks 1-2)</div>
+    <div class="phase-timing">10-15 managers in IT and Security -- teams familiar with access concepts</div>
+</div>
+
+<div class="timeline">
+    <div class="timeline-item">
+        <div class="tl-date">Week 1, Monday</div>
+        <div class="tl-action">Send <strong>Pre-Launch Announcement</strong> email to pilot group</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 1, Wednesday</div>
+        <div class="tl-action">15-minute training session (optional, recorded) -- walk through the guide and a sample campaign</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 1, Thursday</div>
+        <div class="tl-action">Activate daily campaigns for pilot group. Send <strong>First Campaign</strong> email with guide + quick-ref attached</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 2, Monday</div>
+        <div class="tl-action">Check completion rates. Send <strong>Follow-Up Check-In</strong> to anyone who has not completed</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 2, Friday</div>
+        <div class="tl-action">Collect pilot feedback. Adjust documentation based on pain points. Measure: completion rate, avg time, support tickets</div>
+    </div>
+</div>
+
+<div class="callout callout-tip">
+    <div class="callout-label">Pilot success criteria</div>
+    Before moving to Phase 2: >80% completion rate, &lt;3 support tickets per day,
+    no critical documentation gaps reported.
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase-header">
+    <div class="phase-num">Phase 2</div>
+    <div class="phase-title">Expansion (Weeks 3-4)</div>
+    <div class="phase-timing">All managers in Engineering, Operations, and Finance</div>
+</div>
+
+<div class="timeline">
+    <div class="timeline-item">
+        <div class="tl-date">Week 3, Monday</div>
+        <div class="tl-action">Send <strong>Pre-Launch Announcement</strong> to expansion group (updated with pilot learnings)</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 3, Wednesday</div>
+        <div class="tl-action">Post guide + quick-ref + decision tree on intranet/SharePoint. Send Teams announcement.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 3, Thursday</div>
+        <div class="tl-action">Activate daily campaigns for expansion group. Pilot managers available as peer mentors.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 4, Monday</div>
+        <div class="tl-action">Check completion rates. Identify managers struggling -- offer 1-on-1 walkthroughs.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 4, Friday</div>
+        <div class="tl-action">Review metrics. Prepare for full launch.</div>
+    </div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase-header">
+    <div class="phase-num">Phase 3</div>
+    <div class="phase-title">Full Launch (Week 5)</div>
+    <div class="phase-timing">All remaining managers organization-wide</div>
+</div>
+
+<div class="timeline">
+    <div class="timeline-item">
+        <div class="tl-date">Week 5, Monday</div>
+        <div class="tl-action">Leadership sends <strong>Executive Announcement</strong> (VP/CISO-level). IAM sends <strong>Pre-Launch</strong> to remaining managers.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 5, Wednesday</div>
+        <div class="tl-action">Activate daily campaigns for all managers. Deploy documentation to all channels.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Week 5, Friday</div>
+        <div class="tl-action">First completion rate check across full population. Escalate non-completions to skip-level managers.</div>
+    </div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase-header">
+    <div class="phase-num">Phase 4</div>
+    <div class="phase-title">Steady State (Week 6+)</div>
+    <div class="phase-timing">Ongoing operations, continuous improvement</div>
+</div>
+
+<div class="timeline">
+    <div class="timeline-item">
+        <div class="tl-date">Week 6</div>
+        <div class="tl-action">Weekly metrics dashboard published to IAM + CISO. Identify repeat non-completers.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Month 2</div>
+        <div class="tl-action">Reduce check-in frequency to bi-weekly. Add new manager onboarding to HR process.</div>
+    </div>
+    <div class="timeline-item">
+        <div class="tl-date">Quarter 2</div>
+        <div class="tl-action">Retrospective: review metrics, manager feedback, documentation updates. Present results to audit committee.</div>
+    </div>
+</div>
+
+
+<hr class="divider">
+
+<!-- ════════ SUCCESS METRICS ════════ -->
+<h2>Success Metrics</h2>
+
+<div class="metric-grid">
+    <div class="metric-card">
+        <div class="mc-label">Campaign Completion Rate</div>
+        <div class="mc-target">>90%</div>
+        <div class="mc-desc">Percentage of campaigns completed before deadline. Target: >90% within 30 days of launch.</div>
+    </div>
+    <div class="metric-card">
+        <div class="mc-label">Average Review Time</div>
+        <div class="mc-target">&lt;15 min</div>
+        <div class="mc-desc">Median time from campaign creation to sign-off. Target: under 15 minutes for daily deltas.</div>
+    </div>
+    <div class="metric-card">
+        <div class="mc-label">Revocation Rate</div>
+        <div class="mc-target">5-25%</div>
+        <div class="mc-desc">Percentage of items revoked. Below 5% suggests rubber-stamping; above 25% suggests over-provisioning.</div>
+    </div>
+    <div class="metric-card">
+        <div class="mc-label">Support Ticket Volume</div>
+        <div class="mc-target">&lt;5/week</div>
+        <div class="mc-desc">IAM team tickets related to certification confusion. Declining trend indicates documentation is working.</div>
+    </div>
+    <div class="metric-card">
+        <div class="mc-label">Rubber-Stamping Score</div>
+        <div class="mc-target">&lt;10%</div>
+        <div class="mc-desc">Percentage of managers who approve 100% of items in under 60 seconds. Target: under 10%.</div>
+    </div>
+    <div class="metric-card">
+        <div class="mc-label">Comment Rate on Privileged Items</div>
+        <div class="mc-target">>50%</div>
+        <div class="mc-desc">Percentage of privileged access decisions with a comment. Indicates thoughtful review.</div>
+    </div>
+</div>
+
+<div class="callout callout-note">
+    <div class="callout-label">Reporting cadence</div>
+    Publish these metrics weekly during Phases 1-3, bi-weekly during Phase 4, and
+    monthly at steady state. Share with CISO and audit committee quarterly.
+</div>
+
+
+<hr class="divider">
+
+<!-- ════════ EMAIL TEMPLATES ════════ -->
+<h2>Email Templates</h2>
+
+<p>Ready-to-customize emails for each stage of the rollout. Replace all
+<span class="placeholder">[PLACEHOLDER]</span> values before sending.</p>
+
+<!-- TEMPLATE A -->
+<h3>Template A: Pre-Launch Announcement</h3>
+<p><em>Send 3-5 days before the first campaign arrives.</em></p>
+
+<div class="email-template">
+    <div class="email-header">Subject: Starting <span class="placeholder">[DATE]</span>: Daily Access Reviews for Elevated Permissions</div>
+    <div class="email-body">Hi <span class="placeholder">[Manager Name / Team]</span>,
+
+Starting <span class="placeholder">[DATE]</span>, we are implementing daily access reviews for elevated permissions as part of our identity governance program. This email explains what to expect.
+
+<strong>What is changing:</strong>
+When someone on your team receives new elevated access (such as server administration, database admin, or other high-impact permissions), you will receive an email asking you to review and confirm that the access is appropriate.
+
+<strong>Why:</strong>
+Daily reviews replace the quarterly full-scope reviews that were time-consuming and often rushed. By reviewing only new changes each day, we reduce reviewer burden (most reviews take 5-10 minutes) while strengthening our compliance posture.
+
+<strong>What you need to do now:</strong>
+1. Read the Manager's Guide: <span class="placeholder">[LINK TO GUIDE]</span>
+2. Print the Quick-Reference Card: <span class="placeholder">[LINK TO QUICK-REF]</span>
+3. Bookmark your SailPoint login: <span class="placeholder">[YOUR-ORG.identitynow.com]</span>
+
+<strong>What you can expect:</strong>
+- You will only receive a campaign when something changes for your team
+- Most campaigns contain 1-5 items and take 5-10 minutes
+- You cannot break anything while reviewing -- decisions are only final when you click Sign Off
+- If you are unsure about an item, you can reassign it to someone better positioned to evaluate it
+
+<strong>Need help?</strong>
+IAM Team: <span class="placeholder">[IAM-TEAM-EMAIL]</span> | <span class="placeholder">[IAM-TEAM-PHONE]</span> | Teams: <span class="placeholder">[IAM-TEAM-CHANNEL]</span>
+
+Thank you for supporting our security and compliance program.
+
+<span class="placeholder">[IAM TEAM LEAD NAME]</span>
+Identity & Access Management</div>
+</div>
+
+<!-- TEMPLATE B -->
+<h3>Template B: First Campaign Notification</h3>
+<p><em>Send alongside or immediately after the first real campaign arrives.</em></p>
+
+<div class="email-template">
+    <div class="email-header">Subject: Your First Access Review is Ready -- Here's How to Complete It</div>
+    <div class="email-body">Hi <span class="placeholder">[Manager Name]</span>,
+
+Your first daily access review campaign has been created in SailPoint. This is the process we announced on <span class="placeholder">[DATE]</span>.
+
+<strong>Quick start (5 minutes):</strong>
+1. Click this link to go directly to your review: <span class="placeholder">[CAMPAIGN LINK or YOUR-ORG.identitynow.com]</span>
+2. You will see your team members who received new access
+3. For each item: click Approve (checkmark) to keep it, or Revoke (X) to remove it
+4. Click Sign Off when you have decided on every item
+
+<strong>Attached to help you:</strong>
+- Quick-Reference Card (1-page printable cheat sheet)
+- Decision Tree (visual flowchart for approve/revoke decisions)
+
+<strong>Remember:</strong>
+- You cannot break anything before you click Sign Off
+- If you do not recognize a system, click Reassign to send it to someone who does
+- If you make a mistake before Sign Off, click Revisit Decision to change it
+
+<strong>The full guide is here:</strong> <span class="placeholder">[LINK TO GUIDE]</span>
+
+<strong>Need help?</strong>
+IAM Team: <span class="placeholder">[IAM-TEAM-EMAIL]</span> | <span class="placeholder">[IAM-TEAM-PHONE]</span>
+We are happy to walk you through your first review.
+
+Thank you,
+<span class="placeholder">[IAM TEAM LEAD NAME]</span></div>
+</div>
+
+<!-- TEMPLATE C -->
+<h3>Template C: Follow-Up / Incomplete Review Reminder</h3>
+<p><em>Send 24 hours before deadline if the manager has not completed their review.</em></p>
+
+<div class="email-template">
+    <div class="email-header">Subject: Reminder: Access Review Due <span class="placeholder">[DEADLINE DATE]</span> -- <span class="placeholder">[X]</span> Items Pending</div>
+    <div class="email-body">Hi <span class="placeholder">[Manager Name]</span>,
+
+You have an access certification campaign with <span class="placeholder">[X]</span> items still pending review. The deadline is <span class="placeholder">[DEADLINE DATE AND TIME]</span>.
+
+<strong>To complete your review:</strong>
+1. Go to <span class="placeholder">[YOUR-ORG.identitynow.com]</span>
+2. Click Certifications > Active
+3. Open the pending campaign and make your decisions
+4. Click Sign Off
+
+This typically takes 5-10 minutes.
+
+<strong>What happens if the deadline passes:</strong>
+An administrator will need to handle your undecided items. Incomplete reviews are visible to compliance teams and may be flagged during audits.
+
+<strong>Need help?</strong>
+IAM Team: <span class="placeholder">[IAM-TEAM-EMAIL]</span> | <span class="placeholder">[IAM-TEAM-PHONE]</span>
+
+Thank you,
+<span class="placeholder">[IAM TEAM LEAD NAME]</span></div>
+</div>
+
+<!-- TEMPLATE D -->
+<h3>Template D: Executive Announcement (for VP/CISO)</h3>
+<p><em>Sent by a senior leader to signal organizational commitment.</em></p>
+
+<div class="email-template">
+    <div class="email-header">Subject: Strengthening Our Access Security -- What Managers Need to Know</div>
+    <div class="email-body">Team,
+
+Effective <span class="placeholder">[DATE]</span>, we are enhancing how we review access to critical systems. When a member of your team receives elevated access -- permissions that could affect the entire organization if misused -- you will receive a brief daily review asking you to confirm the access is appropriate.
+
+<strong>Why this matters:</strong>
+Access reviews are a core security control required by <span class="placeholder">[SOX / SOC 2 / your compliance framework]</span>. Reviewing access promptly and thoughtfully protects our employees, our customers, and our organization. It also demonstrates to auditors that we take privileged access governance seriously.
+
+<strong>What I am asking of you:</strong>
+- Complete your reviews within 24-48 hours of receiving them (most take 5-10 minutes)
+- Take a moment to genuinely evaluate each item, especially those flagged as privileged
+- If you are unsure, reassign to someone who can make an informed decision -- do not guess
+
+<strong>Resources:</strong>
+The IAM team has prepared a comprehensive guide, quick-reference card, and decision tree. Links will be included with your first review notification.
+
+<strong>Support:</strong>
+The IAM team (<span class="placeholder">[IAM-TEAM-EMAIL]</span>) is available to walk any manager through their first review.
+
+Thank you for making our access governance program a success.
+
+<span class="placeholder">[CISO / VP NAME]</span>
+<span class="placeholder">[TITLE]</span></div>
+</div>
+
+<!-- TEMPLATE E -->
+<h3>Template E: New Manager Onboarding</h3>
+<p><em>Add to HR/IT onboarding checklist for newly promoted or hired managers.</em></p>
+
+<div class="email-template">
+    <div class="email-header">Subject: Welcome -- Setting Up Your Access Reviews</div>
+    <div class="email-body">Hi <span class="placeholder">[New Manager Name]</span>,
+
+Welcome to your new role. As a people-manager, you are responsible for reviewing access for your direct reports when changes occur.
+
+<strong>What this means:</strong>
+When someone on your team receives new access to a critical system, you will get an email asking you to review and confirm it is appropriate. This is a standard part of our security program.
+
+<strong>Getting started:</strong>
+1. Read the Manager's Guide (15 minutes): <span class="placeholder">[LINK TO GUIDE]</span>
+2. Print the Quick-Reference Card for your desk: <span class="placeholder">[LINK TO QUICK-REF]</span>
+3. Bookmark SailPoint: <span class="placeholder">[YOUR-ORG.identitynow.com]</span>
+
+<strong>Your first review:</strong>
+You may not receive a campaign right away -- they are only created when access changes occur. When your first one arrives, the guide and quick-reference card will walk you through it. It typically takes 5-10 minutes.
+
+<strong>As a new manager:</strong>
+If you are unfamiliar with your team's systems, it is completely fine to reassign items to a technical lead or the previous manager until you get up to speed. The guide covers this scenario specifically (Section 4, Scenario 7).
+
+<strong>IAM Team support:</strong>
+<span class="placeholder">[IAM-TEAM-EMAIL]</span> | <span class="placeholder">[IAM-TEAM-PHONE]</span> -- we are happy to walk you through your first review.
+
+<span class="placeholder">[IAM TEAM LEAD NAME]</span></div>
+</div>
+
+
+<hr class="divider">
+
+<!-- ════════ ESCALATION MODEL ════════ -->
+<h2>Escalation Model</h2>
+
+<table>
+    <thead>
+        <tr><th>Situation</th><th>First Response</th><th>Escalation</th><th>Timeline</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Manager has questions about a specific item</td>
+            <td>IAM team answers via email/Teams</td>
+            <td>N/A</td>
+            <td>Same day</td>
+        </tr>
+        <tr>
+            <td>Manager cannot complete review (technical issue)</td>
+            <td>IAM team troubleshoots</td>
+            <td>SailPoint support ticket</td>
+            <td>4 hours</td>
+        </tr>
+        <tr>
+            <td>Manager misses deadline (first occurrence)</td>
+            <td>Friendly reminder email (Template C)</td>
+            <td>N/A</td>
+            <td>24 hours</td>
+        </tr>
+        <tr>
+            <td>Manager misses deadline (repeat, 3+ times)</td>
+            <td>Direct outreach from IAM team</td>
+            <td>Skip-level manager notification</td>
+            <td>48 hours</td>
+        </tr>
+        <tr>
+            <td>Accidental revocation (urgent)</td>
+            <td>IAM team expedites access re-request</td>
+            <td>Emergency provisioning if business-critical</td>
+            <td>2 hours</td>
+        </tr>
+        <tr>
+            <td>Suspected rubber-stamping pattern</td>
+            <td>IAM team conducts follow-up conversation</td>
+            <td>Training session + manager's leader notified</td>
+            <td>1 week</td>
+        </tr>
+    </tbody>
+</table>
+
+
+<hr class="divider">
+
+<!-- ════════ CHANGE MANAGEMENT CONSIDERATIONS ════════ -->
+<h2>Change Management Considerations</h2>
+
+<h3>Resistance Patterns and Mitigation</h3>
+
+<table>
+    <thead>
+        <tr><th>Expected Resistance</th><th>Root Cause</th><th>Mitigation</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>"I don't have time for this"</td>
+            <td>Perceives daily reviews as a new burden</td>
+            <td>Emphasize: 5-10 min, smaller than quarterly, only when changes occur. Compare to timesheet approval.</td>
+        </tr>
+        <tr>
+            <td>"I don't understand what I'm looking at"</td>
+            <td>Non-technical manager, unfamiliar systems</td>
+            <td>Quick-ref card, decision tree, reassign option, 1-on-1 walkthrough offer, peer mentors from pilot</td>
+        </tr>
+        <tr>
+            <td>"This is IT's job, not mine"</td>
+            <td>Does not understand the manager's unique knowledge</td>
+            <td>Executive announcement framing (VP/CISO level), Section 6 of guide explains why managers are essential</td>
+        </tr>
+        <tr>
+            <td>"What if I make a mistake?"</td>
+            <td>Fear of consequences</td>
+            <td>"You cannot break anything" messaging, Revisit Decision before sign-off, IAM team fix-it support, Scenario 8</td>
+        </tr>
+        <tr>
+            <td>"Why is this daily? Quarterly was fine"</td>
+            <td>Change fatigue, questions value</td>
+            <td>Data: 74% breach stat, rubber-stamping evidence from quarterly reviews, daily = smaller not more</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Success Factors</h3>
+
+<ul class="checklist">
+    <li><strong>Executive sponsorship:</strong> CISO or VP sends the executive announcement (Template D). Without visible leadership support, managers treat it as optional.</li>
+    <li><strong>Peer advocacy:</strong> Pilot managers become informal advocates. "It's easy, I do it in 5 minutes" from a peer is more convincing than any documentation.</li>
+    <li><strong>Documentation accessibility:</strong> Guide posted on intranet, quick-ref printable, decision tree on desk. Multiple formats for multiple preferences.</li>
+    <li><strong>Low-friction support:</strong> IAM team available via email, phone, and Teams. Offer to walk first-timers through their first campaign live.</li>
+    <li><strong>Visible metrics:</strong> Share completion rates (anonymized by team, not individual) to create positive social pressure.</li>
+    <li><strong>Continuous improvement:</strong> Collect feedback after Phases 1-3. Update documentation based on real manager questions. Version the guide.</li>
+    <li><strong>HR integration:</strong> Add access review responsibilities to manager onboarding checklist. New managers get the guide on day 1.</li>
+</ul>
+
+
+<hr class="divider">
+
+<!-- ════════ LEADERSHIP TALKING POINTS ════════ -->
+<h2>Leadership Talking Points</h2>
+
+<p>For VPs and directors to use in team meetings or all-hands when introducing the program:</p>
+
+<h4>The Elevator Pitch (30 seconds)</h4>
+<blockquote>
+"We're starting daily access reviews for elevated permissions. When someone on your team
+gets new admin access, you'll get a quick review -- 5-10 minutes. You'll confirm the
+access is right for their current role. This replaces the quarterly review that nobody
+liked, and it's a core part of our compliance program."
+</blockquote>
+
+<h4>The Accountability Frame</h4>
+<blockquote>
+"As managers, we're the ones who know our teams best. We know who's working on what
+project, who just transferred, who no longer needs that old access. That's why this
+lands with us, not the IT department. We're making sure our people have the right
+access -- no more, no less."
+</blockquote>
+
+<h4>Handling the "More Work" Objection</h4>
+<blockquote>
+"I hear you -- nobody wants more tasks. The daily review is actually less work than the
+quarterly one. Instead of reviewing hundreds of items in one sitting and rushing through
+them, you're reviewing 1-5 items when they're fresh. It's like reviewing timesheets
+daily instead of doing three months at once."
+</blockquote>
+
+<h4>The Risk Frame (for skeptics)</h4>
+<blockquote>
+"Every unnecessary privileged account is a potential entry point for an attacker. Three
+quarters of data breaches involve compromised privileged credentials. These reviews
+directly reduce our attack surface. They also protect your team members -- if an account
+is compromised, less access means less damage."
+</blockquote>
+
+
+<!-- ════════ FOOTER ════════ -->
+<div class="footer">
+    Daily Access Certification -- Rollout Plan &amp; Communication Kit v1.0<br>
+    Identity &amp; Access Management Team -- Internal Use Only
+</div>
+
+</body>
+</html>

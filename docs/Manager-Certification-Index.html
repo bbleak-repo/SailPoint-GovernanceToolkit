@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Documentation hub for the daily access certification review program. Quick start, full guide, decision tree, cheat sheet, and more.">
+<title>Access Certification Reviews -- Documentation Hub</title>
+<style>
+body {
+    font-family: 'Segoe UI', Calibri, -apple-system, system-ui, sans-serif;
+    color: #2c3e50;
+    background: #f4f6f9;
+    line-height: 1.7;
+    margin: 0;
+    padding: 0;
+}
+.hero {
+    background: linear-gradient(135deg, #1e2a3a 0%, #2c3e50 60%, #34495e 100%);
+    color: #fff;
+    padding: 48px 40px 40px;
+    text-align: center;
+    border-bottom: 4px solid #5B9BD5;
+}
+.hero h1 { font-size: 28px; font-weight: 700; color: #5B9BD5; margin: 0 0 8px; }
+.hero p { font-size: 15px; color: rgba(255,255,255,0.7); margin: 0 auto; max-width: 580px; }
+.hero-safety {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 8px 20px;
+    background: rgba(91,155,213,0.15);
+    border: 1px solid rgba(91,155,213,0.3);
+    border-radius: 6px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.85);
+}
+
+.container { max-width: 880px; margin: 0 auto; padding: 32px 40px 60px; }
+
+.section-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #336699;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 32px 0 12px;
+}
+
+.doc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
+
+.doc-card {
+    background: #fff;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    padding: 20px 22px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    transition: all 0.2s;
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+.doc-card:hover {
+    border-color: #5B9BD5;
+    box-shadow: 0 2px 8px rgba(91,155,213,0.15);
+    transform: translateY(-1px);
+}
+.doc-card .dc-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    margin-bottom: 8px;
+}
+.dc-badge.start { background: #edf6ef; color: #339933; }
+.dc-badge.ref { background: #edf2f9; color: #336699; }
+.dc-badge.print { background: #fff8ec; color: #e68a00; }
+.dc-badge.iam { background: #f0f2f5; color: #596980; }
+.dc-badge.training { background: #fdf0ef; color: #CC3333; }
+
+.doc-card .dc-title { font-size: 16px; font-weight: 700; color: #1e2a3a; margin-bottom: 4px; }
+.doc-card .dc-desc { font-size: 13px; color: #596980; line-height: 1.5; }
+.doc-card .dc-format { font-size: 11px; color: #b0bec5; margin-top: 8px; }
+
+.doc-card.featured {
+    grid-column: 1 / -1;
+    border-left: 4px solid #5B9BD5;
+    background: linear-gradient(135deg, #fff 0%, #f7f9fc 100%);
+}
+
+.support-box {
+    background: #e8f4f8;
+    border: 1px solid #b3dce8;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 28px 0;
+    text-align: center;
+}
+.support-box .sb-title { font-weight: 700; color: #1565C0; margin-bottom: 6px; font-size: 14px; }
+.support-box .sb-contacts { font-size: 14px; margin-top: 4px; }
+.support-box .sb-note { font-size: 12px; color: #596980; margin-top: 8px; }
+
+.footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 11px;
+    color: #999;
+    border-top: 1px solid #dce3eb;
+}
+
+@media (max-width: 600px) {
+    .doc-grid { grid-template-columns: 1fr; }
+    .hero { padding: 32px 20px; }
+    .container { padding: 20px 16px; }
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+    <h1>Access Certification Reviews</h1>
+    <p>Everything you need to complete your daily access reviews in SailPoint.
+    Start with the Quick Start guide -- most reviews take 5-10 minutes.</p>
+    <div class="hero-safety">You cannot break anything while reviewing. Decisions are only final when you click Sign Off.</div>
+</div>
+
+<div class="container">
+
+    <!-- START HERE -->
+    <div class="section-label">Start Here</div>
+    <div class="doc-grid">
+        <a class="doc-card featured" href="Manager-Attestation-Guide-Tabbed-v2.html">
+            <span class="dc-badge start">Start Here</span>
+            <div class="dc-title">Manager's Guide to Access Certification Reviews</div>
+            <div class="dc-desc">Complete guide with Quick Start, step-by-step interface walkthrough, decision flowchart, 8 scenarios, FAQ, and glossary. Start with the Quick Start tab if you need to complete a review right now.</div>
+            <div class="dc-format">Interactive tabbed HTML -- 12 sections</div>
+        </a>
+    </div>
+
+    <!-- QUICK REFERENCE -->
+    <div class="section-label">Quick Reference (Print These)</div>
+    <div class="doc-grid">
+        <a class="doc-card" href="Manager-QuickRef-Card.html">
+            <span class="dc-badge print">Printable</span>
+            <div class="dc-title">Quick-Reference Card</div>
+            <div class="dc-desc">1-page cheat sheet with steps, buttons, decision flowchart, and contact info. Print and keep at your desk.</div>
+            <div class="dc-format">1 page -- optimized for printing</div>
+        </a>
+        <a class="doc-card" href="Manager-Decision-Tree.html">
+            <span class="dc-badge print">Printable</span>
+            <div class="dc-title">Decision Tree</div>
+            <div class="dc-desc">Visual flowchart: Should I approve, revoke, or reassign? Follow the yes/no questions to the right action.</div>
+            <div class="dc-format">1 page landscape -- print and pin to monitor</div>
+        </a>
+    </div>
+
+    <!-- REFERENCE -->
+    <div class="section-label">Reference Materials</div>
+    <div class="doc-grid">
+        <a class="doc-card" href="assets/isc-mockups.html">
+            <span class="dc-badge ref">Reference</span>
+            <div class="dc-title">SailPoint Screen Guide</div>
+            <div class="dc-desc">Annotated mockups of every screen you will encounter: campaign list, identity view, access items, sign-off page.</div>
+            <div class="dc-format">5 annotated screen mockups</div>
+        </a>
+        <a class="doc-card" href="Manager-Attestation-Guide-v2.html">
+            <span class="dc-badge ref">Reference</span>
+            <div class="dc-title">Guide -- Word/Print Version</div>
+            <div class="dc-desc">Same content as the main guide but in a linear, scrollable format. Best for printing or pasting into Word/ServiceNow.</div>
+            <div class="dc-format">Linear HTML -- Word/ServiceNow compatible</div>
+        </a>
+    </div>
+
+    <!-- IAM TEAM ONLY -->
+    <div class="section-label">IAM Team Resources</div>
+    <div class="doc-grid">
+        <a class="doc-card" href="Manager-Training-Deck.html">
+            <span class="dc-badge training">Training</span>
+            <div class="dc-title">Training Slide Deck</div>
+            <div class="dc-desc">10-slide presentation for 15-minute manager training sessions. Use when rolling out the program to new teams.</div>
+            <div class="dc-format">HTML slides with keyboard navigation</div>
+        </a>
+        <a class="doc-card" href="assets/email-notification-template.html">
+            <span class="dc-badge iam">IAM Team</span>
+            <div class="dc-title">Email Templates</div>
+            <div class="dc-desc">Annotated notification mockup + 3 ready-to-send email templates for pre-launch, first campaign, and reminders.</div>
+            <div class="dc-format">Copyable email templates</div>
+        </a>
+        <a class="doc-card" href="Campaign-Rollout-Plan.html">
+            <span class="dc-badge iam">IAM Team</span>
+            <div class="dc-title">Rollout Plan &amp; Communication Kit</div>
+            <div class="dc-desc">4-phase timeline, 5 email templates, success metrics, escalation model, change management, leadership talking points.</div>
+            <div class="dc-format">Planning document with customizable templates</div>
+        </a>
+        <a class="doc-card" href="Certification-Metrics-Dashboard.html">
+            <span class="dc-badge iam">IAM Team</span>
+            <div class="dc-title">Metrics Dashboard Template</div>
+            <div class="dc-desc">KPI dashboard showing completion rates, review quality, manager performance, and follow-up items. Sample data included.</div>
+            <div class="dc-format">Dashboard with CSS charts and tables</div>
+        </a>
+    </div>
+
+    <!-- SUPPORT -->
+    <div class="support-box">
+        <div class="sb-title">Need Help?</div>
+        <div class="sb-contacts">
+            <strong>[IAM-TEAM-EMAIL]</strong> |
+            <strong>[IAM-TEAM-PHONE]</strong> |
+            Teams: <strong>[IAM-TEAM-CHANNEL]</strong>
+        </div>
+        <div class="sb-note">We are happy to walk you through your first review or answer questions about specific items.</div>
+    </div>
+
+</div>
+
+<div class="footer">
+    Access Certification Reviews -- Documentation Hub v2.0 |
+    Identity &amp; Access Management Team | Internal Use Only
+</div>
+
+</body>
+</html>

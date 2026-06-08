@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="SailPoint ISC connector playbook: 20+ application integration guides with free vs paid vs develop analysis, capabilities matrix, and configuration effort estimates.">
+<title>SailPoint ISC Connector Playbook -- Application Integration Guide</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --primary: #336699; --accent: #5B9BD5; --success: #339933; --success-bg: #edf6ef;
+    --danger: #CC3333; --danger-bg: #fdf0ef; --warning: #e68a00; --warning-bg: #fff8ec;
+    --header-bg: #1e2a3a; --text: #2c3e50; --text-muted: #596980;
+    --bg: #f4f6f9; --surface: #fff; --border: #dce3eb; --border-light: #eaecf0;
+    --tab-bg: #263545; --shadow-sm: 0 1px 3px rgba(0,0,0,0.06); --shadow-md: 0 2px 8px rgba(0,0,0,0.08); --radius: 8px;
+    --included: #339933; --marketplace: #e68a00; --custom: #CC3333; --saas-color: #00A1E0; --va-color: #6B2D8B;
+}
+html { font-size: 15px; } body { font-family: -apple-system,'Segoe UI',system-ui,sans-serif; color: var(--text); background: var(--bg); line-height: 1.7; }
+.app-header { background: linear-gradient(135deg,#14202e 0%,#1e2a3a 50%,#263545 100%); color: #fff; padding: 24px 36px 18px; border-bottom: 3px solid var(--accent); }
+.header-inner { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.header-title { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+.header-sub { font-size: 0.78rem; color: rgba(255,255,255,0.6); margin-top: 3px; }
+.tab-bar { background: var(--tab-bg); display: flex; flex-wrap: wrap; padding: 0 20px; position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow-md); }
+.tab-btn { background: transparent; border: none; color: rgba(255,255,255,0.55); font-family: inherit; font-size: 0.74rem; font-weight: 500; padding: 11px 11px; cursor: pointer; white-space: nowrap; border-bottom: 3px solid transparent; transition: all 0.2s; }
+.tab-btn:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.85); }
+.tab-btn.active { color: #fff; border-bottom-color: var(--accent); font-weight: 600; }
+.content-wrap { max-width: 1000px; margin: 0 auto; padding: 32px 36px 60px; }
+.tab-panel { display: none; animation: fadeIn 0.25s ease; } .tab-panel.active { display: block; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+h2 { font-size: 1.35rem; font-weight: 700; color: var(--header-bg); margin: 0 0 8px; padding-bottom: 12px; border-bottom: 3px solid var(--accent); }
+.section-intro { font-size: 0.92rem; color: var(--text-muted); margin-bottom: 24px; }
+h3 { font-size: 1.05rem; font-weight: 600; color: var(--primary); margin: 26px 0 10px; }
+h4 { font-size: 0.92rem; font-weight: 600; color: var(--text); margin: 16px 0 6px; }
+p { margin: 0 0 14px; } ul, ol { margin: 0 0 14px; padding-left: 22px; } li { margin-bottom: 5px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0 18px; font-size: 0.85rem; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+th { background: #34495e; color: #fff; text-align: left; padding: 9px 12px; font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.4px; }
+td { padding: 9px 12px; border-bottom: 1px solid var(--border-light); vertical-align: top; background: var(--surface); }
+tr:nth-child(even) td { background: #f9f9fb; } tr:last-child td { border-bottom: none; }
+.callout { border-radius: var(--radius); padding: 14px 18px; margin: 16px 0; font-size: 0.88rem; border-left: 4px solid; box-shadow: var(--shadow-sm); }
+.callout-label { font-weight: 700; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+.callout-tip { background: var(--success-bg); border-color: var(--success); } .callout-tip .callout-label { color: var(--success); }
+.callout-note { background: #edf2f9; border-color: var(--primary); } .callout-note .callout-label { color: var(--primary); }
+.callout-warn { background: var(--warning-bg); border-color: var(--warning); } .callout-warn .callout-label { color: var(--warning); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: #fff; }
+.badge-included { background: var(--included); } .badge-marketplace { background: var(--marketplace); }
+.badge-custom { background: var(--custom); } .badge-saas { background: var(--saas-color); } .badge-va { background: var(--va-color); }
+.badge-express { background: var(--accent); } .badge-both { background: #607D8B; }
+.app-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; margin: 14px 0; box-shadow: var(--shadow-sm); }
+.app-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.app-card-title { font-size: 1rem; font-weight: 700; color: var(--header-bg); }
+.app-card-meta { display: flex; gap: 16px; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 10px; flex-wrap: wrap; }
+.app-card-meta strong { color: var(--text); }
+.cap-grid { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.cap { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.68rem; font-weight: 600; }
+.cap-yes { background: var(--success-bg); color: var(--success); border: 1px solid #a3d9a5; }
+.cap-no { background: #f5f5f5; color: #999; border: 1px solid #ddd; }
+.cap-partial { background: var(--warning-bg); color: var(--warning); border: 1px solid #f0d4a0; }
+.cost-row { display: flex; gap: 14px; margin: 18px 0; flex-wrap: wrap; }
+.cost-card { flex: 1; min-width: 200px; border: 2px solid; border-radius: var(--radius); padding: 18px 20px; text-align: center; }
+.cost-card.free { border-color: var(--included); }
+.cost-card.paid { border-color: var(--marketplace); }
+.cost-card.dev { border-color: var(--custom); }
+.cost-card .cost-title { font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; }
+.cost-card.free .cost-title { color: var(--included); }
+.cost-card.paid .cost-title { color: var(--marketplace); }
+.cost-card.dev .cost-title { color: var(--custom); }
+.cost-card .cost-price { font-size: 1.4rem; font-weight: 800; color: var(--text); margin: 4px 0; }
+.cost-card .cost-desc { font-size: 0.78rem; color: var(--text-muted); }
+.welcome-hero { background: linear-gradient(135deg,var(--header-bg) 0%,#263545 100%); color: #fff; border-radius: var(--radius); padding: 32px 28px; margin-bottom: 24px; border-bottom: 3px solid var(--accent); }
+.welcome-hero h2 { color: var(--accent); border-bottom: none; margin-bottom: 10px; padding-bottom: 0; font-size: 1.4rem; }
+.welcome-hero p { color: rgba(255,255,255,0.75); font-size: 0.92rem; max-width: 660px; }
+.app-footer { text-align: center; padding: 20px; font-size: 0.72rem; color: #999; border-top: 1px solid var(--border); margin-top: 40px; }
+code { background: #f0f2f5; color: #5d4037; padding: 2px 5px; border-radius: 3px; font-family: Consolas,monospace; font-size: 0.85rem; }
+@media (max-width: 768px) { .content-wrap { padding: 20px 16px; } .cost-row { flex-direction: column; } }
+@media print { .tab-bar { display: none; } .tab-panel { display: block !important; } }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+    <div class="header-inner">
+        <div>
+            <div class="header-title">SailPoint ISC Connector Playbook</div>
+            <div class="header-sub">Application integration guide: 20+ connectors with free vs paid vs develop analysis</div>
+        </div>
+    </div>
+</header>
+
+<nav class="tab-bar" id="tabBar">
+    <button class="tab-btn active" data-tab="home">Home</button>
+    <button class="tab-btn" data-tab="tiers">Tier Model</button>
+    <button class="tab-btn" data-tab="economics">Economics</button>
+    <button class="tab-btn" data-tab="directory">Directory / Auth</button>
+    <button class="tab-btn" data-tab="hcm">HCM / HR</button>
+    <button class="tab-btn" data-tab="erp">ERP / Finance</button>
+    <button class="tab-btn" data-tab="itsm">ITSM / Collab</button>
+    <button class="tab-btn" data-tab="cloud">Cloud / SaaS</button>
+    <button class="tab-btn" data-tab="pam">PAM / Security</button>
+    <button class="tab-btn" data-tab="custom">Build Your Own</button>
+    <button class="tab-btn" data-tab="matrix">Full Matrix</button>
+</nav>
+
+<div class="content-wrap">
+
+<!-- ════════ HOME ════════ -->
+<div class="tab-panel active" id="panel-home">
+    <div class="welcome-hero">
+        <h2>Connector Playbook</h2>
+        <p>This guide covers 20+ enterprise application connectors for SailPoint Identity
+        Security Cloud (ISC). For each application: what connector is available, what it
+        can do, what it costs, and what to watch out for.</p>
+        <p style="margin-top:10px; color:rgba(255,255,255,0.55); font-size:0.82rem;">
+        All connectors are <strong style="color:#fff;">included with your ISC license</strong> --
+        SailPoint does not charge per connector. The constraint is your <strong style="color:#fff;">source limit</strong>
+        (15 for Standard, 50 for Business, 200+ for Business Plus).</p>
+    </div>
+
+    <h3>Key Concepts</h3>
+    <table>
+        <thead><tr><th>Concept</th><th>What It Means</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge badge-saas">SaaS</span> Connector</td><td>Runs in SailPoint's cloud. No on-premise infrastructure needed. Best for cloud-to-cloud connections.</td></tr>
+            <tr><td><span class="badge badge-va">VA</span> Connector</td><td>Runs through a Virtual Appliance (on-premise VM). Required for on-prem systems behind firewalls (AD, LDAP, databases).</td></tr>
+            <tr><td><span class="badge badge-express">Express</span> Setup</td><td>Guided wizard in the ISC UI -- can be configured without touching config files. Fastest path to production.</td></tr>
+            <tr><td><strong>Deep Governance</strong></td><td>Full lifecycle: aggregation + provisioning + password management + entitlement management. ~200 connectors.</td></tr>
+            <tr><td><strong>Quick Compliance</strong></td><td>Lighter: primarily aggregation and access visibility for certification. ~200+ SaaS apps (Datadog, Monday, Notion, etc.).</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ════════ TIER MODEL ════════ -->
+<div class="tab-panel" id="panel-tiers">
+    <h2>Connector Tier Model</h2>
+    <p class="section-intro">SailPoint connectors fall into three tiers based on availability
+    and implementation effort. Understanding this helps you plan integration priorities.</p>
+
+    <div class="cost-row">
+        <div class="cost-card free">
+            <div class="cost-title">Tier 1: Included</div>
+            <div class="cost-price">$0</div>
+            <div class="cost-desc">Pre-built connector ships with ISC. Configure in the admin UI. No additional licensing.</div>
+        </div>
+        <div class="cost-card paid">
+            <div class="cost-title">Tier 2: Marketplace / Add-On</div>
+            <div class="cost-price">$5K-50K+/yr</div>
+            <div class="cost-desc">Connector exists but requires a marketplace app purchase, partner license, or add-on module.</div>
+        </div>
+        <div class="cost-card dev">
+            <div class="cost-title">Tier 3: Custom Development</div>
+            <div class="cost-price">$15K-150K+</div>
+            <div class="cost-desc">No pre-built connector. Build with SaaS Connectivity SDK, Web Services connector, JDBC, or flat file.</div>
+        </div>
+    </div>
+
+    <h3>Tier 1: Included with ISC (no additional cost)</h3>
+    <p>The vast majority of connectors are Tier 1. SailPoint includes 400+ pre-built connectors
+    with every ISC license. The only constraint is your <strong>source limit</strong>:</p>
+
+    <table>
+        <thead><tr><th>ISC Tier</th><th>Source Limit</th><th>Per-Identity Cost</th><th>Workflows</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Standard</strong></td><td>15 sources</td><td>Custom quote</td><td>15 (20 steps max)</td></tr>
+            <tr><td><strong>Business</strong></td><td>50 sources</td><td>$6-9/identity/month</td><td>50 (50 steps max)</td></tr>
+            <tr><td><strong>Business Plus</strong></td><td>200+ sources</td><td>$9-13/identity/month</td><td>200 (100 steps max)</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">Important</div>
+        Each configured application counts as one "source" toward your limit. If you connect
+        Active Directory, Entra ID, Salesforce, and ServiceNow, that is 4 sources. The
+        connector software itself is free -- the limit is how many you can use simultaneously.
+    </div>
+
+    <h3>Tier 2: Marketplace / Add-On (additional cost)</h3>
+    <p>A small number of integrations require purchasing from a vendor's marketplace or
+    adding a licensed module:</p>
+    <table>
+        <thead><tr><th>Integration</th><th>Why It Costs Extra</th><th>Estimated Cost</th></tr></thead>
+        <tbody>
+            <tr><td><strong>ServiceNow Service Catalog</strong></td><td>Requires SailPoint app from the ServiceNow Store</td><td>$10K-30K/year (varies by ServiceNow tier)</td></tr>
+            <tr><td><strong>ServiceNow Identity Governance</strong></td><td>Requires SailPoint Identity Governance app from SNOW Store</td><td>$10K-30K/year</td></tr>
+            <tr><td><strong>SAP GRC</strong></td><td>Requires SAP GRC module licensing on the SAP side</td><td>SAP enterprise licensing (varies widely)</td></tr>
+            <tr><td><strong>Non-Employee Risk Mgmt (NERM)</strong></td><td>Separate SailPoint add-on module</td><td>$4-8/non-employee/month</td></tr>
+            <tr><td><strong>Data Access Security (DAS)</strong></td><td>Separate SailPoint add-on module</td><td>Per-data-source fee (not published)</td></tr>
+            <tr><td><strong>Aquera ADP Bridge</strong></td><td>Third-party bridge for ADP (no native SailPoint connector)</td><td>$15K-40K/year estimated</td></tr>
+        </tbody>
+    </table>
+
+    <h3>Tier 3: Custom Development (build or pay for services)</h3>
+    <p>When no pre-built connector exists, you have four development paths:</p>
+    <table>
+        <thead><tr><th>Approach</th><th>Best For</th><th>Effort</th><th>Cost</th></tr></thead>
+        <tbody>
+            <tr><td><strong>SaaS Connectivity SDK</strong><br><span style="font-size:0.72rem; color:var(--text-muted);">TypeScript/JavaScript</span></td><td>Cloud apps with REST APIs</td><td>2-6 weeks development</td><td>$15K-60K (professional services) or internal dev time</td></tr>
+            <tr><td><strong>Connector Studio</strong><br><span style="font-size:0.72rem; color:var(--text-muted);">Visual builder (beta 2025)</span></td><td>Simple REST API apps</td><td>1-2 weeks (no code)</td><td>$0 (included with ISC) + configuration time</td></tr>
+            <tr><td><strong>Web Services Connector</strong><br><span style="font-size:0.72rem; color:var(--text-muted);">SOAP/REST via config</span></td><td>Apps with standard APIs</td><td>1-3 weeks configuration</td><td>$10K-40K professional services</td></tr>
+            <tr><td><strong>JDBC Connector</strong></td><td>Direct database access</td><td>1-2 weeks</td><td>$5K-20K professional services</td></tr>
+            <tr><td><strong>Delimited File</strong><br><span style="font-size:0.72rem; color:var(--text-muted);">CSV flat file</span></td><td>No API, no DB access</td><td>Days (simplest option)</td><td>$0-5K + ongoing export maintenance</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ════════ ECONOMICS ════════ -->
+<div class="tab-panel" id="panel-economics">
+    <h2>Connector Economics: Free vs Paid vs Develop</h2>
+    <p class="section-intro">A decision framework for choosing the right integration approach
+    for each application in your environment.</p>
+
+    <h3>Decision Flowchart</h3>
+    <table>
+        <thead><tr><th>Question</th><th>If YES</th><th>If NO</th></tr></thead>
+        <tbody>
+            <tr><td>Does SailPoint have a pre-built connector for this app?</td><td><span class="badge badge-included">TIER 1</span> -- Configure and go. $0 additional.</td><td>Continue below.</td></tr>
+            <tr><td>Does the app have a REST or SOAP API?</td><td>SaaS SDK or Web Services connector. 2-6 weeks.</td><td>Continue below.</td></tr>
+            <tr><td>Can you query the app's database directly?</td><td>JDBC connector. 1-2 weeks.</td><td>Continue below.</td></tr>
+            <tr><td>Can the app produce a file export (CSV)?</td><td>Delimited File connector. Days.</td><td>Manual process required -- work with app vendor to add export capability.</td></tr>
+        </tbody>
+    </table>
+
+    <h3>Total Cost of Ownership Comparison (per application)</h3>
+    <table>
+        <thead><tr><th>Factor</th><th><span class="badge badge-included">Tier 1: Included</span></th><th><span class="badge badge-marketplace">Tier 2: Marketplace</span></th><th><span class="badge badge-custom">Tier 3: Custom</span></th></tr></thead>
+        <tbody>
+            <tr><td><strong>Connector license</strong></td><td>$0</td><td>$5K-50K/year</td><td>$0</td></tr>
+            <tr><td><strong>Implementation</strong></td><td>$5K-15K (PS or internal)</td><td>$10K-25K</td><td>$15K-150K</td></tr>
+            <tr><td><strong>Ongoing maintenance</strong></td><td>Included (SailPoint maintains)</td><td>Vendor updates + SailPoint updates</td><td>You maintain -- API changes break your connector</td></tr>
+            <tr><td><strong>Time to production</strong></td><td>1-3 weeks</td><td>2-4 weeks</td><td>4-12 weeks</td></tr>
+            <tr><td><strong>Provisioning support</strong></td><td>Usually full CRUD</td><td>Varies</td><td>Whatever you build</td></tr>
+            <tr><td><strong>Express Setup</strong></td><td>~85 connectors support it</td><td>Rarely</td><td>No</td></tr>
+            <tr><td><strong>Year 1 total</strong></td><td><strong>$5K-15K</strong></td><td><strong>$15K-75K</strong></td><td><strong>$15K-150K</strong></td></tr>
+            <tr><td><strong>Year 2+ annual</strong></td><td><strong>$0</strong></td><td><strong>$5K-50K</strong></td><td><strong>$5K-20K maintenance</strong></td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout callout-note">
+        <div class="callout-label">The real cost is time, not money</div>
+        For Tier 1 connectors, the biggest cost is configuration and testing time, not dollars.
+        A Tier 1 connector with Express Setup can be in production in days. A custom connector
+        takes months. Always check if a pre-built connector exists before deciding to build.
+    </div>
+
+    <h3>When to Choose Each Tier</h3>
+    <table>
+        <thead><tr><th>Choose This</th><th>When</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge badge-included">Tier 1: Pre-built</span></td><td>Always the first choice. 90% of enterprise apps have a pre-built connector.</td></tr>
+            <tr><td><span class="badge badge-marketplace">Tier 2: Marketplace</span></td><td>The app vendor requires their own integration module (ServiceNow Store apps, SAP GRC). Budget for the marketplace cost.</td></tr>
+            <tr><td><span class="badge badge-custom">Tier 3: Custom (SaaS SDK)</span></td><td>Modern cloud app with a well-documented REST API, no pre-built connector, and you need full provisioning.</td></tr>
+            <tr><td><span class="badge badge-custom">Tier 3: Custom (Web Services)</span></td><td>App has a REST/SOAP API, you need aggregation + provisioning, and SaaS SDK feels like overkill.</td></tr>
+            <tr><td><span class="badge badge-custom">Tier 3: Custom (JDBC)</span></td><td>On-prem app with direct database access, no API. Common for legacy line-of-business apps.</td></tr>
+            <tr><td><span class="badge badge-custom">Tier 3: Custom (Flat File)</span></td><td>No API, no DB access, app can produce CSV exports. Simplest option but no provisioning (read-only governance).</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ════════ DIRECTORY / AUTH ════════ -->
+<div class="tab-panel" id="panel-directory">
+    <h2>Directory and Authentication</h2>
+    <p class="section-intro">The foundational identity sources -- Active Directory, Entra ID,
+    Okta, and LDAP.</p>
+
+    <!-- AD -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Microsoft Active Directory</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-va">VA Required</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connector:</strong> VA-based (on-prem)</span>
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Provisioning:</strong> Full CRUD</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Password Mgmt</span><span class="cap cap-yes">Groups</span>
+            <span class="cap cap-yes">OUs</span><span class="cap cap-yes">Delta Aggregation</span>
+        </div>
+        <p><strong>What it does:</strong> Manages AD user accounts, group memberships, OU placement,
+        and passwords. Supports delta aggregation (only import changes since last run).
+        The workhorse connector -- almost every ISC deployment starts here.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>Requires a VA cluster on-premise with network access to domain controllers</li>
+            <li>AD-synced groups in Entra ID are <strong>read-only</strong> from the Entra side -- manage them through this connector, not Entra</li>
+            <li>BeforeProvisioning rules are available (VA-based connector supports custom logic)</li>
+            <li>One source per AD domain; use Access Profiles to represent applications on top</li>
+        </ul>
+    </div>
+
+    <!-- Entra ID -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Microsoft Entra ID (Azure AD)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connector:</strong> SaaS (cloud-native) or VA-based</span>
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Provisioning:</strong> Full CRUD</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Password Mgmt</span><span class="cap cap-yes">Groups</span>
+            <span class="cap cap-yes">App Assignments</span><span class="cap cap-yes">B2B Guest Users</span>
+            <span class="cap cap-yes">MFA Attributes</span><span class="cap cap-yes">Licenses</span>
+        </div>
+        <p><strong>What it does:</strong> Manages Entra ID users, groups, application assignments,
+        B2B guest users, and licenses via Microsoft Graph API. Supports Conditional Access
+        enforcement and token revocation.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>SaaS connector does NOT support BeforeProvisioning rules (VA-based does)</li>
+            <li>All Graph API Application permissions require admin consent regardless of read/write</li>
+            <li>Cloud-native groups only -- AD-synced groups must be managed via the AD connector</li>
+            <li><code>DELETE /groups/{id}/members/{userId}/$ref</code> -- the <code>/$ref</code> is critical; omitting it deletes the user object</li>
+            <li>SAML token limit: 150 groups / JWT: 200 -- exceeding causes complete omission, not truncation</li>
+        </ul>
+    </div>
+
+    <!-- Okta -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Okta</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connector:</strong> SaaS (no VA needed) or VA-based</span>
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Provisioning:</strong> Full lifecycle</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Groups</span><span class="cap cap-yes">App Assignments</span>
+            <span class="cap cap-yes">Roles</span><span class="cap cap-yes">Deprovisioning</span>
+        </div>
+        <p><strong>What it does:</strong> Manages Okta Universal Directory users, groups, application
+        assignments, and roles via Okta REST API. Automates provisioning and deprovisioning
+        across the Okta ecosystem.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>In hybrid environments (Okta for SSO + SailPoint for governance), decide who is the authoritative provisioner</li>
+            <li>Okta group membership changes trigger SailPoint certification campaigns</li>
+            <li>Use SailPoint for governance/certification, Okta for authentication/SSO -- clear separation of duties</li>
+            <li>SaaS connector available (no VA required for cloud-only Okta deployments)</li>
+        </ul>
+    </div>
+
+    <!-- LDAP -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">LDAP / OpenLDAP</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-va">VA Required</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connector:</strong> VA-based</span>
+            <span><strong>Effort:</strong> 1 week</span>
+            <span><strong>Provisioning:</strong> Full CRUD</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Password Mgmt</span><span class="cap cap-yes">Groups</span>
+        </div>
+        <p><strong>What it does:</strong> Generic LDAP connector for any LDAP-compliant directory
+        (OpenLDAP, Oracle Internet Directory, IBM Tivoli, Novell eDirectory, etc.).</p>
+    </div>
+</div>
+
+<!-- ════════ HCM / HR ════════ -->
+<div class="tab-panel" id="panel-hcm">
+    <h2>HCM and HR Systems</h2>
+    <p class="section-intro">Authoritative identity sources -- where employees and contractors
+    are created, and lifecycle events (hire, transfer, terminate) originate.</p>
+
+    <!-- Workday -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Workday</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connector:</strong> 3 variants (HCM, Accounts, Students)</span>
+            <span><strong>Effort:</strong> 2-4 weeks</span>
+            <span><strong>Role:</strong> Authoritative source (JML)</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Delta Aggregation</span>
+            <span class="cap cap-yes">Joiner/Mover/Leaver</span><span class="cap cap-yes">Custom Schemas</span>
+            <span class="cap cap-yes">Provisioning (Accounts variant)</span><span class="cap cap-yes">Student Accounts</span>
+        </div>
+        <p><strong>What it does:</strong> The primary authoritative source for most enterprises.
+        Workday HCM feeds employee/contractor identities into SailPoint, driving joiner,
+        mover, and leaver lifecycle events. The Accounts variant adds provisioning back to Workday.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>Workday is typically the <strong>single source of truth</strong> for identity -- hire/transfer/terminate events flow from Workday to SailPoint to all downstream apps</li>
+            <li>Custom report-based integration: SailPoint reads from Workday custom reports (RaaS), not the standard Workday API</li>
+            <li>Plan 2-4 weeks for attribute mapping, custom reports, and lifecycle state configuration</li>
+            <li>Workday Accounts connector (separate from HCM) supports provisioning changes back to Workday</li>
+        </ul>
+    </div>
+
+    <!-- SAP HR/HCM -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">SAP HR/HCM + SuccessFactors</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express (SF)</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connectors:</strong> SAP HR/HCM (VA), SuccessFactors (SaaS+VA)</span>
+            <span><strong>Effort:</strong> 2-4 weeks</span>
+            <span><strong>Role:</strong> Authoritative source (JML)</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Delta Aggregation</span>
+            <span class="cap cap-yes">Joiner/Mover/Leaver</span><span class="cap cap-partial">Read-only (HR/HCM)</span>
+            <span class="cap cap-yes">Provisioning (SuccessFactors)</span>
+        </div>
+        <p><strong>What it does:</strong> SAP HR/HCM is a <strong>read-only</strong> connector for
+        on-premise SAP HCM -- it feeds employee data into SailPoint as an authoritative source.
+        SuccessFactors (cloud) supports full provisioning.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>SAP HR/HCM requires specific RFC authorization objects on the SAP admin user</li>
+            <li>For SAP access governance (roles, authorization objects), use the SAP Direct or SAP GRC connector (see ERP tab)</li>
+            <li>SuccessFactors LMS is a separate connector for learning management</li>
+        </ul>
+    </div>
+
+    <!-- ADP -->
+    <div class="app-card" style="border-left: 4px solid var(--custom);">
+        <div class="app-card-header">
+            <span class="app-card-title">ADP Workforce Now</span>
+            <span class="badge badge-custom">Custom / Third-Party</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Native connector:</strong> None</span>
+            <span><strong>Effort:</strong> 4-8 weeks</span>
+            <span><strong>Options:</strong> Aquera bridge, custom build, flat file</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-no">No Native Connector</span>
+        </div>
+        <p><strong>The situation:</strong> SailPoint does <strong>not</strong> have a pre-built connector
+        for ADP Workforce Now. This is a notable gap given ADP's market share in payroll/HR.</p>
+
+        <h4>Option A: Aquera Identity Bridge ($15K-40K/year estimated)</h4>
+        <p>Third-party integration platform that synchronizes ADP worker data with SailPoint.
+        Available on the ADP Marketplace. Handles the API integration, attribute mapping, and
+        delta sync. Fastest path to production (2-3 weeks).</p>
+
+        <h4>Option B: Custom SaaS Connector via ADP API Central ($15K-60K one-time)</h4>
+        <p>Build a custom connector using SailPoint's SaaS Connectivity SDK (TypeScript) that
+        calls ADP API Central endpoints. Gives you full control but requires development and
+        ongoing maintenance when ADP changes their API.</p>
+
+        <h4>Option C: Flat File / Delimited File ($0-5K + ongoing manual effort)</h4>
+        <p>Export a CSV from ADP and feed it to SailPoint via the Delimited File connector.
+        Simplest to set up but requires either manual export or a MuleSoft/GoAnywhere
+        pipeline to automate the daily delivery. Read-only governance (no provisioning back to ADP).</p>
+
+        <div class="callout callout-warn">
+            <div class="callout-label">Recommendation</div>
+            For organizations with 1,000+ identities in ADP, the Aquera bridge (Option A) offers
+            the best ROI. For smaller environments or budget constraints, the flat file approach
+            (Option C) with MuleSoft/GoAnywhere automation is pragmatic.
+        </div>
+    </div>
+
+    <!-- UKG -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">UKG Pro (formerly UltiPro)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="app-card-meta"><span><strong>Connector:</strong> UKG Pro Core HCM</span><span><strong>Role:</strong> Authoritative source</span></div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">JML Lifecycle</span></div>
+        <p>Native connector for UKG Pro HCM as an authoritative identity source.</p>
+    </div>
+
+    <!-- BambooHR -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">BambooHR</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-saas">SaaS</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="app-card-meta"><span><strong>Connector:</strong> SaaS-based</span><span><strong>Role:</strong> Authoritative source</span></div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Express Setup</span></div>
+        <p>Cloud-native connector for BambooHR as a lightweight authoritative source. Good for SMB organizations.</p>
+    </div>
+</div>
+
+<!-- ════════ ERP ════════ -->
+<div class="tab-panel" id="panel-erp">
+    <h2>ERP and Finance Systems</h2>
+    <p class="section-intro">Complex, high-value targets for identity governance. SAP and
+    Oracle deployments often have the most intricate access models.</p>
+
+    <!-- SAP -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">SAP Ecosystem (Direct, GRC, S/4HANA)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connectors:</strong> 10+ SAP-specific connectors</span>
+            <span><strong>Effort:</strong> 4-8 weeks (SAP is complex)</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">SoD Checks</span><span class="cap cap-yes">Role Management</span>
+            <span class="cap cap-yes">Authorization Objects</span><span class="cap cap-yes">GRC Integration</span>
+        </div>
+
+        <h4>SAP Direct (VA-based)</h4>
+        <p>Connects directly to SAP ECC/R3 via RFC. Manages users, roles, profiles, and
+        authorization objects. The most common SAP connector for ERP access governance.</p>
+
+        <h4>SAP S/4HANA Cloud (SaaS + VA, Express Setup)</h4>
+        <p>For organizations on S/4HANA Public Cloud. Supports user creation, role assignment,
+        and full CRUD operations via API.</p>
+
+        <h4>SAP GRC (VA-based) <span class="badge badge-marketplace">Requires SAP GRC License</span></h4>
+        <p>Integrates with SAP Governance, Risk and Compliance for SoD (Separation of Duties)
+        checks during provisioning. Provisioning requests go through GRC approval workflows.
+        <strong>Requires SAP GRC to be licensed and configured on the SAP side.</strong></p>
+
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>SAP access models are deeply nested (roles contain profiles contain authorization objects) -- plan for complex entitlement modeling</li>
+            <li>SoD checks are critical for SOX compliance -- integrate with SAP GRC or SailPoint's native SoD</li>
+            <li>SAP HR/HCM (authoritative source) and SAP Direct (access governance) are separate connectors that serve different purposes</li>
+        </ul>
+    </div>
+
+    <!-- Oracle -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Oracle Ecosystem (ERP, PeopleSoft, DB)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connectors:</strong> 10+ Oracle-specific connectors</span>
+            <span><strong>Effort:</strong> 2-6 weeks</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">HCM (authoritative)</span><span class="cap cap-yes">Database Direct</span>
+        </div>
+        <p><strong>Connectors available:</strong> Oracle ERP Cloud, Oracle E-Business Suite, Oracle PeopleSoft
+        (ERP + HCM), Oracle Fusion HCM, Oracle HCM Cloud, Oracle Database, Oracle NetSuite.
+        Coverage is comprehensive across the Oracle stack.</p>
+    </div>
+
+    <!-- Salesforce -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Salesforce</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Provisioning:</strong> Full lifecycle</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Profiles</span><span class="cap cap-yes">Permission Sets</span>
+            <span class="cap cap-yes">Roles</span><span class="cap cap-yes">Licenses</span>
+            <span class="cap cap-yes">Permission Set Groups</span><span class="cap cap-yes">Managed Packages</span>
+        </div>
+        <p><strong>What it does:</strong> Full governance over Salesforce: users, profiles, permission
+        sets, permission set groups, roles, licenses, and managed packages. One of the most
+        complete connectors in the ISC catalog.</p>
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>Salesforce license management is a cost optimization opportunity -- identify unused licenses via SailPoint aggregation</li>
+            <li>Permission Set Groups (introduced by Salesforce to replace profiles) are fully supported</li>
+            <li>Role hierarchy in Salesforce controls record access -- SailPoint can manage this</li>
+            <li>SaaS connector available (no VA needed for Salesforce-only deployments)</li>
+        </ul>
+    </div>
+</div>
+
+<!-- ════════ ITSM ════════ -->
+<div class="tab-panel" id="panel-itsm">
+    <h2>ITSM and Collaboration</h2>
+
+    <!-- ServiceNow -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">ServiceNow</span>
+            <span class="badge badge-included">Included</span> <span class="badge badge-marketplace">Service Catalog = Paid</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connectors:</strong> Identity Governance (included), Service Catalog (paid), Service Desk (paid)</span>
+            <span><strong>Effort:</strong> 2-4 weeks</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Groups/Roles</span><span class="cap cap-yes">Password Mgmt</span>
+            <span class="cap cap-yes">Ticket Creation</span><span class="cap cap-yes">Service Catalog</span>
+        </div>
+
+        <h4>Identity Governance Connector <span class="badge badge-included">Included</span></h4>
+        <p>Manages ServiceNow accounts, groups, and roles. Aggregation and provisioning.
+        Available as both SaaS and VA connector. This is what most organizations need for
+        basic ServiceNow identity governance.</p>
+
+        <h4>Service Catalog Integration <span class="badge badge-marketplace">Requires SNOW Store Purchase</span></h4>
+        <p>Enables SailPoint access requests to appear in the ServiceNow Service Catalog portal.
+        Users request access through ServiceNow as usual; SailPoint handles approval workflows
+        and provisioning behind the scenes. <strong>Estimated cost: $10K-30K/year</strong>
+        (varies by ServiceNow tier and licensing).</p>
+
+        <h4>Service Desk Integration <span class="badge badge-marketplace">Requires License</span></h4>
+        <p>Creates ServiceNow incident/change/service request tickets when SailPoint provisions
+        access to systems that require manual fulfillment. <strong>Requires an active ISC
+        ServiceNow Service Desk license.</strong></p>
+
+        <div class="callout callout-note">
+            <div class="callout-label">The ServiceNow decision</div>
+            Start with the Identity Governance connector (free). Add Service Catalog only if your
+            organization uses ServiceNow as the primary access request portal and you want a
+            "single pane of glass" experience for end users.
+        </div>
+    </div>
+
+    <!-- Slack / Teams -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Slack + Microsoft Teams</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express (Slack)</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Channels/Teams</span></div>
+        <p>Manage Slack workspace users and channel memberships, or Teams team memberships.
+        Useful for automated onboarding (add to the right channels on day 1).</p>
+    </div>
+
+    <!-- Jira -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Atlassian (Jira, Confluence)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Groups</span></div>
+        <p>Atlassian Suite Cloud and Data Center connectors for Jira and Confluence user/group management.</p>
+    </div>
+</div>
+
+<!-- ════════ CLOUD / SaaS ════════ -->
+<div class="tab-panel" id="panel-cloud">
+    <h2>Cloud and SaaS Platforms</h2>
+
+    <!-- AWS -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Amazon Web Services (AWS)</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">IAM Users</span><span class="cap cap-yes">IAM Roles</span><span class="cap cap-yes">Policies</span></div>
+        <p>Manages AWS IAM users, roles, groups, and policies. Critical for cloud infrastructure governance.</p>
+    </div>
+
+    <!-- Google Workspace -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Google Workspace</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Groups</span><span class="cap cap-yes">Licenses</span></div>
+        <p>Full lifecycle for Google Workspace users, groups, and license assignments.</p>
+    </div>
+
+    <!-- Snowflake -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Snowflake</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Roles</span><span class="cap cap-yes">Warehouses</span></div>
+        <p>Manage Snowflake users, roles, and warehouse access. Important for data governance.</p>
+    </div>
+
+    <!-- GitHub -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">GitHub</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-saas">SaaS</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Teams</span><span class="cap cap-yes">Repo Access</span></div>
+        <p>Manage GitHub organization members, team memberships, and repository access permissions.</p>
+    </div>
+
+    <!-- Zoom -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Zoom + Webex</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express Setup</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Licenses</span></div>
+        <p>License and user management for Zoom and Webex. Good for license reclamation (identify unused seats).</p>
+    </div>
+
+    <!-- Box -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Box + Dropbox</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Groups</span></div>
+        <p>Manage Box and Dropbox enterprise users and group memberships.</p>
+    </div>
+</div>
+
+<!-- ════════ PAM / SECURITY ════════ -->
+<div class="tab-panel" id="panel-pam">
+    <h2>PAM and Security Tools</h2>
+    <p class="section-intro">Privileged Access Management (PAM) integration is critical --
+    these are the highest-risk accounts in your environment.</p>
+
+    <!-- CyberArk -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">CyberArk</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+            <span class="badge badge-express">Express (Priv Cloud)</span>
+        </div>
+        <div class="app-card-meta">
+            <span><strong>Connectors:</strong> Privilege Cloud Shared Services (SaaS+VA), PAM Self-Hosted (VA)</span>
+            <span><strong>Effort:</strong> 2-4 weeks</span>
+        </div>
+        <div class="cap-grid">
+            <span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span>
+            <span class="cap cap-yes">Safe Management</span><span class="cap cap-yes">User Lifecycle</span>
+            <span class="cap cap-yes">Group/Safe Permissions</span>
+        </div>
+
+        <h4>CyberArk Privilege Cloud Shared Services <span class="badge badge-saas">SaaS</span></h4>
+        <p>For CyberArk's cloud-hosted PAM. Supports Express Setup. Manages users, safes,
+        and safe permissions via REST API. Full end-to-end lifecycle management.</p>
+
+        <h4>CyberArk PAM Self-Hosted <span class="badge badge-va">VA Required</span></h4>
+        <p>For on-premise CyberArk deployments. Fetches local and external users, manages
+        safes (as groups), and provisions/deprovisions user-safe assignments. Creates local
+        users on the PAM system.</p>
+
+        <p><strong>Key considerations:</strong></p>
+        <ul>
+            <li>CyberArk integration enables <strong>privileged access governance</strong> -- certify who has access to which safes</li>
+            <li>Combine with daily delta certification to review new CyberArk safe assignments within 24 hours</li>
+            <li>CyberArk safes map to SailPoint groups/entitlements -- safe permissions become certifiable access items</li>
+            <li>For CyberArk Identity (formerly Idaptive), use SCIM provisioning instead of the PAM connector</li>
+        </ul>
+    </div>
+
+    <!-- Delinea / BeyondTrust -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Delinea Secret Server + BeyondTrust Password Safe</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-va">VA (Delinea)</span>
+            <span class="badge badge-both">SaaS + VA (BT)</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">Vault Management</span></div>
+        <p>Similar to CyberArk connectors: manage PAM users, groups, and vault/safe assignments.
+        Both cloud and on-premise variants available.</p>
+    </div>
+
+    <!-- Duo -->
+    <div class="app-card">
+        <div class="app-card-header">
+            <span class="app-card-title">Duo Security</span>
+            <span class="badge badge-included">Included</span>
+            <span class="badge badge-both">SaaS + VA</span>
+        </div>
+        <div class="cap-grid"><span class="cap cap-yes">Aggregation</span><span class="cap cap-yes">Provisioning</span><span class="cap cap-yes">MFA Groups</span></div>
+        <p>Manage Duo MFA users and group memberships. Useful for ensuring MFA enrollment
+        aligns with access policies.</p>
+    </div>
+</div>
+
+<!-- ════════ BUILD YOUR OWN ════════ -->
+<div class="tab-panel" id="panel-custom">
+    <h2>Building Custom Connectors</h2>
+    <p class="section-intro">When no pre-built connector exists, here are your options --
+    from zero-code to full development.</p>
+
+    <div class="app-card">
+        <div class="app-card-header"><span class="app-card-title">SaaS Connectivity SDK</span><span class="badge badge-custom">Development Required</span></div>
+        <div class="app-card-meta">
+            <span><strong>Language:</strong> TypeScript/JavaScript</span>
+            <span><strong>Effort:</strong> 2-6 weeks</span>
+            <span><strong>Cost:</strong> $15K-60K (PS) or internal dev time</span>
+        </div>
+        <p>The recommended path for modern cloud apps with REST APIs. Build a connector using
+        SailPoint's open-source SDK (<code>sp-connector-sdk-js</code> on GitHub). Develop, debug,
+        and test locally. Deploy to SailPoint's cloud infrastructure (no VA needed).</p>
+        <p><strong>Best for:</strong> SaaS apps with REST APIs, no pre-built connector, need full provisioning.</p>
+        <p><strong>Ongoing cost:</strong> You maintain the connector. API changes from the target app require updates.</p>
+    </div>
+
+    <div class="app-card">
+        <div class="app-card-header"><span class="app-card-title">Connector Studio (Beta)</span><span class="badge badge-included">Included (No Code)</span></div>
+        <div class="app-card-meta">
+            <span><strong>Language:</strong> Visual builder (no code)</span>
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Cost:</strong> $0 (included with ISC)</span>
+        </div>
+        <p>Launched April 2025 in beta. Build connectors visually by mapping attributes and
+        defining rules without writing code. Rolling out to enterprise tenants. Best for
+        simple REST API integrations where you need basic aggregation and provisioning.</p>
+    </div>
+
+    <div class="app-card">
+        <div class="app-card-header"><span class="app-card-title">Web Services Connector</span><span class="badge badge-included">Included</span></div>
+        <div class="app-card-meta">
+            <span><strong>Language:</strong> Configuration (XML/JSON)</span>
+            <span><strong>Effort:</strong> 1-3 weeks</span>
+            <span><strong>Cost:</strong> $10K-40K (PS)</span>
+        </div>
+        <p>Generic connector that can call any REST or SOAP API via configuration (no code).
+        Define endpoints, authentication, request/response mapping in the ISC admin UI.
+        Available as both SaaS and VA variant.</p>
+        <p><strong>Best for:</strong> Apps with standard REST/SOAP APIs where you need aggregation + basic provisioning.</p>
+    </div>
+
+    <div class="app-card">
+        <div class="app-card-header"><span class="app-card-title">JDBC Connector</span><span class="badge badge-included">Included</span><span class="badge badge-va">VA Required</span></div>
+        <div class="app-card-meta">
+            <span><strong>Effort:</strong> 1-2 weeks</span>
+            <span><strong>Cost:</strong> $5K-20K (PS)</span>
+        </div>
+        <p>Direct database connectivity via JDBC. Write SQL queries to extract accounts and
+        entitlements. Supports provisioning (INSERT/UPDATE/DELETE). Requires VA with network
+        access to the database.</p>
+        <p><strong>Best for:</strong> Legacy apps with no API but accessible database. Common for
+        line-of-business applications built on SQL Server, Oracle, or MySQL.</p>
+    </div>
+
+    <div class="app-card">
+        <div class="app-card-header"><span class="app-card-title">Delimited File Connector</span><span class="badge badge-included">Included</span><span class="badge badge-both">SaaS + VA</span></div>
+        <div class="app-card-meta">
+            <span><strong>Effort:</strong> Days</span>
+            <span><strong>Cost:</strong> $0-5K + pipeline maintenance</span>
+        </div>
+        <p>Read account and entitlement data from CSV files. The simplest integration option.
+        No provisioning (read-only governance). Requires a pipeline to produce and deliver
+        daily files (see the <a href="AppOwner-Integration-Guide.html">App Owner Integration Guide</a>
+        for MuleSoft/GoAnywhere patterns).</p>
+        <p><strong>Best for:</strong> No API, no DB access, or apps where you need governance quickly
+        while planning a deeper integration.</p>
+    </div>
+</div>
+
+<!-- ════════ FULL MATRIX ════════ -->
+<div class="tab-panel" id="panel-matrix">
+    <h2>Full Connector Matrix: Top 20 Applications</h2>
+    <p class="section-intro">At-a-glance comparison of connector type, tier, capabilities,
+    and estimated effort for the most common enterprise applications.</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Application</th>
+                <th>Tier</th>
+                <th>Type</th>
+                <th>Agg</th>
+                <th>Prov</th>
+                <th>Pwd</th>
+                <th>Express</th>
+                <th>Effort</th>
+                <th>Notes</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td><strong>Active Directory</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-va">VA</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>1-2w</td><td>Start here; one source per domain</td></tr>
+            <tr><td><strong>Entra ID</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>1-2w</td><td>SaaS conn = no VA; watch /$ref bug</td></tr>
+            <tr><td><strong>Okta</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>1-2w</td><td>Govern+certify; Okta for SSO</td></tr>
+            <tr><td><strong>Salesforce</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>1-2w</td><td>Full: profiles, perm sets, licenses</td></tr>
+            <tr><td><strong>ServiceNow (Gov)</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>2-3w</td><td>Identity Gov connector = free</td></tr>
+            <tr><td><strong>ServiceNow (Catalog)</strong></td><td><span class="badge badge-marketplace">Paid</span></td><td><span class="badge badge-va">VA</span></td><td>--</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>3-4w</td><td>$10-30K/yr from SNOW Store</td></tr>
+            <tr><td><strong>SAP Direct</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-va">VA</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>4-8w</td><td>Complex: roles + auth objects</td></tr>
+            <tr><td><strong>SAP S/4HANA Cloud</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>2-4w</td><td>API-based; simpler than SAP Direct</td></tr>
+            <tr><td><strong>SAP GRC</strong></td><td><span class="badge badge-marketplace">Paid*</span></td><td><span class="badge badge-va">VA</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>4-8w</td><td>*Requires SAP GRC license (SAP cost)</td></tr>
+            <tr><td><strong>CyberArk (Cloud)</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>2-3w</td><td>Safes as entitlements; full lifecycle</td></tr>
+            <tr><td><strong>CyberArk (On-Prem)</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-va">VA</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>2-4w</td><td>RFC-based; local+external users</td></tr>
+            <tr><td><strong>Workday HCM</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>--</td><td>2-4w</td><td>Authoritative source; RaaS reports</td></tr>
+            <tr><td><strong>Workday Accounts</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>1-2w</td><td>Provision back to Workday</td></tr>
+            <tr><td><strong>ADP Workforce Now</strong></td><td><span class="badge badge-custom">Custom</span></td><td>--</td><td style="color:var(--warning);">*</td><td>--</td><td>--</td><td>--</td><td>4-8w</td><td>Aquera bridge or flat file; no native</td></tr>
+            <tr><td><strong>AWS</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>2-3w</td><td>IAM users, roles, policies</td></tr>
+            <tr><td><strong>Google Workspace</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>1-2w</td><td>Users, groups, licenses</td></tr>
+            <tr><td><strong>Snowflake</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>1-2w</td><td>Roles, warehouses</td></tr>
+            <tr><td><strong>GitHub</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-saas">SaaS</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>1w</td><td>Org members, teams, repos</td></tr>
+            <tr><td><strong>Slack</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td style="color:var(--success);">Y</td><td>1w</td><td>Workspace users, channels</td></tr>
+            <tr><td><strong>Box</strong></td><td><span class="badge badge-included">Free</span></td><td><span class="badge badge-both">Both</span></td><td style="color:var(--success);">Y</td><td style="color:var(--success);">Y</td><td>--</td><td>--</td><td>1w</td><td>Enterprise users, groups</td></tr>
+        </tbody>
+    </table>
+
+    <p style="font-size:0.78rem; color:var(--text-muted); margin-top:8px;">
+        <strong>Legend:</strong> Agg = Aggregation, Prov = Provisioning, Pwd = Password Management,
+        Y = Supported, -- = Not applicable/supported, * = Via third-party.
+        Effort = estimated weeks to production (configuration + testing, not including project planning).
+    </p>
+
+    <div class="callout callout-tip">
+        <div class="callout-label">The 80/20 rule</div>
+        Most organizations get 80% of their governance coverage from 5-8 connectors:
+        Active Directory + Entra ID + Workday (or SAP HR) + Salesforce + ServiceNow +
+        1-2 industry-specific apps. Start there, then expand incrementally.
+    </div>
+</div>
+
+</div><!-- end .content-wrap -->
+
+<div class="app-footer">
+    SailPoint ISC Connector Playbook v1.0 &middot; Identity &amp; Access Management Team &middot; Internal Use Only<br>
+    <span style="font-size:0.65rem;">Pricing estimates are based on publicly available information and may vary. Contact SailPoint for current pricing.</span>
+</div>
+
+<script>
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
+    document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
+    var panel=document.getElementById('panel-'+tabId); if(panel) panel.classList.add('active');
+    var btn=document.querySelector('.tab-btn[data-tab="'+tabId+'"]'); if(btn) btn.classList.add('active');
+    window.scrollTo(0,0);
+}
+document.getElementById('tabBar').addEventListener('click',function(e){
+    var btn=e.target.closest('.tab-btn'); if(!btn) return; switchTab(btn.getAttribute('data-tab'));
+});
+document.addEventListener('keydown',function(e){
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+    var tabs=Array.from(document.querySelectorAll('.tab-btn')); var active=document.querySelector('.tab-btn.active'); var idx=tabs.indexOf(active);
+    if(e.key==='ArrowRight'&&idx<tabs.length-1) switchTab(tabs[idx+1].getAttribute('data-tab'));
+    else if(e.key==='ArrowLeft'&&idx>0) switchTab(tabs[idx-1].getAttribute('data-tab'));
+});
+</script>
+</body>
+</html>
