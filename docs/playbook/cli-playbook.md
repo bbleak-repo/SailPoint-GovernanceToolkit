@@ -24,7 +24,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 
 ## Contents
 1. [Setup & diagnostics](#1-setup--diagnostics) — `New-SPVault`, `Test-SPConnectivity`, `Show-SPDashboard`
-2. [Campaign testing & audit](#2-campaign-testing--audit) — `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
+2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
 5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, weekly digest, **adaptive reports**
@@ -90,6 +90,43 @@ auth/TLS issues.
 ---
 
 ## 2. Campaign testing & audit
+
+### Creating & activating a campaign (the write path)
+**Purpose:** the toolkit doesn't just *audit* campaigns — it can **create, activate,
+and complete** them. The lifecycle building blocks live in `SP.Api\SP.Campaigns.psm1`
+and follow the ISC state machine `STAGED → ACTIVATING → ACTIVE → COMPLETING → COMPLETED`:
+
+| Function | What it does |
+|---|---|
+| `New-SPCampaign` | POSTs `/campaigns` and returns the **STAGED** campaign. `-Type` is one of `MANAGER`, `SOURCE_OWNER`, `SEARCH`, `ROLE_COMPOSITION`; supply only the fields that type needs (`-CertifierIdentityId` for MANAGER/SEARCH/ROLE_COMPOSITION, `-SourceId` for SOURCE_OWNER, `-SearchFilter` for SEARCH, `-RoleId` for ROLE_COMPOSITION). Optional `-Description`, `-Deadline` (ISO 8601). |
+| `Start-SPCampaign` | POSTs `/campaigns/{id}/activate` — transitions **STAGED → ACTIVATING → ACTIVE** (a campaign does nothing until activated). |
+| `Get-SPCampaignStatus` | Blocking poller — waits until the campaign reaches `-TargetStatus` (default `ACTIVE`) so a script can create → activate → confirm in one flow. |
+| `Complete-SPCampaign` | POSTs `/campaigns/{id}/complete` to close a **past-due** campaign. Gated by `Safety.AllowCompleteCampaign` (returns an error, makes no API call, when false). |
+
+These are module functions (not standalone scripts), so run them after importing the
+module chain. The minimal **create → activate** flow for a **MANAGER** campaign:
+
+```powershell
+Import-Module .\Modules\SP.Api\SP.Api.psd1   # pulls SP.Core -> SP.Api
+$c = New-SPCampaign -Name 'Q3 Manager Review' -Type MANAGER `
+        -CertifierIdentityId 'idn-mgr-001' -Deadline '2026-09-30T23:59:59Z'
+if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }
+```
+
+For the **driven** (no-hand-rolling) paths that create *and* activate campaigns for you:
+- **`Invoke-SPDeltaCertRun`** (in `SP.DeltaCert\SP.DeltaCertRunner.psm1`) — finds newly-granted
+  access, groups affected identities by manager, then **creates and activates one campaign
+  per manager** in a single call (`ReviewerMode Manager` → one SEARCH campaign per manager;
+  `SourceOwner` → one SOURCE_OWNER campaign per source). It is the engine behind the
+  `Invoke-SPADDeltaCert.ps1` script (§3) and `Invoke-SPScheduledCampaign.ps1` (§7). Honors
+  `-WhatIf` and the `MaxCampaignsPerRun` ceiling.
+- **`Invoke-SPADDeltaCert.ps1`** (§3) and **`Invoke-SPScheduledCampaign.ps1`** (§7) — the
+  scheduled, script-level wrappers that call the runner.
+
+> **Scope:** creating/activating/completing campaigns needs the **Full-toolkit** PAT scope
+> set (`idn:campaign:manage`, …) — see [Foundations §5.1](00-foundations.md#51-the-isc-credential-a-personal-access-token-pat).
+**Related GUI:** the SDK Features → Templates sub-tab (New Template / Edit Schedule) creates
+*scheduled* campaign templates; ad-hoc create/activate is a CLI/module operation.
 
 ### `Invoke-GovernanceTest.ps1`
 **Purpose:** the primary test entry point — loads campaign test definitions from CSV,
@@ -600,7 +637,7 @@ campaign/certification endpoints (no extra scopes).
 | Parameter | Description |
 |---|---|
 | `-Anchor <a>` | `Entitlement` (default) or `Campaign`. |
-| `-Components <keys>` | Composable component list: `kpi-cards`, `heatmap`, `tree`, `top-n`, `group-table` (append `:half` for side-by-side). Default `kpi-cards,top-n,group-table`; pass `@()` to skip the composable report. |
+| `-Components <keys>` | Composable component list: `kpi-cards`, `heatmap`, `tree`, `top-n`, `group-table`, **`diff`** (append `:half` for side-by-side). Default `kpi-cards,top-n,group-table`; pass `@()` to skip the composable report. The **`diff`** component renders the per-group **Added/Removed** membership changelog (RC04) — see *Delta / removal detection* below. |
 | `-BaselineReport <names>` | One or more of `inventory`, `privileged`, `orphaned`, `exec-summary`, `roster`, `access-cert`, `sod`, or `all`. |
 | `-Theme <t>` | `light` (default) or `dark`. |
 | `-Status <list>` | Campaign status filter (default `COMPLETED, ACTIVE`). |
@@ -609,14 +646,51 @@ campaign/certification endpoints (no extra scopes).
 | `-OutputPath <dir>` | Destination (default `Audit\adaptive`). |
 | `-OutputMode` | `Console` (default) / `JSON` / `HTML` / `Both` — controls the run summary; the HTML report files are always written. |
 
+**Leadership distribution** *(additive; off by default)* — `-DistributeToLeadership`
+turns the same run into tiered, per-leader reports and (optionally) sends them. It reuses
+the org-tree / band machinery from `Invoke-SPReportDistribution` (`SP.DeltaCert`): it builds
+the org tree, resolves each identity's **band A–E**, generates an upper-leadership executive
+HTML rollup plus **per-band leader reports** (via `Export-SPLeadershipExecutiveHtml` /
+`Export-SPLeadershipBandHtml`), then distributes them.
+
+| Parameter | Description |
+|---|---|
+| `-DistributeToLeadership` | Enable the leadership pass (per-band reports + distribution). |
+| `-TargetBands <letters>` | Limit to specific bands (e.g. `B,C`). Default: all bands present. |
+| `-LeadershipDepth <n>` | Org-tree levels above reviewed identities (default 4). |
+| `-OrgSupplementPath <csv>` | Org-chart supplement overriding/filling ISC manager gaps. |
+| `-PreviewOnly` | Show who-gets-what without generating or sending. |
+| `-SendReports` | Actually email each report. |
+
+> **SMTP-off = "would-send" simulation.** Distribution **simulates by default** (WhatIf):
+> for each band leader it logs `WOULD send -> email (name) : file` and **sends nothing**.
+> Email is only attempted when you pass `-SendReports`, and even then `Send-SPReport` only
+> truly sends when `Audit.Smtp.Enabled = true` — otherwise it falls back to a logged
+> "would-send" entry. The run summary reports `Leaders / Sent / Simulated / Skipped` counts.
+
+**Delta / removal detection (`diff` component).** Add `diff` to `-Components` to render
+the **Added/Removed membership changelog** (RC04) — a per-group `+adds / -removes` delta
+over the window, so *removed-from-entitlement* changes are surfaced alongside grants. It
+reads the membership changelog (JSONL of `Added`/`Removed` events); component options
+`Days` (last-N-days window) and `MaxGroups` (busiest first) tune the view. This complements
+`Invoke-SPADDeltaCert` / `Invoke-SPDeltaCertRun` (§3), which re-certify *newly granted*
+access; the `diff` component is the read-side view of *both* directions of change.
+
 ```powershell
 # Entitlement view: composable dashboard + three baseline reports, last 180 days
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,heatmap,top-n,group-table -BaselineReport inventory,privileged,exec-summary -DaysBack 180
+# Add the Added/Removed change diff alongside the dashboard
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Entitlement -Components kpi-cards,top-n,diff -DaysBack 30
 # Campaign view, dark theme, an explicit window
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport all -Theme dark -CreatedAfter 2026-01-01 -CreatedBefore 2026-03-31
+# Generate + distribute to leadership, bands B & C, simulate only (no email)
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport exec-summary -DistributeToLeadership -TargetBands B,C
+# Same, but actually email (requires Audit.Smtp.Enabled = true)
+.\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport exec-summary -DistributeToLeadership -SendReports
 ```
 *Exit codes:* 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config.
-**Related GUI:** Adaptive Reports tab (see the GUI Playbook).
+**Related GUI:** Adaptive Reports tab (see the GUI Playbook). The GUI generates reports
+only; leadership distribution is CLI-only (`-DistributeToLeadership`).
 
 ---
 

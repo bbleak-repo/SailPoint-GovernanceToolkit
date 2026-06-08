@@ -154,8 +154,14 @@ if (-not $NoIsolation) {
         $relaunchArgs += @('-ConfigPath', "`"$ConfigPath`"")
     }
 
-    Start-Process powershell.exe -ArgumentList $relaunchArgs -Wait -NoNewWindow
-    exit $LASTEXITCODE
+    # -PassThru captures the process object so we can read .ExitCode.
+    # $LASTEXITCODE is only set by native-executable calls (& or direct invocation),
+    # NOT by Start-Process (a cmdlet). Under Set-StrictMode -Version 1 reading an
+    # unset $LASTEXITCODE throws "variable cannot be retrieved because it has not
+    # been set." Using .ExitCode is the correct, strict-mode-safe approach.
+    $childProcess = Start-Process powershell.exe -ArgumentList $relaunchArgs `
+                        -Wait -NoNewWindow -PassThru
+    exit $childProcess.ExitCode
 }
 
 # Past this point we are the isolated child (or someone bypassed

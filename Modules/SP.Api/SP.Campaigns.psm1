@@ -916,14 +916,27 @@ function Complete-SPCampaign {
         NOTE: The ISC API only accepts completion on past-due campaigns.
     .PARAMETER CampaignId
         The unique ID of the campaign to complete.
+    .PARAMETER Phased
+        When specified, requests opt-in two-phase completion by appending the
+        ?phased=1 query flag. Against a backend that honours it (e.g. the local
+        mock), the first call on an ACTIVE campaign transitions it to COMPLETING
+        and a SUBSEQUENT call settles it to COMPLETED -- so the documented
+        STAGED->ACTIVE->COMPLETING->COMPLETED machine can be observed end-to-end
+        against the LIVE backend. Backends that ignore the flag fall back to the
+        single-call ACTIVE->COMPLETED behaviour, so this switch is safe and
+        additive (default behaviour, when omitted, is unchanged).
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries.
     .PARAMETER CampaignTestId
         Test case identifier.
     .OUTPUTS
-        [hashtable] @{Success=$bool; Error=$string}
+        [hashtable] @{Success=$bool; Data=$campaignObject; Error=$string}
     .EXAMPLE
         $result = Complete-SPCampaign -CampaignId 'camp-abc123' -CorrelationID $cid
+    .EXAMPLE
+        # Two-phase: first call -> COMPLETING, second call -> COMPLETED
+        $p1 = Complete-SPCampaign -CampaignId 'camp-abc123' -Phased -CorrelationID $cid
+        $p2 = Complete-SPCampaign -CampaignId 'camp-abc123' -Phased -CorrelationID $cid
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -931,6 +944,9 @@ function Complete-SPCampaign {
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
         [string]$CampaignId,
+
+        [Parameter()]
+        [switch]$Phased,
 
         [Parameter()]
         [string]$CorrelationID,
@@ -961,29 +977,37 @@ function Complete-SPCampaign {
         return @{ Success = $false; Error = $errMsg }
     }
 
-    Write-SPLog -Message "Completing campaign: Id='$CampaignId'" `
+    # Opt-in phased completion: append ?phased=1 so a honouring backend (the mock)
+    # performs ACTIVE->COMPLETING on the first call and COMPLETING->COMPLETED on the
+    # next. Omitted by default -> unchanged single-call behaviour.
+    $queryParams = $null
+    if ($Phased) {
+        $queryParams = @{ phased = '1' }
+    }
+
+    Write-SPLog -Message "Completing campaign: Id='$CampaignId', Phased=$($Phased.IsPresent)" `
         -Severity INFO -Component 'SP.Campaigns' -Action 'Complete-SPCampaign' `
         -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
     try {
         $result = Invoke-SPApiRequest -Method POST -Endpoint "/campaigns/$CampaignId/complete" `
-            -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
+            -QueryParams $queryParams -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
 
         if ($result.Success) {
-            Write-SPLog -Message "Campaign '$CampaignId' completed successfully." `
+            Write-SPLog -Message "Campaign '$CampaignId' complete request accepted." `
                 -Severity INFO -Component 'SP.Campaigns' -Action 'Complete-SPCampaign' `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
-            return @{ Success = $true; Error = $null }
+            return @{ Success = $true; Data = $result.Data; Error = $null }
         }
         else {
-            return @{ Success = $false; Error = $result.Error }
+            return @{ Success = $false; Data = $null; Error = $result.Error }
         }
     }
     catch {
         $errMsg = "Complete-SPCampaign failed: $($_.Exception.Message)"
         Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.Campaigns' `
             -Action 'Complete-SPCampaign' -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
-        return @{ Success = $false; Error = $errMsg }
+        return @{ Success = $false; Data = $null; Error = $errMsg }
     }
 }
 

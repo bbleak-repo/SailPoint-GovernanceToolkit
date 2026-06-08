@@ -216,17 +216,21 @@ function Export-SPDisconnectedAppDeltaHtml {
         $totalCurrent  = if ($null -ne $summary['TotalCurrent'])  { $summary['TotalCurrent'] }  else { 0 }
         $totalPrevious = if ($null -ne $summary['TotalPrevious']) { $summary['TotalPrevious'] } else { 0 }
 
+        # NOTE: each row literal is comma-prefixed (,@(...)) so the outer @() keeps
+        # them as 2-element [label, value] arrays. Without the leading comma,
+        # newline-separated nested arrays flatten into a flat scalar list and the
+        # summary table renders one character per cell (real-bug fix, T-03).
         $summaryRows = @(
-            @('Total Current Accounts',  $totalCurrent)
-            @('Total Previous Accounts', $totalPrevious)
-            @('Accounts Added',          $added.Count)
-            @('Accounts Removed',        $removed.Count)
-            @('Accounts Disabled',       $disabled.Count)
-            @('Accounts Enabled',        $enabled.Count)
-            @('Entitlements Granted',    $granted.Count)
-            @('Entitlements Revoked',    $revoked.Count)
-            @('Attribute Changes',       $attrChg.Count)
-            @('Unchanged',              $unchanged)
+            ,@('Total Current Accounts',  $totalCurrent)
+            ,@('Total Previous Accounts', $totalPrevious)
+            ,@('Accounts Added',          $added.Count)
+            ,@('Accounts Removed',        $removed.Count)
+            ,@('Accounts Disabled',       $disabled.Count)
+            ,@('Accounts Enabled',        $enabled.Count)
+            ,@('Entitlements Granted',    $granted.Count)
+            ,@('Entitlements Revoked',    $revoked.Count)
+            ,@('Attribute Changes',       $attrChg.Count)
+            ,@('Unchanged',              $unchanged)
         )
 
         foreach ($row in $summaryRows) {
@@ -1010,14 +1014,16 @@ function Export-SPDisconnectedAppBatchHtml {
         [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$overallBadge`">$overallLabel</span></p>")
 
         [void]$html.AppendLine("<table style=`"$tableStyle`">")
+        # Comma-prefixed rows keep each [label, value] pair as a nested array
+        # (otherwise newline-separated nested arrays flatten -- real-bug fix, T-03).
         $summaryRows = @(
-            @('Apps Processed',     $totalApps)
-            @('Succeeded',          $successCount)
-            @('No Changes',         $noChangesCount)
-            @('Threshold Blocked',  $blockedCount)
-            @('Errors',             $errorCount)
-            @('Campaigns Created',  $totalCampaigns)
-            @('Identities Affected', $totalIdentities)
+            ,@('Apps Processed',     $totalApps)
+            ,@('Succeeded',          $successCount)
+            ,@('No Changes',         $noChangesCount)
+            ,@('Threshold Blocked',  $blockedCount)
+            ,@('Errors',             $errorCount)
+            ,@('Campaigns Created',  $totalCampaigns)
+            ,@('Identities Affected', $totalIdentities)
         )
         foreach ($row in $summaryRows) {
             $label = ConvertTo-DisconnectedHtmlSafe $row[0]
@@ -1114,14 +1120,14 @@ function Export-SPDisconnectedAppBatchHtml {
                 [void]$html.AppendLine("    <table style=`"$tableStyle`">")
 
                 $detailRows = @(
-                    @('App Name', $errApp.App)
-                    @('Status', $errApp.Status)
-                    @('Reason', $errApp.Reason)
-                    @('Error Message', $errApp.Error)
-                    @('Correlation ID', $errApp.CorrelationID)
-                    @('Started At', $errApp.StartedAt)
-                    @('Completed At', $errApp.CompletedAt)
-                    @('Duration', "$($errApp.DurationSeconds)s")
+                    ,@('App Name', $errApp.App)
+                    ,@('Status', $errApp.Status)
+                    ,@('Reason', $errApp.Reason)
+                    ,@('Error Message', $errApp.Error)
+                    ,@('Correlation ID', $errApp.CorrelationID)
+                    ,@('Started At', $errApp.StartedAt)
+                    ,@('Completed At', $errApp.CompletedAt)
+                    ,@('Duration', "$($errApp.DurationSeconds)s")
                 )
 
                 foreach ($dRow in $detailRows) {
@@ -1151,11 +1157,11 @@ function Export-SPDisconnectedAppBatchHtml {
             if ($null -ne $deliverySummary) {
                 [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
                 $dSummaryRows = @(
-                    @('Total Apps',  $deliverySummary.Total)
-                    @('Delivered',   $deliverySummary.Delivered)
-                    @('Stale',       $deliverySummary.Stale)
-                    @('Missing',     $deliverySummary.Missing)
-                    @('Disabled',    $deliverySummary.Disabled)
+                    ,@('Total Apps',  $deliverySummary.Total)
+                    ,@('Delivered',   $deliverySummary.Delivered)
+                    ,@('Stale',       $deliverySummary.Stale)
+                    ,@('Missing',     $deliverySummary.Missing)
+                    ,@('Disabled',    $deliverySummary.Disabled)
                 )
                 foreach ($ds in $dSummaryRows) {
                     $dsLabel = ConvertTo-DisconnectedHtmlSafe $ds[0]
@@ -1378,11 +1384,12 @@ function Export-SPDisconnectedAppSlaHtml {
         [void]$html.AppendLine("<p style=`"margin-bottom:12px;`"><span style=`"$healthBadge`">$healthLabel</span></p>")
 
         [void]$html.AppendLine("<table style=`"$tableStyle width:auto;`">")
+        # Comma-prefixed rows keep each [label, value] pair nested (real-bug fix, T-03).
         $summaryRows = @(
-            @('Total Apps',         $summary.TotalApps)
-            @('SLA Compliant',      $summary.Compliant)
-            @('SLA Non-Compliant',  $summary.NonCompliant)
-            @('Avg Delivery Rate',  "${avgRate}%")
+            ,@('Total Apps',         $summary.TotalApps)
+            ,@('SLA Compliant',      $summary.Compliant)
+            ,@('SLA Non-Compliant',  $summary.NonCompliant)
+            ,@('Avg Delivery Rate',  "${avgRate}%")
         )
         foreach ($row in $summaryRows) {
             $label = ConvertTo-DisconnectedHtmlSafe $row[0]
@@ -1654,12 +1661,13 @@ function Export-SPDisconnectedAppDecisionHarvestHtml {
         [void]$html.AppendLine("<h2 style=`"$sectionHeadingStyle`">Campaign Status Summary</h2>")
         [void]$html.AppendLine("<table style=`"$tableStyle`">")
 
+        # Comma-prefixed rows keep each [label, value] pair nested (real-bug fix, T-03).
         $statusRows = @(
-            @('Campaigns Checked', $campaignsChecked)
-            @('Completed',         $completed)
-            @('Active',            $active)
-            @('Expired',           $expired)
-            @('Purged / Deleted',  $purged)
+            ,@('Campaigns Checked', $campaignsChecked)
+            ,@('Completed',         $completed)
+            ,@('Active',            $active)
+            ,@('Expired',           $expired)
+            ,@('Purged / Deleted',  $purged)
         )
         foreach ($row in $statusRows) {
             $label = ConvertTo-DisconnectedHtmlSafe $row[0]
@@ -1728,8 +1736,8 @@ function Export-SPDisconnectedAppDecisionHarvestHtml {
         [void]$html.AppendLine("<table style=`"$tableStyle width:auto; margin-top:8px;`">")
 
         $footerRows = @(
-            @('Report Type', 'Decision Harvest')
-            @('Application', $AppName)
+            ,@('Report Type', 'Decision Harvest')
+            ,@('Application', $AppName)
         )
         foreach ($fRow in $footerRows) {
             $fLabel = ConvertTo-DisconnectedHtmlSafe $fRow[0]

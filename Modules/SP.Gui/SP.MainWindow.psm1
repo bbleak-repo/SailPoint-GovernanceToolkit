@@ -70,6 +70,12 @@ $script:SdkFilterDataSource         = [System.Collections.ObjectModel.Observable
 $script:SdkCertCascadeBusy           = $false
 $script:SdkCertLoadedCampaign        = $null
 $script:IsSdkRunning                 = $false
+# Round-05 T-01 fix: identity-keyed snapshot of each SDK sub-tab button's
+# IsEnabled at the moment Set-SdkSubTabButtonsEnabled disables it for a load, so
+# the matching re-enable restores the prior state instead of unconditionally
+# forcing IsEnabled=$true (which would wrongly enable design-disabled controls
+# such as BtnSdkRefreshSummaries, IsEnabled="False" in SdkTab.xaml per SDK-18).
+$script:SdkButtonEnabledSnapshot     = $null
 # Cached checkbox reference set by Initialize-SdkTab so OnLoaded closures can
 # read IsChecked without a FindName call (avoids namescope resolution issues
 # when the dashboard is driven by a cross-process automation tool).
@@ -3215,13 +3221,27 @@ function Invoke-GuiAdaptiveReport {
         if ($null -ne $chk -and $chk.IsChecked -eq $true) { $baselines.Add($baselineMap[$name]) }
     }
 
-    if ($components.Count -eq 0 -and $baselines.Count -eq 0) {
-        Set-StatusMessage -Message 'Select at least one component or baseline report.' -IsError
+    # Map enriched-report checkboxes to the enriched-exporter keys (T-05)
+    $enrichedMap = [ordered]@{
+        'ChkArEnrichedPrivilegedAttestation' = 'privileged-attestation'
+        'ChkArEnrichedAccountability'        = 'accountability'
+        'ChkArEnrichedTrend'                 = 'trend'
+        'ChkArEnrichedDisconnected'          = 'disconnected'
+    }
+    $enriched = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $enrichedMap.Keys) {
+        $chk = Find-Control -Parent $TabContent -Name $name
+        if ($null -ne $chk -and $chk.IsChecked -eq $true) { $enriched.Add($enrichedMap[$name]) }
+    }
+
+    if ($components.Count -eq 0 -and $baselines.Count -eq 0 -and $enriched.Count -eq 0) {
+        Set-StatusMessage -Message 'Select at least one component, baseline or enriched report.' -IsError
         return
     }
 
     $componentArr = $components.ToArray()
     $baselineArr  = $baselines.ToArray()
+    $enrichedArr  = $enriched.ToArray()
 
     $outputPath = Resolve-AdaptiveOutputPath
 
@@ -3251,6 +3271,7 @@ function Invoke-GuiAdaptiveReport {
     $runspace.SessionStateProxy.SetVariable('DaysBack',      $daysBack)
     $runspace.SessionStateProxy.SetVariable('Components',    $componentArr)
     $runspace.SessionStateProxy.SetVariable('Baselines',     $baselineArr)
+    $runspace.SessionStateProxy.SetVariable('Enriched',      $enrichedArr)
 
     $psInstance = [System.Management.Automation.PowerShell]::Create()
     $psInstance.Runspace = $runspace
@@ -3263,6 +3284,7 @@ function Invoke-GuiAdaptiveReport {
                 'SP.DeltaCert\SP.DeltaCert.psd1',
                 'SP.ReportComponents\SP.ReportComponents.psd1',
                 'SP.AdaptiveReports\SP.AdaptiveReports.psd1',
+                'SP.DisconnectedApps\SP.DisconnectedApps.psd1',
                 'SP.Gui\SP.Gui.psd1')) {
             $mod = Join-Path $ToolkitRoot "Modules\$rel"
             if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
@@ -3328,6 +3350,49 @@ function Invoke-GuiAdaptiveReport {
                 $outFile = Join-Path $OutputPath "$key-$stamp.html"
                 & $fn -GroupResults $gr -OutputPath $outFile -Theme $Theme | Out-Null
                 $generated.Add($outFile)
+            }
+
+            # Enriched reports (T-05). Their exporter inputs differ from the
+            # baseline GroupResults shape and may not be derivable from the
+            # in-runspace audits/gr/ds chain, so each branch is a SOFT-SKIP on
+            # failure (status note appended) rather than a crash. The headless
+            # additive gate only requires that the controls/map/wiring exist.
+            $enrichedNotes = New-Object System.Collections.Generic.List[string]
+            foreach ($key in @($Enriched)) {
+                try {
+                    switch ($key) {
+                        'privileged-attestation' {
+                            # Privileged-attestation sections live in Export-SPAuditHtml,
+                            # which consumes the CampaignAudits hashtable array built above.
+                            $paths = Export-SPAuditHtml -CampaignAudits $audits.ToArray() -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            foreach ($p in @($paths)) { if ($p) { $generated.Add([string]$p) } }
+                        }
+                        'accountability' {
+                            # Reviewer-accountability sections also render via Export-SPAuditHtml.
+                            $paths = Export-SPAuditHtml -CampaignAudits $audits.ToArray() -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            foreach ($p in @($paths)) { if ($p) { $generated.Add([string]$p) } }
+                        }
+                        'trend' {
+                            # Campaign-trend takes TrendData from Measure-SPCampaignTrends, not GroupResults.
+                            $metrics = @($audits | ForEach-Object {
+                                @{ CampaignName = [string]$_.CampaignName; CampaignId = [string]$_.CampaignId }
+                            })
+                            $trend = Measure-SPCampaignTrends -CampaignMetrics $metrics
+                            $trendData = if ($trend -is [hashtable] -and $trend.ContainsKey('Data')) { $trend.Data } else { $trend }
+                            $outFile = Export-SPCampaignTrendHtml -TrendData $trendData -OutputPath $OutputPath -CorrelationID $CorrelationID
+                            if ($outFile) { $generated.Add([string]$outFile) }
+                        }
+                        'disconnected' {
+                            # The disconnected-app report needs CSV/delta inputs that are not
+                            # part of the campaign gr/ds chain -- soft-skip in the GUI runspace.
+                            throw 'disconnected-app report requires CSV/delta inputs not available in the adaptive runspace'
+                        }
+                        default { throw "unknown enriched key '$key'" }
+                    }
+                }
+                catch {
+                    $enrichedNotes.Add("$key skipped: $($_.Exception.Message)")
+                }
             }
 
             if ($generated.Count -eq 0) { throw 'No reports were produced.' }
@@ -4456,6 +4521,97 @@ function Set-SdkSubTabStatus {
     }
 }
 
+function Set-SdkSubTabButtonsEnabled {
+    <#
+    .SYNOPSIS
+        Enables/disables every per-sub-tab SDK Refresh/action Button under $TabContent.
+    .DESCRIPTION
+        Used by the SDK load engines to give the single-load guard
+        ($script:IsSdkRunning) a visible state: disabled buttons during a load make
+        a click an obvious no-op instead of a silent one. Each button is resolved by
+        x:Name via Find-Control and null-guarded (a button may be absent in some
+        sub-tab). Writes .IsEnabled directly because every caller is already on the
+        UI thread (mirrors Set-SdkSubTabStatus): the initial disable runs
+        synchronously in the button-click handler, and the re-enable runs inside the
+        DispatcherTimer Add_Tick body -- both on the dispatcher (UI) thread.
+
+        ADDITIVE / behaviour-preserving (round-05 fix): the re-enable pass MUST NOT
+        flip a control that was already disabled BEFORE the load to clickable. Some
+        controls are intentionally disabled by design (e.g. BtnSdkRefreshSummaries +
+        the Cert-Summaries combos are IsEnabled="False" in SdkTab.xaml per SDK-18,
+        because that deferred sub-tab is still collapsed). Unconditionally setting
+        IsEnabled=$true on re-enable would silently enable that deferred button while
+        its driving combos stay disabled -- a regression and an inconsistent state.
+
+        To avoid that we SNAPSHOT each button's IsEnabled at the moment of disable
+        (-Enabled $false) into $script:SdkButtonEnabledSnapshot, keyed by the control
+        instance, and on re-enable (-Enabled $true) restore ONLY the prior value
+        (default $true when no snapshot exists, preserving legacy behaviour for any
+        control that was enabled going in). A control that was disabled going in
+        stays disabled coming out.
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+
+    if ($null -eq $TabContent) { return }
+
+    if ($null -eq $script:SdkButtonEnabledSnapshot) {
+        # Identity-keyed snapshot map. PS 5.1 / .NET Framework 4.8 has no
+        # ReferenceEqualityComparer, so we key by the object's identity hash
+        # (RuntimeHelpers.GetHashCode -- stable for the object's lifetime,
+        # independent of any overridden GetHashCode/Equals) and store the live
+        # reference alongside the remembered bool to verify identity on read.
+        $script:SdkButtonEnabledSnapshot = @{}
+    }
+
+    $names = @(
+        'BtnSdkRefreshTemplates','BtnSdkNewTemplate','BtnSdkEditSchedule','BtnSdkRemoveSchedule','BtnSdkDeleteTemplate',
+        'BtnSdkRefreshSummaries',
+        'BtnSdkRefreshApprovals','BtnSdkApprove','BtnSdkDeny','BtnSdkForward',
+        'BtnSdkRefreshWorkItems','BtnSdkCompleteWorkItem','BtnSdkForwardWorkItem','BtnSdkBulkApprove',
+        'BtnSdkRefreshWorkflows','BtnSdkEnableWorkflow','BtnSdkTestWorkflow','BtnSdkViewExecutions','BtnSdkCreateOOO',
+        'BtnSdkRefreshFilters','BtnSdkNewFilter','BtnSdkEditFilter','BtnSdkDeleteFilter'
+    )
+    foreach ($n in $names) {
+        $btn = Find-Control -Parent $TabContent -Name $n
+        if ($null -eq $btn) { continue }
+
+        $key = [System.Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($btn)
+
+        if (-not $Enabled) {
+            # Disabling for a load -- remember the control's current state so the
+            # matching re-enable restores it exactly (a default-disabled control
+            # is recorded as $false and therefore stays disabled afterwards).
+            # Re-entrancy-safe: a NESTED disable (e.g. an action whose success
+            # chains a grid refresh that disables again before the action's finally
+            # runs) must NOT overwrite an existing snapshot with the already-forced
+            # $false state -- keep the ORIGINAL pre-disable value.
+            $existing = $script:SdkButtonEnabledSnapshot[$key]
+            if ($null -eq $existing -or -not [object]::ReferenceEquals($existing.Control, $btn)) {
+                $script:SdkButtonEnabledSnapshot[$key] = `
+                    [pscustomobject]@{ Control = $btn; Prior = [bool]$btn.IsEnabled }
+            }
+            $btn.IsEnabled = $false
+        }
+        else {
+            # Re-enabling after a load -- restore the snapshotted prior value.
+            # Default to $true (legacy behaviour) when no snapshot was taken, so a
+            # control we never disabled is never wrongly forced off. Verify object
+            # identity (ReferenceEquals) to be safe against any hash collision.
+            $prior = $true
+            $snap  = $script:SdkButtonEnabledSnapshot[$key]
+            if ($null -ne $snap -and [object]::ReferenceEquals($snap.Control, $btn)) {
+                $prior = $snap.Prior
+                [void]$script:SdkButtonEnabledSnapshot.Remove($key)
+            }
+            $btn.IsEnabled = $prior
+        }
+    }
+}
+
 function Invoke-SdkGridRefresh {
     <#
     .SYNOPSIS
@@ -4506,6 +4662,7 @@ function Invoke-SdkGridRefresh {
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $LoadingMessage
 
     $script:IsSdkRunning = $true
+    Set-SdkSubTabButtonsEnabled -TabContent $TabContent -Enabled $false
 
     # Create background runspace (STA) -- mirror Invoke-GuiAuditRun.
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -4612,6 +4769,7 @@ function Invoke-SdkGridRefresh {
             }
             finally {
                 $script:IsSdkRunning = $false
+                Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
             }
         } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnLoaded
     }.GetNewClosure())
@@ -4719,6 +4877,7 @@ function Invoke-SdkActionRun {
     Set-SdkSubTabStatus -TabContent $TabContent -StatusName $StatusLabelName -Message $RunningMessage
 
     $script:IsSdkRunning = $true
+    Set-SdkSubTabButtonsEnabled -TabContent $TabContent -Enabled $false
 
     # Create background runspace (STA) -- mirror Invoke-SdkGridRefresh.
     $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
@@ -4781,6 +4940,15 @@ function Invoke-SdkActionRun {
 
             $t.Stop()
 
+            # Round-05 T-01 fix: tracks whether the success-path $onSuccess started
+            # a CHAINED refresh (Invoke-SdkGridRefresh) that re-took the single-load
+            # guard + re-disabled the buttons for its OWN background load. When it
+            # has, this action's finally must NOT re-enable the buttons or clear the
+            # guard -- doing so would clobber the chained refresh (a disable->enable
+            # ->enable flicker and a window where SDK buttons are clickable mid-load).
+            # The chained refresh owns and will release that state in its own Tick.
+            $chainedRefreshOwnsState = $false
+
             try {
                 $result = $null
                 try { $result = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
@@ -4804,7 +4972,13 @@ function Invoke-SdkActionRun {
                     # module scope so $script:* and private helpers resolve, and
                     # the IsSdkRunning guard is cleared first so the refresh runs).
                     $script:IsSdkRunning = $false
-                    if ($null -ne $onSuccess) { & $onSuccess $tab }
+                    if ($null -ne $onSuccess) {
+                        & $onSuccess $tab
+                        # If the chained refresh successfully started, it set the
+                        # guard back to $true and re-disabled the buttons. Detect
+                        # that and hand ownership over to it.
+                        if ($script:IsSdkRunning) { $chainedRefreshOwnsState = $true }
+                    }
                 }
 
                 try {
@@ -4813,7 +4987,12 @@ function Invoke-SdkActionRun {
                 } catch { }
             }
             finally {
-                $script:IsSdkRunning = $false
+                # Skip the re-enable / guard-clear when a chained refresh has taken
+                # ownership -- it will release them in its own completion Tick.
+                if (-not $chainedRefreshOwnsState) {
+                    $script:IsSdkRunning = $false
+                    Set-SdkSubTabButtonsEnabled -TabContent $tab -Enabled $true
+                }
             }
         } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedStatus $capturedOnSuccess
     }.GetNewClosure())

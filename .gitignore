@@ -39,3 +39,8 @@ docs/windows-test-rounds/round-.md
 # Transient local Pester run artifacts
 Tests/_pester-*.txt
 Tests/_pester-*.xml
+
+# #Loop / orchestration journals -- kept on disk, not tracked in the product repo
+docs/loop-runs/
+docs/adaptive-reports-rounds/
+docs/phase7-sdk-gui-rounds/

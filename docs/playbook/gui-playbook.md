@@ -145,6 +145,16 @@ and campaign filters interactively.
 > validates the entered values, applies the Safety gate (`RequireWhatIfOnProd`), and
 > calls the SDK bridge. There are no placeholder/"coming soon" actions on this tab.
 
+> **Load-wait behaviour (one load at a time).** All SDK sub-tab data loads are
+> **serialized behind a single guard** — only one Refresh/load runs at a time across
+> the whole tab. **While a load is running, the per-sub-tab Refresh and action buttons
+> are disabled**, and the sub-tab status label shows `Loading…`; they **re-enable
+> automatically when the load completes** (success or failure). So a click during a
+> load is an obvious no-op (a greyed-out button) rather than a silent "already in
+> progress" no-op. Buttons that are disabled *by design* (e.g. the Cert Summaries
+> **Refresh** until you pick a campaign/certification) stay disabled afterwards —
+> the re-enable restores each button's prior state, it doesn't force everything on.
+
 ### 6.1 Templates
 | Control | What it does |
 |---|---|

@@ -1836,6 +1836,29 @@
                                               ToolTip="Include the Separation-of-Duties baseline report (sod)"/>
                                 </WrapPanel>
                             </Border>
+
+                            <!-- Enriched Reports -->
+                            <TextBlock Text="Enriched Reports" Style="{StaticResource SectionHeader}"/>
+                            <Border Style="{StaticResource SectionBorder}">
+                                <WrapPanel Orientation="Horizontal">
+                                    <CheckBox x:Name="ChkArEnrichedPrivilegedAttestation" Content="Privileged Attestation"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the privileged-attestation audit report from the enriched campaign dataset (privileged-attestation)"/>
+                                    <CheckBox x:Name="ChkArEnrichedAccountability" Content="Reviewer Accountability"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the reviewer-accountability audit report from the enriched campaign dataset (accountability)"/>
+                                    <CheckBox x:Name="ChkArEnrichedTrend" Content="Campaign Trend"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the period-over-period campaign-trend report from Measure-SPCampaignTrends (trend)"/>
+                                    <CheckBox x:Name="ChkArEnrichedDisconnected" Content="Disconnected Apps"
+                                              Foreground="#E0E0E0" VerticalAlignment="Center"
+                                              IsChecked="False" Margin="0,0,16,4" FontSize="12"
+                                              ToolTip="Include the disconnected-app delta/onboarding report from the disconnected-app dataset (disconnected)"/>
+                                </WrapPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
 
