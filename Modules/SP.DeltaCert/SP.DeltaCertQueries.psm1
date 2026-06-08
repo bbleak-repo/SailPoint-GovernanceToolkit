@@ -27,6 +27,12 @@
 # Module-scope identity cache to avoid redundant API calls within a session.
 $script:IdentityCache = @{}
 
+# Module-scope entitlement privileged-status cache (keyed by "SourceId::ItemValue").
+# Populated by Select-SPPrivilegedGrantEvents. Persists for the lifetime of the module
+# import so repeated runs in the same session don't re-call the ISC entitlements API
+# for the same group.
+$script:EntitlementPrivilegedCache = @{}
+
 #region Internal Functions
 
 function Get-SPDeltaIdentityDetail {
@@ -193,6 +199,144 @@ function Get-SPDeltaIdentityDetail {
 #endregion
 
 #region Public Functions
+
+function Select-SPPrivilegedGrantEvents {
+    <#
+    .SYNOPSIS
+        Filters grant events to only those where the granted entitlement is privileged.
+    .DESCRIPTION
+        For each unique (SourceId, ItemValue) pair in the grant event list, queries ISC
+        GET /v3/entitlements?filters=value eq "ITEM_VALUE" and source.id eq "SOURCE_ID"
+        and checks whether the returned entitlement has privileged:true in ISC.
+
+        If ISC returns no matching entitlement (entitlement not yet aggregated or not
+        managed by ISC), falls back to pattern matching against PrivilegedPatterns.
+        Patterns are matched case-insensitively against the EntitlementName field.
+
+        Results are cached in the module-scope EntitlementPrivilegedCache to avoid
+        redundant API calls for the same entitlement within a session.
+
+        ISC scope required: idn:entitlement:read or sp:scopes:all
+
+    .PARAMETER GrantEvents
+        Array of grant event objects as returned by Get-SPDeltaGrantEvents.
+    .PARAMETER PrivilegedPatterns
+        Optional regex patterns matched case-insensitively against EntitlementName when
+        ISC has no record for the entitlement (unmanaged groups, not yet aggregated).
+        Typically sourced from Audit.RiskIndicators.PrivilegedPatterns in settings.json.
+        Example: @('Admin', 'Root', 'DBA', 'Domain Admins')
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [PSCustomObject[]] Filtered array containing only privileged grant events.
+        Returns an empty array when no privileged events are found.
+    .EXAMPLE
+        $events    = (Get-SPDeltaGrantEvents -SourceIds @('src-abc') -HoursBack 24).Data
+        $patterns  = @('Admin', 'Root', 'Domain Admins')
+        $privEvts  = Select-SPPrivilegedGrantEvents -GrantEvents $events -PrivilegedPatterns $patterns
+        "$($privEvts.Count) privileged grant events found"
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$GrantEvents,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$PrivilegedPatterns = @(),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if ($GrantEvents.Count -eq 0) { return @() }
+
+    # Collect unique (SourceId, ItemValue) pairs to minimise API calls
+    $uniquePairs = $GrantEvents |
+        Select-Object SourceId, ItemValue -Unique |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.SourceId) -and
+                       -not [string]::IsNullOrWhiteSpace($_.ItemValue) }
+
+    $checkedViaISC  = 0
+    $privilegedISC  = 0
+    $privilegedPatt = 0
+    $notPrivileged  = 0
+
+    foreach ($pair in @($uniquePairs)) {
+        $cacheKey = "$($pair.SourceId)::$($pair.ItemValue)"
+        if ($script:EntitlementPrivilegedCache.ContainsKey($cacheKey)) { continue }
+
+        $isPrivileged = $false
+        $foundInISC   = $false
+
+        try {
+            # Escape embedded double-quotes for Lucene filter syntax
+            $escapedValue  = $pair.ItemValue -replace '"', '\"'
+            $escapedSource = $pair.SourceId  -replace '"', '\"'
+            $filterStr     = "value eq `"$escapedValue`" and source.id eq `"$escapedSource`""
+
+            $apiResult = Invoke-SPApiRequest -Method GET -Endpoint '/entitlements' `
+                -QueryParams @{ filters = $filterStr; limit = 1 } `
+                -CorrelationID $CorrelationID
+
+            $checkedViaISC++
+
+            if ($apiResult.Success) {
+                $items = @($apiResult.Data)
+                if ($items.Count -gt 0 -and $null -ne $items[0]) {
+                    $foundInISC = $true
+                    $privProp = $items[0].PSObject.Properties['privileged']
+                    if ($null -ne $privProp -and $privProp.Value -eq $true) {
+                        $isPrivileged = $true
+                        $privilegedISC++
+                    }
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Entitlement lookup failed for '$($pair.ItemValue)' on source '$($pair.SourceId)': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Select-SPPrivilegedGrantEvents' `
+                -CorrelationID $CorrelationID
+        }
+
+        # Pattern fallback: when ISC has no record (not aggregated / not managed),
+        # fall back to name-based pattern match so newly provisioned groups that
+        # haven't been tagged in ISC yet still get caught.
+        if (-not $foundInISC -and $PrivilegedPatterns.Count -gt 0) {
+            $nameToCheck = if (-not [string]::IsNullOrWhiteSpace($pair.ItemValue)) { $pair.ItemValue } else { '' }
+            foreach ($pattern in $PrivilegedPatterns) {
+                if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
+                if ($nameToCheck -imatch $pattern) {
+                    $isPrivileged = $true
+                    $privilegedPatt++
+                    break
+                }
+            }
+        }
+
+        if (-not $isPrivileged) { $notPrivileged++ }
+        $script:EntitlementPrivilegedCache[$cacheKey] = $isPrivileged
+    }
+
+    Write-SPLog -Message "Privileged filter: UniqueEntitlements=$($uniquePairs.Count) CheckedViaISC=$checkedViaISC PrivilegedByISC=$privilegedISC PrivilegedByPattern=$privilegedPatt NotPrivileged=$notPrivileged" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Select-SPPrivilegedGrantEvents' `
+        -CorrelationID $CorrelationID
+
+    # Return only the grant events whose (SourceId, ItemValue) pair was determined privileged
+    $filtered = $GrantEvents | Where-Object {
+        $k = "$($_.SourceId)::$($_.ItemValue)"
+        $script:EntitlementPrivilegedCache.ContainsKey($k) -and
+        $script:EntitlementPrivilegedCache[$k] -eq $true
+    }
+
+    return @($filtered)
+}
 
 function Get-SPDeltaGrantEvents {
     <#

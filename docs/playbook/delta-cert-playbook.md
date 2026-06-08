@@ -197,6 +197,7 @@ overrides).
 | `SourceIds` | Default AD source(s) to monitor. Passed as `-SourceId` default. |
 | `DefaultHoursBack` | Look-back window for grant detection. `24` = last 24 hours. |
 | `DefaultDeadlineDays` | How many days managers have to review. `2` = 48-hour deadline. |
+| `PrivilegedOnly` | `false` (default) — certify all grants. `true` — only grants to privileged entitlements (ISC `privileged:true` or name-pattern match). Best volume control available. |
 | `CampaignNamePrefix` | Daily delta campaign names: `"AD Delta Cert 2026-06-08 - Manager Smith"`. |
 | `MaxCampaignsPerRun` | Safety cap — refuses to create more than this many campaigns in one run. |
 | `ExcludeLifecycleStates` | Identities in these states are skipped even if they received new access. |
@@ -212,6 +213,7 @@ overrides).
 | `idn:campaign:manage` | Create new campaigns |
 | `idn:campaign-report:read` | Read certifications and review items |
 | **`sp:scopes:all`** or `idn:account-activities:read` | **Required** — read the account-activities events that detect new grants |
+| `idn:entitlement:read` | Required only when using `-PrivilegedOnly` to check ISC entitlement metadata |
 
 Without `sp:scopes:all` (or the specific account-activities scope), the script fails at
 grant detection with a 403. This is the most common setup issue. See the
@@ -261,6 +263,41 @@ this to run for several minutes and create dozens of campaigns.
 # Look back 48 hours (catch-up after a skipped day)
 .\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -HoursBack 48
 ```
+
+### Targeting only privileged grants (-PrivilegedOnly)
+
+The single highest-leverage volume control for daily delta. Instead of certifying every
+AD group grant, only trigger a campaign when the specific group is marked `privileged:true`
+in ISC — distribution lists, project groups, and standard access get ignored entirely.
+
+```powershell
+# Only certify managers whose staff received a privileged AD entitlement today
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -PrivilegedOnly
+
+# Preview what would be caught (no campaigns created)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -PrivilegedOnly -WhatIf
+```
+
+**What "privileged" means in ISC:** In ISC Admin → Entitlements, each AD group entry can
+have its `privileged` attribute set to `true`. ISC populates this from your source connector
+(AD has no native "privileged" flag, so someone must tag them manually or via an ISC rule).
+
+**Pattern-match fallback:** If the entitlement isn't in ISC yet (not yet aggregated, or
+the source hasn't been fully catalogued), the toolkit falls back to the name patterns in
+`Audit.RiskIndicators.PrivilegedPatterns` (default: `Admin`, `Root`, `DBA`, `Domain Admins`).
+A group named "Finance-Admins" would be caught by the "Admin" pattern.
+
+**ISC scope required:** `idn:entitlement:read` or `sp:scopes:all` (needs to read entitlement
+metadata to check the privileged attribute).
+
+**Make it the permanent default:** Set `"PrivilegedOnly": true` in the `DeltaCert` section
+of `settings.json` — then every daily run automatically uses the filter without needing the
+command-line switch.
+
+**For the ISC `at-access(privileged:true)` Lucene query:** This ISC search expression finds
+identities who hold ANY privileged access. `-PrivilegedOnly` is more specific — it filters by
+whether the specific *new grant event* is for a privileged entitlement, not whether the
+identity happened to already hold other privileged access.
 
 ### Escalation — deadline-aware (recommended)
 

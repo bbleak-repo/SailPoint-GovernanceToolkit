@@ -32,6 +32,7 @@
     FunctionsToExport = @(
         # SP.DeltaCertQueries - Data retrieval and query functions
         'Get-SPDeltaGrantEvents'
+        'Select-SPPrivilegedGrantEvents'
         'Get-SPDeltaAffectedIdentities'
         'Group-SPDeltaByManager'
         'Get-SPDeltaCertStaleCertifications'

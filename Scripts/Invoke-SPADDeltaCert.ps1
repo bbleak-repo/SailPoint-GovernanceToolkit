@@ -177,6 +177,15 @@ param(
     [Parameter()]
     [switch]$RunCleanup,
 
+    # When set, only creates campaigns for identities who received a GRANT_ACCESS event
+    # where the specific AD entitlement is marked privileged:true in ISC.
+    # Falls back to Audit.RiskIndicators.PrivilegedPatterns for entitlements not yet
+    # tagged in ISC (unmanaged groups, recently aggregated sources).
+    # Default: read from DeltaCert.PrivilegedOnly in settings.json (false if not set).
+    # ISC scope required: idn:entitlement:read or sp:scopes:all
+    [Parameter()]
+    [switch]$PrivilegedOnly,
+
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
     [string]$OutputMode = 'Console',
@@ -357,6 +366,17 @@ if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
     $effectiveFullCertDeadline = [int]$config.DeltaCert.FullCert.DeadlineDays
 }
 
+# Apply PrivilegedOnly default from config when the switch was not explicitly passed
+$effectivePrivilegedOnly = $PrivilegedOnly.IsPresent
+if (-not $effectivePrivilegedOnly) {
+    if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+        $null -ne $config.DeltaCert -and
+        $null -ne $config.DeltaCert.PSObject.Properties['PrivilegedOnly'] -and
+        [bool]$config.DeltaCert.PrivilegedOnly -eq $true) {
+        $effectivePrivilegedOnly = $true
+    }
+}
+
 # First-run advisory: if no audit baseline exists and -FullCert is not set, warn the operator.
 # The audit JSONL file is written on every successful run. Its absence means this is either
 # a brand-new deployment or the output directory was reset. In DELTA mode without a prior
@@ -376,7 +396,7 @@ if (-not $FullCert) {
     }
 }
 
-Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays FullCert=$($FullCert.IsPresent)" `
+Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays FullCert=$($FullCert.IsPresent) PrivilegedOnly=$effectivePrivilegedOnly" `
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Start' -CorrelationID $correlationID
 
 #endregion
@@ -443,6 +463,7 @@ if (($WhatIfPreference -eq $true)) {
         Write-Host "    NamePrefix:     $effectivePrefix"
         Write-Host "    MaxCampaigns:   $effectiveMaxCampaigns"
         Write-Host "    ReviewerMode:   $effectiveReviewerMode"
+        Write-Host "    PrivilegedOnly: $effectivePrivilegedOnly"
         if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
             Write-Host "    FallbackMgr:    $effectiveFallback"
         }
@@ -493,6 +514,7 @@ else {
         MaxCampaignsPerRun   = $effectiveMaxCampaigns
         ReviewerMode         = $effectiveReviewerMode
         CorrelationID        = $correlationID
+        PrivilegedOnly       = $effectivePrivilegedOnly
     }
     if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
         $runParams['FallbackManagerId'] = $effectiveFallback
@@ -549,6 +571,14 @@ switch ($OutputMode) {
             Write-Host "  Sources:       $($SourceId -join ', ')" -ForegroundColor DarkGray
             Write-Host "  Window:        last $HoursBack hours" -ForegroundColor DarkGray
         }
+        elseif ($reason -eq 'NoPrivilegedGrants') {
+            Write-Host '  No Privileged Grants' -ForegroundColor Yellow
+            Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
+            Write-Host '  AD grant events were found but none involved privileged entitlements.' -ForegroundColor Yellow
+            Write-Host "  Sources:       $($SourceId -join ', ')" -ForegroundColor DarkGray
+            Write-Host "  Window:        last $HoursBack hours" -ForegroundColor DarkGray
+            Write-Host '  To certify all grants regardless of privilege flag, omit -PrivilegedOnly.' -ForegroundColor DarkGray
+        }
         elseif ($reason -eq 'WhatIf') {
             Write-Host '  WhatIf Summary' -ForegroundColor Cyan
             Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
@@ -601,8 +631,9 @@ Write-SPLog -Message "Invoke-SPADDeltaCert completed: Reason='$reason' Campaigns
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Complete' -CorrelationID $correlationID
 
 # Exit code: 1 for no-changes (expected on quiet DELTA days, or no managers found in FULL mode)
-if ($reason -eq 'NoChanges' -or $reason -eq 'NoActiveIdentities' -or
-    $reason -eq 'NoManagerGroups' -or $reason -eq 'NoManagers') {
+if ($reason -eq 'NoChanges' -or $reason -eq 'NoPrivilegedGrants' -or
+    $reason -eq 'NoActiveIdentities' -or $reason -eq 'NoManagerGroups' -or
+    $reason -eq 'NoManagers') {
     exit 1
 }
 

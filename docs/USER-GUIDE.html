@@ -2588,6 +2588,10 @@ campaigns may find recent grants but existing access will never have been certif
 <td>How many days managers have to review. <code>2</code> = 48-hour deadline.</td>
 </tr>
 <tr>
+<td><code>PrivilegedOnly</code></td>
+<td><code>false</code> (default) — certify all grants. <code>true</code> — only grants to privileged entitlements (ISC <code>privileged:true</code> or name-pattern match). Best volume control available.</td>
+</tr>
+<tr>
 <td><code>CampaignNamePrefix</code></td>
 <td>Daily delta campaign names: <code>"AD Delta Cert 2026-06-08 - Manager Smith"</code>.</td>
 </tr>
@@ -2634,6 +2638,10 @@ campaigns may find recent grants but existing access will never have been certif
 <td><strong><code>sp:scopes:all</code></strong> or <code>idn:account-activities:read</code></td>
 <td><strong>Required</strong> — read the account-activities events that detect new grants</td>
 </tr>
+<tr>
+<td><code>idn:entitlement:read</code></td>
+<td>Required only when using <code>-PrivilegedOnly</code> to check ISC entitlement metadata</td>
+</tr>
 </tbody></table>
 <p>Without <code>sp:scopes:all</code> (or the specific account-activities scope), the script fails at grant detection with a 403. This is the most common setup issue. See the Foundations doc for how to add scopes to your Personal Access Token.</p>
 <h3 id="how-to-find-your-ad-source-id">How to find your AD Source ID</h3>
@@ -2658,6 +2666,18 @@ campaigns may find recent grants but existing access will never have been certif
 
 # Look back 48 hours (catch-up after a skipped day)
 .\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -HoursBack 48</code></pre>
+<h3 id="targeting-only-privileged-grants-privilegedonly">Targeting only privileged grants (-PrivilegedOnly)</h3>
+<p>The single highest-leverage volume control for daily delta. Instead of certifying every AD group grant, only trigger a campaign when the specific group is marked <code>privileged:true</code> in ISC — distribution lists, project groups, and standard access get ignored entirely.</p>
+<pre><code># Only certify managers whose staff received a privileged AD entitlement today
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -PrivilegedOnly
+
+# Preview what would be caught (no campaigns created)
+.\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -PrivilegedOnly -WhatIf</code></pre>
+<p><strong>What "privileged" means in ISC:</strong> In ISC Admin → Entitlements, each AD group entry can have its <code>privileged</code> attribute set to <code>true</code>. ISC populates this from your source connector (AD has no native "privileged" flag, so someone must tag them manually or via an ISC rule).</p>
+<p><strong>Pattern-match fallback:</strong> If the entitlement isn't in ISC yet (not yet aggregated, or the source hasn't been fully catalogued), the toolkit falls back to the name patterns in <code>Audit.RiskIndicators.PrivilegedPatterns</code> (default: <code>Admin</code>, <code>Root</code>, <code>DBA</code>, <code>Domain Admins</code>). A group named "Finance-Admins" would be caught by the "Admin" pattern.</p>
+<p><strong>ISC scope required:</strong> <code>idn:entitlement:read</code> or <code>sp:scopes:all</code> (needs to read entitlement metadata to check the privileged attribute).</p>
+<p><strong>Make it the permanent default:</strong> Set <code>"PrivilegedOnly": true</code> in the <code>DeltaCert</code> section of <code>settings.json</code> — then every daily run automatically uses the filter without needing the command-line switch.</p>
+<p><strong>For the ISC <code>at-access(privileged:true)</code> Lucene query:</strong> This ISC search expression finds identities who hold ANY privileged access. <code>-PrivilegedOnly</code> is more specific — it filters by whether the specific <em>new grant event</em> is for a privileged entitlement, not whether the identity happened to already hold other privileged access.</p>
 <h3 id="escalation-deadline-aware-recommended">Escalation — deadline-aware (recommended)</h3>
 <pre><code># Escalate if campaign deadline is within 8 hours AND cert is unsigned
 # Run this at noon for 11pm deadlines (gives 11h for escalated reviewer)

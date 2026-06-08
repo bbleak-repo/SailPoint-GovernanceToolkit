@@ -204,6 +204,8 @@
         ],
         "ExcludeDisplayNamePatterns": [],
         "ExcludeIdentityIds": [],
+        "PrivilegedOnly": false,
+        "_PrivilegedOnlyNote": "When true, delta runs only create campaigns for identities who received a GRANT_ACCESS event where the specific AD entitlement is marked privileged:true in ISC (or matches Audit.RiskIndicators.PrivilegedPatterns as a fallback). Reduces campaign volume on busy provisioning days by ignoring non-sensitive group additions.",
         "Escalation": {
             "DefaultStaleHours": 24,
             "MaxEscalationLevels": 2,

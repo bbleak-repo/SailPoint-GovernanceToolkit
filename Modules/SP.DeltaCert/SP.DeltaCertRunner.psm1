@@ -233,9 +233,9 @@ function Invoke-SPDeltaCertRun {
                 CampaignIds      = [string[]]
                 IdentityCount    = [int]
                 ManagerGroups    = [int]
-                Reason           = [string]    # NoChanges | NoActiveIdentities |
-                                               # NoManagerGroups | DuplicatesExist |
-                                               # WhatIf | Created
+                Reason           = [string]    # NoChanges | NoPrivilegedGrants |
+                                               # NoActiveIdentities | NoManagerGroups |
+                                               # DuplicatesExist | WhatIf | Created
                 Errors           = [string[]]  # per-campaign errors (partial failure)
                 WhatIfGroups     = [hashtable] # only present when WhatIf=true
             }
@@ -278,6 +278,19 @@ function Invoke-SPDeltaCertRun {
         [Parameter()]
         [string]$CorrelationID,
 
+        # When set, only creates campaigns for identities who received a GRANT_ACCESS
+        # event where the specific entitlement is marked privileged:true in ISC.
+        # Falls back to Audit.RiskIndicators.PrivilegedPatterns pattern matching for
+        # entitlements not yet tagged in ISC (un-aggregated or unmanaged groups).
+        [Parameter()]
+        [switch]$PrivilegedOnly,
+
+        # Optional override for the pattern fallback list. When omitted and PrivilegedOnly
+        # is set, patterns are read from Audit.RiskIndicators.PrivilegedPatterns in config.
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$PrivilegedPatterns = @(),
+
         [Parameter()]
         [switch]$Force
     )
@@ -288,7 +301,7 @@ function Invoke-SPDeltaCertRun {
 
     $runStartTime = [System.Diagnostics.Stopwatch]::StartNew()
 
-    Write-SPLog -Message "Invoke-SPDeltaCertRun: Sources='$($SourceIds -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays WhatIf=$(($WhatIfPreference -eq $true))" `
+    Write-SPLog -Message "Invoke-SPDeltaCertRun: Sources='$($SourceIds -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays PrivilegedOnly=$($PrivilegedOnly.IsPresent) WhatIf=$(($WhatIfPreference -eq $true))" `
         -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
         -CorrelationID $CorrelationID
 
@@ -318,7 +331,44 @@ function Invoke-SPDeltaCertRun {
 
         $grantEvents = @($eventsResult.Data)
 
+        # Step 1b: Privileged-only filter (optional)
+        # When -PrivilegedOnly is set, discard grant events for non-privileged entitlements
+        # before identity resolution. Only identities who received a privileged AD group
+        # will end up in a campaign. This is the primary workload-reduction lever for
+        # organisations where daily provisioning is high-volume but most grants are
+        # non-sensitive (e.g., distribution lists, project groups).
+        if ($PrivilegedOnly) {
+            $effectivePatterns = $PrivilegedPatterns
+            if ($effectivePatterns.Count -eq 0) {
+                try {
+                    $cfg = Get-SPConfig
+                    if ($null -ne $cfg -and
+                        $null -ne $cfg.PSObject.Properties['Audit'] -and
+                        $null -ne $cfg.Audit -and
+                        $null -ne $cfg.Audit.PSObject.Properties['RiskIndicators'] -and
+                        $null -ne $cfg.Audit.RiskIndicators -and
+                        $null -ne $cfg.Audit.RiskIndicators.PSObject.Properties['PrivilegedPatterns']) {
+                        $effectivePatterns = @($cfg.Audit.RiskIndicators.PrivilegedPatterns)
+                    }
+                } catch { }
+            }
+
+            Write-SPLog -Message "Step 1b: Filtering $($grantEvents.Count) event(s) to privileged entitlements only (patterns=$($effectivePatterns.Count))" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+
+            $grantEvents = @(Select-SPPrivilegedGrantEvents `
+                -GrantEvents $grantEvents `
+                -PrivilegedPatterns $effectivePatterns `
+                -CorrelationID $CorrelationID)
+
+            Write-SPLog -Message "Step 1b: $($grantEvents.Count) privileged grant event(s) remain after filter" `
+                -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
+                -CorrelationID $CorrelationID
+        }
+
         if ($grantEvents.Count -eq 0) {
+            $noChangesReason = if ($PrivilegedOnly) { 'NoPrivilegedGrants' } else { 'NoChanges' }
             Write-SPLog -Message "No AD GRANT_ACCESS events found in the last $HoursBack hours -- no campaigns created" `
                 -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertRun' `
                 -CorrelationID $CorrelationID
@@ -327,7 +377,7 @@ function Invoke-SPDeltaCertRun {
             Write-SPDeltaCertAuditEvent -CorrelationID $CorrelationID -SourceIds $SourceIds `
                 -HoursBack $HoursBack -GrantEventsFound 0 -IdentitiesProcessed 0 `
                 -ManagerGroups 0 -CampaignsCreated 0 -CampaignIds @() `
-                -Reason 'NoChanges' -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
+                -Reason $noChangesReason -Errors @() -DurationSeconds $runStartTime.Elapsed.TotalSeconds
 
             return @{
                 Success = $true
@@ -336,7 +386,7 @@ function Invoke-SPDeltaCertRun {
                     CampaignIds      = @()
                     IdentityCount    = 0
                     ManagerGroups    = 0
-                    Reason           = 'NoChanges'
+                    Reason           = $noChangesReason
                     Errors           = @()
                 }
                 Error   = $null
