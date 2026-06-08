@@ -964,6 +964,12 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Cert '$certId' has no ReviewerIdentityId (campaign='$campaignName') -- cannot escalate, skipping" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
+                if (($WhatIfPreference -eq $true)) {
+                    Write-Host "    $campaignName" -ForegroundColor DarkGray
+                    Write-Host "      Reviewer:    [NONE — cert has no reviewer ID]" -ForegroundColor Red
+                    Write-Host "      Skip-level:  SKIP — cannot escalate" -ForegroundColor Red
+                    Write-Host ''
+                }
                 $skipped.Add($certId)
                 continue
             }
@@ -975,6 +981,13 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Reviewer '$reviewerId' not found in ISC -- cannot escalate cert '$certId'" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
+                if (($WhatIfPreference -eq $true)) {
+                    $reviewerDisplay = if (-not [string]::IsNullOrWhiteSpace($staleCert.ReviewerName)) { $staleCert.ReviewerName } else { $reviewerId }
+                    Write-Host "    $campaignName" -ForegroundColor DarkGray
+                    Write-Host "      Reviewer:    $reviewerDisplay" -ForegroundColor White
+                    Write-Host "      Skip-level:  WARNING — reviewer not found in ISC" -ForegroundColor Red
+                    Write-Host ''
+                }
                 $skipped.Add($certId)
                 continue
             }
@@ -983,6 +996,12 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Reviewer '$reviewerId' ($($reviewerDetail.DisplayName)) has no manager -- cannot escalate cert '$certId'" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
+                if (($WhatIfPreference -eq $true)) {
+                    Write-Host "    $campaignName" -ForegroundColor DarkGray
+                    Write-Host "      Reviewer:    $($reviewerDetail.DisplayName)" -ForegroundColor White
+                    Write-Host "      Skip-level:  WARNING — NO MANAGER in ISC (org chain gap)" -ForegroundColor Red
+                    Write-Host ''
+                }
                 $skipped.Add($certId)
                 continue
             }
@@ -1013,9 +1032,21 @@ function Invoke-SPDeltaCertEscalate {
             $reviewItemIds = @($reviewItems | ForEach-Object { [string]$_.id })
             $reason = "SLA escalation: $hoursOpen hours without action"
 
-            # WhatIf: describe without making API calls
+            # WhatIf: show full reviewer→skip-level chain, no write API calls
             if (($WhatIfPreference -eq $true)) {
-                Write-SPLog -Message "WhatIf: Would reassign cert '$certId' ($($reviewItemIds.Count) items) from '$reviewerId' to '$escalationTarget'" `
+                $skipLevelDetail  = Get-SPDeltaIdentityDetail -IdentityId $escalationTarget -CorrelationID $CorrelationID
+                $skipLevelName    = if ($skipLevelDetail.Found) { $skipLevelDetail.DisplayName } else { "UNRESOLVED ($escalationTarget)" }
+                $reviewerDisplay  = if (-not [string]::IsNullOrWhiteSpace($staleCert.ReviewerName)) { $staleCert.ReviewerName } else { $reviewerId }
+                $deadlineDisplay  = if ($null -ne $staleCert.HoursUntilDeadline) { "$($staleCert.HoursUntilDeadline)h until deadline" } else { 'no deadline' }
+                $reasonDisplay    = if (-not [string]::IsNullOrWhiteSpace($staleCert.EscalationReason) -and $staleCert.EscalationReason -ne 'AuditAll') { "[$($staleCert.EscalationReason)]" } else { '[org-audit]' }
+
+                Write-Host "    $($staleCert.CampaignName)" -ForegroundColor DarkGray
+                Write-Host "      Reviewer:    $reviewerDisplay" -ForegroundColor White
+                Write-Host "      Skip-level:  $skipLevelName" -ForegroundColor $(if ($skipLevelDetail.Found) { 'Green' } else { 'Red' })
+                Write-Host "      Items:       $($reviewItemIds.Count)   $deadlineDisplay   $reasonDisplay" -ForegroundColor DarkGray
+                Write-Host ''
+
+                Write-SPLog -Message "WhatIf: Would reassign cert '$certId' ($($reviewItemIds.Count) items) from '$reviewerDisplay' to '$skipLevelName' ($escalationTarget)" `
                     -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
                 $escalated.Add($certId)

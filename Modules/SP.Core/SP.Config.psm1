@@ -162,10 +162,16 @@ function Get-SPConfigDefaults {
             ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
             ExcludeDisplayNamePatterns = @()
             ExcludeIdentityIds         = @()
+            PrivilegedOnly             = $false
             Escalation = @{
                 DefaultStaleHours      = 24
                 MaxEscalationLevels    = 2
-                CampaignNamePrefix     = ''  # Falls back to DeltaCert.CampaignNamePrefix when empty
+                CampaignNamePrefix     = ''
+            }
+            FullCert = @{
+                CampaignNamePrefix    = 'AD Full Cert'
+                DeadlineDays          = 14
+                MaxIdentitiesPerPage  = 250
             }
         }
         Leadership = @{
@@ -515,10 +521,16 @@ function Get-SPConfigTemplate {
             ExcludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
             ExcludeDisplayNamePatterns = @()
             ExcludeIdentityIds         = @()
+            PrivilegedOnly             = $false
             Escalation = [ordered]@{
                 DefaultStaleHours   = 24
                 MaxEscalationLevels = 2
-                CampaignNamePrefix  = ''  # Falls back to DeltaCert.CampaignNamePrefix when empty
+                CampaignNamePrefix  = ''
+            }
+            FullCert = [ordered]@{
+                CampaignNamePrefix   = 'AD Full Cert'
+                DeadlineDays         = 14
+                MaxIdentitiesPerPage = 250
             }
         }
         Leadership = [ordered]@{

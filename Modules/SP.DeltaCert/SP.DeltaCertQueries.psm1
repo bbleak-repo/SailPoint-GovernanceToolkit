@@ -890,32 +890,67 @@ function Group-SPDeltaByManager {
 function Get-SPDeltaCertStaleCertifications {
     <#
     .SYNOPSIS
-        Finds active delta cert certifications that have been open longer than a threshold.
+        Finds delta cert certifications that meet escalation criteria or are in-scope for audit.
     .DESCRIPTION
-        Searches for active delta cert campaigns matching a name prefix, retrieves all
-        certifications for each campaign, and filters to certifications where:
-          - signed is null (not completed by the reviewer)
-          - created date is older than StaleHours
+        Searches for delta cert campaigns matching a name prefix, retrieves all certifications
+        for each campaign, and applies configurable filters.
 
-        Returns enough context per stale certification for downstream escalation
-        (F-07: cert ID, reviewer ID, campaign name, hours open).
+        STANDARD MODE (default, -DaysBack 0):
+          Searches ACTIVE campaigns only. Includes certifications where:
+            - signed is null (not completed by the reviewer)
+            - StaleHours condition: cert has been open >= StaleHours hours
+            - OR EscalateBeforeDeadlineHours condition: campaign deadline is within
+              EscalateBeforeDeadlineHours hours (union -- either condition triggers)
+
+        ORG CHART AUDIT MODE (-DaysBack N or -AllCertifications):
+          Searches all campaigns (ACTIVE + COMPLETED + STAGED) within the last N days.
+          Skips the signed/stale filters -- returns ALL certifications so callers can
+          validate the manager chain for every reviewer that ever appeared in the window.
+          Designed for -WhatIf dry-runs to verify ISC org chain data before enabling
+          live escalation.
+
     .PARAMETER CampaignNamePrefix
         Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
+        Uses an ISC starts-with filter (sw=) for indexed performance.
     .PARAMETER StaleHours
-        Number of hours with no reviewer action before a certification is considered
-        stale. Default: 24.
+        Hours with no reviewer action before a certification is stale. Default: 24.
+        Ignored when -AllCertifications is set.
+    .PARAMETER EscalateBeforeDeadlineHours
+        Escalate if the campaign deadline is within this many hours, regardless of
+        how long the cert has been open. 0 = disabled. Union with StaleHours:
+        if either condition is met the certification is returned.
+        Ignored when -AllCertifications is set.
+    .PARAMETER DaysBack
+        When > 0, searches all campaign statuses (ACTIVE, COMPLETED, STAGED, etc.)
+        and restricts to campaigns created in the last N days. Automatically activates
+        AllCertifications mode (signed/stale filters are skipped).
+        When 0 (default), searches ACTIVE campaigns only with no date limit.
+    .PARAMETER AllCertifications
+        When set, skips the signed and stale-hours filters -- returns ALL certifications
+        regardless of status. Implies DaysBack audit behaviour. Useful for org chart
+        validation in -WhatIf runs.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries. Auto-generated if omitted.
     .OUTPUTS
         [hashtable] @{
             Success = $bool
-            Data    = @([PSCustomObject] with CertificationId, CampaignId, CampaignName,
-                        ReviewerIdentityId, ReviewerName, HoursOpen, ReviewerClassification)
+            Data    = @([PSCustomObject]:
+                        CertificationId, CampaignId, CampaignName, CampaignStatus,
+                        ReviewerIdentityId, ReviewerName, HoursOpen,
+                        HoursUntilDeadline, EscalationReason,
+                        ReviewerClassification, CertSigned)
             Error   = $string
         }
     .EXAMPLE
-        $result = Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 24
-        $result.Data | Format-Table CertificationId, ReviewerName, HoursOpen
+        $r = Get-SPDeltaCertStaleCertifications -StaleHours 24
+        $r.Data | Format-Table CertificationId, ReviewerName, HoursOpen
+    .EXAMPLE
+        # Org chart audit: all certs from last 30 days
+        $r = Get-SPDeltaCertStaleCertifications -DaysBack 30
+        $r.Data | Format-Table CampaignName, ReviewerName, CertSigned
+    .EXAMPLE
+        # Deadline-proximity mode: escalate if campaign closes within 8 hours
+        $r = Get-SPDeltaCertStaleCertifications -StaleHours 0 -EscalateBeforeDeadlineHours 8
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -927,6 +962,15 @@ function Get-SPDeltaCertStaleCertifications {
         [int]$StaleHours = 24,
 
         [Parameter()]
+        [int]$EscalateBeforeDeadlineHours = 0,
+
+        [Parameter()]
+        [int]$DaysBack = 0,
+
+        [Parameter()]
+        [switch]$AllCertifications,
+
+        [Parameter()]
         [string]$CorrelationID
     )
 
@@ -934,14 +978,38 @@ function Get-SPDeltaCertStaleCertifications {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Get-SPDeltaCertStaleCertifications: Prefix='$CampaignNamePrefix' StaleHours=$StaleHours" `
+    # DaysBack > 0 automatically activates AllCertifications (audit) mode
+    $auditMode = $AllCertifications.IsPresent -or ($DaysBack -gt 0)
+
+    Write-SPLog -Message "Get-SPDeltaCertStaleCertifications: Prefix='$CampaignNamePrefix' StaleHours=$StaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours DaysBack=$DaysBack AuditMode=$auditMode" `
         -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
         -CorrelationID $CorrelationID
 
     try {
-        # Step 1: Find active delta cert campaigns
-        $searchResult = Search-SPCampaigns -Keyword $CampaignNamePrefix -Status @('ACTIVE') `
-            -CorrelationID $CorrelationID
+        # Step 1: Find campaigns
+        # Standard mode: ACTIVE only, no date limit (sw= prefix filter, indexed).
+        # Audit mode:    All statuses, DaysBack date window (client-side date filter).
+        if ($auditMode) {
+            $auditSearchParams = @{
+                CampaignNameStartsWith = $CampaignNamePrefix
+                CorrelationID          = $CorrelationID
+            }
+            if ($DaysBack -gt 0) {
+                $auditSearchParams['DaysBack'] = $DaysBack
+            }
+            else {
+                # AllCertifications without DaysBack: no date limit (DaysBack=0 disables it)
+                $auditSearchParams['DaysBack'] = 0
+            }
+            $searchResult = Get-SPAuditCampaigns @auditSearchParams
+        }
+        else {
+            $searchResult = Get-SPAuditCampaigns `
+                -CampaignNameStartsWith $CampaignNamePrefix `
+                -Status @('ACTIVE') `
+                -DaysBack 0 `
+                -CorrelationID $CorrelationID
+        }
 
         if (-not $searchResult.Success) {
             $errMsg = "Campaign search failed: $($searchResult.Error)"
@@ -950,27 +1018,62 @@ function Get-SPDeltaCertStaleCertifications {
             return @{ Success = $false; Data = $null; Error = $errMsg }
         }
 
-        $activeCampaigns = @($searchResult.Data)
+        $foundCampaigns = @($searchResult.Data)
 
-        if ($activeCampaigns.Count -eq 0) {
-            Write-SPLog -Message "No active campaigns found matching '$CampaignNamePrefix'" `
+        if ($foundCampaigns.Count -eq 0) {
+            $noResultMsg = if ($auditMode) {
+                "No campaigns found matching '$CampaignNamePrefix' in last $DaysBack days"
+            } else {
+                "No active campaigns found matching '$CampaignNamePrefix'"
+            }
+            Write-SPLog -Message $noResultMsg `
                 -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
                 -CorrelationID $CorrelationID
             return @{ Success = $true; Data = @(); Error = $null }
         }
 
-        Write-SPLog -Message "Found $($activeCampaigns.Count) active campaign(s) -- retrieving certifications" `
+        $modeLabel = if ($auditMode) { 'campaign(s) (audit mode)' } else { 'active campaign(s)' }
+        Write-SPLog -Message "Found $($foundCampaigns.Count) $modeLabel -- retrieving certifications" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
             -CorrelationID $CorrelationID
 
-        $nowUtc        = (Get-Date).ToUniversalTime()
-        $staleCutoff   = $nowUtc.AddHours(-$StaleHours)
-        $staleCerts    = [System.Collections.Generic.List[object]]::new()
+        $nowUtc      = (Get-Date).ToUniversalTime()
+        $staleCutoff = $nowUtc.AddHours(-$StaleHours)
+        $resultCerts = [System.Collections.Generic.List[object]]::new()
 
-        # Step 2: For each campaign, get certifications and filter
-        foreach ($campaign in $activeCampaigns) {
-            $campaignId   = $campaign.id
-            $campaignName = $campaign.name
+        # Step 2: For each campaign, get certifications and apply filters
+        foreach ($campaign in $foundCampaigns) {
+            $campaignId     = [string]$campaign.id
+            $campaignName   = [string]$campaign.name
+            $campaignStatus = ''
+            if ($campaign.PSObject.Properties.Name -contains 'status' -and $null -ne $campaign.status) {
+                $campaignStatus = [string]$campaign.status
+            }
+
+            # Extract campaign deadline for EscalateBeforeDeadlineHours mode
+            $campaignDeadline      = $null
+            $hoursUntilDeadline    = [double]::MaxValue
+            $deadlineStr = $null
+            foreach ($prop in @('deadline', 'Deadline', 'endDate', 'end')) {
+                if ($campaign.PSObject.Properties.Name -contains $prop -and
+                    $null -ne $campaign.$prop -and
+                    -not [string]::IsNullOrWhiteSpace([string]$campaign.$prop)) {
+                    $deadlineStr = [string]$campaign.$prop
+                    break
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
+                try {
+                    if ($deadlineStr -is [datetime]) {
+                        $campaignDeadline = ([datetime]$deadlineStr).ToUniversalTime()
+                    }
+                    else {
+                        $campaignDeadline = [datetime]::Parse($deadlineStr).ToUniversalTime()
+                    }
+                    $hoursUntilDeadline = [math]::Round(($campaignDeadline - $nowUtc).TotalHours, 1)
+                }
+                catch { }
+            }
 
             $certResult = Get-SPAuditCertifications -CampaignId $campaignId `
                 -CorrelationID $CorrelationID
@@ -985,23 +1088,22 @@ function Get-SPDeltaCertStaleCertifications {
             $certs = @($certResult.Data)
 
             foreach ($cert in $certs) {
-                # Skip completed certifications (signed is not null)
+                # Extract signed status
                 $signedValue = $null
                 if ($cert.PSObject.Properties.Name -contains 'signed') {
                     $signedValue = $cert.signed
                 }
-                if ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue)) {
-                    continue
-                }
+                $isSigned = ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue))
 
-                # Check created date against stale threshold
+                # In standard mode: skip signed certifications
+                if (-not $auditMode -and $isSigned) { continue }
+
+                # Parse created date
                 $certCreatedStr = $null
                 if ($cert.PSObject.Properties.Name -contains 'created') {
                     $certCreatedStr = $cert.created
                 }
-                if ([string]::IsNullOrWhiteSpace($certCreatedStr)) {
-                    continue
-                }
+                if ([string]::IsNullOrWhiteSpace($certCreatedStr)) { continue }
 
                 $certCreated = $null
                 try {
@@ -1019,8 +1121,31 @@ function Get-SPDeltaCertStaleCertifications {
                     continue
                 }
 
-                if ($certCreated -ge $staleCutoff) {
-                    continue
+                $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
+
+                # Determine if this cert meets escalation criteria (standard mode only)
+                $escalationReason = ''
+                if (-not $auditMode) {
+                    $meetsStaleHours   = ($StaleHours -gt 0 -and $certCreated -lt $staleCutoff)
+                    $meetsDeadline     = ($EscalateBeforeDeadlineHours -gt 0 -and
+                                         $hoursUntilDeadline -ne [double]::MaxValue -and
+                                         $hoursUntilDeadline -le $EscalateBeforeDeadlineHours)
+
+                    if ($meetsStaleHours -and $meetsDeadline) {
+                        $escalationReason = 'Both'
+                    }
+                    elseif ($meetsStaleHours) {
+                        $escalationReason = 'Stale'
+                    }
+                    elseif ($meetsDeadline) {
+                        $escalationReason = 'Deadline'
+                    }
+                    else {
+                        continue  # neither condition met -- skip
+                    }
+                }
+                else {
+                    $escalationReason = 'AuditAll'
                 }
 
                 $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
@@ -1049,23 +1174,28 @@ function Get-SPDeltaCertStaleCertifications {
                     $reviewerClassification = [string]$cert.ReviewerClassification
                 }
 
-                $staleCerts.Add([PSCustomObject]@{
+                $resultCerts.Add([PSCustomObject]@{
                     CertificationId        = [string]$cert.id
                     CampaignId             = $campaignId
                     CampaignName           = $campaignName
+                    CampaignStatus         = $campaignStatus
                     ReviewerIdentityId     = $reviewerId
                     ReviewerName           = $reviewerName
                     HoursOpen              = $hoursOpen
+                    HoursUntilDeadline     = if ($hoursUntilDeadline -eq [double]::MaxValue) { $null } else { $hoursUntilDeadline }
+                    EscalationReason       = $escalationReason
                     ReviewerClassification = $reviewerClassification
+                    CertSigned             = $isSigned
                 })
             }
         }
 
-        Write-SPLog -Message "Found $($staleCerts.Count) stale certification(s) across $($activeCampaigns.Count) active campaign(s)" `
+        $resultLabel = if ($auditMode) { 'certification(s) (audit)' } else { 'stale certification(s)' }
+        Write-SPLog -Message "Found $($resultCerts.Count) $resultLabel across $($foundCampaigns.Count) campaign(s)" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
             -CorrelationID $CorrelationID
 
-        return @{ Success = $true; Data = $staleCerts.ToArray(); Error = $null }
+        return @{ Success = $true; Data = $resultCerts.ToArray(); Error = $null }
     }
     catch {
         $errMsg = "Get-SPDeltaCertStaleCertifications failed: $($_.Exception.Message)"

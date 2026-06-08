@@ -31,6 +31,19 @@
     Number of hours with no reviewer action before a certification is
     considered stale. Defaults to DeltaCert.Escalation.DefaultStaleHours
     in settings.json (fallback: 24).
+.PARAMETER EscalateBeforeDeadlineHours
+    Escalate if the campaign deadline is within this many hours, regardless
+    of how long the cert has been open. 0 = disabled (default).
+    Union with StaleHours: either condition triggers escalation.
+    Recommended: run at noon with -EscalateBeforeDeadlineHours 11 so
+    certifications closing at 11 PM get escalated with 11 hours remaining.
+.PARAMETER DaysBack
+    When > 0, searches ALL campaigns (active + completed + staged) created in
+    the last N days and runs in ORG CHART AUDIT mode: every certification in
+    those campaigns is returned regardless of signed/stale status. Designed
+    for use with -WhatIf to validate that ISC's manager chain resolves
+    correctly before enabling live escalation.
+    Example: -DaysBack 30 -WhatIf
 .PARAMETER MaxEscalationLevels
     Maximum number of escalation hops from the original reviewer.
     Defaults to DeltaCert.Escalation.MaxEscalationLevels in settings.json
@@ -55,6 +68,16 @@
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
     # Dry-run: show which stale certifications would be escalated.
 .EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 0 -EscalateBeforeDeadlineHours 11 -WhatIf
+    # Deadline-aware dry-run: escalate certs whose campaign closes within 11 hours.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf
+    # Org chart audit: show the reviewer->skip-level chain for ALL certs in last 30 days.
+    # Validates that ISC can resolve the skip-level for every reviewer. No write calls.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf
+    # Org chart audit against a peer's campaign name prefix.
+.EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
     # Escalate stale certifications using a browser token.
 .EXAMPLE
@@ -77,6 +100,12 @@ param(
 
     [Parameter()]
     [int]$StaleHours = 0,
+
+    [Parameter()]
+    [int]$EscalateBeforeDeadlineHours = 0,
+
+    [Parameter()]
+    [int]$DaysBack = 0,
 
     [Parameter()]
     [int]$MaxEscalationLevels = 0,
@@ -248,7 +277,7 @@ if ($effectiveMaxLevels -le 0) {
     }
 }
 
-Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePrefix' StaleHours=$effectiveStaleHours MaxLevels=$effectiveMaxLevels" `
+Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePrefix' StaleHours=$effectiveStaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours DaysBack=$DaysBack MaxLevels=$effectiveMaxLevels" `
     -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'Start' -CorrelationID $correlationID
 
 #endregion
@@ -261,20 +290,47 @@ $runStart = Get-Date
 if (($WhatIfPreference -eq $true)) {
     Write-Host '  [WhatIf] Dry-run mode. No write API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
-    Write-Host '  Would run escalation with:' -ForegroundColor Cyan
-    Write-Host "    CampaignPrefix:      $effectivePrefix"
-    Write-Host "    StaleHours:          $effectiveStaleHours"
-    Write-Host "    MaxEscalationLevels: $effectiveMaxLevels"
+    if ($DaysBack -gt 0) {
+        Write-Host '  ORG CHART AUDIT MODE' -ForegroundColor Cyan
+        Write-Host '  All certifications in the window are checked.' -ForegroundColor DarkGray
+        Write-Host '  Each reviewer is resolved to their skip-level to validate ISC manager chains.' -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '  Would run escalation with:' -ForegroundColor Cyan
+    }
+    Write-Host "    CampaignPrefix:              $effectivePrefix"
+    Write-Host "    StaleHours:                  $effectiveStaleHours"
+    if ($EscalateBeforeDeadlineHours -gt 0) {
+        Write-Host "    EscalateBeforeDeadlineHours: $EscalateBeforeDeadlineHours"
+    }
+    if ($DaysBack -gt 0) {
+        Write-Host "    DaysBack:                    $DaysBack  (all campaign statuses)"
+    }
+    Write-Host "    MaxEscalationLevels:         $effectiveMaxLevels"
     Write-Host ''
 }
 
-Write-Host "  Detecting stale certifications (threshold: $effectiveStaleHours hours)..." -ForegroundColor Cyan
+if ($DaysBack -gt 0) {
+    Write-Host "  Org chart audit: scanning campaigns from last $DaysBack days..." -ForegroundColor Cyan
+}
+else {
+    Write-Host "  Detecting stale certifications (threshold: $effectiveStaleHours hours)..." -ForegroundColor Cyan
+}
 
-# Step 1: Find stale certifications
-$staleResult = Get-SPDeltaCertStaleCertifications `
-    -CampaignNamePrefix $effectivePrefix `
-    -StaleHours $effectiveStaleHours `
-    -CorrelationID $correlationID
+# Step 1: Find stale/in-scope certifications
+$staleParams = @{
+    CampaignNamePrefix = $effectivePrefix
+    StaleHours         = $effectiveStaleHours
+    CorrelationID      = $correlationID
+}
+if ($EscalateBeforeDeadlineHours -gt 0) {
+    $staleParams['EscalateBeforeDeadlineHours'] = $EscalateBeforeDeadlineHours
+}
+if ($DaysBack -gt 0) {
+    $staleParams['DaysBack'] = $DaysBack
+}
+
+$staleResult = Get-SPDeltaCertStaleCertifications @staleParams
 
 if (-not $staleResult.Success) {
     Write-Host "ERROR: Stale cert detection failed: $($staleResult.Error)" -ForegroundColor Red
@@ -287,9 +343,16 @@ $staleCerts = @($staleResult.Data)
 
 if ($staleCerts.Count -eq 0) {
     Write-Host ''
-    Write-Host '  No stale certifications found.' -ForegroundColor Yellow
-    Write-Host "  Prefix:     $effectivePrefix" -ForegroundColor DarkGray
-    Write-Host "  Threshold:  $effectiveStaleHours hours" -ForegroundColor DarkGray
+    if ($DaysBack -gt 0) {
+        Write-Host '  No certifications found in audit window.' -ForegroundColor Yellow
+        Write-Host "  Prefix:   $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  DaysBack: $DaysBack days" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '  No stale certifications found.' -ForegroundColor Yellow
+        Write-Host "  Prefix:     $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  Threshold:  $effectiveStaleHours hours" -ForegroundColor DarkGray
+    }
     Write-Host ''
 
     Write-SPLog -Message "No stale certifications found" `
@@ -335,18 +398,20 @@ try {
     }
 
     $auditEvent = [ordered]@{
-        Timestamp           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-        CorrelationID       = $correlationID
-        Action              = 'DeltaCertEscalation'
-        CampaignNamePrefix  = $effectivePrefix
-        StaleHours          = $effectiveStaleHours
-        MaxEscalationLevels = $effectiveMaxLevels
-        StaleCertsFound     = $staleCerts.Count
-        Escalated           = $escalatedIds.Count
-        Skipped             = $skippedIds.Count
-        Errors              = $errorMsgs
-        WhatIf              = ($WhatIfPreference -eq $true)
-        DurationSeconds     = [math]::Round($runDuration, 2)
+        Timestamp                   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        CorrelationID               = $correlationID
+        Action                      = 'DeltaCertEscalation'
+        CampaignNamePrefix          = $effectivePrefix
+        StaleHours                  = $effectiveStaleHours
+        EscalateBeforeDeadlineHours = $EscalateBeforeDeadlineHours
+        DaysBack                    = $DaysBack
+        MaxEscalationLevels         = $effectiveMaxLevels
+        CertsFound                  = $staleCerts.Count
+        Escalated                   = $escalatedIds.Count
+        Skipped                     = $skippedIds.Count
+        Errors                      = $errorMsgs
+        WhatIf                      = ($WhatIfPreference -eq $true)
+        DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
     $jsonLine  = $auditEvent | ConvertTo-Json -Depth 5 -Compress
@@ -376,19 +441,21 @@ if ($null -ne $escalateResult.Data) {
 }
 
 $summary = [PSCustomObject]@{
-    CorrelationID       = $correlationID
-    StartedAt           = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    CompletedAt         = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    DurationSeconds     = [math]::Round($runDuration, 2)
-    CampaignNamePrefix  = $effectivePrefix
-    StaleHours          = $effectiveStaleHours
-    MaxEscalationLevels = $effectiveMaxLevels
-    StaleCertsFound     = $staleCerts.Count
-    Escalated           = $escalatedCount
-    Skipped             = $skippedCount
-    Errors              = $errorCount
-    Success             = $escalateResult.Success
-    Environment         = $config.Global.EnvironmentName
+    CorrelationID                = $correlationID
+    StartedAt                    = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    CompletedAt                  = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    DurationSeconds              = [math]::Round($runDuration, 2)
+    CampaignNamePrefix           = $effectivePrefix
+    StaleHours                   = $effectiveStaleHours
+    EscalateBeforeDeadlineHours  = $EscalateBeforeDeadlineHours
+    DaysBack                     = $DaysBack
+    MaxEscalationLevels          = $effectiveMaxLevels
+    CertsFound                   = $staleCerts.Count
+    Escalated                    = $escalatedCount
+    Skipped                      = $skippedCount
+    Errors                       = $errorCount
+    Success                      = $escalateResult.Success
+    Environment                  = $config.Global.EnvironmentName
 }
 
 switch ($OutputMode) {
@@ -404,7 +471,7 @@ switch ($OutputMode) {
             Write-Host '  Escalation Complete' -ForegroundColor Cyan
         }
         Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
-        Write-Host "  Stale certs found: $($staleCerts.Count)" -ForegroundColor DarkGray
+        Write-Host "  Certs found:       $($staleCerts.Count)" -ForegroundColor DarkGray
         Write-Host "  Escalated:         $escalatedCount" -ForegroundColor Green
         Write-Host "  Skipped:           $skippedCount" -ForegroundColor Yellow
         if ($errorCount -gt 0) {
