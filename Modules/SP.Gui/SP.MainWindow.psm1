@@ -3959,13 +3959,22 @@ function Invoke-GuiGovernanceReport {
     $psInstance.Runspace = $runspace
 
     $scriptBlock = {
-        $coreModule  = Join-Path $ToolkitRoot 'Modules\SP.Core\SP.Core.psd1'
-        $apiModule   = Join-Path $ToolkitRoot 'Modules\SP.Api\SP.Api.psd1'
-        $auditModule = Join-Path $ToolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
-        $guiModule   = Join-Path $ToolkitRoot 'Modules\SP.Gui\SP.Gui.psd1'
-
-        foreach ($mod in @($coreModule, $apiModule, $auditModule, $guiModule)) {
-            if (Test-Path $mod) { Import-Module $mod -Force -ErrorAction SilentlyContinue }
+        # Import every module the governance report can call -- missing modules
+        # produce "term not recognized" errors (e.g. Get-SPRegisteredApps needs
+        # SP.DisconnectedApps; Build-SPOrgTree needs SP.DeltaCert; the RC
+        # generators need SP.ReportComponents). Keep in sync with the CLI script
+        # Invoke-SPGovernanceReport.ps1 which imports the same set.
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.DeltaCert\SP.DeltaCert.psd1',
+                'SP.DisconnectedApps\SP.DisconnectedApps.psd1',
+                'SP.ReportComponents\SP.ReportComponents.psd1',
+                'SP.AdaptiveReports\SP.AdaptiveReports.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
         }
 
         $govReportParams = @{

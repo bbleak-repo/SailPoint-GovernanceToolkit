@@ -197,7 +197,8 @@ $adaptiveReportsModulePath  = Join-Path $toolkitRoot 'Modules\SP.AdaptiveReports
 # SP.Testing provides Import-SPTestIdentities / Import-SPTestCampaigns used by the
 # Campaigns tab (test runner) and the GUI bridge (Get-SPGuiCampaignsList).
 # Without it the Campaigns tab throws "Import-SPTestIdentities is not recognized."
-$testingModulePath = Join-Path $toolkitRoot 'Modules\SP.Testing\SP.Testing.psd1'
+$testingModulePath       = Join-Path $toolkitRoot 'Modules\SP.Testing\SP.Testing.psd1'
+$disconnectedModulePath  = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
 
 foreach ($moduleDef in @(
     @{ Path = $coreModulePath;  Name = 'SP.Core';  Required = $true },
@@ -206,6 +207,7 @@ foreach ($moduleDef in @(
     @{ Path = $deltaCertModulePath;        Name = 'SP.DeltaCert';        Required = $true },
     @{ Path = $reportComponentsModulePath; Name = 'SP.ReportComponents'; Required = $true },
     @{ Path = $adaptiveReportsModulePath;  Name = 'SP.AdaptiveReports';  Required = $true },
+    @{ Path = $disconnectedModulePath;     Name = 'SP.DisconnectedApps'; Required = $true },
     @{ Path = $testingModulePath;          Name = 'SP.Testing';          Required = $true },
     @{ Path = $sdkModulePath;   Name = 'SP.Sdk';   Required = $true },
     @{ Path = $guiModulePath;   Name = 'SP.Gui';   Required = $true }
