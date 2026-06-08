@@ -225,6 +225,88 @@ foreach ($moduleDef in @(
 
 #endregion
 
+#region Pre-warm Authentication
+
+# Acquire the bearer token NOW, on the UI thread, before the window opens.
+#
+# WHY THIS IS REQUIRED:
+# The dashboard spawns background STA runspaces as soon as tabs are initialised
+# (e.g. the SDK Features tab auto-loads templates on first display). Those
+# runspaces import SP.Auth fresh and have no cached token. In Vault mode they
+# would call Read-Host to prompt for the passphrase -- but background runspaces
+# have no interactive host and Read-Host throws "host does not support user
+# interaction."
+#
+# The solution has two layers:
+#   1. This block: acquire the token HERE, on the UI thread (which CAN prompt),
+#      before any runspace fires. The token is stored in the AppDomain-static
+#      cross-runspace cache (SPAuthRunspaceCache) in SP.Auth.psm1.
+#   2. SP.Auth.psm1: Get-SPAuthToken checks the static cache before doing
+#      anything else, so every subsequent runspace call returns the cached
+#      token without prompting.
+#
+# Token expiry during a long session: the next UI-thread API call (any button
+# click that triggers an action) will re-prompt and repopulate both caches.
+# Runspaces that fire during the brief expiry window get a clear error.
+
+$_authConfig = $null
+try {
+    $_cfg = Get-SPConfig -ErrorAction Stop
+    $_authConfig = $_cfg.Authentication
+} catch {
+    Write-Host "  WARNING: Could not read authentication config: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+if ($null -ne $_authConfig -and $_authConfig.Mode -eq 'Vault') {
+    Write-Host ''
+    Write-Host '  Vault authentication required.' -ForegroundColor Cyan
+    Write-Host '  Enter your vault passphrase below. You will NOT be prompted again' -ForegroundColor Cyan
+    Write-Host '  during this session (the token is shared with all background operations).' -ForegroundColor Cyan
+    Write-Host ''
+
+    $_preAuth = $null
+    $_attempt = 0
+    while ($null -eq $_preAuth -or -not $_preAuth.Success) {
+        $_attempt++
+        if ($_attempt -gt 3) {
+            Write-Host ''
+            Write-Host '  ERROR: Vault authentication failed 3 times. The dashboard will open' -ForegroundColor Red
+            Write-Host '  but API operations will fail. Restart and try again.' -ForegroundColor Red
+            Write-Host ''
+            break
+        }
+        if ($_attempt -gt 1) {
+            Write-Host "  Attempt $_attempt of 3..." -ForegroundColor Yellow
+        }
+        $_preAuth = Get-SPAuthToken -CorrelationID ([guid]::NewGuid().ToString())
+        if ($_preAuth.Success) {
+            $_exp = $_preAuth.Data.ExpiresAt
+            Write-Host "  Authentication successful. Token valid until $($_exp.ToString('HH:mm')) ($(($_exp - (Get-Date)).TotalMinutes.ToString('0')) min)." -ForegroundColor Green
+            Write-Host ''
+        } else {
+            Write-Host "  Authentication failed: $($_preAuth.Error)" -ForegroundColor Red
+            if ($_preAuth.Error -notmatch '(?i)passphrase|vault|read.host|incorrect') {
+                # Non-passphrase error (network, config) -- don't retry
+                Write-Host '  Non-recoverable error. The dashboard will open but API operations will fail.' -ForegroundColor Yellow
+                break
+            }
+        }
+    }
+}
+elseif ($null -ne $_authConfig -and $_authConfig.Mode -eq 'ConfigFile') {
+    # ConfigFile mode: pre-warm silently (no passphrase needed)
+    $_preAuth = Get-SPAuthToken -CorrelationID ([guid]::NewGuid().ToString())
+    if ($_preAuth.Success) {
+        Write-Host "  INFO: Pre-authenticated (ConfigFile). Token valid until $($_preAuth.Data.ExpiresAt.ToString('HH:mm'))." -ForegroundColor Green
+    }
+    # Don't exit on failure -- let the dashboard show and surface the error per-tab
+}
+# BrowserToken mode: no pre-warm (user pastes a token via Settings tab in the GUI)
+
+Remove-Variable _authConfig, _cfg, _preAuth, _attempt -ErrorAction SilentlyContinue
+
+#endregion
+
 #region Launch GUI
 
 $dashboardParams = @{}

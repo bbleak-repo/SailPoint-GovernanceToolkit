@@ -133,8 +133,20 @@ function Get-SPCredentialsFromVault {
                "to an absolute path in Config\settings.local.json.")
     }
 
-    # Prompt for vault passphrase at runtime
-    $passphrase = Read-Host -Prompt 'Enter vault passphrase' -AsSecureString
+    # Prompt for vault passphrase at runtime.
+    # In a background STA runspace Read-Host throws "host does not support user
+    # interaction." If this happens it means the cross-runspace static cache was
+    # empty (token not yet acquired or already expired). The pre-warm block in
+    # Show-SPDashboard.ps1 prevents this on startup; a session expiry during a
+    # long run requires clicking any action to re-authenticate.
+    $passphrase = $null
+    try {
+        $passphrase = Read-Host -Prompt 'Enter vault passphrase' -AsSecureString
+    } catch {
+        throw ("Vault passphrase cannot be collected in this context (background runspace). " +
+               "This usually means the session token has expired. " +
+               "Click any action button in the dashboard to re-authenticate, or restart the dashboard.")
+    }
 
     Write-SPLog -Message 'Retrieving credentials from vault' -Severity 'DEBUG' `
         -Component 'SP.Auth' -Action 'GetCredentials' -CorrelationID $CorrelationID
