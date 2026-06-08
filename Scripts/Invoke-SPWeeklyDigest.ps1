@@ -931,13 +931,76 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
         Write-Host '  --- Campaign Activity ---' -ForegroundColor Cyan
         Write-Host "    Created: $($ca.Created) | Completed: $($ca.Completed) | Active: $($ca.Active)"
         if ($ca.TotalItems -gt 0) {
-            Write-Host "    Items Reviewed: $($ca.TotalItems) | Approved: $($ca.Approved) ($($ca.ApprovalRate)%) | Revoked: $($ca.Revoked) ($($ca.RevocationRate)%)"
+            # NOTE: "Items in Scope" = total items needing a decision (Approved + Revoked + still Pending).
+            # Approval% and Revoke% are percentages of ALL items, so a fresh campaign with few decisions
+            # will show 0% even with some approvals -- that is correct (e.g. 46 of 10577 = 0.4% rounds to 0%).
+            $decided = $ca.Approved + $ca.Revoked
+            $pending = $ca.TotalItems - $decided
+            $completionPct = if ($ca.TotalItems -gt 0) { [math]::Round(($decided / $ca.TotalItems) * 100, 1) } else { 0 }
+            Write-Host "    Items in Scope: $($ca.TotalItems) | Decided: $decided ($completionPct% complete) | Pending: $pending"
+            Write-Host "    Approved: $($ca.Approved) ($($ca.ApprovalRate)%) | Revoked: $($ca.Revoked) ($($ca.RevocationRate)%)"
         }
         $compStr = "    vs Last Week: $($ca.CampaignDelta) campaigns"
         if (-not [string]::IsNullOrWhiteSpace($ca.ApprovalRateDelta)) {
             $compStr += ", $($ca.ApprovalRateDelta) approval rate"
         }
         Write-Host $compStr
+
+        # Per-campaign breakdown -- shows which campaigns are stalled vs. active,
+        # so you can identify which manager groups need a nudge.
+        if ($campaignAudits.Count -gt 0) {
+            Write-Host ''
+            Write-Host '    Per-Campaign Detail:' -ForegroundColor DarkGray
+
+            # Build a lookup: campaign name -> deadline/status from $currentCampaigns
+            $campLookup = @{}
+            foreach ($c in $currentCampaigns) {
+                $n = if ($null -ne $c.name) { [string]$c.name } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($n)) {
+                    $campLookup[$n] = $c
+                }
+            }
+
+            foreach ($audit in ($campaignAudits | Sort-Object { $_.CampaignName })) {
+                $cName = [string]$audit.CampaignName
+                $shortName = if ($cName.Length -gt 45) { $cName.Substring(0, 42) + '...' } else { $cName }
+
+                $cApproved = 0; $cRevoked = 0; $cPending = 0
+                if ($null -ne $audit.Decisions) {
+                    $d = $audit.Decisions
+                    if ($null -ne $d.Approved) { $cApproved = @($d.Approved).Count }
+                    if ($null -ne $d.Revoked)  { $cRevoked  = @($d.Revoked).Count }
+                    if ($null -ne $d.Pending)  { $cPending  = @($d.Pending).Count }
+                }
+                $cTotal   = $cApproved + $cRevoked + $cPending
+                $cDecided = $cApproved + $cRevoked
+                $cPct     = if ($cTotal -gt 0) { [math]::Round(($cDecided / $cTotal) * 100, 0) } else { 0 }
+
+                # Deadline from campaign object
+                $deadlineStr = ''
+                if ($campLookup.ContainsKey($cName)) {
+                    $campObj = $campLookup[$cName]
+                    $dl = if ($null -ne $campObj.deadline) { $campObj.deadline }
+                          elseif ($null -ne $campObj.deadlineDate) { $campObj.deadlineDate }
+                          else { $null }
+                    if ($null -ne $dl) {
+                        try {
+                            $dlDate  = [datetime]::Parse($dl.ToString(),
+                                [System.Globalization.CultureInfo]::InvariantCulture,
+                                [System.Globalization.DateTimeStyles]::RoundtripKind)
+                            $daysLeft = [int]($dlDate.ToUniversalTime() - (Get-Date).ToUniversalTime()).TotalDays
+                            $deadlineStr = " | Due in ${daysLeft}d"
+                            if ($daysLeft -le 0) { $deadlineStr = ' | OVERDUE' }
+                        } catch { }
+                    }
+                }
+
+                $pctColor = if ($cPct -ge 80) { 'Green' } elseif ($cPct -ge 40) { 'Yellow' } else { 'Red' }
+                $line = "      {0,-47} {1,5} in scope  {2,3}% done  ({3}A {4}R {5}P){6}" -f `
+                    $shortName, $cTotal, $cPct, $cApproved, $cRevoked, $cPending, $deadlineStr
+                Write-Host $line -ForegroundColor $pctColor
+            }
+        }
         Write-Host ''
     }
 
