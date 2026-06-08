@@ -157,52 +157,70 @@
             <Setter Property="FontSize"                 Value="12"/>
             <Setter Property="Height"                   Value="30"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="Template">
+<Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBox">
                         <Grid x:Name="templateRoot" SnapsToDevicePixels="True">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="22"/>
-                            </Grid.ColumnDefinitions>
-                            <Border x:Name="border"
-                                    Grid.ColumnSpan="2"
-                                    Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="2"/>
-                            <!-- Selected value: TextElement.Foreground explicitly bound
-                                 so WPF's default system brush cannot override it. -->
+                            <!-- Single full-width ToggleButton makes the entire ComboBox
+                                 clickable. It owns its own ControlTemplate so we can draw
+                                 a proper dark border + arrow without WPF's system chrome. -->
+                            <ToggleButton x:Name="toggleButton"
+                                          Background="{TemplateBinding Background}"
+                                          BorderBrush="{TemplateBinding BorderBrush}"
+                                          BorderThickness="{TemplateBinding BorderThickness}"
+                                          Focusable="False"
+                                          OverridesDefaultStyle="True"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="bd"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="2">
+                                            <!-- Arrow indicator, right-aligned -->
+                                            <Path x:Name="arrow"
+                                                  Fill="#AAAACC"
+                                                  HorizontalAlignment="Right"
+                                                  VerticalAlignment="Center"
+                                                  Data="M 0 0 L 6 5 L 12 0 Z"
+                                                  Width="12" Height="6"
+                                                  Margin="0,0,8,0"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd"    Property="BorderBrush" Value="#5B9BD5"/>
+                                                <Setter TargetName="arrow" Property="Fill"        Value="#5B9BD5"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="bd"    Property="BorderBrush" Value="#5B9BD5"/>
+                                                <Setter TargetName="arrow" Property="Fill"        Value="#5B9BD5"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <!-- Selected value overlaid on the ToggleButton.
+                                 IsHitTestVisible=False lets mouse clicks fall through
+                                 to the ToggleButton underneath. TextElement.Foreground
+                                 is explicitly bound so WPF's system brush cannot override. -->
                             <ContentPresenter x:Name="contentPresenter"
-                                              Grid.Column="0"
-                                              Margin="{TemplateBinding Padding}"
-                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Margin="8,0,26,0"
+                                              HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                               IsHitTestVisible="False"
                                               TextElement.Foreground="{TemplateBinding Foreground}"/>
-                            <!-- Dropdown arrow toggle -->
-                            <ToggleButton Grid.Column="1"
-                                          Background="Transparent"
-                                          BorderThickness="0"
-                                          Focusable="False"
-                                          OverridesDefaultStyle="True"
-                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
-                                <Path Fill="#AAAACC"
-                                      HorizontalAlignment="Center"
-                                      VerticalAlignment="Center"
-                                      Data="M 0 0 L 6 5 L 12 0 Z"
-                                      Width="12" Height="6"/>
-                            </ToggleButton>
+
                             <!-- Dropdown popup with dark background -->
                             <Popup x:Name="PART_Popup"
-                                   Grid.ColumnSpan="2"
                                    AllowsTransparency="True"
                                    IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                    Placement="Bottom">
-                                <Border x:Name="dropDownBorder"
-                                        Background="#2D2D44"
+                                <Border Background="#2D2D44"
                                         BorderBrush="#5B9BD5"
                                         BorderThickness="1"
                                         MinWidth="{Binding ActualWidth, ElementName=templateRoot}"
@@ -213,14 +231,6 @@
                                 </Border>
                             </Popup>
                         </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#5B9BD5"/>
-                            </Trigger>
-                            <Trigger Property="IsDropDownOpen" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#5B9BD5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
