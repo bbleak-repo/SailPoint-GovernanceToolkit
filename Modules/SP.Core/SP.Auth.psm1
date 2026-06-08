@@ -32,9 +32,29 @@ try {
     }
 } catch { }
 
-# Script-scoped variables
+# Script-scoped variables (module-scope cache -- cleared on each fresh module import)
 $script:CurrentToken = $null
 $script:TokenExpiry  = $null
+
+# AppDomain-wide static token cache -- survives background STA runspace imports.
+# In the same powershell.exe process every runspace shares the AppDomain, so a
+# static .NET type defined here is accessible from all runspaces. This is the only
+# reliable way to share an acquired vault token with background runspaces: they
+# cannot call Read-Host (no interactive host), so they read the pre-acquired token
+# from this cache instead of re-prompting for the vault passphrase.
+# The try/catch handles re-imports in background runspaces where the type already
+# exists in the AppDomain -- Add-Type throws on duplicate, but the existing instance
+# (and its stored token) is exactly what we want to reuse.
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Concurrent;
+public static class SPAuthRunspaceCache {
+    public static readonly ConcurrentDictionary<string, object> Store =
+        new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+}
+'@
+} catch { }  # Type already defined in this AppDomain -- reuse the existing instance.
 
 #region Internal Functions
 
@@ -180,7 +200,37 @@ function Get-SPAuthToken {
             $CorrelationID = [guid]::NewGuid().ToString()
         }
 
-        # Return cached token if valid and not forced
+        # 1. Check AppDomain-wide static cache first.
+        #    Background STA runspaces cannot call Read-Host (no interactive host), so
+        #    they must reuse a token acquired by the UI thread. The static cache is the
+        #    only mechanism that crosses runspace module-scope boundaries within one
+        #    powershell.exe process.
+        if (-not $Force) {
+            try {
+                $xToken  = [SPAuthRunspaceCache]::Store['Token']     -as [string]
+                $xExpiry = [SPAuthRunspaceCache]::Store['ExpiresAt'] -as [datetime]
+                if (-not [string]::IsNullOrWhiteSpace($xToken) -and
+                    $null -ne $xExpiry -and
+                    $xExpiry -gt (Get-Date).AddMinutes(5)) {
+                    $xMode = [string][SPAuthRunspaceCache]::Store['Mode']
+                    $xData = @{
+                        Mode      = $xMode
+                        Token     = $xToken
+                        Headers   = @{ 'Authorization' = "Bearer $xToken"; 'Content-Type' = 'application/json' }
+                        ExpiresAt = $xExpiry
+                    }
+                    # Also warm the module-scope cache so repeated calls in this
+                    # runspace don't re-hit the static dictionary.
+                    $script:CurrentToken = $xData
+                    $script:TokenExpiry  = $xExpiry
+                    Write-SPLog -Message 'Using cross-runspace cached authentication token' -Severity 'DEBUG' `
+                        -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
+                    return @{ Success = $true; Data = $xData; Error = $null }
+                }
+            } catch { }
+        }
+
+        # 2. Check module-scope cache (same runspace / session).
         if (-not $Force -and $null -ne $script:CurrentToken -and $null -ne $script:TokenExpiry) {
             if ($script:TokenExpiry -gt (Get-Date).AddMinutes(5)) {
                 Write-SPLog -Message 'Using cached authentication token' -Severity 'DEBUG' `
@@ -244,9 +294,15 @@ function Get-SPAuthToken {
             ExpiresAt = $expiresAt
         }
 
-        # Cache the token
+        # Cache the token -- both module-scope (this runspace) and AppDomain-static
+        # (all other runspaces in this process).
         $script:CurrentToken = $tokenData
         $script:TokenExpiry  = $expiresAt
+        try {
+            [SPAuthRunspaceCache]::Store['Token']     = $response.access_token
+            [SPAuthRunspaceCache]::Store['ExpiresAt'] = $expiresAt
+            [SPAuthRunspaceCache]::Store['Mode']      = $mode
+        } catch { }
 
         Write-SPLog -Message "OAuth 2.0 token acquired (mode: $mode, expires: $($expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')))" `
             -Severity 'INFO' -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
@@ -344,9 +400,14 @@ function Set-SPBrowserToken {
             ExpiresAt = $expiresAt
         }
 
-        # Cache the token
+        # Cache the token -- both module-scope and AppDomain-static.
         $script:CurrentToken = $tokenData
         $script:TokenExpiry  = $expiresAt
+        try {
+            [SPAuthRunspaceCache]::Store['Token']     = $jwt
+            [SPAuthRunspaceCache]::Store['ExpiresAt'] = $expiresAt
+            [SPAuthRunspaceCache]::Store['Mode']      = 'BrowserToken'
+        } catch { }
 
         Write-SPLog -Message "Browser token injected (expires: $($expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')), segments: $($segments.Count))" `
             -Severity 'INFO' -Component 'SP.Auth' -Action 'SetBrowserToken' -CorrelationID $CorrelationID
@@ -383,11 +444,21 @@ function Clear-SPAuthToken {
         $script:CurrentToken.Headers = $null
         $script:CurrentToken         = $null
     }
-
     $script:TokenExpiry = $null
+
+    # Also clear the AppDomain-static cross-runspace cache so background runspaces
+    # don't serve a stale token after a 401 / explicit clear.
+    # Note: after clearing, the NEXT Get-SPAuthToken call on the UI thread will
+    # re-prompt for the vault passphrase and repopulate both caches.
+    try {
+        [SPAuthRunspaceCache]::Store.TryRemove('Token',     [ref]$null) | Out-Null
+        [SPAuthRunspaceCache]::Store.TryRemove('ExpiresAt', [ref]$null) | Out-Null
+        [SPAuthRunspaceCache]::Store.TryRemove('Mode',      [ref]$null) | Out-Null
+    } catch { }
+
     [System.GC]::Collect()
 
-    Write-SPLog -Message 'Cached auth token cleared from memory' `
+    Write-SPLog -Message 'Cached auth token cleared from memory (module-scope + cross-runspace)' `
         -Severity 'DEBUG' -Component 'SP.Auth' -Action 'ClearToken'
 }
 
