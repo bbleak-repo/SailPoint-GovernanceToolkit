@@ -699,8 +699,9 @@ function Get-SPCampaignDeadlineStatus {
             $filterParts.Add("status in ($quotedStatuses)")
         }
 
+        # NOTE: detail=FULL omitted -- list endpoint only needs id/name/status/
+        # created/deadline (all in SLIM). Full detail causes 400 on some ISC tenants.
         $queryParams = @{
-            'detail' = 'FULL'
             'limit'  = '250'
             'offset' = '0'
         }

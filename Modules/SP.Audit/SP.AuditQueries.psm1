@@ -375,8 +375,13 @@ function Get-SPAuditCampaigns {
             $filterParts.Add("type eq `"$CampaignType`"")
         }
 
+        # NOTE: detail=FULL is intentionally omitted from the list query.
+        # ISC /v3/campaigns list does not reliably support detail=FULL across
+        # all tenant configurations and returns 400 on some. The audit pipeline
+        # only needs id, name, status, created, deadline -- all present in the
+        # default (SLIM) response. Full campaign detail is fetched individually
+        # via Get-SPCampaign -Full only when a single-campaign deep-read is needed.
         $queryParams = @{
-            'detail' = 'FULL'
             'limit'  = '250'
             'offset' = '0'
         }
