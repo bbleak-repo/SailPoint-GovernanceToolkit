@@ -53,7 +53,7 @@
     },
     "Audit": {
         "OutputPath": ".\\Audit",
-        "DefaultDaysBack": 365,
+        "DefaultDaysBack": 1,
         "DefaultIdentityEventDays": 2,
         "DefaultStatuses": [
             "COMPLETED",
