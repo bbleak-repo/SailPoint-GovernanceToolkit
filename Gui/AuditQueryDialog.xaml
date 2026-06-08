@@ -117,10 +117,12 @@
                               Background="#2D2D44" Foreground="#E0E0E0"
                               BorderBrush="#3D3D5C" BorderThickness="1"
                               FontSize="12"
-                              SelectedIndex="2">
+                              SelectedIndex="0"
+                              ToolTip="Look-back window. Default is controlled by Audit.DefaultDaysBack in settings.local.json.">
+                        <ComboBoxItem Content="1 day"/>
                         <ComboBoxItem Content="7 days"/>
                         <ComboBoxItem Content="14 days"/>
-                        <ComboBoxItem Content="30 days" IsSelected="True"/>
+                        <ComboBoxItem Content="30 days"/>
                         <ComboBoxItem Content="60 days"/>
                         <ComboBoxItem Content="90 days"/>
                         <ComboBoxItem Content="180 days"/>

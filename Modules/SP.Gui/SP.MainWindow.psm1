@@ -1527,10 +1527,32 @@ function Get-AuditQueryDialogDefaults {
         return $script:LastAuditQueryParams
     }
 
+    # Map Audit.DefaultDaysBack from config to the nearest CboTimespan label.
+    # Valid labels: '1 day', '7 days', '14 days', '30 days', '60 days',
+    #               '90 days', '180 days', '365 days'.
+    $defaultTimespan = '30 days'
+    try {
+        $auditCfg = (Get-SPConfig).Audit
+        if ($null -ne $auditCfg -and
+            $auditCfg.PSObject.Properties.Name -contains 'DefaultDaysBack') {
+            $days = [int]$auditCfg.DefaultDaysBack
+            $defaultTimespan = switch ($true) {
+                ($days -le 1)   { '1 day' }
+                ($days -le 7)   { '7 days' }
+                ($days -le 14)  { '14 days' }
+                ($days -le 30)  { '30 days' }
+                ($days -le 60)  { '60 days' }
+                ($days -le 90)  { '90 days' }
+                ($days -le 180) { '180 days' }
+                default         { '365 days' }
+            }
+        }
+    } catch { }
+
     return @{
         TxtCampaignName  = ''
         CboStatus        = '(All)'
-        CboTimespan      = '30 days'
+        CboTimespan      = $defaultTimespan
         CboType          = '(All)'
         TxtCreatedAfter  = ''
         TxtCreatedBefore = ''
