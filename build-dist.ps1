@@ -119,18 +119,41 @@ function Get-RuntimePlan {
 function Get-UserPlan {
     $p = New-Plan
     Get-RuntimePlan $p
-    # User-facing docs at root
+
+    # Root-level user docs
     Add-Item $p 'README.md'            (Join-Path $RepoRoot 'README.md')
     Add-Item $p 'QUICKSTART.md'        (Join-Path $RepoRoot 'QUICKSTART.md')
     Add-Item $p 'USER-GUIDE.html'      (Join-Path $RepoRoot 'USER-GUIDE.html')
     Add-Item $p 'SANDBOX-API-SETUP.md' (Join-Path $RepoRoot 'docs\SANDBOX-API-SETUP.md')
+
     # Onboarding templates (for app owners providing disconnected CSVs)
-    Add-Item $p 'Config/Templates/ONBOARDING-GUIDE.md'              (Join-Path $RepoRoot 'Config\Templates\ONBOARDING-GUIDE.md')
-    Add-Item $p 'Config/Templates/VERSION-HISTORY.md'              (Join-Path $RepoRoot 'Config\Templates\VERSION-HISTORY.md')
-    Add-Item $p 'Config/Templates/disconnected-app-accounts.csv'     (Join-Path $RepoRoot 'Config\Templates\disconnected-app-accounts.csv')
-    Add-Item $p 'Config/Templates/disconnected-app-entitlements.csv' (Join-Path $RepoRoot 'Config\Templates\disconnected-app-entitlements.csv')
+    Add-Item $p 'Config/Templates/ONBOARDING-GUIDE.md'               (Join-Path $RepoRoot 'Config\Templates\ONBOARDING-GUIDE.md')
+    Add-Item $p 'Config/Templates/VERSION-HISTORY.md'                (Join-Path $RepoRoot 'Config\Templates\VERSION-HISTORY.md')
+    Add-Item $p 'Config/Templates/disconnected-app-accounts.csv'      (Join-Path $RepoRoot 'Config\Templates\disconnected-app-accounts.csv')
+    Add-Item $p 'Config/Templates/disconnected-app-entitlements.csv'  (Join-Path $RepoRoot 'Config\Templates\disconnected-app-entitlements.csv')
+
     # Workflow diagrams referenced by the onboarding/user guide
     Add-Tree $p 'docs/designs/disconnected-app-workflows' 'docs/designs/disconnected-app-workflows' @('*.png')
+
+    # Governance HTML guides (persona-specific: manager attestation, app owner,
+    # connector playbook, campaign rollout, SaaS architecture, metrics dashboard, etc.)
+    # Excludes mockup-audit-report.html (dev-only visual prototype).
+    $htmlExclude = @('mockup-audit-report.html')
+    Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'docs') -File -Filter '*.html' |
+        Where-Object { $_.Name -notin $htmlExclude } |
+        ForEach-Object { Add-Item $p "docs/$($_.Name)" $_.FullName }
+
+    # HTML guide assets (email templates, integration diagrams, ISC UI mockups)
+    $assetsDir = Join-Path $RepoRoot 'docs\assets'
+    if (Test-Path $assetsDir) {
+        Get-ChildItem -LiteralPath $assetsDir -File -Filter '*.html' |
+            ForEach-Object { Add-Item $p "docs/assets/$($_.Name)" $_.FullName }
+    }
+
+    # Playbook Markdown (canonical source-of-truth reference docs for CLI + GUI)
+    Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'docs\playbook') -File -Filter '*.md' |
+        ForEach-Object { Add-Item $p "docs/playbook/$($_.Name)" $_.FullName }
+
     return $p
 }
 
