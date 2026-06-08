@@ -710,32 +710,61 @@ function Group-SPDeltaByManager {
 function Get-SPDeltaCertStaleCertifications {
     <#
     .SYNOPSIS
-        Finds active delta cert certifications that have been open longer than a threshold.
+        Finds active delta cert certifications that need escalation.
     .DESCRIPTION
         Searches for active delta cert campaigns matching a name prefix, retrieves all
-        certifications for each campaign, and filters to certifications where:
-          - signed is null (not completed by the reviewer)
-          - created date is older than StaleHours
+        unsigned certifications for each, and flags ones that need escalation based on
+        ONE OR BOTH trigger modes:
+
+        MODE 1 -- StaleHours (wall-clock age):
+          Certifications older than StaleHours with no reviewer action.
+          Use when campaigns have a consistent creation time (e.g. nightly at 11pm)
+          and you schedule the escalation job to run after enough wall-clock time has
+          elapsed (e.g. run at 2pm the next day with -StaleHours 15).
+
+        MODE 2 -- EscalateBeforeDeadlineHours (deadline proximity):
+          Certifications whose campaign deadline is within N hours AND no action taken.
+          Better for business-hours-aware scheduling: reviewers may only have a narrow
+          window (e.g. 6am-2pm) before a 24h campaign expires. Running this at noon
+          with -EscalateBeforeDeadlineHours 11 catches anyone who will miss the 11pm
+          deadline -- regardless of what time the campaign was created.
+
+        COMBINED: when both parameters are supplied, a certification is flagged if
+        EITHER condition is met (union). Omit StaleHours to use deadline-only mode.
 
         Returns enough context per stale certification for downstream escalation
-        (F-07: cert ID, reviewer ID, campaign name, hours open).
+        (cert ID, reviewer ID, campaign name, hours open, hours until deadline).
     .PARAMETER CampaignNamePrefix
         Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
     .PARAMETER StaleHours
-        Number of hours with no reviewer action before a certification is considered
-        stale. Default: 24.
+        Wall-clock hours since certification creation with no action. Set to 0 to
+        disable this mode and use only EscalateBeforeDeadlineHours. Default: 24.
+    .PARAMETER EscalateBeforeDeadlineHours
+        Escalate certifications whose campaign deadline is within this many hours
+        AND has not been signed off. Set to 0 to disable. Default: 0 (disabled).
+        Recommended for 24h campaigns: set to the number of hours you need the
+        escalated reviewer to have -- e.g. 8 means "escalate if less than 8h remain."
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries. Auto-generated if omitted.
     .OUTPUTS
         [hashtable] @{
             Success = $bool
             Data    = @([PSCustomObject] with CertificationId, CampaignId, CampaignName,
-                        ReviewerIdentityId, ReviewerName, HoursOpen, ReviewerClassification)
+                        ReviewerIdentityId, ReviewerName, HoursOpen, HoursUntilDeadline,
+                        EscalationReason, ReviewerClassification)
             Error   = $string
         }
     .EXAMPLE
-        $result = Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 24
-        $result.Data | Format-Table CertificationId, ReviewerName, HoursOpen
+        # Original wall-clock mode: escalate certs open > 15h (campaign at 11pm, script at 2pm)
+        Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 15
+
+    .EXAMPLE
+        # Deadline-aware mode: escalate if campaign deadline is within 8 hours (preferred)
+        Get-SPDeltaCertStaleCertifications -EscalateBeforeDeadlineHours 8 -StaleHours 0
+
+    .EXAMPLE
+        # Combined: escalate if stale OR deadline near (belt-and-suspenders)
+        Get-SPDeltaCertStaleCertifications -StaleHours 15 -EscalateBeforeDeadlineHours 8
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -745,6 +774,10 @@ function Get-SPDeltaCertStaleCertifications {
 
         [Parameter()]
         [int]$StaleHours = 24,
+
+        # Escalate when campaign deadline is within this many hours. 0 = disabled.
+        [Parameter()]
+        [int]$EscalateBeforeDeadlineHours = 0,
 
         [Parameter()]
         [string]$CorrelationID
@@ -791,14 +824,46 @@ function Get-SPDeltaCertStaleCertifications {
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
             -CorrelationID $CorrelationID
 
-        $nowUtc        = (Get-Date).ToUniversalTime()
-        $staleCutoff   = $nowUtc.AddHours(-$StaleHours)
-        $staleCerts    = [System.Collections.Generic.List[object]]::new()
+        $nowUtc      = (Get-Date).ToUniversalTime()
+        $staleCutoff = $nowUtc.AddHours(-$StaleHours)   # wall-clock threshold
+        $staleCerts  = [System.Collections.Generic.List[object]]::new()
+
+        $useStaleMode    = ($StaleHours -gt 0)
+        $useDeadlineMode = ($EscalateBeforeDeadlineHours -gt 0)
+
+        Write-SPLog -Message ("Get-SPDeltaCertStaleCertifications: " +
+            "Mode=$(if ($useStaleMode -and $useDeadlineMode) {'Combined'} elseif ($useDeadlineMode) {'DeadlineOnly'} else {'StaleOnly'})" +
+            " StaleHours=$StaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours") `
+            -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
+            -CorrelationID $CorrelationID
 
         # Step 2: For each campaign, get certifications and filter
         foreach ($campaign in $activeCampaigns) {
             $campaignId   = $campaign.id
             $campaignName = $campaign.name
+
+            # Parse campaign deadline once per campaign (used for deadline-mode filtering)
+            $campaignDeadline  = $null
+            $hoursUntilDeadline = $null
+            foreach ($dlProp in @('deadline', 'deadlineDate', 'due')) {
+                $dlRaw = $null
+                if ($campaign.PSObject.Properties.Name -contains $dlProp -and $null -ne $campaign.$dlProp) {
+                    $dlRaw = $campaign.$dlProp
+                }
+                if ($null -ne $dlRaw -and -not [string]::IsNullOrWhiteSpace([string]$dlRaw)) {
+                    try {
+                        $campaignDeadline = if ($dlRaw -is [datetime]) {
+                            ([datetime]$dlRaw).ToUniversalTime()
+                        } else {
+                            [datetime]::Parse([string]$dlRaw,
+                                [System.Globalization.CultureInfo]::InvariantCulture,
+                                [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+                        }
+                        $hoursUntilDeadline = [math]::Round(($campaignDeadline - $nowUtc).TotalHours, 1)
+                    } catch { }
+                    break
+                }
+            }
 
             $certResult = Get-SPAuditCertifications -CampaignId $campaignId `
                 -CorrelationID $CorrelationID
@@ -847,11 +912,23 @@ function Get-SPDeltaCertStaleCertifications {
                     continue
                 }
 
-                if ($certCreated -ge $staleCutoff) {
-                    continue
-                }
-
                 $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
+
+                # Determine whether this cert meets the escalation threshold(s)
+                $isStale          = $useStaleMode -and ($certCreated -lt $staleCutoff)
+                $isDeadlineUrgent = $useDeadlineMode -and ($null -ne $hoursUntilDeadline) -and
+                                    ($hoursUntilDeadline -le $EscalateBeforeDeadlineHours) -and
+                                    ($hoursUntilDeadline -ge 0)   # don't escalate already-expired campaigns
+
+                if (-not $isStale -and -not $isDeadlineUrgent) { continue }
+
+                $escalationReason = if ($isStale -and $isDeadlineUrgent) {
+                    "Stale ($hoursOpen h open) + Deadline urgent ($hoursUntilDeadline h remaining)"
+                } elseif ($isDeadlineUrgent) {
+                    "Deadline urgent: $hoursUntilDeadline h remaining before campaign expires"
+                } else {
+                    "Stale: open $hoursOpen hours with no reviewer action"
+                }
 
                 # Extract reviewer info from EffectiveReviewer (added by Get-SPAuditCertifications)
                 $reviewerId   = ''
@@ -884,6 +961,8 @@ function Get-SPDeltaCertStaleCertifications {
                     ReviewerIdentityId     = $reviewerId
                     ReviewerName           = $reviewerName
                     HoursOpen              = $hoursOpen
+                    HoursUntilDeadline     = $hoursUntilDeadline
+                    EscalationReason       = $escalationReason
                     ReviewerClassification = $reviewerClassification
                 })
             }

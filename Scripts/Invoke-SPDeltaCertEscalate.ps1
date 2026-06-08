@@ -28,9 +28,20 @@
     DeltaCert.Escalation.CampaignNamePrefix value in settings.json
     (fallback: 'AD Delta Cert').
 .PARAMETER StaleHours
-    Number of hours with no reviewer action before a certification is
-    considered stale. Defaults to DeltaCert.Escalation.DefaultStaleHours
-    in settings.json (fallback: 24).
+    Wall-clock hours since certification assignment with no reviewer action.
+    Set to 0 to rely solely on -EscalateBeforeDeadlineHours.
+    Defaults to DeltaCert.Escalation.DefaultStaleHours in settings.json (fallback: 24).
+    TIP: For overnight campaigns (created 11pm, due 11pm+24h) with business-hours
+    reviewers (6am-2pm), prefer -EscalateBeforeDeadlineHours 8 over -StaleHours 24.
+    With -StaleHours 24 you'd only escalate at 11pm -- the deadline itself.
+.PARAMETER EscalateBeforeDeadlineHours
+    Escalate unsigned certifications whose campaign deadline is within this many
+    hours. Use instead of (or alongside) StaleHours for campaigns with tight
+    windows and reviewers who only work business hours.
+    Example: -EscalateBeforeDeadlineHours 8 -StaleHours 0
+      → runs at noon, finds campaigns due by 8pm, escalates anyone not signed off.
+      → escalated reviewer has the remaining hours to act.
+    Default: 0 (disabled -- StaleHours mode used).
 .PARAMETER MaxEscalationLevels
     Maximum number of escalation hops from the original reviewer.
     Defaults to DeltaCert.Escalation.MaxEscalationLevels in settings.json
@@ -77,6 +88,9 @@ param(
 
     [Parameter()]
     [int]$StaleHours = 0,
+
+    [Parameter()]
+    [int]$EscalateBeforeDeadlineHours = 0,
 
     [Parameter()]
     [int]$MaxEscalationLevels = 0,
@@ -268,13 +282,23 @@ if (($WhatIfPreference -eq $true)) {
     Write-Host ''
 }
 
-Write-Host "  Detecting stale certifications (threshold: $effectiveStaleHours hours)..." -ForegroundColor Cyan
+$modeDesc = if ($EscalateBeforeDeadlineHours -gt 0 -and $effectiveStaleHours -gt 0) {
+    "stale > $effectiveStaleHours h OR deadline within $EscalateBeforeDeadlineHours h"
+} elseif ($EscalateBeforeDeadlineHours -gt 0) {
+    "deadline within $EscalateBeforeDeadlineHours h"
+} else {
+    "stale > $effectiveStaleHours h"
+}
+Write-Host "  Detecting certifications needing escalation ($modeDesc)..." -ForegroundColor Cyan
 
-# Step 1: Find stale certifications
-$staleResult = Get-SPDeltaCertStaleCertifications `
-    -CampaignNamePrefix $effectivePrefix `
-    -StaleHours $effectiveStaleHours `
-    -CorrelationID $correlationID
+# Step 1: Find stale/deadline-urgent certifications
+$staleParams = @{
+    CampaignNamePrefix           = $effectivePrefix
+    StaleHours                   = $effectiveStaleHours
+    EscalateBeforeDeadlineHours  = $EscalateBeforeDeadlineHours
+    CorrelationID                = $correlationID
+}
+$staleResult = Get-SPDeltaCertStaleCertifications @staleParams
 
 if (-not $staleResult.Success) {
     Write-Host "ERROR: Stale cert detection failed: $($staleResult.Error)" -ForegroundColor Red
