@@ -44,6 +44,7 @@
         'Show-SPOrgTree'
         'Show-SPCampaignOrgPreview'
         'Show-SPReportDistributionPreview'
+        'Clear-SPIdentityCache'
         'Export-SPOrgChartHtml'
         'Resolve-SPIdentityBand'
         'Get-SPOrgChartGaps'

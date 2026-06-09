@@ -27,6 +27,13 @@
 # Module-scope identity cache to avoid redundant API calls within a session.
 $script:IdentityCache = @{}
 
+# Persistent (disk-backed) identity-cache state. $script:_IdentityCachedAt records the
+# CachedAt timestamp per identity so resolutions can be aged out (org movement) and
+# persisted across runs; the disk warm-load happens once per session. Only successfully
+# resolved (Found=true) identities are persisted -- transient misses stay session-only.
+$script:_IdentityCachedAt  = @{}
+$script:_IdentityDiskLoaded = $false
+
 # Module-scope entitlement privileged-status cache (keyed by "SourceId::ItemValue").
 # Populated by Select-SPPrivilegedGrantEvents. Persists for the lifetime of the module
 # import so repeated runs in the same session don't re-call the ISC entitlements API
@@ -34,6 +41,131 @@ $script:IdentityCache = @{}
 $script:EntitlementPrivilegedCache = @{}
 
 #region Internal Functions
+
+function Get-SPIdentityCacheInfo {
+    # Persistent identity-cache file (absolute -- Audit.CachePath is toolkit-root-resolved by
+    # Get-SPConfig) + TTL. Default 1440 min (24h): fast, but an org move surfaces next day.
+    # Override via Audit.IdentityCacheTtlMinutes.
+    $file = $null; $ttl = 1440
+    try {
+        $cfg = Get-SPConfig
+        $dir = $null
+        if ($null -ne $cfg.PSObject.Properties['Audit']) {
+            if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) { $dir = [string]$cfg.Audit.CachePath }
+            elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) { $dir = Join-Path ([string]$cfg.Audit.OutputPath) '.cache' }
+            if ($null -ne $cfg.Audit.PSObject.Properties['IdentityCacheTtlMinutes'] -and
+                $null -ne $cfg.Audit.IdentityCacheTtlMinutes) { $ttl = [int]$cfg.Audit.IdentityCacheTtlMinutes }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            if (-not [System.IO.Path]::IsPathRooted($dir)) {
+                $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+                $dir  = [System.IO.Path]::GetFullPath((Join-Path $root $dir))
+            }
+            $file = Join-Path $dir 'identities.jsonl'
+        }
+    } catch { $file = $null }
+    return @{ File = $file; TtlMin = $ttl }
+}
+
+function Import-SPIdentityCacheFromDisk {
+    # Warm $script:IdentityCache from disk once per session: keep the most recent non-expired
+    # record per id, then compact the file (dedupe + prune) in one rewrite.
+    if ($script:_IdentityDiskLoaded) { return }
+    $script:_IdentityDiskLoaded = $true
+    $info = Get-SPIdentityCacheInfo
+    if ($null -eq $info.File -or -not (Test-Path $info.File)) { return }
+    try {
+        $now = Get-Date
+        $latest = @{}
+        Get-Content $info.File | ForEach-Object {
+            if ([string]::IsNullOrWhiteSpace($_)) { return }
+            try {
+                $rec = $_ | ConvertFrom-Json
+                $rid = [string]$rec.IdentityId
+                $rat = [datetime]::Parse([string]$rec.CachedAt)
+                if (-not [string]::IsNullOrWhiteSpace($rid) -and ($now - $rat).TotalMinutes -lt $info.TtlMin) {
+                    if (-not $latest.ContainsKey($rid) -or $rat -gt $latest[$rid].CachedAt) {
+                        $latest[$rid] = @{ Detail = $rec.Detail; CachedAt = $rat }
+                    }
+                }
+            } catch { }
+        }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $sb = New-Object System.Text.StringBuilder
+        foreach ($id in $latest.Keys) {
+            $d = $latest[$id].Detail
+            $detail = @{
+                IdentityId          = $id
+                DisplayName         = [string]$d.DisplayName
+                ManagerId           = [string]$d.ManagerId
+                ManagerName         = [string]$d.ManagerName
+                IsActive            = [bool]$d.IsActive
+                Found               = [bool]$d.Found
+                CloudLifecycleState = [string]$d.CloudLifecycleState
+                Email               = [string]$d.Email
+                JobLevel            = [string]$d.JobLevel
+            }
+            $script:IdentityCache[$id]     = $detail
+            $script:_IdentityCachedAt[$id] = $latest[$id].CachedAt
+            [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
+        }
+        [System.IO.File]::WriteAllText($info.File, $sb.ToString(), $utf8NoBom)
+    } catch { }
+}
+
+function Save-SPIdentityCacheEntry {
+    param([string]$IdentityId, [hashtable]$Detail)
+    # Append a successful (Found=true) resolution; the warm-load compacts/dedupes per session.
+    if ($null -eq $Detail -or -not $Detail.Found) { return }
+    $info = Get-SPIdentityCacheInfo
+    if ($null -eq $info.File) { return }
+    try {
+        $now = Get-Date
+        $script:_IdentityCachedAt[$IdentityId] = $now
+        $dir = Split-Path -Parent $info.File
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path $dir)) {
+            New-Item -Path $dir -ItemType Directory -Force -WhatIf:$false | Out-Null
+        }
+        $rec = @{ IdentityId = $IdentityId; CachedAt = $now.ToString('o'); Detail = $Detail }
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($info.File, (($rec | ConvertTo-Json -Depth 6 -Compress) + "`r`n"), $utf8NoBom)
+    } catch { }
+}
+
+function Clear-SPIdentityCache {
+    <#
+    .SYNOPSIS
+        Clears the identity-detail cache (memory and/or disk).
+    .DESCRIPTION
+        Forces the next org-tree build to re-resolve identities from ISC -- use this to
+        validate org movement (manager changes / reorg) before the TTL would expire entries.
+    .PARAMETER DiskOnly
+        Clear the on-disk identities.jsonl only (keep the session memory cache).
+    .PARAMETER MemoryOnly
+        Clear the in-memory cache only (keep the disk file).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [switch]$DiskOnly,
+        [Parameter()] [switch]$MemoryOnly
+    )
+    if (-not $DiskOnly) {
+        $script:IdentityCache.Clear()
+        $script:_IdentityCachedAt.Clear()
+        $script:_IdentityDiskLoaded = $false
+        Write-Host "  Identity memory cache cleared." -ForegroundColor DarkGray
+    }
+    if (-not $MemoryOnly) {
+        try {
+            $info = Get-SPIdentityCacheInfo
+            if ($null -ne $info.File -and (Test-Path $info.File)) {
+                Remove-Item $info.File -Force -ErrorAction SilentlyContinue
+                Write-Host "  Identity disk cache cleared." -ForegroundColor DarkGray
+            }
+        } catch { }
+    }
+}
 
 function Get-SPDeltaIdentityDetail {
     <#
@@ -76,6 +208,9 @@ function Get-SPDeltaIdentityDetail {
         Email               = ''
         JobLevel            = ''
     }
+
+    # Warm the persistent (disk) cache into memory once per session, then check memory.
+    Import-SPIdentityCacheFromDisk
 
     if ($script:IdentityCache.ContainsKey($IdentityId)) {
         return $script:IdentityCache[$IdentityId]
@@ -184,6 +319,7 @@ function Get-SPDeltaIdentityDetail {
         }
 
         $script:IdentityCache[$IdentityId] = $resolved
+        Save-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $resolved
         return $resolved
     }
     catch {
@@ -1283,13 +1419,24 @@ function Build-SPOrgTree {
         $maxDepthHit = $false
 
         # Step 1: Create leaf nodes (level 0) for each input identity
-        $leafIds = [System.Collections.Generic.List[string]]::new()
+        $leafIds   = [System.Collections.Generic.List[string]]::new()
+        $leafTotal = @($IdentityIds | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        $leafIdx   = 0
+        $leafStep  = [Math]::Max(25, [int][Math]::Ceiling($leafTotal / 20.0))
+        if ($leafTotal -gt 50) {
+            Write-Host "    Resolving $leafTotal certifier identit(ies) + manager chains (cache reused; rest from ISC)..." -ForegroundColor DarkGray
+        }
         foreach ($leafId in $IdentityIds) {
             if ([string]::IsNullOrWhiteSpace($leafId)) { continue }
             if ($leafIds.Contains($leafId)) { continue }
             $leafIds.Add($leafId)
+            $leafIdx++
 
             $detail = Get-SPDeltaIdentityDetail -IdentityId $leafId -CorrelationID $CorrelationID
+
+            if ($leafTotal -gt 50 -and ($leafIdx % $leafStep -eq 0)) {
+                Write-Host ("      ...$leafIdx / $leafTotal certifiers resolved") -ForegroundColor DarkGray
+            }
 
             $nodes[$leafId] = @{
                 Identity  = @{
@@ -3951,6 +4098,7 @@ Export-ModuleMember -Function @(
     'Merge-SPOrgTreeWithSupplement',
     'Show-SPOrgTree',
     'Show-SPCampaignOrgPreview',
+    'Clear-SPIdentityCache',
     'Show-SPReportDistributionPreview',
     'Export-SPOrgChartHtml',
     'Resolve-SPIdentityBand',

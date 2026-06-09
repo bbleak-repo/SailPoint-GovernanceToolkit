@@ -117,6 +117,9 @@ param(
     [string]$OutputMode = 'Console',
 
     [Parameter()]
+    [switch]$RefreshIdentities,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -353,6 +356,12 @@ $totalP = @($decisions.Pending).Count
 Write-Host "  Decisions: $totalA approved, $totalR revoked, $totalP pending" -ForegroundColor DarkGray
 
 # Step 6: Build org tree from certifier IDs
+# -RefreshIdentities: drop the persistent identity cache first so the manager chain is
+# re-resolved from ISC (use after a reorg to validate movement).
+if ($RefreshIdentities -and (Get-Command Clear-SPIdentityCache -ErrorAction SilentlyContinue)) {
+    Write-Host "  Refreshing identity cache (forcing fresh org-tree resolution)..." -ForegroundColor DarkGray
+    Clear-SPIdentityCache | Out-Null
+}
 Write-Host "  Step 5: Building org tree (depth=$OrgDepth)..." -ForegroundColor Cyan
 $orgTreeResult = Build-SPOrgTree -IdentityIds $uniqueCertifierIds -MaxDepth $OrgDepth `
     -CorrelationID $correlationID
