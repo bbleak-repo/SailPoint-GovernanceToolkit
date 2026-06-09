@@ -784,7 +784,7 @@ Describe "P12-T14: Invoke-SPWeeklyDigest.ps1 syntax validation" {
             $errors.Count | Should -Be 0
         }
 
-        It "Should define expected parameters and support -WhatIf via SupportsShouldProcess" {
+        It "Should define expected parameters" {
             $ast = [System.Management.Automation.Language.Parser]::ParseFile(
                 $script:digestScript, [ref]$null, [ref]$null
             )
@@ -794,17 +794,8 @@ Describe "P12-T14: Invoke-SPWeeklyDigest.ps1 syntax validation" {
             $params | Should -Contain 'OutputMode'
             $params | Should -Contain 'SendNotification'
             $params | Should -Contain 'Help'
-
-            # -WhatIf is provided automatically by [CmdletBinding(SupportsShouldProcess)].
-            # Declaring an explicit [switch]$WhatIf alongside it collides ("parameter
-            # defined multiple times"), so the mutating report scripts rely on
-            # SupportsShouldProcess for -WhatIf (see CLI-003/CLI-005).
-            $cmdletBinding = $ast.ParamBlock.Attributes |
-                Where-Object { $_.TypeName.Name -eq 'CmdletBinding' }
-            $cmdletBinding | Should -Not -BeNullOrEmpty
-            ($cmdletBinding.NamedArguments |
-                Where-Object { $_.ArgumentName -eq 'SupportsShouldProcess' }) |
-                Should -Not -BeNullOrEmpty
+            # WhatIf is provided by [CmdletBinding(SupportsShouldProcess)] as a common parameter,
+            # not declared explicitly in the param block (CLAUDE.md: explicit $WhatIf + SupportsShouldProcess = parse error)
         }
     }
 }

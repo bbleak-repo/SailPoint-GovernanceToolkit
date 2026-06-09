@@ -28,20 +28,22 @@
     DeltaCert.Escalation.CampaignNamePrefix value in settings.json
     (fallback: 'AD Delta Cert').
 .PARAMETER StaleHours
-    Wall-clock hours since certification assignment with no reviewer action.
-    Set to 0 to rely solely on -EscalateBeforeDeadlineHours.
-    Defaults to DeltaCert.Escalation.DefaultStaleHours in settings.json (fallback: 24).
-    TIP: For overnight campaigns (created 11pm, due 11pm+24h) with business-hours
-    reviewers (6am-2pm), prefer -EscalateBeforeDeadlineHours 8 over -StaleHours 24.
-    With -StaleHours 24 you'd only escalate at 11pm -- the deadline itself.
+    Number of hours with no reviewer action before a certification is
+    considered stale. Defaults to DeltaCert.Escalation.DefaultStaleHours
+    in settings.json (fallback: 24).
 .PARAMETER EscalateBeforeDeadlineHours
-    Escalate unsigned certifications whose campaign deadline is within this many
-    hours. Use instead of (or alongside) StaleHours for campaigns with tight
-    windows and reviewers who only work business hours.
-    Example: -EscalateBeforeDeadlineHours 8 -StaleHours 0
-      → runs at noon, finds campaigns due by 8pm, escalates anyone not signed off.
-      → escalated reviewer has the remaining hours to act.
-    Default: 0 (disabled -- StaleHours mode used).
+    Escalate if the campaign deadline is within this many hours, regardless
+    of how long the cert has been open. 0 = disabled (default).
+    Union with StaleHours: either condition triggers escalation.
+    Recommended: run at noon with -EscalateBeforeDeadlineHours 11 so
+    certifications closing at 11 PM get escalated with 11 hours remaining.
+.PARAMETER DaysBack
+    When > 0, searches ALL campaigns (active + completed + staged) created in
+    the last N days and runs in ORG CHART AUDIT mode: every certification in
+    those campaigns is returned regardless of signed/stale status. Designed
+    for use with -WhatIf to validate that ISC's manager chain resolves
+    correctly before enabling live escalation.
+    Example: -DaysBack 30 -WhatIf
 .PARAMETER MaxEscalationLevels
     Maximum number of escalation hops from the original reviewer.
     Defaults to DeltaCert.Escalation.MaxEscalationLevels in settings.json
@@ -56,6 +58,17 @@
 .PARAMETER TokenExpiryMinutes
     Minutes until the browser token is considered expired. Default: 10.
     ISC browser tokens are typically valid for ~12 minutes.
+.PARAMETER Csv
+    When set, writes a structured CSV file to {DeltaCert.OutputPath}\escalation-audit-YYYYMMDD-HHmmss.csv
+    containing one row per certification found, with the full reviewer → skip-level chain
+    resolved. Columns include: CampaignName, CampaignStatus, CertificationId,
+    ReviewerName, ReviewerIdentityId, SkipLevelName, SkipLevelIdentityId, SkipLevelResolved,
+    HoursOpen, HoursUntilDeadline, EscalationReason, CertSigned, Outcome.
+    Works in both -WhatIf and live modes. Combines well with -DaysBack for a full
+    30-day org chart audit report: -DaysBack 30 -WhatIf -Csv
+.PARAMETER CsvPath
+    Override the auto-generated CSV path. When specified alongside -Csv, writes the
+    CSV to this exact path instead of the auto-generated one in DeltaCert.OutputPath.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -65,6 +78,22 @@
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf
     # Dry-run: show which stale certifications would be escalated.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 0 -EscalateBeforeDeadlineHours 11 -WhatIf
+    # Deadline-aware dry-run: escalate certs whose campaign closes within 11 hours.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf
+    # Org chart audit: show the reviewer->skip-level chain for ALL certs in last 30 days.
+    # Validates that ISC can resolve the skip-level for every reviewer. No write calls.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv
+    # Org chart audit + CSV report: all chain data in a reviewable spreadsheet.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf -Csv
+    # Org chart audit against a peer's campaign name prefix with CSV output.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
+    # Live escalation with CSV evidence log of what was processed.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token 'eyJhbGciOiJSUzI1...'
     # Escalate stale certifications using a browser token.
@@ -93,6 +122,9 @@ param(
     [int]$EscalateBeforeDeadlineHours = 0,
 
     [Parameter()]
+    [int]$DaysBack = 0,
+
+    [Parameter()]
     [int]$MaxEscalationLevels = 0,
 
     [Parameter()]
@@ -103,6 +135,12 @@ param(
 
     [Parameter()]
     [int]$TokenExpiryMinutes = 10,
+
+    [Parameter()]
+    [switch]$Csv,
+
+    [Parameter()]
+    [string]$CsvPath,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -262,7 +300,7 @@ if ($effectiveMaxLevels -le 0) {
     }
 }
 
-Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePrefix' StaleHours=$effectiveStaleHours MaxLevels=$effectiveMaxLevels" `
+Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePrefix' StaleHours=$effectiveStaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours DaysBack=$DaysBack MaxLevels=$effectiveMaxLevels" `
     -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'Start' -CorrelationID $correlationID
 
 #endregion
@@ -275,29 +313,46 @@ $runStart = Get-Date
 if (($WhatIfPreference -eq $true)) {
     Write-Host '  [WhatIf] Dry-run mode. No write API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
-    Write-Host '  Would run escalation with:' -ForegroundColor Cyan
-    Write-Host "    CampaignPrefix:      $effectivePrefix"
-    Write-Host "    StaleHours:          $effectiveStaleHours"
-    Write-Host "    MaxEscalationLevels: $effectiveMaxLevels"
+    if ($DaysBack -gt 0) {
+        Write-Host '  ORG CHART AUDIT MODE' -ForegroundColor Cyan
+        Write-Host '  All certifications in the window are checked.' -ForegroundColor DarkGray
+        Write-Host '  Each reviewer is resolved to their skip-level to validate ISC manager chains.' -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '  Would run escalation with:' -ForegroundColor Cyan
+    }
+    Write-Host "    CampaignPrefix:              $effectivePrefix"
+    Write-Host "    StaleHours:                  $effectiveStaleHours"
+    if ($EscalateBeforeDeadlineHours -gt 0) {
+        Write-Host "    EscalateBeforeDeadlineHours: $EscalateBeforeDeadlineHours"
+    }
+    if ($DaysBack -gt 0) {
+        Write-Host "    DaysBack:                    $DaysBack  (all campaign statuses)"
+    }
+    Write-Host "    MaxEscalationLevels:         $effectiveMaxLevels"
     Write-Host ''
 }
 
-$modeDesc = if ($EscalateBeforeDeadlineHours -gt 0 -and $effectiveStaleHours -gt 0) {
-    "stale > $effectiveStaleHours h OR deadline within $EscalateBeforeDeadlineHours h"
-} elseif ($EscalateBeforeDeadlineHours -gt 0) {
-    "deadline within $EscalateBeforeDeadlineHours h"
-} else {
-    "stale > $effectiveStaleHours h"
+if ($DaysBack -gt 0) {
+    Write-Host "  Org chart audit: scanning campaigns from last $DaysBack days..." -ForegroundColor Cyan
 }
-Write-Host "  Detecting certifications needing escalation ($modeDesc)..." -ForegroundColor Cyan
+else {
+    Write-Host "  Detecting stale certifications (threshold: $effectiveStaleHours hours)..." -ForegroundColor Cyan
+}
 
-# Step 1: Find stale/deadline-urgent certifications
+# Step 1: Find stale/in-scope certifications
 $staleParams = @{
-    CampaignNamePrefix           = $effectivePrefix
-    StaleHours                   = $effectiveStaleHours
-    EscalateBeforeDeadlineHours  = $EscalateBeforeDeadlineHours
-    CorrelationID                = $correlationID
+    CampaignNamePrefix = $effectivePrefix
+    StaleHours         = $effectiveStaleHours
+    CorrelationID      = $correlationID
 }
+if ($EscalateBeforeDeadlineHours -gt 0) {
+    $staleParams['EscalateBeforeDeadlineHours'] = $EscalateBeforeDeadlineHours
+}
+if ($DaysBack -gt 0) {
+    $staleParams['DaysBack'] = $DaysBack
+}
+
 $staleResult = Get-SPDeltaCertStaleCertifications @staleParams
 
 if (-not $staleResult.Success) {
@@ -309,11 +364,123 @@ if (-not $staleResult.Success) {
 
 $staleCerts = @($staleResult.Data)
 
+#region CSV output (built before runner so -WhatIf and -Csv can co-exist)
+
+$effectiveCsvPath = $CsvPath   # hoisted so the JSONL audit block can reference it
+
+if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $staleCerts.Count -gt 0) {
+
+    # Resolve output path
+    $effectiveCsvPath = $CsvPath
+    if ([string]::IsNullOrWhiteSpace($effectiveCsvPath)) {
+        $csvOutputDir = '.\DeltaCert'
+        if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+            $null -ne $config.DeltaCert -and
+            $null -ne $config.DeltaCert.PSObject.Properties['OutputPath'] -and
+            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+            $csvOutputDir = [string]$config.DeltaCert.OutputPath
+        }
+        if (-not (Test-Path -LiteralPath $csvOutputDir -PathType Container)) {
+            New-Item -Path $csvOutputDir -ItemType Directory -Force | Out-Null
+        }
+        $csvStamp           = (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $effectiveCsvPath   = Join-Path $csvOutputDir "escalation-audit-$csvStamp.csv"
+    }
+
+    Write-Host "  Building CSV org chain report..." -ForegroundColor Cyan
+
+    $csvRows = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($sc in $staleCerts) {
+        $reviewerId  = $sc.ReviewerIdentityId
+        $skipName    = ''
+        $skipId      = ''
+        $skipFound   = $false
+        $outcome     = 'Pending'
+
+        # Determine skip-level (reviewer's manager) — same resolution the runner uses
+        if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
+            try {
+                $detail = Get-SPDeltaIdentityDetail -IdentityId $reviewerId -CorrelationID $correlationID
+                if ($detail.Found -and -not [string]::IsNullOrWhiteSpace($detail.ManagerId)) {
+                    $skipId    = $detail.ManagerId
+                    $skipFound = $true
+                    try {
+                        $mgDetail  = Get-SPDeltaIdentityDetail -IdentityId $detail.ManagerId -CorrelationID $correlationID
+                        $skipName  = if ($mgDetail.Found) { $mgDetail.DisplayName } else { $detail.ManagerId }
+                    } catch { $skipName = $detail.ManagerId }
+                }
+            } catch { }
+        }
+
+        # Determine what would/did happen
+        $levelsConsumed  = if ($sc.ReviewerClassification -eq 'Reassigned') { 1 } else { 0 }
+        $levelsRemaining = $effectiveMaxLevels - $levelsConsumed
+
+        if ([string]::IsNullOrWhiteSpace($reviewerId)) {
+            $outcome = 'Skip-NoReviewerId'
+        }
+        elseif ($levelsRemaining -le 0) {
+            $outcome = 'Skip-MaxLevelsReached'
+        }
+        elseif (-not $skipFound) {
+            $outcome = 'Skip-NoManagerInISC'
+        }
+        elseif (($WhatIfPreference -eq $true)) {
+            $outcome = 'WouldEscalate'
+        }
+        else {
+            $outcome = 'Escalated'
+        }
+
+        $csvRows.Add([PSCustomObject]@{
+            CampaignName         = $sc.CampaignName
+            CampaignStatus       = $sc.CampaignStatus
+            CertificationId      = $sc.CertificationId
+            ReviewerName         = $sc.ReviewerName
+            ReviewerIdentityId   = $sc.ReviewerIdentityId
+            Classification       = $sc.ReviewerClassification
+            SkipLevelName        = $skipName
+            SkipLevelIdentityId  = $skipId
+            SkipLevelResolved    = $skipFound
+            HoursOpen            = $sc.HoursOpen
+            HoursUntilDeadline   = $sc.HoursUntilDeadline
+            EscalationReason     = $sc.EscalationReason
+            CertSigned           = $sc.CertSigned
+            Outcome              = $outcome
+        })
+    }
+
+    try {
+        $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8
+        Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
+        Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
+            -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+            -CorrelationID $correlationID
+    }
+    catch {
+        Write-Host "  WARNING: Failed to write CSV: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Failed to write escalation audit CSV '$effectiveCsvPath': $($_.Exception.Message)" `
+            -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+            -CorrelationID $correlationID
+    }
+    Write-Host ''
+}
+
+#endregion
+
 if ($staleCerts.Count -eq 0) {
     Write-Host ''
-    Write-Host '  No stale certifications found.' -ForegroundColor Yellow
-    Write-Host "  Prefix:     $effectivePrefix" -ForegroundColor DarkGray
-    Write-Host "  Threshold:  $effectiveStaleHours hours" -ForegroundColor DarkGray
+    if ($DaysBack -gt 0) {
+        Write-Host '  No certifications found in audit window.' -ForegroundColor Yellow
+        Write-Host "  Prefix:   $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  DaysBack: $DaysBack days" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host '  No stale certifications found.' -ForegroundColor Yellow
+        Write-Host "  Prefix:     $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  Threshold:  $effectiveStaleHours hours" -ForegroundColor DarkGray
+    }
     Write-Host ''
 
     Write-SPLog -Message "No stale certifications found" `
@@ -359,18 +526,21 @@ try {
     }
 
     $auditEvent = [ordered]@{
-        Timestamp           = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-        CorrelationID       = $correlationID
-        Action              = 'DeltaCertEscalation'
-        CampaignNamePrefix  = $effectivePrefix
-        StaleHours          = $effectiveStaleHours
-        MaxEscalationLevels = $effectiveMaxLevels
-        StaleCertsFound     = $staleCerts.Count
-        Escalated           = $escalatedIds.Count
-        Skipped             = $skippedIds.Count
-        Errors              = $errorMsgs
-        WhatIf              = ($WhatIfPreference -eq $true)
-        DurationSeconds     = [math]::Round($runDuration, 2)
+        Timestamp                   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        CorrelationID               = $correlationID
+        Action                      = 'DeltaCertEscalation'
+        CampaignNamePrefix          = $effectivePrefix
+        StaleHours                  = $effectiveStaleHours
+        EscalateBeforeDeadlineHours = $EscalateBeforeDeadlineHours
+        DaysBack                    = $DaysBack
+        MaxEscalationLevels         = $effectiveMaxLevels
+        CertsFound                  = $staleCerts.Count
+        Escalated                   = $escalatedIds.Count
+        Skipped                     = $skippedIds.Count
+        Errors                      = $errorMsgs
+        WhatIf                      = ($WhatIfPreference -eq $true)
+        CsvPath                     = if (-not [string]::IsNullOrWhiteSpace($effectiveCsvPath)) { $effectiveCsvPath } else { $null }
+        DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
     $jsonLine  = $auditEvent | ConvertTo-Json -Depth 5 -Compress
@@ -400,19 +570,21 @@ if ($null -ne $escalateResult.Data) {
 }
 
 $summary = [PSCustomObject]@{
-    CorrelationID       = $correlationID
-    StartedAt           = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    CompletedAt         = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    DurationSeconds     = [math]::Round($runDuration, 2)
-    CampaignNamePrefix  = $effectivePrefix
-    StaleHours          = $effectiveStaleHours
-    MaxEscalationLevels = $effectiveMaxLevels
-    StaleCertsFound     = $staleCerts.Count
-    Escalated           = $escalatedCount
-    Skipped             = $skippedCount
-    Errors              = $errorCount
-    Success             = $escalateResult.Success
-    Environment         = $config.Global.EnvironmentName
+    CorrelationID                = $correlationID
+    StartedAt                    = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    CompletedAt                  = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    DurationSeconds              = [math]::Round($runDuration, 2)
+    CampaignNamePrefix           = $effectivePrefix
+    StaleHours                   = $effectiveStaleHours
+    EscalateBeforeDeadlineHours  = $EscalateBeforeDeadlineHours
+    DaysBack                     = $DaysBack
+    MaxEscalationLevels          = $effectiveMaxLevels
+    CertsFound                   = $staleCerts.Count
+    Escalated                    = $escalatedCount
+    Skipped                      = $skippedCount
+    Errors                       = $errorCount
+    Success                      = $escalateResult.Success
+    Environment                  = $config.Global.EnvironmentName
 }
 
 switch ($OutputMode) {
@@ -428,7 +600,7 @@ switch ($OutputMode) {
             Write-Host '  Escalation Complete' -ForegroundColor Cyan
         }
         Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
-        Write-Host "  Stale certs found: $($staleCerts.Count)" -ForegroundColor DarkGray
+        Write-Host "  Certs found:       $($staleCerts.Count)" -ForegroundColor DarkGray
         Write-Host "  Escalated:         $escalatedCount" -ForegroundColor Green
         Write-Host "  Skipped:           $skippedCount" -ForegroundColor Yellow
         if ($errorCount -gt 0) {

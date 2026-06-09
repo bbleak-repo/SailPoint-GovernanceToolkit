@@ -1,20 +1,46 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Creates daily AD delta certification campaigns for managers of users who received new AD access.
+    Creates AD certification campaigns for managers of users who received new AD access
+    (daily DELTA mode) or for all managers with staff on monitored AD sources (quarterly
+    FULL mode via -FullCert).
 .DESCRIPTION
-    Queries SailPoint ISC account activities for GRANT_ACCESS events on specified AD sources
-    within a configurable time window. For each affected active identity, resolves their
-    manager and groups them accordingly. Creates one SEARCH-type certification campaign per
-    manager group, scoped to only those manager's direct reports who received new access.
+    DELTA mode (default):
+        Queries SailPoint ISC account activities for GRANT_ACCESS events on specified AD
+        sources within a configurable time window. For each affected active identity,
+        resolves their manager and groups them. Creates one SEARCH-type certification
+        campaign per manager group, scoped to only those managers' direct reports who
+        received new access in the window.
 
-    If no AD grant events are found in the time window the script exits with code 1
-    (no-op -- this is the expected daily result on quiet days).
+        If no AD grant events are found in the time window the script exits with code 1
+        (no-op -- this is the expected daily result on quiet days).
 
-    SCOPE REQUIREMENT:
+    FULL mode (-FullCert switch):
+        Bypasses account-activity detection entirely. Queries all active identities who
+        have accounts on the monitored source IDs, resolves their unique managers, and
+        creates one MANAGER-type campaign per manager. The MANAGER campaign type in ISC
+        automatically scopes to ALL direct reports of the certifier identity, presenting
+        their complete entitlement set. Use for quarterly baseline reviews before starting
+        the daily DELTA cron.
+
+        Full-cert campaigns use a separate name prefix (DeltaCert.FullCert.CampaignNamePrefix,
+        default: 'AD Full Cert') to avoid colliding with same-day DELTA campaigns.
+
+    FIRST-RUN ADVISORY:
+        If the deltacert-audit.jsonl baseline file does not exist and -FullCert is not
+        specified, the script emits a WARNING recommending a -FullCert run first.
+
+    SCOPE REQUIREMENT (DELTA mode):
         GET /v3/account-activities requires sp:scopes:all or a browser token.
         Use -Token with a JWT from the ISC admin console, or configure a PAT with
         sp:scopes:all in settings.json / the vault.
+
+    ISC API LIMITATION:
+        The /v3/campaigns SEARCH type accepts filter.query.query as a Lucene IDENTITY
+        filter (id:"..." OR id:"..."). There is no entitlement-level filter parameter
+        in the campaign creation body. DELTA mode scopes campaigns to only the identities
+        who received new access (narrowing the reviewer's queue), but the reviewer will
+        see ALL entitlements for those identities, not just the newly-granted AD group.
 
 .PARAMETER SourceId
     One or more SailPoint ISC source IDs to monitor for AD group add operations.
@@ -23,16 +49,26 @@
 .PARAMETER HoursBack
     Look-back window in hours. Default: 24 (one full day).
     Increase to 48+ for catch-up after a missed run.
+    Ignored in -FullCert mode.
 .PARAMETER DeadlineDays
-    Days from today until the campaign deadline. Default: 2.
-    Managers receive the campaign today and have this many days to review.
+    Days from today until the campaign deadline. Default: 2 for DELTA mode.
+    In -FullCert mode, reads DeltaCert.FullCert.DeadlineDays from settings.json
+    (default: 14 days to accommodate quarterly review cadence).
+.PARAMETER FullCert
+    When set, runs the quarterly full-certification workflow (Invoke-SPDeltaCertFullRun)
+    instead of the daily delta workflow. Creates one MANAGER-type campaign per manager
+    who has staff on the monitored sources. Does NOT query account-activities.
+
+    Run this once before starting the daily DELTA cron to establish a baseline, then
+    schedule quarterly or as needed for periodic comprehensive reviews.
 .PARAMETER FallbackReviewerIdentityId
     Identity ID of the reviewer to assign for identities who have no manager in ISC.
     If omitted, manager-less identities are skipped and logged as warnings.
 .PARAMETER CampaignNamePrefix
-    Prefix for campaign names. Defaults to the DeltaCert.CampaignNamePrefix value
+    Prefix for DELTA campaign names. Defaults to the DeltaCert.CampaignNamePrefix value
     in settings.json (fallback: 'AD Delta Cert').
     Full name: "{Prefix} {YYYY-MM-DD} - {ManagerName}"
+    Full-cert campaigns use DeltaCert.FullCert.CampaignNamePrefix instead.
 .PARAMETER MaxCampaignsPerRun
     Abort before creating any campaigns if the number of manager groups exceeds this.
     Defaults to DeltaCert.MaxCampaignsPerRun in settings.json (fallback: 50).
@@ -43,6 +79,7 @@
     SourceOwner: One SOURCE_OWNER campaign per source ID. ISC automatically
         routes certification items to whoever owns each source.
     Defaults to DeltaCert.DefaultReviewerMode in settings.json (fallback: Manager).
+    In -FullCert mode, this parameter is ignored (MANAGER type is always used).
 .PARAMETER RunCleanup
     When set, runs Invoke-SPDeltaCertCleanup before creating new campaigns.
     Completes past-due delta cert campaigns that have exceeded their deadline
@@ -66,13 +103,19 @@
     Display full comment-based help and exit.
 .EXAMPLE
     .\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123'
-    # Daily run: create campaigns for managers of identities who got new AD access in the last 24 hours.
+    # Daily DELTA run: campaigns for managers of identities who got new AD access in the last 24 hours.
+.EXAMPLE
+    .\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -FullCert
+    # Quarterly FULL run: one MANAGER campaign per manager with staff on the source (baseline mode).
 .EXAMPLE
     .\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -WhatIf
     # Dry-run: show what campaigns would be created without making any write API calls.
 .EXAMPLE
+    .\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -FullCert -WhatIf
+    # Dry-run full-cert: show which managers would receive MANAGER campaigns.
+.EXAMPLE
     .\Invoke-SPADDeltaCert.ps1 -SourceId @('src-abc','src-def') -HoursBack 48 -DeadlineDays 3
-    # Catch-up run across two AD sources with 48-hour window and 3-day deadline.
+    # Catch-up DELTA run across two AD sources with 48-hour window and 3-day deadline.
 .EXAMPLE
     .\Invoke-SPADDeltaCert.ps1 -SourceId 'src-abc123' -Token 'eyJhbGciOiJSUzI1...'
     # Use a browser token instead of OAuth credentials (required for sp:scopes:all).
@@ -81,10 +124,10 @@
     # Include manager-less identities, routing them to a designated fallback reviewer.
 .NOTES
     Script:  Invoke-SPADDeltaCert.ps1
-    Version: 1.0.0
+    Version: 1.1.0
     Exit codes:
         0 = Success -- campaigns created (or WhatIf completed)
-        1 = No changes -- no AD grant events found, no campaigns created
+        1 = No changes -- no events found, no campaigns created (DELTA no-op days)
         2 = Parameter error
         3 = Authentication error
         4 = Configuration error
@@ -101,6 +144,13 @@ param(
 
     [Parameter()]
     [int]$DeadlineDays = 2,
+
+    [Parameter()]
+    # When set, runs the quarterly full-certification workflow instead of the daily
+    # delta workflow. Creates one MANAGER-type campaign per manager who has staff on
+    # the monitored sources. Does NOT query account-activities. Use before starting
+    # the daily DELTA cron to establish a full baseline, then schedule quarterly.
+    [switch]$FullCert,
 
     [Parameter()]
     [string]$FallbackReviewerIdentityId,
@@ -126,6 +176,15 @@ param(
 
     [Parameter()]
     [switch]$RunCleanup,
+
+    # When set, only creates campaigns for identities who received a GRANT_ACCESS event
+    # where the specific AD entitlement is marked privileged:true in ISC.
+    # Falls back to Audit.RiskIndicators.PrivilegedPatterns for entitlements not yet
+    # tagged in ISC (unmanaged groups, recently aggregated sources).
+    # Default: read from DeltaCert.PrivilegedOnly in settings.json (false if not set).
+    # ISC scope required: idn:entitlement:read or sp:scopes:all
+    [Parameter()]
+    [switch]$PrivilegedOnly,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -193,7 +252,12 @@ try {
 
 Write-Host ''
 Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
-Write-Host '  AD Delta Certification' -ForegroundColor Cyan
+if ($FullCert) {
+    Write-Host '  AD Full Certification (Quarterly Baseline Mode)' -ForegroundColor Cyan
+}
+else {
+    Write-Host '  AD Delta Certification' -ForegroundColor Cyan
+}
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -281,7 +345,58 @@ if ([string]::IsNullOrWhiteSpace($effectiveReviewerMode)) {
     }
 }
 
-Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays" `
+# Apply config defaults for FullCert-specific parameters
+$effectiveFullCertPrefix = 'AD Full Cert'
+if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+    $null -ne $config.DeltaCert -and
+    $null -ne $config.DeltaCert.PSObject.Properties['FullCert'] -and
+    $null -ne $config.DeltaCert.FullCert -and
+    $null -ne $config.DeltaCert.FullCert.PSObject.Properties['CampaignNamePrefix'] -and
+    -not [string]::IsNullOrWhiteSpace($config.DeltaCert.FullCert.CampaignNamePrefix)) {
+    $effectiveFullCertPrefix = [string]$config.DeltaCert.FullCert.CampaignNamePrefix
+}
+
+$effectiveFullCertDeadline = 14
+if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+    $null -ne $config.DeltaCert -and
+    $null -ne $config.DeltaCert.PSObject.Properties['FullCert'] -and
+    $null -ne $config.DeltaCert.FullCert -and
+    $null -ne $config.DeltaCert.FullCert.PSObject.Properties['DeadlineDays'] -and
+    [int]$config.DeltaCert.FullCert.DeadlineDays -gt 0) {
+    $effectiveFullCertDeadline = [int]$config.DeltaCert.FullCert.DeadlineDays
+}
+
+# Apply PrivilegedOnly default from config when the switch was not explicitly passed
+$effectivePrivilegedOnly = $PrivilegedOnly.IsPresent
+if (-not $effectivePrivilegedOnly) {
+    if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+        $null -ne $config.DeltaCert -and
+        $null -ne $config.DeltaCert.PSObject.Properties['PrivilegedOnly'] -and
+        [bool]$config.DeltaCert.PrivilegedOnly -eq $true) {
+        $effectivePrivilegedOnly = $true
+    }
+}
+
+# First-run advisory: if no audit baseline exists and -FullCert is not set, warn the operator.
+# The audit JSONL file is written on every successful run. Its absence means this is either
+# a brand-new deployment or the output directory was reset. In DELTA mode without a prior
+# FULL baseline, managers will only see entitlements granted in the current window -- any
+# access granted before this run started will not be reviewed until the next full cycle.
+if (-not $FullCert) {
+    $baselineExists = Test-SPDeltaCertBaselineExists
+    if (-not $baselineExists) {
+        $advisoryMsg = 'No prior run detected (deltacert-audit.jsonl not found). ' +
+            "DELTA mode will only certify entitlements granted in the last $HoursBack hours. " +
+            'To establish a full baseline first, re-run with -FullCert. ' +
+            'Continuing in DELTA mode...'
+        Write-Host "  WARNING: $advisoryMsg" -ForegroundColor Yellow
+        Write-SPLog -Message $advisoryMsg `
+            -Severity WARN -Component 'Invoke-SPADDeltaCert' -Action 'FirstRunCheck' `
+            -CorrelationID $correlationID
+    }
+}
+
+Write-SPLog -Message "Invoke-SPADDeltaCert started: SourceIds='$($SourceId -join ',')' HoursBack=$HoursBack DeadlineDays=$DeadlineDays FullCert=$($FullCert.IsPresent) PrivilegedOnly=$effectivePrivilegedOnly" `
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Start' -CorrelationID $correlationID
 
 #endregion
@@ -332,38 +447,84 @@ $runStart = Get-Date
 if (($WhatIfPreference -eq $true)) {
     Write-Host '  [WhatIf] Dry-run mode. No write API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
-    Write-Host '  Would run delta certification with:' -ForegroundColor Cyan
-    Write-Host "    SourceIds:      $($SourceId -join ', ')"
-    Write-Host "    HoursBack:      $HoursBack"
-    Write-Host "    DeadlineDays:   $DeadlineDays"
-    Write-Host "    NamePrefix:     $effectivePrefix"
-    Write-Host "    MaxCampaigns:   $effectiveMaxCampaigns"
-    Write-Host "    ReviewerMode:   $effectiveReviewerMode"
-    if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
-        Write-Host "    FallbackMgr:    $effectiveFallback"
+    if ($FullCert) {
+        Write-Host '  Would run full certification with:' -ForegroundColor Cyan
+        Write-Host "    SourceIds:      $($SourceId -join ', ')"
+        Write-Host "    NamePrefix:     $effectiveFullCertPrefix"
+        Write-Host "    DeadlineDays:   $effectiveFullCertDeadline"
+        Write-Host "    MaxCampaigns:   $effectiveMaxCampaigns"
+        Write-Host "    Mode:           MANAGER (quarterly full-cert)"
+    }
+    else {
+        Write-Host '  Would run delta certification with:' -ForegroundColor Cyan
+        Write-Host "    SourceIds:      $($SourceId -join ', ')"
+        Write-Host "    HoursBack:      $HoursBack"
+        Write-Host "    DeadlineDays:   $DeadlineDays"
+        Write-Host "    NamePrefix:     $effectivePrefix"
+        Write-Host "    MaxCampaigns:   $effectiveMaxCampaigns"
+        Write-Host "    ReviewerMode:   $effectiveReviewerMode"
+        Write-Host "    PrivilegedOnly: $effectivePrivilegedOnly"
+        if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
+            Write-Host "    FallbackMgr:    $effectiveFallback"
+        }
     }
     Write-Host ''
 }
 
-Write-Host "  Querying AD grant events (last $HoursBack hours)..." -ForegroundColor Cyan
+$runResult = $null
 
-$runParams = @{
-    SourceIds            = $SourceId
-    HoursBack            = $HoursBack
-    DeadlineDays         = $DeadlineDays
-    CampaignNamePrefix   = $effectivePrefix
-    MaxCampaignsPerRun   = $effectiveMaxCampaigns
-    ReviewerMode         = $effectiveReviewerMode
-    CorrelationID        = $correlationID
-}
-if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
-    $runParams['FallbackManagerId'] = $effectiveFallback
-}
-if ($WhatIfPreference -eq $true) {
-    $runParams['WhatIf'] = $true
-}
+if ($FullCert) {
+    # FullCert mode: quarterly MANAGER campaigns for all managers with staff on monitored sources.
+    # Note: -ReviewerMode is ignored in FULL mode; MANAGER type is always used.
+    if (-not [string]::IsNullOrWhiteSpace($effectiveReviewerMode) -and
+        $effectiveReviewerMode -ne 'Manager') {
+        Write-SPLog -Message "FullCert mode: -ReviewerMode '$effectiveReviewerMode' is ignored. MANAGER campaign type is always used for full-cert runs." `
+            -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Dispatch' `
+            -CorrelationID $correlationID
+        Write-Host "  Note: -ReviewerMode is ignored in -FullCert mode (always uses MANAGER type)." -ForegroundColor DarkGray
+    }
 
-$runResult = Invoke-SPDeltaCertRun @runParams
+    Write-Host "  Resolving managers for full certification..." -ForegroundColor Cyan
+
+    $fullRunParams = @{
+        SourceIds          = $SourceId
+        DeadlineDays       = $effectiveFullCertDeadline
+        CampaignNamePrefix = $effectiveFullCertPrefix
+        MaxCampaignsPerRun = $effectiveMaxCampaigns
+        CorrelationID      = $correlationID
+    }
+    if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
+        $fullRunParams['FallbackManagerId'] = $effectiveFallback
+    }
+    if ($WhatIfPreference -eq $true) {
+        $fullRunParams['WhatIf'] = $true
+    }
+
+    $runResult = Invoke-SPDeltaCertFullRun @fullRunParams
+}
+else {
+    # DELTA mode (default): daily SEARCH campaigns per manager group.
+    Write-Host "  Querying AD grant events (last $HoursBack hours)..." -ForegroundColor Cyan
+
+    $runParams = @{
+        SourceIds            = $SourceId
+        HoursBack            = $HoursBack
+        DeadlineDays         = $DeadlineDays
+        CampaignNamePrefix   = $effectivePrefix
+        MaxCampaignsPerRun   = $effectiveMaxCampaigns
+        ReviewerMode         = $effectiveReviewerMode
+        CorrelationID        = $correlationID
+        PrivilegedOnly       = $effectivePrivilegedOnly
+    }
+    if (-not [string]::IsNullOrWhiteSpace($effectiveFallback)) {
+        $runParams['FallbackManagerId'] = $effectiveFallback
+    }
+    if ($WhatIfPreference -eq $true) {
+        $runParams['WhatIf'] = $true
+    }
+
+    $runResult = Invoke-SPDeltaCertRun @runParams
+}
 
 $runEnd      = Get-Date
 $runDuration = ($runEnd - $runStart).TotalSeconds
@@ -384,6 +545,7 @@ $reason = $data.Reason
 
 $summary = [PSCustomObject]@{
     CorrelationID    = $correlationID
+    RunMode          = if ($FullCert) { 'Full' } else { 'Delta' }
     StartedAt        = $runStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     CompletedAt      = $runEnd.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     DurationSeconds  = [math]::Round($runDuration, 2)
@@ -409,6 +571,14 @@ switch ($OutputMode) {
             Write-Host "  Sources:       $($SourceId -join ', ')" -ForegroundColor DarkGray
             Write-Host "  Window:        last $HoursBack hours" -ForegroundColor DarkGray
         }
+        elseif ($reason -eq 'NoPrivilegedGrants') {
+            Write-Host '  No Privileged Grants' -ForegroundColor Yellow
+            Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
+            Write-Host '  AD grant events were found but none involved privileged entitlements.' -ForegroundColor Yellow
+            Write-Host "  Sources:       $($SourceId -join ', ')" -ForegroundColor DarkGray
+            Write-Host "  Window:        last $HoursBack hours" -ForegroundColor DarkGray
+            Write-Host '  To certify all grants regardless of privilege flag, omit -PrivilegedOnly.' -ForegroundColor DarkGray
+        }
         elseif ($reason -eq 'WhatIf') {
             Write-Host '  WhatIf Summary' -ForegroundColor Cyan
             Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
@@ -426,10 +596,13 @@ switch ($OutputMode) {
             }
         }
         else {
-            Write-Host '  Delta Certification Complete' -ForegroundColor Cyan
+            $completeLabel = if ($FullCert) { 'Full Certification Complete' } else { 'Delta Certification Complete' }
+            Write-Host "  $completeLabel" -ForegroundColor Cyan
             Write-Host "  $('=' * 60)" -ForegroundColor DarkGray
             Write-Host "  Campaigns created: $($data.CampaignsCreated)" -ForegroundColor Green
-            Write-Host "  Identities:        $($data.IdentityCount)" -ForegroundColor DarkGray
+            if ($data.IdentityCount -gt 0) {
+                Write-Host "  Identities:        $($data.IdentityCount)" -ForegroundColor DarkGray
+            }
             Write-Host "  Manager groups:    $($data.ManagerGroups)" -ForegroundColor DarkGray
             if ($data.CampaignIds.Count -gt 0) {
                 Write-Host "  Campaign IDs:      $($data.CampaignIds -join ', ')" -ForegroundColor DarkGray
@@ -457,8 +630,10 @@ switch ($OutputMode) {
 Write-SPLog -Message "Invoke-SPADDeltaCert completed: Reason='$reason' Campaigns=$($data.CampaignsCreated) Identities=$($data.IdentityCount)" `
     -Severity INFO -Component 'Invoke-SPADDeltaCert' -Action 'Complete' -CorrelationID $correlationID
 
-# Exit code: 1 for no-changes (expected on quiet days), 0 otherwise
-if ($reason -eq 'NoChanges' -or $reason -eq 'NoActiveIdentities' -or $reason -eq 'NoManagerGroups') {
+# Exit code: 1 for no-changes (expected on quiet DELTA days, or no managers found in FULL mode)
+if ($reason -eq 'NoChanges' -or $reason -eq 'NoPrivilegedGrants' -or
+    $reason -eq 'NoActiveIdentities' -or $reason -eq 'NoManagerGroups' -or
+    $reason -eq 'NoManagers') {
     exit 1
 }
 

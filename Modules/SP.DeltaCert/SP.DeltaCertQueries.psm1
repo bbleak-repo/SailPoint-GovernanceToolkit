@@ -27,6 +27,12 @@
 # Module-scope identity cache to avoid redundant API calls within a session.
 $script:IdentityCache = @{}
 
+# Module-scope entitlement privileged-status cache (keyed by "SourceId::ItemValue").
+# Populated by Select-SPPrivilegedGrantEvents. Persists for the lifetime of the module
+# import so repeated runs in the same session don't re-call the ISC entitlements API
+# for the same group.
+$script:EntitlementPrivilegedCache = @{}
+
 #region Internal Functions
 
 function Get-SPDeltaIdentityDetail {
@@ -193,6 +199,144 @@ function Get-SPDeltaIdentityDetail {
 #endregion
 
 #region Public Functions
+
+function Select-SPPrivilegedGrantEvents {
+    <#
+    .SYNOPSIS
+        Filters grant events to only those where the granted entitlement is privileged.
+    .DESCRIPTION
+        For each unique (SourceId, ItemValue) pair in the grant event list, queries ISC
+        GET /v3/entitlements?filters=value eq "ITEM_VALUE" and source.id eq "SOURCE_ID"
+        and checks whether the returned entitlement has privileged:true in ISC.
+
+        If ISC returns no matching entitlement (entitlement not yet aggregated or not
+        managed by ISC), falls back to pattern matching against PrivilegedPatterns.
+        Patterns are matched case-insensitively against the EntitlementName field.
+
+        Results are cached in the module-scope EntitlementPrivilegedCache to avoid
+        redundant API calls for the same entitlement within a session.
+
+        ISC scope required: idn:entitlement:read or sp:scopes:all
+
+    .PARAMETER GrantEvents
+        Array of grant event objects as returned by Get-SPDeltaGrantEvents.
+    .PARAMETER PrivilegedPatterns
+        Optional regex patterns matched case-insensitively against EntitlementName when
+        ISC has no record for the entitlement (unmanaged groups, not yet aggregated).
+        Typically sourced from Audit.RiskIndicators.PrivilegedPatterns in settings.json.
+        Example: @('Admin', 'Root', 'DBA', 'Domain Admins')
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [PSCustomObject[]] Filtered array containing only privileged grant events.
+        Returns an empty array when no privileged events are found.
+    .EXAMPLE
+        $events    = (Get-SPDeltaGrantEvents -SourceIds @('src-abc') -HoursBack 24).Data
+        $patterns  = @('Admin', 'Root', 'Domain Admins')
+        $privEvts  = Select-SPPrivilegedGrantEvents -GrantEvents $events -PrivilegedPatterns $patterns
+        "$($privEvts.Count) privileged grant events found"
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [object[]]$GrantEvents,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$PrivilegedPatterns = @(),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    if ($GrantEvents.Count -eq 0) { return @() }
+
+    # Collect unique (SourceId, ItemValue) pairs to minimise API calls
+    $uniquePairs = $GrantEvents |
+        Select-Object SourceId, ItemValue -Unique |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.SourceId) -and
+                       -not [string]::IsNullOrWhiteSpace($_.ItemValue) }
+
+    $checkedViaISC  = 0
+    $privilegedISC  = 0
+    $privilegedPatt = 0
+    $notPrivileged  = 0
+
+    foreach ($pair in @($uniquePairs)) {
+        $cacheKey = "$($pair.SourceId)::$($pair.ItemValue)"
+        if ($script:EntitlementPrivilegedCache.ContainsKey($cacheKey)) { continue }
+
+        $isPrivileged = $false
+        $foundInISC   = $false
+
+        try {
+            # Escape embedded double-quotes for Lucene filter syntax
+            $escapedValue  = $pair.ItemValue -replace '"', '\"'
+            $escapedSource = $pair.SourceId  -replace '"', '\"'
+            $filterStr     = "value eq `"$escapedValue`" and source.id eq `"$escapedSource`""
+
+            $apiResult = Invoke-SPApiRequest -Method GET -Endpoint '/entitlements' `
+                -QueryParams @{ filters = $filterStr; limit = 1 } `
+                -CorrelationID $CorrelationID
+
+            $checkedViaISC++
+
+            if ($apiResult.Success) {
+                $items = @($apiResult.Data)
+                if ($items.Count -gt 0 -and $null -ne $items[0]) {
+                    $foundInISC = $true
+                    $privProp = $items[0].PSObject.Properties['privileged']
+                    if ($null -ne $privProp -and $privProp.Value -eq $true) {
+                        $isPrivileged = $true
+                        $privilegedISC++
+                    }
+                }
+            }
+        }
+        catch {
+            Write-SPLog -Message "Entitlement lookup failed for '$($pair.ItemValue)' on source '$($pair.SourceId)': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Select-SPPrivilegedGrantEvents' `
+                -CorrelationID $CorrelationID
+        }
+
+        # Pattern fallback: when ISC has no record (not aggregated / not managed),
+        # fall back to name-based pattern match so newly provisioned groups that
+        # haven't been tagged in ISC yet still get caught.
+        if (-not $foundInISC -and $PrivilegedPatterns.Count -gt 0) {
+            $nameToCheck = if (-not [string]::IsNullOrWhiteSpace($pair.ItemValue)) { $pair.ItemValue } else { '' }
+            foreach ($pattern in $PrivilegedPatterns) {
+                if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
+                if ($nameToCheck -imatch $pattern) {
+                    $isPrivileged = $true
+                    $privilegedPatt++
+                    break
+                }
+            }
+        }
+
+        if (-not $isPrivileged) { $notPrivileged++ }
+        $script:EntitlementPrivilegedCache[$cacheKey] = $isPrivileged
+    }
+
+    Write-SPLog -Message "Privileged filter: UniqueEntitlements=$($uniquePairs.Count) CheckedViaISC=$checkedViaISC PrivilegedByISC=$privilegedISC PrivilegedByPattern=$privilegedPatt NotPrivileged=$notPrivileged" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Select-SPPrivilegedGrantEvents' `
+        -CorrelationID $CorrelationID
+
+    # Return only the grant events whose (SourceId, ItemValue) pair was determined privileged
+    $filtered = $GrantEvents | Where-Object {
+        $k = "$($_.SourceId)::$($_.ItemValue)"
+        $script:EntitlementPrivilegedCache.ContainsKey($k) -and
+        $script:EntitlementPrivilegedCache[$k] -eq $true
+    }
+
+    return @($filtered)
+}
 
 function Get-SPDeltaGrantEvents {
     <#
@@ -405,6 +549,39 @@ function Get-SPDeltaGrantEvents {
                 $itemValue = if ($null -ne $item.PSObject.Properties['value'] -and $null -ne $item.value) { [string]$item.value } else { '' }
                 $itemName  = if ($null -ne $item.PSObject.Properties['name']  -and $null -ne $item.name)  { [string]$item.name  } else { $itemValue }
 
+                # Extract entitlement / access-profile ID if the item carries it.
+                # ISC account-activity provisioning items may carry entitlementId
+                # or accessProfileId depending on the ISC provisioning path.
+                # These fields are captured for audit traceability and are
+                # available to callers for post-hoc reporting. They are NOT
+                # passed to the ISC /v3/campaigns API because the SEARCH
+                # campaign filter only accepts identity-level Lucene queries --
+                # there is no entitlement-level filter parameter in the campaign
+                # creation body. See design note in SP.DeltaCertRunner.psm1.
+                $entitlementId   = ''
+                $accessProfileId = ''
+                foreach ($prop in @('entitlementId', 'entitlement_id')) {
+                    if ($null -ne $item.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($item.$prop)) {
+                        $entitlementId = [string]$item.$prop
+                        break
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($entitlementId) -and
+                    $null -ne $item.PSObject.Properties['entitlement'] -and
+                    $null -ne $item.entitlement -and
+                    $null -ne $item.entitlement.PSObject.Properties['id'] -and
+                    -not [string]::IsNullOrWhiteSpace($item.entitlement.id)) {
+                    $entitlementId = [string]$item.entitlement.id
+                }
+                foreach ($prop in @('accessProfileId', 'access_profile_id')) {
+                    if ($null -ne $item.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($item.$prop)) {
+                        $accessProfileId = [string]$item.$prop
+                        break
+                    }
+                }
+
                 $grantEvents.Add([PSCustomObject]@{
                     IdentityId      = $identityId
                     SourceId        = $itemSourceId
@@ -413,6 +590,9 @@ function Get-SPDeltaGrantEvents {
                     ItemType        = $itemType
                     ItemValue       = $itemValue
                     ItemName        = $itemName
+                    EntitlementId   = $entitlementId
+                    EntitlementName = $itemName   # best available name; ItemName already falls back to ItemValue
+                    AccessProfileId = $accessProfileId
                 })
             }
         }
@@ -710,61 +890,67 @@ function Group-SPDeltaByManager {
 function Get-SPDeltaCertStaleCertifications {
     <#
     .SYNOPSIS
-        Finds active delta cert certifications that need escalation.
+        Finds delta cert certifications that meet escalation criteria or are in-scope for audit.
     .DESCRIPTION
-        Searches for active delta cert campaigns matching a name prefix, retrieves all
-        unsigned certifications for each, and flags ones that need escalation based on
-        ONE OR BOTH trigger modes:
+        Searches for delta cert campaigns matching a name prefix, retrieves all certifications
+        for each campaign, and applies configurable filters.
 
-        MODE 1 -- StaleHours (wall-clock age):
-          Certifications older than StaleHours with no reviewer action.
-          Use when campaigns have a consistent creation time (e.g. nightly at 11pm)
-          and you schedule the escalation job to run after enough wall-clock time has
-          elapsed (e.g. run at 2pm the next day with -StaleHours 15).
+        STANDARD MODE (default, -DaysBack 0):
+          Searches ACTIVE campaigns only. Includes certifications where:
+            - signed is null (not completed by the reviewer)
+            - StaleHours condition: cert has been open >= StaleHours hours
+            - OR EscalateBeforeDeadlineHours condition: campaign deadline is within
+              EscalateBeforeDeadlineHours hours (union -- either condition triggers)
 
-        MODE 2 -- EscalateBeforeDeadlineHours (deadline proximity):
-          Certifications whose campaign deadline is within N hours AND no action taken.
-          Better for business-hours-aware scheduling: reviewers may only have a narrow
-          window (e.g. 6am-2pm) before a 24h campaign expires. Running this at noon
-          with -EscalateBeforeDeadlineHours 11 catches anyone who will miss the 11pm
-          deadline -- regardless of what time the campaign was created.
+        ORG CHART AUDIT MODE (-DaysBack N or -AllCertifications):
+          Searches all campaigns (ACTIVE + COMPLETED + STAGED) within the last N days.
+          Skips the signed/stale filters -- returns ALL certifications so callers can
+          validate the manager chain for every reviewer that ever appeared in the window.
+          Designed for -WhatIf dry-runs to verify ISC org chain data before enabling
+          live escalation.
 
-        COMBINED: when both parameters are supplied, a certification is flagged if
-        EITHER condition is met (union). Omit StaleHours to use deadline-only mode.
-
-        Returns enough context per stale certification for downstream escalation
-        (cert ID, reviewer ID, campaign name, hours open, hours until deadline).
     .PARAMETER CampaignNamePrefix
         Prefix used to find delta cert campaigns. Default: 'AD Delta Cert'.
+        Uses an ISC starts-with filter (sw=) for indexed performance.
     .PARAMETER StaleHours
-        Wall-clock hours since certification creation with no action. Set to 0 to
-        disable this mode and use only EscalateBeforeDeadlineHours. Default: 24.
+        Hours with no reviewer action before a certification is stale. Default: 24.
+        Ignored when -AllCertifications is set.
     .PARAMETER EscalateBeforeDeadlineHours
-        Escalate certifications whose campaign deadline is within this many hours
-        AND has not been signed off. Set to 0 to disable. Default: 0 (disabled).
-        Recommended for 24h campaigns: set to the number of hours you need the
-        escalated reviewer to have -- e.g. 8 means "escalate if less than 8h remain."
+        Escalate if the campaign deadline is within this many hours, regardless of
+        how long the cert has been open. 0 = disabled. Union with StaleHours:
+        if either condition is met the certification is returned.
+        Ignored when -AllCertifications is set.
+    .PARAMETER DaysBack
+        When > 0, searches all campaign statuses (ACTIVE, COMPLETED, STAGED, etc.)
+        and restricts to campaigns created in the last N days. Automatically activates
+        AllCertifications mode (signed/stale filters are skipped).
+        When 0 (default), searches ACTIVE campaigns only with no date limit.
+    .PARAMETER AllCertifications
+        When set, skips the signed and stale-hours filters -- returns ALL certifications
+        regardless of status. Implies DaysBack audit behaviour. Useful for org chart
+        validation in -WhatIf runs.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries. Auto-generated if omitted.
     .OUTPUTS
         [hashtable] @{
             Success = $bool
-            Data    = @([PSCustomObject] with CertificationId, CampaignId, CampaignName,
-                        ReviewerIdentityId, ReviewerName, HoursOpen, HoursUntilDeadline,
-                        EscalationReason, ReviewerClassification)
+            Data    = @([PSCustomObject]:
+                        CertificationId, CampaignId, CampaignName, CampaignStatus,
+                        ReviewerIdentityId, ReviewerName, HoursOpen,
+                        HoursUntilDeadline, EscalationReason,
+                        ReviewerClassification, CertSigned)
             Error   = $string
         }
     .EXAMPLE
-        # Original wall-clock mode: escalate certs open > 15h (campaign at 11pm, script at 2pm)
-        Get-SPDeltaCertStaleCertifications -CampaignNamePrefix 'AD Delta Cert' -StaleHours 15
-
+        $r = Get-SPDeltaCertStaleCertifications -StaleHours 24
+        $r.Data | Format-Table CertificationId, ReviewerName, HoursOpen
     .EXAMPLE
-        # Deadline-aware mode: escalate if campaign deadline is within 8 hours (preferred)
-        Get-SPDeltaCertStaleCertifications -EscalateBeforeDeadlineHours 8 -StaleHours 0
-
+        # Org chart audit: all certs from last 30 days
+        $r = Get-SPDeltaCertStaleCertifications -DaysBack 30
+        $r.Data | Format-Table CampaignName, ReviewerName, CertSigned
     .EXAMPLE
-        # Combined: escalate if stale OR deadline near (belt-and-suspenders)
-        Get-SPDeltaCertStaleCertifications -StaleHours 15 -EscalateBeforeDeadlineHours 8
+        # Deadline-proximity mode: escalate if campaign closes within 8 hours
+        $r = Get-SPDeltaCertStaleCertifications -StaleHours 0 -EscalateBeforeDeadlineHours 8
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -775,9 +961,14 @@ function Get-SPDeltaCertStaleCertifications {
         [Parameter()]
         [int]$StaleHours = 24,
 
-        # Escalate when campaign deadline is within this many hours. 0 = disabled.
         [Parameter()]
         [int]$EscalateBeforeDeadlineHours = 0,
+
+        [Parameter()]
+        [int]$DaysBack = 0,
+
+        [Parameter()]
+        [switch]$AllCertifications,
 
         [Parameter()]
         [string]$CorrelationID
@@ -787,22 +978,38 @@ function Get-SPDeltaCertStaleCertifications {
         $CorrelationID = [guid]::NewGuid().ToString()
     }
 
-    Write-SPLog -Message "Get-SPDeltaCertStaleCertifications: Prefix='$CampaignNamePrefix' StaleHours=$StaleHours" `
+    # DaysBack > 0 automatically activates AllCertifications (audit) mode
+    $auditMode = $AllCertifications.IsPresent -or ($DaysBack -gt 0)
+
+    Write-SPLog -Message "Get-SPDeltaCertStaleCertifications: Prefix='$CampaignNamePrefix' StaleHours=$StaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours DaysBack=$DaysBack AuditMode=$auditMode" `
         -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
         -CorrelationID $CorrelationID
 
     try {
-        # Step 1: Find active delta cert campaigns.
-        # Use Get-SPAuditCampaigns with CampaignNameStartsWith (sw = prefix match, indexed)
-        # rather than Search-SPCampaigns (co = contains, full-text scan). The contains filter
-        # can cause ISC to return 400 "request timed out" when the server-side query exceeds
-        # its execution window. Prefix matching is both faster and correct here -- we know the
-        # exact prefix; we don't need a substring search.
-        $searchResult = Get-SPAuditCampaigns `
-            -CampaignNameStartsWith $CampaignNamePrefix `
-            -Status @('ACTIVE') `
-            -DaysBack 0 `
-            -CorrelationID $CorrelationID
+        # Step 1: Find campaigns
+        # Standard mode: ACTIVE only, no date limit (sw= prefix filter, indexed).
+        # Audit mode:    All statuses, DaysBack date window (client-side date filter).
+        if ($auditMode) {
+            $auditSearchParams = @{
+                CampaignNameStartsWith = $CampaignNamePrefix
+                CorrelationID          = $CorrelationID
+            }
+            if ($DaysBack -gt 0) {
+                $auditSearchParams['DaysBack'] = $DaysBack
+            }
+            else {
+                # AllCertifications without DaysBack: no date limit (DaysBack=0 disables it)
+                $auditSearchParams['DaysBack'] = 0
+            }
+            $searchResult = Get-SPAuditCampaigns @auditSearchParams
+        }
+        else {
+            $searchResult = Get-SPAuditCampaigns `
+                -CampaignNameStartsWith $CampaignNamePrefix `
+                -Status @('ACTIVE') `
+                -DaysBack 0 `
+                -CorrelationID $CorrelationID
+        }
 
         if (-not $searchResult.Success) {
             $errMsg = "Campaign search failed: $($searchResult.Error)"
@@ -811,58 +1018,61 @@ function Get-SPDeltaCertStaleCertifications {
             return @{ Success = $false; Data = $null; Error = $errMsg }
         }
 
-        $activeCampaigns = @($searchResult.Data)
+        $foundCampaigns = @($searchResult.Data)
 
-        if ($activeCampaigns.Count -eq 0) {
-            Write-SPLog -Message "No active campaigns found matching '$CampaignNamePrefix'" `
+        if ($foundCampaigns.Count -eq 0) {
+            $noResultMsg = if ($auditMode) {
+                "No campaigns found matching '$CampaignNamePrefix' in last $DaysBack days"
+            } else {
+                "No active campaigns found matching '$CampaignNamePrefix'"
+            }
+            Write-SPLog -Message $noResultMsg `
                 -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
                 -CorrelationID $CorrelationID
             return @{ Success = $true; Data = @(); Error = $null }
         }
 
-        Write-SPLog -Message "Found $($activeCampaigns.Count) active campaign(s) -- retrieving certifications" `
+        $modeLabel = if ($auditMode) { 'campaign(s) (audit mode)' } else { 'active campaign(s)' }
+        Write-SPLog -Message "Found $($foundCampaigns.Count) $modeLabel -- retrieving certifications" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
             -CorrelationID $CorrelationID
 
         $nowUtc      = (Get-Date).ToUniversalTime()
-        $staleCutoff = $nowUtc.AddHours(-$StaleHours)   # wall-clock threshold
-        $staleCerts  = [System.Collections.Generic.List[object]]::new()
+        $staleCutoff = $nowUtc.AddHours(-$StaleHours)
+        $resultCerts = [System.Collections.Generic.List[object]]::new()
 
-        $useStaleMode    = ($StaleHours -gt 0)
-        $useDeadlineMode = ($EscalateBeforeDeadlineHours -gt 0)
+        # Step 2: For each campaign, get certifications and apply filters
+        foreach ($campaign in $foundCampaigns) {
+            $campaignId     = [string]$campaign.id
+            $campaignName   = [string]$campaign.name
+            $campaignStatus = ''
+            if ($campaign.PSObject.Properties.Name -contains 'status' -and $null -ne $campaign.status) {
+                $campaignStatus = [string]$campaign.status
+            }
 
-        Write-SPLog -Message ("Get-SPDeltaCertStaleCertifications: " +
-            "Mode=$(if ($useStaleMode -and $useDeadlineMode) {'Combined'} elseif ($useDeadlineMode) {'DeadlineOnly'} else {'StaleOnly'})" +
-            " StaleHours=$StaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours") `
-            -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
-            -CorrelationID $CorrelationID
-
-        # Step 2: For each campaign, get certifications and filter
-        foreach ($campaign in $activeCampaigns) {
-            $campaignId   = $campaign.id
-            $campaignName = $campaign.name
-
-            # Parse campaign deadline once per campaign (used for deadline-mode filtering)
-            $campaignDeadline  = $null
-            $hoursUntilDeadline = $null
-            foreach ($dlProp in @('deadline', 'deadlineDate', 'due')) {
-                $dlRaw = $null
-                if ($campaign.PSObject.Properties.Name -contains $dlProp -and $null -ne $campaign.$dlProp) {
-                    $dlRaw = $campaign.$dlProp
-                }
-                if ($null -ne $dlRaw -and -not [string]::IsNullOrWhiteSpace([string]$dlRaw)) {
-                    try {
-                        $campaignDeadline = if ($dlRaw -is [datetime]) {
-                            ([datetime]$dlRaw).ToUniversalTime()
-                        } else {
-                            [datetime]::Parse([string]$dlRaw,
-                                [System.Globalization.CultureInfo]::InvariantCulture,
-                                [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
-                        }
-                        $hoursUntilDeadline = [math]::Round(($campaignDeadline - $nowUtc).TotalHours, 1)
-                    } catch { }
+            # Extract campaign deadline for EscalateBeforeDeadlineHours mode
+            $campaignDeadline      = $null
+            $hoursUntilDeadline    = [double]::MaxValue
+            $deadlineStr = $null
+            foreach ($prop in @('deadline', 'Deadline', 'endDate', 'end')) {
+                if ($campaign.PSObject.Properties.Name -contains $prop -and
+                    $null -ne $campaign.$prop -and
+                    -not [string]::IsNullOrWhiteSpace([string]$campaign.$prop)) {
+                    $deadlineStr = [string]$campaign.$prop
                     break
                 }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
+                try {
+                    if ($deadlineStr -is [datetime]) {
+                        $campaignDeadline = ([datetime]$deadlineStr).ToUniversalTime()
+                    }
+                    else {
+                        $campaignDeadline = [datetime]::Parse($deadlineStr).ToUniversalTime()
+                    }
+                    $hoursUntilDeadline = [math]::Round(($campaignDeadline - $nowUtc).TotalHours, 1)
+                }
+                catch { }
             }
 
             $certResult = Get-SPAuditCertifications -CampaignId $campaignId `
@@ -878,23 +1088,22 @@ function Get-SPDeltaCertStaleCertifications {
             $certs = @($certResult.Data)
 
             foreach ($cert in $certs) {
-                # Skip completed certifications (signed is not null)
+                # Extract signed status
                 $signedValue = $null
                 if ($cert.PSObject.Properties.Name -contains 'signed') {
                     $signedValue = $cert.signed
                 }
-                if ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue)) {
-                    continue
-                }
+                $isSigned = ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue))
 
-                # Check created date against stale threshold
+                # In standard mode: skip signed certifications
+                if (-not $auditMode -and $isSigned) { continue }
+
+                # Parse created date
                 $certCreatedStr = $null
                 if ($cert.PSObject.Properties.Name -contains 'created') {
                     $certCreatedStr = $cert.created
                 }
-                if ([string]::IsNullOrWhiteSpace($certCreatedStr)) {
-                    continue
-                }
+                if ([string]::IsNullOrWhiteSpace($certCreatedStr)) { continue }
 
                 $certCreated = $null
                 try {
@@ -914,21 +1123,32 @@ function Get-SPDeltaCertStaleCertifications {
 
                 $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
 
-                # Determine whether this cert meets the escalation threshold(s)
-                $isStale          = $useStaleMode -and ($certCreated -lt $staleCutoff)
-                $isDeadlineUrgent = $useDeadlineMode -and ($null -ne $hoursUntilDeadline) -and
-                                    ($hoursUntilDeadline -le $EscalateBeforeDeadlineHours) -and
-                                    ($hoursUntilDeadline -ge 0)   # don't escalate already-expired campaigns
+                # Determine if this cert meets escalation criteria (standard mode only)
+                $escalationReason = ''
+                if (-not $auditMode) {
+                    $meetsStaleHours   = ($StaleHours -gt 0 -and $certCreated -lt $staleCutoff)
+                    $meetsDeadline     = ($EscalateBeforeDeadlineHours -gt 0 -and
+                                         $hoursUntilDeadline -ne [double]::MaxValue -and
+                                         $hoursUntilDeadline -le $EscalateBeforeDeadlineHours)
 
-                if (-not $isStale -and -not $isDeadlineUrgent) { continue }
-
-                $escalationReason = if ($isStale -and $isDeadlineUrgent) {
-                    "Stale ($hoursOpen h open) + Deadline urgent ($hoursUntilDeadline h remaining)"
-                } elseif ($isDeadlineUrgent) {
-                    "Deadline urgent: $hoursUntilDeadline h remaining before campaign expires"
-                } else {
-                    "Stale: open $hoursOpen hours with no reviewer action"
+                    if ($meetsStaleHours -and $meetsDeadline) {
+                        $escalationReason = 'Both'
+                    }
+                    elseif ($meetsStaleHours) {
+                        $escalationReason = 'Stale'
+                    }
+                    elseif ($meetsDeadline) {
+                        $escalationReason = 'Deadline'
+                    }
+                    else {
+                        continue  # neither condition met -- skip
+                    }
                 }
+                else {
+                    $escalationReason = 'AuditAll'
+                }
+
+                $hoursOpen = [math]::Round(($nowUtc - $certCreated).TotalHours, 1)
 
                 # Extract reviewer info from EffectiveReviewer (added by Get-SPAuditCertifications)
                 $reviewerId   = ''
@@ -954,25 +1174,28 @@ function Get-SPDeltaCertStaleCertifications {
                     $reviewerClassification = [string]$cert.ReviewerClassification
                 }
 
-                $staleCerts.Add([PSCustomObject]@{
+                $resultCerts.Add([PSCustomObject]@{
                     CertificationId        = [string]$cert.id
                     CampaignId             = $campaignId
                     CampaignName           = $campaignName
+                    CampaignStatus         = $campaignStatus
                     ReviewerIdentityId     = $reviewerId
                     ReviewerName           = $reviewerName
                     HoursOpen              = $hoursOpen
-                    HoursUntilDeadline     = $hoursUntilDeadline
+                    HoursUntilDeadline     = if ($hoursUntilDeadline -eq [double]::MaxValue) { $null } else { $hoursUntilDeadline }
                     EscalationReason       = $escalationReason
                     ReviewerClassification = $reviewerClassification
+                    CertSigned             = $isSigned
                 })
             }
         }
 
-        Write-SPLog -Message "Found $($staleCerts.Count) stale certification(s) across $($activeCampaigns.Count) active campaign(s)" `
+        $resultLabel = if ($auditMode) { 'certification(s) (audit)' } else { 'stale certification(s)' }
+        Write-SPLog -Message "Found $($resultCerts.Count) $resultLabel across $($foundCampaigns.Count) campaign(s)" `
             -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `
             -CorrelationID $CorrelationID
 
-        return @{ Success = $true; Data = $staleCerts.ToArray(); Error = $null }
+        return @{ Success = $true; Data = $resultCerts.ToArray(); Error = $null }
     }
     catch {
         $errMsg = "Get-SPDeltaCertStaleCertifications failed: $($_.Exception.Message)"
@@ -3372,6 +3595,324 @@ function Get-SPOrgChartGaps {
     }
 }
 
+function Get-SPDeltaManagersForSources {
+    <#
+    .SYNOPSIS
+        Returns a hashtable of all unique managers who have direct reports with
+        accounts on the specified AD source IDs.
+    .DESCRIPTION
+        Used by Invoke-SPDeltaCertFullRun to determine which managers should
+        receive a MANAGER-type full certification campaign.
+
+        Queries GET /v3/search/identities with filters that narrow to active
+        identities who have accounts on the monitored source IDs and who have a
+        manager assignment in ISC. Extracts the unique manager IDs and resolves
+        their display names.
+
+        The same ExcludeLifecycleStates, ExcludeIdentityIds, and
+        ExcludeDisplayNamePatterns filters applied by Get-SPDeltaAffectedIdentities
+        are applied here for consistency.
+
+        IMPORTANT -- ISC API ceiling:
+          The /v3/search/identities filter supports 'accounts.source.id in (...)' for
+          source-level scoping. If that filter is not indexed or returns errors on the
+          tenant, the function falls back to fetching all active identities and
+          filtering client-side by source ID from the accounts array.
+
+    .PARAMETER SourceIds
+        Array of SailPoint ISC source IDs to scope to. If empty, all active
+        identities with any manager are included (not recommended for large tenants).
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries. Auto-generated if omitted.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{ managerId = ManagerName }  # keyed by manager identity ID
+            Error   = $string
+        }
+    .EXAMPLE
+        $mgrs = Get-SPDeltaManagersForSources -SourceIds @('src-abc123')
+        foreach ($mgrId in $mgrs.Data.Keys) {
+            "Manager: $($mgrs.Data[$mgrId]) ($mgrId)"
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$SourceIds = @(),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $srcLabel = if ($SourceIds.Count -gt 0) { $SourceIds -join ',' } else { '(all)' }
+    Write-SPLog -Message "Get-SPDeltaManagersForSources: SourceIds='$srcLabel'" `
+        -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # Load exclusion config (fail-safe to hardcoded defaults)
+        $excludeLifecycleStates     = @('terminated', 'inactive', 'leaver', 'prehire')
+        $excludeDisplayNamePatterns = @()
+        $excludeIdentityIds         = @()
+        $maxPerPage                 = 250
+
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg -and $null -ne $cfg.PSObject.Properties['DeltaCert'] -and
+                $null -ne $cfg.DeltaCert) {
+                $dc = $cfg.DeltaCert
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeLifecycleStates' -and
+                    $null -ne $dc.ExcludeLifecycleStates) {
+                    $excludeLifecycleStates = @($dc.ExcludeLifecycleStates)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeDisplayNamePatterns' -and
+                    $null -ne $dc.ExcludeDisplayNamePatterns) {
+                    $excludeDisplayNamePatterns = @($dc.ExcludeDisplayNamePatterns)
+                }
+                if ($dc.PSObject.Properties.Name -contains 'ExcludeIdentityIds' -and
+                    $null -ne $dc.ExcludeIdentityIds) {
+                    $excludeIdentityIds = @($dc.ExcludeIdentityIds)
+                }
+
+                # Optional per-page override for full-cert identity search
+                if ($null -ne $dc.PSObject.Properties['FullCert'] -and
+                    $null -ne $dc.FullCert -and
+                    $dc.FullCert.PSObject.Properties.Name -contains 'MaxIdentitiesPerPage' -and
+                    [int]$dc.FullCert.MaxIdentitiesPerPage -gt 0) {
+                    $maxPerPage = [int]$dc.FullCert.MaxIdentitiesPerPage
+                }
+            }
+        } catch { }
+
+        $excludeIdSet = if ($excludeIdentityIds.Count -gt 0) {
+            [System.Collections.Generic.HashSet[string]]::new([string[]]$excludeIdentityIds)
+        } else { $null }
+
+        $sourceSet = if ($SourceIds.Count -gt 0) {
+            [System.Collections.Generic.HashSet[string]]::new($SourceIds)
+        } else { $null }
+
+        # Pagination ceiling (reuse Api.MaxPaginationPages from config)
+        $maxPages = 200
+        try {
+            $cfgForCeiling = Get-SPConfig
+            if ($null -ne $cfgForCeiling.Api -and
+                $cfgForCeiling.Api.PSObject.Properties.Name -contains 'MaxPaginationPages' -and
+                [int]$cfgForCeiling.Api.MaxPaginationPages -gt 0) {
+                $maxPages = [int]$cfgForCeiling.Api.MaxPaginationPages
+            }
+        } catch { }
+
+        # Attempt server-side source filter first. If the filter is unsupported,
+        # fall back to fetching all active identities with a manager.
+        $useServerSideSourceFilter = ($SourceIds.Count -gt 0)
+        $allIdentities = [System.Collections.Generic.List[object]]::new()
+        $offset  = 0
+        $pageNum = 0
+
+        do {
+            $pageNum++
+            if ($pageNum -gt $maxPages) {
+                $errMsg = "Pagination ceiling reached at $maxPages pages while retrieving identity list for full-cert manager resolution."
+                Write-SPLog -Message $errMsg -Severity ERROR `
+                    -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                    -CorrelationID $CorrelationID
+                return @{ Success = $false; Data = $null; Error = $errMsg }
+            }
+
+            $queryParams = @{
+                'limit'  = $maxPerPage.ToString()
+                'offset' = $offset.ToString()
+            }
+
+            # Build server-side filter. The 'manager.id is present' filter selects
+            # identities that have any manager assignment.
+            if ($useServerSideSourceFilter) {
+                $srcFilterParts = $SourceIds | ForEach-Object { "`"$_`"" }
+                $queryParams['filters'] = "manager.id is present and attributes.cloudLifecycleState ne `"terminated`" and accounts.source.id in ($($srcFilterParts -join ','))"
+            } else {
+                $queryParams['filters'] = 'manager.id is present'
+            }
+
+            $result = Invoke-SPApiRequest -Method GET -Endpoint '/search/identities' `
+                -QueryParams $queryParams -CorrelationID $CorrelationID
+
+            if (-not $result.Success) {
+                # Server-side source filter may not be supported by tenant -- fall back
+                if ($useServerSideSourceFilter) {
+                    Write-SPLog -Message "Server-side source filter unsupported or failed ($($result.Error)). Falling back to client-side source filtering." `
+                        -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                        -CorrelationID $CorrelationID
+                    $useServerSideSourceFilter = $false
+                    $offset  = 0
+                    $pageNum = 0
+                    $allIdentities.Clear()
+                    continue
+                }
+                else {
+                    $errMsg = "Identity search failed at page $($pageNum): $($result.Error)"
+                    Write-SPLog -Message $errMsg -Severity ERROR `
+                        -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                        -CorrelationID $CorrelationID
+                    return @{ Success = $false; Data = $null; Error = $errMsg }
+                }
+            }
+
+            $page = $result.Data
+            if ($null -ne $result.Data -and
+                $result.Data.PSObject.Properties.Name -contains 'items') {
+                $page = $result.Data.items
+            }
+            $page = @($page)
+
+            if ($page.Count -gt 0) {
+                foreach ($identity in $page) { $allIdentities.Add($identity) }
+            }
+
+            Write-SPLog -Message "Page ${pageNum}: retrieved $($page.Count) identities (running total: $($allIdentities.Count))" `
+                -Severity DEBUG -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+                -CorrelationID $CorrelationID
+
+            $offset += $maxPerPage
+        } while ($page.Count -ge $maxPerPage)
+
+        Write-SPLog -Message "Retrieved $($allIdentities.Count) candidate identities for full-cert manager resolution" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+            -CorrelationID $CorrelationID
+
+        # Extract unique manager IDs, applying exclusion filters
+        # Key: managerId, Value: manager display name (best resolved from any subordinate record)
+        $managerMap = @{}
+
+        foreach ($identity in $allIdentities) {
+
+            # Explicit identity exclusion
+            $identId = ''
+            if ($null -ne $identity.PSObject.Properties['id'] -and
+                -not [string]::IsNullOrWhiteSpace($identity.id)) {
+                $identId = [string]$identity.id
+            }
+            if ([string]::IsNullOrWhiteSpace($identId)) { continue }
+            if ($null -ne $excludeIdSet -and $excludeIdSet.Contains($identId)) { continue }
+
+            # Lifecycle state exclusion
+            $lcs = ''
+            if ($null -ne $identity.PSObject.Properties['attributes'] -and
+                $null -ne $identity.attributes -and
+                $null -ne $identity.attributes.PSObject.Properties['cloudLifecycleState'] -and
+                -not [string]::IsNullOrWhiteSpace($identity.attributes.cloudLifecycleState)) {
+                $lcs = [string]$identity.attributes.cloudLifecycleState
+            }
+            if (-not [string]::IsNullOrWhiteSpace($lcs) -and
+                $excludeLifecycleStates.Count -gt 0 -and $lcs -in $excludeLifecycleStates) {
+                continue
+            }
+
+            # Display name exclusion
+            $displayName = ''
+            foreach ($prop in @('displayName', 'name')) {
+                if ($null -ne $identity.PSObject.Properties[$prop] -and
+                    -not [string]::IsNullOrWhiteSpace($identity.$prop)) {
+                    $displayName = [string]$identity.$prop
+                    break
+                }
+            }
+            if ($excludeDisplayNamePatterns.Count -gt 0 -and
+                -not [string]::IsNullOrWhiteSpace($displayName)) {
+                $isExcluded = $false
+                foreach ($pattern in $excludeDisplayNamePatterns) {
+                    if (-not [string]::IsNullOrWhiteSpace($pattern) -and
+                        $displayName -match $pattern) {
+                        $isExcluded = $true
+                        break
+                    }
+                }
+                if ($isExcluded) { continue }
+            }
+
+            # Client-side source filter (only needed when server-side filter is not active)
+            if (-not $useServerSideSourceFilter -and $null -ne $sourceSet) {
+                $hasMatchingSource = $false
+                if ($null -ne $identity.PSObject.Properties['accounts'] -and
+                    $null -ne $identity.accounts) {
+                    $accts = @($identity.accounts)
+                    foreach ($acct in $accts) {
+                        $acctSrcId = ''
+                        foreach ($prop in @('sourceId', 'source_id')) {
+                            if ($null -ne $acct.PSObject.Properties[$prop] -and
+                                -not [string]::IsNullOrWhiteSpace($acct.$prop)) {
+                                $acctSrcId = [string]$acct.$prop
+                                break
+                            }
+                        }
+                        if ([string]::IsNullOrWhiteSpace($acctSrcId) -and
+                            $null -ne $acct.PSObject.Properties['source'] -and
+                            $null -ne $acct.source -and
+                            $null -ne $acct.source.PSObject.Properties['id'] -and
+                            -not [string]::IsNullOrWhiteSpace($acct.source.id)) {
+                            $acctSrcId = [string]$acct.source.id
+                        }
+                        if ($sourceSet.Contains($acctSrcId)) {
+                            $hasMatchingSource = $true
+                            break
+                        }
+                    }
+                }
+                if (-not $hasMatchingSource) { continue }
+            }
+
+            # Extract manager
+            $managerId   = ''
+            $managerName = ''
+            if ($null -ne $identity.PSObject.Properties['manager'] -and
+                $null -ne $identity.manager) {
+                $mgr = $identity.manager
+                if ($null -ne $mgr.PSObject.Properties['id'] -and
+                    -not [string]::IsNullOrWhiteSpace($mgr.id)) {
+                    $managerId = [string]$mgr.id
+                }
+                foreach ($prop in @('displayName', 'name')) {
+                    if ($null -ne $mgr.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace($mgr.$prop)) {
+                        $managerName = [string]$mgr.$prop
+                        break
+                    }
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($managerId)) { continue }
+
+            # Add or update manager entry (prefer a non-empty display name)
+            if (-not $managerMap.ContainsKey($managerId)) {
+                $managerMap[$managerId] = $managerName
+            }
+            elseif ([string]::IsNullOrWhiteSpace($managerMap[$managerId]) -and
+                    -not [string]::IsNullOrWhiteSpace($managerName)) {
+                $managerMap[$managerId] = $managerName
+            }
+        }
+
+        Write-SPLog -Message "Get-SPDeltaManagersForSources: Found $($managerMap.Count) unique manager(s) with staff on monitored source(s)" `
+            -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaManagersForSources' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $managerMap; Error = $null }
+    }
+    catch {
+        $errMsg = "Get-SPDeltaManagersForSources failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.DeltaCertQueries' `
+            -Action 'Get-SPDeltaManagersForSources' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -3388,5 +3929,6 @@ Export-ModuleMember -Function @(
     'Show-SPReportDistributionPreview',
     'Export-SPOrgChartHtml',
     'Resolve-SPIdentityBand',
-    'Get-SPOrgChartGaps'
+    'Get-SPOrgChartGaps',
+    'Get-SPDeltaManagersForSources'
 )
