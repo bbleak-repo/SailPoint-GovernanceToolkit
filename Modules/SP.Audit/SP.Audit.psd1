@@ -29,6 +29,7 @@
         'SP.AuditAnalytics.psm1'
         'SP.AuditReportHtml.psm1'
         'SP.AuditOperations.psm1'
+        'SP.CampaignDelta.psm1'
     )
 
     # Public functions exported by this module
@@ -213,6 +214,14 @@
 
         # SP.AuditOperations - Bulk Remediation Ticket Export (P15-04 / DF-09)
         'Export-SPRemediationTickets'
+
+        # SP.CampaignDelta - Dated campaign snapshots (diff/trend foundation)
+        'Build-SPCampaignSnapshotData'
+        'Save-SPCampaignSnapshot'
+        'Get-SPCampaignSnapshot'
+        'Get-SPCampaignSnapshotList'
+        'Get-SPCampaignPreviousSnapshot'
+        'Remove-SPCampaignOldSnapshots'
     )
 
     # Do not export variables or aliases from nested modules

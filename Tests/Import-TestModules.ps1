@@ -90,6 +90,7 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditAnalytics.psm1')  -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditReportHtml.psm1') -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.AuditOperations.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.CampaignDelta.psm1')   -Force -DisableNameChecking
     }
     if ($Testing) {
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.TestLoader.psm1') -Force -DisableNameChecking

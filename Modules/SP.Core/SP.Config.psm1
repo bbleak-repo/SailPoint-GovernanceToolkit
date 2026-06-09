@@ -93,6 +93,8 @@ function Get-SPConfigDefaults {
             CacheActiveTtlMinutes    = 180
             AccountCacheTtlMinutes   = 1440
             IdentityCacheTtlMinutes  = 1440
+            SnapshotPath             = '.\Audit\Snapshots'
+            SnapshotRetentionDays    = 90
             DefaultDaysBack          = 30
             DefaultIdentityEventDays = 2
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
@@ -457,6 +459,8 @@ function Get-SPConfigTemplate {
             CacheActiveTtlMinutes    = 180
             AccountCacheTtlMinutes   = 1440
             IdentityCacheTtlMinutes  = 1440
+            SnapshotPath             = '.\Audit\Snapshots'
+            SnapshotRetentionDays    = 90
             DefaultDaysBack          = 30
             DefaultIdentityEventDays = 2
             DefaultStatuses          = @('COMPLETED', 'ACTIVE')
@@ -1320,7 +1324,7 @@ function Resolve-SPConfigOutputPaths {
 
     $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
     $map = [ordered]@{
-        Audit             = @('OutputPath', 'CachePath')
+        Audit             = @('OutputPath', 'CachePath', 'SnapshotPath')
         DeltaCert         = @('OutputPath')
         Logging           = @('Path')
         GovernanceMetrics = @('MetricsOutputPath')
