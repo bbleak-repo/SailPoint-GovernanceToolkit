@@ -86,6 +86,7 @@
         # SP.AuditReportCore + SP.AuditReportHtml - Hierarchical Leadership Rollup (P17-01)
         'Build-SPLeadershipHierarchy'
         'Export-SPHierarchicalLeadershipHtml'
+        'Export-SPMasterLeadershipHtml'
 
         'Export-SPEntitlementInventoryHtml'
         'Export-SPAccessProfileInventoryHtml'

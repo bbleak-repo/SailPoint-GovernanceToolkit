@@ -11649,8 +11649,258 @@ function toggleIdentities(){
     }
 }
 
+function Export-SPMasterLeadershipHtml {
+    <#
+    .SYNOPSIS
+        Generates a single executive "master rollup" HTML for upper leadership: org-wide
+        KPIs, a whole-org collapsible drill-down, a leadership scorecard, the revocations
+        ("what was done"), and a coverage/exceptions footer.
+    .DESCRIPTION
+        Consumes Build-SPLeadershipHierarchy output. Reuses the same collapsible node
+        rendering as the per-leader files so the drill-down is consistent, then wraps it
+        with executive sections. Scope:
+          CompanyWide  -> one file covering the whole org (synthetic 'All Leadership' root)
+          PerTopLeader -> one file per top-level leader (their subtree)
+          Both         -> both of the above
+    .PARAMETER HierarchyData
+        The .Data property from Build-SPLeadershipHierarchy (TopNodes, NodeCount).
+    .PARAMETER OutputPath
+        Directory to write into (a master-<stamp> subdir is created).
+    .PARAMETER ReportTitle / DateRange / CampaignCount
+        Header text.
+    .PARAMETER Scope
+        CompanyWide | PerTopLeader | Both (default Both).
+    .PARAMETER ScorecardMinLevel
+        Include leaders at/above this org level in the scorecard table (default 1).
+    .PARAMETER CorrelationID
+        Trace id.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Files; FileCount; RunDir }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$HierarchyData,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter()][string]$ReportTitle = 'Executive Certification Master Rollup',
+        [Parameter()][string]$DateRange = '',
+        [Parameter()][int]$CampaignCount = 0,
+        [Parameter()][ValidateSet('CompanyWide', 'PerTopLeader', 'Both')][string]$Scope = 'Both',
+        [Parameter()][int]$ScorecardMinLevel = 1,
+        [Parameter()][string]$CorrelationID
+    )
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+
+    try {
+        # Absolute path so New-Item and WriteAllText agree (.NET CurrentDirectory != PS location).
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) { $OutputPath = [System.IO.Path]::GetFullPath($OutputPath) }
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+
+        $runStamp  = (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $genDate   = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        $runDir    = Join-Path $OutputPath "master-$runStamp"
+        New-Item -Path $runDir -ItemType Directory -Force | Out-Null
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $topNodes  = @($HierarchyData.TopNodes)
+        $files     = [System.Collections.Generic.List[string]]::new()
+        $enc       = { param($s) [System.Web.HttpUtility]::HtmlEncode([string]$s) }
+
+        # DFS collect every node in a subtree.
+        $collectNodes = {
+            param($root)
+            $acc   = [System.Collections.Generic.List[object]]::new()
+            $stack = [System.Collections.Generic.Stack[object]]::new()
+            $stack.Push($root)
+            while ($stack.Count -gt 0) {
+                $n = $stack.Pop()
+                $acc.Add($n)
+                foreach ($c in @($n.Children)) { $stack.Push($c) }
+            }
+            return $acc
+        }
+
+        $css = @'
+body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:#f4f6f8;color:#212529;}
+.rpt-header{background:#1a1a2e;color:#fff;padding:18px 22px;border-radius:6px;margin-bottom:16px;}
+.rpt-title{font-size:22px;font-weight:700;margin:0 0 4px;}
+.rpt-meta{font-size:12px;color:#c7c9d9;}
+.sec{background:#fff;padding:14px 16px;border-radius:6px;border:1px solid #dee2e6;margin-bottom:16px;}
+.sec h2{font-size:15px;margin:0 0 10px;color:#1a1a2e;border-bottom:2px solid #e9ecef;padding-bottom:6px;}
+.kpi-cards td{padding:10px 18px;text-align:center;border-radius:5px;font-size:13px;font-weight:600;}
+.kpi-approved{background:#d4edda;color:#155724;}
+.kpi-revoked{background:#f8d7da;color:#721c24;}
+.kpi-pending{background:#fff3cd;color:#856404;}
+.kpi-total{background:#d1ecf1;color:#0c5460;}
+.kpi-pct{background:#e2e3f3;color:#1a1a2e;}
+table.grid{border-collapse:collapse;width:100%;font-size:12px;}
+table.grid th{background:#e9ecef;text-align:left;padding:6px 10px;border-bottom:2px solid #dee2e6;font-size:11px;}
+table.grid td{padding:5px 10px;border-bottom:1px solid #eee;}
+table.grid tr:hover td{background:#f8f9fa;}
+.num{text-align:right;font-variant-numeric:tabular-nums;}
+.rev{color:#CC3333;font-weight:600;}
+.muted{color:#777;}
+.org-section{background:#fff;padding:12px;border-radius:6px;border:1px solid #dee2e6;}
+details>summary{list-style:none;cursor:pointer;}
+details>summary::-webkit-details-marker{display:none;}
+.rpt-footer{margin-top:18px;font-size:11px;color:#adb5bd;text-align:center;}
+.warn{background:#fff3cd;border:1px solid #ffe69c;border-radius:5px;padding:10px 12px;font-size:12px;color:#664d03;}
+body.hide-empty details[data-total="0"]{display:none;}
+body.hide-identities .identity-node{display:none;}
+'@
+
+        $buildMaster = {
+            param($rootNode, $headerLabel, $fileName)
+
+            $allNodes = & $collectNodes $rootNode
+            $agg      = $rootNode.Agg
+            $decided  = [int]$agg.Approved + [int]$agg.Revoked
+            $pct      = if ($agg.Total -gt 0) { [math]::Round($decided * 100.0 / $agg.Total, 0) } else { 0 }
+
+            # --- Leadership scorecard (one row per leader at/above ScorecardMinLevel) ---
+            $scoreNodes = @($allNodes |
+                Where-Object { $_.NodeId -ne 'all-leadership' -and [int]$_.Level -ge $ScorecardMinLevel } |
+                Sort-Object @{ Expression = { [int]$_.Level }; Descending = $true }, @{ Expression = { [int]$_.Agg.Total }; Descending = $true })
+            $scoreRows = New-Object System.Text.StringBuilder
+            foreach ($s in $scoreNodes) {
+                $sDecided = [int]$s.Agg.Approved + [int]$s.Agg.Revoked
+                $sPct     = if ($s.Agg.Total -gt 0) { [math]::Round($sDecided * 100.0 / $s.Agg.Total, 0) } else { 0 }
+                [void]$scoreRows.Append("<tr><td>$(& $enc $s.DisplayName)</td><td class='muted'>L$($s.Level)</td>" +
+                    "<td class='num'>$($s.Agg.Total)</td><td class='num'>$($s.Agg.Approved)</td>" +
+                    "<td class='num rev'>$($s.Agg.Revoked)</td><td class='num'>$($s.Agg.Pending)</td>" +
+                    "<td class='num'>$sPct%</td></tr>")
+            }
+            if ($scoreNodes.Count -eq 0) { [void]$scoreRows.Append("<tr><td colspan='7' class='muted'>No leaders at level &ge; $ScorecardMinLevel.</td></tr>") }
+
+            # --- Revocations ("what was done") ---
+            $revRows = New-Object System.Text.StringBuilder
+            $revCount = 0
+            foreach ($n in $allNodes) {
+                if (-not $n.IsCertifier) { continue }
+                foreach ($ci in @($n.CertifiedIdentities)) {
+                    foreach ($it in @($ci.Items)) {
+                        if (([string]$it.Decision) -match '^REVOKE') {
+                            $revCount++
+                            [void]$revRows.Append("<tr><td>$(& $enc $ci.Name)</td><td>$(& $enc $it.AccessName)</td>" +
+                                "<td class='muted'>$(& $enc $it.AccessType)</td><td class='muted'>$(& $enc $it.SourceName)</td>" +
+                                "<td>$(& $enc $n.DisplayName)</td><td class='muted'>$(& $enc $it.DecisionDate)</td></tr>")
+                        }
+                    }
+                }
+            }
+            if ($revCount -eq 0) { [void]$revRows.Append("<tr><td colspan='6' class='muted'>No access was revoked in this window.</td></tr>") }
+
+            # --- Coverage / exceptions (unresolved leadership identities) ---
+            $unresolved = @($allNodes | Where-Object { [int]$_.Level -gt 0 -and ([string]$_.DisplayName -eq [string]$_.NodeId) })
+            $coverageHtml = if ($unresolved.Count -gt 0) {
+                "<div class='warn'><b>$($unresolved.Count) leadership node(s) could not be resolved to a name in ISC</b> " +
+                "(shown by their identity id; the manager chain may be incomplete). Add them to " +
+                "<code>Config\org-chart-supplement.csv</code> and re-run with <code>-OrgSupplementPath</code> to fill the gaps.</div>"
+            } else {
+                "<div class='muted' style='font-size:12px;'>All leadership nodes resolved to a name. No coverage gaps detected.</div>"
+            }
+
+            $treeHtml = _Render-SPHierarchyNodeHtml -Node $rootNode -Depth 0
+            $hdr      = & $enc $headerLabel
+            $title    = & $enc $ReportTitle
+            $range    = & $enc $DateRange
+            $campNote = if ($CampaignCount -gt 0) { " &nbsp;|&nbsp; $CampaignCount campaign(s)" } else { '' }
+
+            $html = @"
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$title — $hdr</title><style>$css</style>
+<script>
+function toggleAll(open){document.querySelectorAll('details').forEach(function(d){d.open=open;});}
+</script></head><body>
+<div class="rpt-header">
+  <div class="rpt-title">$title</div>
+  <div class="rpt-meta">$hdr &nbsp;|&nbsp; $range$campNote &nbsp;|&nbsp; Generated: $genDate</div>
+</div>
+
+<div class="sec">
+  <h2>Org-wide summary</h2>
+  <table cellpadding="0" cellspacing="6" border="0" class="kpi-cards"><tr>
+    <td class="kpi-total">$($agg.Total) items</td>
+    <td class="kpi-approved">$($agg.Approved) approved &#10003;</td>
+    <td class="kpi-revoked">$($agg.Revoked) revoked &#10007;</td>
+    <td class="kpi-pending">$($agg.Pending) pending &#9203;</td>
+    <td class="kpi-pct">$pct% decided</td>
+    <td class="kpi-total">$($agg.Identities) identities</td>
+  </tr></table>
+</div>
+
+<div class="sec">
+  <h2>Leadership scorecard</h2>
+  <table class="grid"><thead><tr><th>Leader</th><th>Level</th><th class="num">Items</th><th class="num">Approved</th><th class="num">Revoked</th><th class="num">Pending</th><th class="num">% Decided</th></tr></thead>
+  <tbody>$($scoreRows.ToString())</tbody></table>
+</div>
+
+<div class="sec">
+  <h2>Access revoked ($revCount) — what was done</h2>
+  <table class="grid"><thead><tr><th>Identity</th><th>Access</th><th>Type</th><th>Source</th><th>Reviewer</th><th>Date</th></tr></thead>
+  <tbody>$($revRows.ToString())</tbody></table>
+</div>
+
+<div class="sec">
+  <h2>Full org drill-down</h2>
+  <div style="margin-bottom:8px;">
+    <button onclick="toggleAll(true)" style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:6px;">Expand All</button>
+    <button onclick="toggleAll(false)" style="font-size:11px;padding:3px 10px;cursor:pointer;">Collapse All</button>
+  </div>
+  <div class="org-section">$treeHtml</div>
+</div>
+
+<div class="sec"><h2>Coverage &amp; exceptions</h2>$coverageHtml</div>
+
+<div class="rpt-footer">SailPoint ISC Governance Toolkit &mdash; $genDate &mdash; CorrelationID: $CorrelationID</div>
+</body></html>
+"@
+            $fp = Join-Path $runDir $fileName
+            [System.IO.File]::WriteAllText($fp, $html, $utf8NoBom)
+            $files.Add($fp)
+        }
+
+        if ($Scope -eq 'CompanyWide' -or $Scope -eq 'Both') {
+            $cAgg = @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0; Identities = 0 }
+            $maxLevel = 0
+            foreach ($t in $topNodes) {
+                $cAgg.Approved += [int]$t.Agg.Approved; $cAgg.Revoked += [int]$t.Agg.Revoked
+                $cAgg.Pending  += [int]$t.Agg.Pending;  $cAgg.Total   += [int]$t.Agg.Total
+                $cAgg.Identities += [int]$t.Agg.Identities
+                if ([int]$t.Level -gt $maxLevel) { $maxLevel = [int]$t.Level }
+            }
+            $syntheticRoot = [PSCustomObject]@{
+                NodeId = 'all-leadership'; DisplayName = 'All Leadership'; Level = ($maxLevel + 1)
+                Children = $topNodes; CertifiedIdentities = @(); IsCertifier = $false; Agg = $cAgg
+            }
+            & $buildMaster $syntheticRoot 'Company-wide' 'master-rollup-company.html'
+        }
+
+        if ($Scope -eq 'PerTopLeader' -or $Scope -eq 'Both') {
+            foreach ($t in $topNodes) {
+                $safe = ($t.DisplayName -replace '[^A-Za-z0-9_\-]', '_')
+                $safe = $safe.Substring(0, [math]::Min(40, $safe.Length))
+                if ([string]::IsNullOrWhiteSpace($safe)) { $safe = 'leader' }
+                & $buildMaster $t $t.DisplayName "master-rollup-$safe.html"
+            }
+        }
+
+        Write-Host "  Master rollup: $($files.Count) file(s) in '$runDir'" -ForegroundColor Green
+        return @{ Success = $true; Data = @{ Files = $files.ToArray(); FileCount = $files.Count; RunDir = $runDir }; Error = $null }
+    }
+    catch {
+        $errMsg = "Export-SPMasterLeadershipHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReportHtml' `
+            -Action 'Export-SPMasterLeadershipHtml' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
 # Second Export-ModuleMember call is required because Export-SPHierarchicalLeadershipHtml is
 # defined after the primary Export-ModuleMember call at the top of this section.
 # In PS5.1, Export-ModuleMember calls are cumulative; this additive call registers the
-# new hierarchical report function.
-Export-ModuleMember -Function 'Export-SPHierarchicalLeadershipHtml'
+# new hierarchical report functions.
+Export-ModuleMember -Function 'Export-SPHierarchicalLeadershipHtml', 'Export-SPMasterLeadershipHtml'

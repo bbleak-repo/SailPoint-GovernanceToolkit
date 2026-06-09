@@ -637,7 +637,10 @@ Also useful as a spot-check at any point during an active campaign window.
 | `-OrgDepth <n>` | Levels to walk up the manager chain (default 5). |
 | `-OutputPath <dir>` | Output root (default `.\Audit\HierarchicalReports`). |
 | `-ReportTitle <str>` | Title shown in every report header. |
-| `-OutputMode` | `Console`/`JSON`/`Both`. |
+| `-OutputMode` | `Console`/`JSON`/`Both` — controls the run summary; the HTML files are always written. |
+| `-OrgSupplementPath <csv>` | Merge `Config\org-chart-supplement.csv` to fill ISC manager-chain gaps where the chain dead-ends short of the top. |
+| `-RefreshIdentities` | Clear the identity cache first so the manager chain is re-resolved from ISC — use to validate org movement after a reorg. |
+| `-IncludeMasterRollup` / `-MasterScope <s>` | Also generate the **executive master rollup**: one consolidated doc with an org-wide KPI banner, whole-org drill-down, leadership scorecard, the revocations ("what was done"), and a coverage/exceptions footer. Scope `CompanyWide` / `PerTopLeader` / `Both` (default `Both`). |
 | `-WhatIf` | Preview: shows campaign/cert count without generating files. |
 
 ```powershell
@@ -650,9 +653,15 @@ Also useful as a spot-check at any point during an active campaign window.
 # Scope to a specific campaign type, generate VP-and-above only
 .\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Daily Attestation' -MinReportLevel 2
 
-# Catch-up: last 90 days, all levels
-.\Scripts\Invoke-SPHierarchicalReport.ps1 -DaysBack 90 -MinReportLevel 0
+# Per-leader files PLUS the executive master rollup, filling chain gaps from the supplement
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Tuesday' -IncludeMasterRollup -OrgSupplementPath .\Config\org-chart-supplement.csv
+
+# After a reorg: force fresh identity resolution
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Tuesday' -RefreshIdentities
 ```
+
+The master rollup lands beside the per-leader files in a `master-<stamp>\` subdirectory
+(`master-rollup-company.html` and one `master-rollup-<Leader>.html` per top leader).
 
 **Output structure:** each run creates a timestamped subdirectory so multiple runs never
 overwrite each other:
@@ -737,6 +746,28 @@ packaging evidence for auditors.
 2. Collect the output directory (`Reports\`) -- it includes a manifest listing all artifacts.
 3. Include the JSONL audit trail (`Audit\*.jsonl`) for machine-verifiable provenance.
 4. For SOX, add the leadership rollup reports to show reviewer accountability.
+
+### `Invoke-SPOrgTreePreview.ps1`
+**Purpose:** prints the **org tree as ASCII art** for a campaign's certifiers, so you can
+eyeball the management chain (and band assignments) before generating leadership reports.
+Read-only; surfaces `Build-SPOrgTree` / `Show-SPOrgTree` as a one-command tool.
+**When to use:** sanity-check the org structure, spot where ISC manager data dead-ends, or
+validate an `org-chart-supplement.csv` before a big report run.
+
+| Parameter | Description |
+|---|---|
+| `-CampaignName*` | Campaign name filters (exact / starts-with / contains). |
+| `-Status <list>` / `-DaysBack <n>` | Campaign window (default `COMPLETED, ACTIVE` / 30). |
+| `-OrgDepth <1-10>` | Levels to walk up the manager chain (default 5). |
+| `-OrgSupplementPath <csv>` | Merge the supplement to fill ISC chain gaps. |
+| `-ShowBands` | Annotate each node with its A–E leadership band. |
+| `-MaxChildrenShown <n>` | Truncate each node to the first *n* children (0 = all). |
+| `-RefreshIdentities` | Re-resolve the chain from ISC (validate movement after a reorg). |
+
+```powershell
+.\Scripts\Invoke-SPOrgTreePreview.ps1 -CampaignNameContains 'Tuesday' -ShowBands
+.\Scripts\Invoke-SPOrgTreePreview.ps1 -Status COMPLETED -DaysBack 7 -OrgSupplementPath .\Config\org-chart-supplement.csv
+```
 
 ### `Invoke-SPWeeklyDigest.ps1`
 **Purpose:** a consolidated **weekly digest** — campaign activity, campaign health, identity

@@ -2470,7 +2470,19 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 <tr>
 <td><code>-OutputMode</code></td>
-<td><code>Console</code>/<code>JSON</code>/<code>Both</code>.</td>
+<td><code>Console</code>/<code>JSON</code>/<code>Both</code> — controls the run summary; the HTML files are always written.</td>
+</tr>
+<tr>
+<td><code>-OrgSupplementPath &lt;csv&gt;</code></td>
+<td>Merge <code>Config\org-chart-supplement.csv</code> to fill ISC manager-chain gaps where the chain dead-ends short of the top.</td>
+</tr>
+<tr>
+<td><code>-RefreshIdentities</code></td>
+<td>Clear the identity cache first so the manager chain is re-resolved from ISC — use to validate org movement after a reorg.</td>
+</tr>
+<tr>
+<td><code>-IncludeMasterRollup</code> / <code>-MasterScope &lt;s&gt;</code></td>
+<td>Also generate the <strong>executive master rollup</strong>: one consolidated doc with an org-wide KPI banner, whole-org drill-down, leadership scorecard, the revocations ("what was done"), and a coverage/exceptions footer. Scope <code>CompanyWide</code> / <code>PerTopLeader</code> / <code>Both</code> (default <code>Both</code>).</td>
 </tr>
 <tr>
 <td><code>-WhatIf</code></td>
@@ -2486,8 +2498,12 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 # Scope to a specific campaign type, generate VP-and-above only
 .\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Daily Attestation' -MinReportLevel 2
 
-# Catch-up: last 90 days, all levels
-.\Scripts\Invoke-SPHierarchicalReport.ps1 -DaysBack 90 -MinReportLevel 0</code></pre>
+# Per-leader files PLUS the executive master rollup, filling chain gaps from the supplement
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Tuesday' -IncludeMasterRollup -OrgSupplementPath .\Config\org-chart-supplement.csv
+
+# After a reorg: force fresh identity resolution
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Tuesday' -RefreshIdentities</code></pre>
+<p>The master rollup lands beside the per-leader files in a <code>master-&lt;stamp&gt;\</code> subdirectory (<code>master-rollup-company.html</code> and one <code>master-rollup-&lt;Leader&gt;.html</code> per top leader).</p>
 <p><strong>Output structure:</strong> each run creates a timestamped subdirectory so multiple runs never overwrite each other:</p>
 <pre><code>Audit\HierarchicalReports\
   run-20260609-041423\
@@ -2622,6 +2638,44 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tbody></table>
 <p><strong>Packaging evidence for auditors:</strong></p>
 <ol><li>Run <code>Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality</code> to generate the full evidence package.</li><li>Collect the output directory (<code>Reports\</code>) -- it includes a manifest listing all artifacts.</li><li>Include the JSONL audit trail (<code>Audit\*.jsonl</code>) for machine-verifiable provenance.</li><li>For SOX, add the leadership rollup reports to show reviewer accountability.</li></ol>
+<h3 id="invoke-sporgtreepreview-ps1"><code>Invoke-SPOrgTreePreview.ps1</code></h3>
+<p><strong>Purpose:</strong> prints the <strong>org tree as ASCII art</strong> for a campaign's certifiers, so you can eyeball the management chain (and band assignments) before generating leadership reports. Read-only; surfaces <code>Build-SPOrgTree</code> / <code>Show-SPOrgTree</code> as a one-command tool. <strong>When to use:</strong> sanity-check the org structure, spot where ISC manager data dead-ends, or validate an <code>org-chart-supplement.csv</code> before a big report run.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignName*</code></td>
+<td>Campaign name filters (exact / starts-with / contains).</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code> / <code>-DaysBack &lt;n&gt;</code></td>
+<td>Campaign window (default <code>COMPLETED, ACTIVE</code> / 30).</td>
+</tr>
+<tr>
+<td><code>-OrgDepth &lt;1-10&gt;</code></td>
+<td>Levels to walk up the manager chain (default 5).</td>
+</tr>
+<tr>
+<td><code>-OrgSupplementPath &lt;csv&gt;</code></td>
+<td>Merge the supplement to fill ISC chain gaps.</td>
+</tr>
+<tr>
+<td><code>-ShowBands</code></td>
+<td>Annotate each node with its A–E leadership band.</td>
+</tr>
+<tr>
+<td><code>-MaxChildrenShown &lt;n&gt;</code></td>
+<td>Truncate each node to the first <em>n</em> children (0 = all).</td>
+</tr>
+<tr>
+<td><code>-RefreshIdentities</code></td>
+<td>Re-resolve the chain from ISC (validate movement after a reorg).</td>
+</tr>
+</tbody></table>
+<pre><code>.\Scripts\Invoke-SPOrgTreePreview.ps1 -CampaignNameContains 'Tuesday' -ShowBands
+.\Scripts\Invoke-SPOrgTreePreview.ps1 -Status COMPLETED -DaysBack 7 -OrgSupplementPath .\Config\org-chart-supplement.csv</code></pre>
 <h3 id="invoke-spweeklydigest-ps1"><code>Invoke-SPWeeklyDigest.ps1</code></h3>
 <p><strong>Purpose:</strong> a consolidated <strong>weekly digest</strong> — campaign activity, campaign health, identity risk, reviewer performance, remediation tracking, and orchestrator reliability in one report. <strong>When to use:</strong> weekly distribution to governance leadership.</p>
 <table>

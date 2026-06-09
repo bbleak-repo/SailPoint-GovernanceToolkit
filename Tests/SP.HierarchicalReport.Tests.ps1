@@ -491,3 +491,56 @@ Describe "HR-008: Director correctly aggregates decisions from multiple managers
 }
 
 #endregion
+
+# ===========================================================================
+#region HR-009: Export-SPMasterLeadershipHtml executive master rollup
+# ===========================================================================
+
+Describe "HR-009: Export-SPMasterLeadershipHtml generates the executive master rollup" {
+
+    Context "When generating a master rollup (scope Both) from a hierarchy" {
+
+        BeforeAll {
+            $orgTree   = New-MockOrgTree
+            $decisions = New-MockDecisions
+            $idMap     = New-MockCertReviewerIdMap
+            $hier = Build-SPLeadershipHierarchy -Decisions $decisions -OrgTree $orgTree -CertReviewerIdMap $idMap
+
+            $script:masterDir = Join-Path $TestDrive 'master-test'
+            New-Item -ItemType Directory -Path $script:masterDir -Force | Out-Null
+            $script:masterResult = Export-SPMasterLeadershipHtml -HierarchyData $hier.Data `
+                -OutputPath $script:masterDir -ReportTitle 'Q1 Master' -DateRange '2026 Q1' -CampaignCount 1 -Scope Both
+
+            $files = Get-ChildItem -Path $script:masterDir -Filter '*.html' -Recurse
+            $companyFile = $files | Where-Object { $_.Name -match 'company' } | Select-Object -First 1
+            $script:masterHtml = if ($companyFile) { Get-Content $companyFile.FullName -Raw } else { '' }
+        }
+
+        It "Should return Success=true" { $script:masterResult.Success | Should -Be $true }
+
+        It "Should generate both a company-wide and a per-top-leader file" {
+            $script:masterResult.Data.FileCount | Should -BeGreaterOrEqual 2
+        }
+
+        It "Should contain the org-wide summary and leadership scorecard" {
+            $script:masterHtml | Should -Match 'Org-wide summary'
+            $script:masterHtml | Should -Match 'Leadership scorecard'
+        }
+
+        It "Should contain the revocations section with the revoked access" {
+            $script:masterHtml | Should -Match 'Access revoked'
+            $script:masterHtml | Should -Match 'Admin-Tools'
+        }
+
+        It "Should contain the full-org drill-down with leader names" {
+            $script:masterHtml | Should -Match 'Full org drill-down'
+            $script:masterHtml | Should -Match 'Victoria Parker'
+        }
+
+        It "Should contain the coverage / exceptions section" {
+            $script:masterHtml | Should -Match 'Coverage'
+        }
+    }
+}
+
+#endregion

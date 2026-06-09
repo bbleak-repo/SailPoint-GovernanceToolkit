@@ -54,6 +54,17 @@
     Path to settings.json. Defaults to ..\Config\settings.json.
 .PARAMETER OutputMode
     Console (default), JSON, or Both.
+.PARAMETER RefreshIdentities
+    Clear the persistent identity cache before building the org tree, forcing a fresh
+    manager-chain resolution from ISC (use to validate org movement after a reorg).
+.PARAMETER OrgSupplementPath
+    Optional org-chart-supplement.csv (identityEmail -> managerEmail/level/title/band) to
+    fill ISC manager-chain gaps where the chain dead-ends short of the top.
+.PARAMETER IncludeMasterRollup
+    Also generate an executive master-rollup HTML (org-wide KPI banner, whole-org
+    drill-down, leadership scorecard, revocations, coverage) alongside the per-leader files.
+.PARAMETER MasterScope
+    Master rollup scope: CompanyWide, PerTopLeader, or Both (default Both).
 .PARAMETER Help
     Show full help and exit.
 .EXAMPLE
@@ -121,6 +132,13 @@ param(
 
     [Parameter()]
     [string]$OrgSupplementPath,
+
+    [Parameter()]
+    [switch]$IncludeMasterRollup,
+
+    [Parameter()]
+    [ValidateSet('CompanyWide', 'PerTopLeader', 'Both')]
+    [string]$MasterScope = 'Both',
 
     [Parameter()]
     [Alias('?')]
@@ -438,6 +456,24 @@ $exportResult = Export-SPHierarchicalLeadershipHtml `
 if (-not $exportResult.Success) {
     Write-Host "ERROR: Report export failed: $($exportResult.Error)" -ForegroundColor Red
     exit 5
+}
+
+# Step 7b: Executive master rollup -- one consolidated doc for upper leadership
+# (KPI banner + whole-org drill-down + leadership scorecard + revocations + coverage).
+$masterResult = $null
+if ($IncludeMasterRollup) {
+    Write-Host "  Step 7b: Generating executive master rollup (scope=$MasterScope)..." -ForegroundColor Cyan
+    $masterResult = Export-SPMasterLeadershipHtml `
+        -HierarchyData $hierarchyResult.Data `
+        -OutputPath    $effectiveOutputPath `
+        -ReportTitle   "$ReportTitle -- Executive Master Rollup" `
+        -DateRange     $dateRange `
+        -CampaignCount $campaigns.Count `
+        -Scope         $MasterScope `
+        -CorrelationID $correlationID
+    if (-not $masterResult.Success) {
+        Write-Host "    WARN: Master rollup failed: $($masterResult.Error)" -ForegroundColor Yellow
+    }
 }
 
 $runEnd      = Get-Date
