@@ -11462,6 +11462,13 @@ function Export-SPHierarchicalLeadershipHtml {
         -CorrelationID $CorrelationID
 
     try {
+        # Normalize to an absolute path so PowerShell's New-Item and .NET's WriteAllText
+        # cannot disagree about where a relative OutputPath points -- .NET resolves relative
+        # paths against its own CurrentDirectory (never synced with Set-Location), which was
+        # creating the run dir in one place and writing files to a non-existent other.
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            $OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
+        }
         if (-not (Test-Path -Path $OutputPath -PathType Container)) {
             New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
         }

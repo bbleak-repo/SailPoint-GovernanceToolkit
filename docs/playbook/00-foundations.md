@@ -376,6 +376,14 @@ deciding work items, etc.) are governed by `Safety`:
 | `DisconnectedApps\` | Imports, snapshots, and disconnected-app reports. |
 | `Data\` | The encrypted vault (`sp-vault.enc`). |
 
+> **Paths are anchored to the toolkit root.** The relative paths in `settings.json`
+> (`Audit.OutputPath = .\Audit`, `Logging.Path = .\Logs`, `Audit.CachePath`,
+> `DeltaCert.OutputPath`, etc.) are resolved to **`<toolkit-root>\…`** at load time, so output,
+> cache, and logs land in the **same place no matter which directory you launch a script from**
+> — running from `Scripts\` no longer scatters them to `Scripts\Audit\…` or your home folder.
+> To pin output elsewhere, set an **absolute** path in `settings.json` (absolute values are used
+> as-is) or pass `-OutputPath` to a script.
+
 ### Output modes (CLI)
 Most reporting scripts take `-OutputMode`:
 

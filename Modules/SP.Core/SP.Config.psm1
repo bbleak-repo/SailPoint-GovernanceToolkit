@@ -1294,6 +1294,52 @@ function Get-SPConfigJsonHint {
     return ($hints -join ' ')
 }
 
+function Resolve-SPConfigOutputPaths {
+    <#
+    .SYNOPSIS
+        Rewrites relative output/cache/log paths on a loaded config object to ABSOLUTE,
+        anchored at the toolkit root.
+    .DESCRIPTION
+        The settings file keeps short, portable relative paths (e.g. '.\Audit'). At load
+        time those are resolved to '<toolkit-root>\Audit' so that:
+          * every entry point writes to the SAME place regardless of the directory the
+            script was launched from (no more Scripts\Audit\.cache or C:\Users\me\Audit\...);
+          * PowerShell cmdlets (New-Item) and .NET file APIs ([IO.File]::WriteAllText) agree
+            on where a path points -- .NET resolves relative paths against its own
+            CurrentDirectory, which PowerShell never syncs with Set-Location, so a relative
+            output path can otherwise be created in one place and written to another.
+        Absolute paths (set explicitly by the user) are left untouched, so an admin can still
+        pin output anywhere via settings.json. settings.json itself is NOT rewritten.
+    .PARAMETER Config
+        The loaded config object (PSCustomObject) to normalize in place.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $map = [ordered]@{
+        Audit             = @('OutputPath', 'CachePath')
+        DeltaCert         = @('OutputPath')
+        Logging           = @('Path')
+        GovernanceMetrics = @('MetricsOutputPath')
+        Sdk               = @('OutputPath')
+    }
+
+    foreach ($section in $map.Keys) {
+        if ($null -eq $Config.PSObject.Properties[$section]) { continue }
+        $sec = $Config.$section
+        if ($null -eq $sec) { continue }
+        foreach ($prop in $map[$section]) {
+            if ($null -eq $sec.PSObject.Properties[$prop]) { continue }
+            $val = [string]$sec.$prop
+            if ([string]::IsNullOrWhiteSpace($val)) { continue }
+            if ([System.IO.Path]::IsPathRooted($val)) { continue }
+            $sec.$prop = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $val))
+        }
+    }
+    return $Config
+}
+
 function Get-SPConfig {
     <#
     .SYNOPSIS
@@ -1380,6 +1426,10 @@ function Get-SPConfig {
 
     # Convert to PSCustomObject
     $configObject = ConvertTo-SPConfigObject -Hashtable $mergedConfig
+
+    # Resolve relative output/cache/log paths to absolute (toolkit-root anchored) so every
+    # consumer writes to one consistent place regardless of the launch directory.
+    $configObject = Resolve-SPConfigOutputPaths -Config $configObject
 
     # Cache the result
     $script:ConfigCache = $configObject

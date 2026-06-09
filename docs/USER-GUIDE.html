@@ -1307,6 +1307,7 @@ pwsh -NoProfile -File Start-MockServer.ps1
 <td>The encrypted vault (<code>sp-vault.enc</code>).</td>
 </tr>
 </tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Paths are anchored to the toolkit root.</strong> The relative paths in <code>settings.json</code> (<code>Audit.OutputPath = .\Audit</code>, <code>Logging.Path = .\Logs</code>, <code>Audit.CachePath</code>, <code>DeltaCert.OutputPath</code>, etc.) are resolved to <strong><code>&lt;toolkit-root&gt;\…</code></strong> at load time, so output, cache, and logs land in the <strong>same place no matter which directory you launch a script from</strong> — running from <code>Scripts\</code> no longer scatters them to <code>Scripts\Audit\…</code> or your home folder. To pin output elsewhere, set an <strong>absolute</strong> path in <code>settings.json</code> (absolute values are used as-is) or pass <code>-OutputPath</code> to a script.</p></div>
 <h3 id="output-modes-cli">Output modes (CLI)</h3>
 <p>Most reporting scripts take <code>-OutputMode</code>:</p>
 <table>
