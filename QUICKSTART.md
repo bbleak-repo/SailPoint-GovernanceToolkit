@@ -66,9 +66,18 @@ idn:sources:read
 idn:accounts:read
 ```
 
-`sp:search:read` is required for identity resolution (manager lookup in Delta Cert). For full sandbox scope details including write permissions, see `docs/SANDBOX-API-SETUP.md`.
+`sp:search:read` is required for identity resolution (manager lookup in Delta Cert and Hierarchical Reports).
 
-> **Note:** Delta Cert's `GET /v3/account-activities` endpoint requires `sp:scopes:all` or a browser token. The granular scopes above are not sufficient for that endpoint.
+**Additional scopes by feature:**
+
+| Feature | Extra scope needed | Why |
+|---|---|---|
+| Delta Cert grant detection | `sp:scopes:all` (or browser token) | `GET /v3/account-activities` has no granular scope |
+| Delta Cert `-PrivilegedOnly` | `idn:entitlement:read` | Checks ISC `privileged:true` on each granted entitlement |
+| Hierarchical Leadership Report | `sp:search:read` (already listed above) | Walks manager chains via identity search |
+| Governance Health Check | `idn:sources:read`, `idn:accounts:read` | Source aggregation status and orphan detection |
+
+> **Tip:** If you want a single PAT that covers everything, request `sp:scopes:all`. This grants all listed scopes. Only use granular scopes when your ISC tenant policy restricts `sp:scopes:all`.
 
 > **Tip:** If the toolkit detects `CHANGE_ME` values on first run, it will exit with guidance. You do not need to fill in every field -- only the ones shown above.
 

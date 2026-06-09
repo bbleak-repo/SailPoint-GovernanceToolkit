@@ -2846,6 +2846,173 @@ function Invoke-SPGuiReportDistribution {
 
 #endregion
 
+#region Hierarchical Leadership Report Bridge
+
+function Invoke-SPGuiHierarchicalReport {
+    <#
+    .SYNOPSIS
+        GUI bridge for the hierarchical leadership certification drill-down report.
+    .DESCRIPTION
+        Collects campaigns/certifications/items, builds the org-tree hierarchy,
+        and generates one self-contained HTML file per leader at or above MinReportLevel.
+        Called from the Governance tab's "Generate Drill-Down Reports" button via a
+        background STA runspace.
+    .PARAMETER DaysBack
+        Number of days to look back for campaigns. Default: 30.
+    .PARAMETER CampaignNameContains
+        Optional substring filter for campaign names.
+    .PARAMETER MinReportLevel
+        Minimum org level for top-level report files (0=managers, 1=directors, 2=VPs).
+    .PARAMETER Status
+        Campaign statuses to include. Default: COMPLETED and ACTIVE.
+    .PARAMETER CorrelationID
+        Unique ID for log tracing.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
+        [ValidateRange(0, 5)]
+        [int]$MinReportLevel = 1,
+
+        [Parameter()]
+        [string[]]$Status = @('COMPLETED', 'ACTIVE'),
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Invoke-SPGuiHierarchicalReport: DaysBack=$DaysBack CampaignContains='$CampaignNameContains' MinLevel=$MinReportLevel" `
+        -Severity INFO -Component 'SP.GuiBridge' -Action 'HierarchicalReport' -CorrelationID $CorrelationID
+
+    try {
+        $config = Get-SPConfig
+
+        # Resolve output path
+        $outputPath = '.\Audit\HierarchicalReports'
+        if ($null -ne $config.PSObject.Properties['Audit'] -and
+            -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+            $outputPath = Join-Path $config.Audit.OutputPath 'HierarchicalReports'
+        }
+
+        # Step 1: Campaigns
+        $campParams = @{ Status=$Status; DaysBack=$DaysBack; CorrelationID=$CorrelationID }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $campParams['CampaignNameContains'] = $CampaignNameContains
+        }
+        $campResult = Get-SPAuditCampaigns @campParams
+        if (-not $campResult.Success) {
+            return @{ Success=$false; Data=@{}; Error="Campaign fetch failed: $($campResult.Error)" }
+        }
+        $campaigns = @($campResult.Data)
+        if ($campaigns.Count -eq 0) {
+            return @{ Success=$true; Data=@{ ReportsGenerated=0; CampaignCount=0; Message='No campaigns found in window' }; Error=$null }
+        }
+
+        # Step 2: Certifications and certifier ID map
+        $allCerts = [System.Collections.Generic.List[object]]::new()
+        foreach ($camp in $campaigns) {
+            $certsResult = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $CorrelationID
+            if ($certsResult.Success) { foreach ($c in @($certsResult.Data)) { $allCerts.Add($c) } }
+        }
+        if ($allCerts.Count -eq 0) {
+            return @{ Success=$true; Data=@{ ReportsGenerated=0; CampaignCount=$campaigns.Count; Message='No certifications found' }; Error=$null }
+        }
+
+        # Build reviewer ID map — check both 'reviewer' (ISC v3) and 'certifier' (SDK)
+        $certReviewerIdMap = @{}
+        foreach ($cert in $allCerts) {
+            $certId = [string]$cert.id
+            foreach ($prop in @('certifier', 'reviewer')) {
+                if ($null -ne $cert.PSObject.Properties[$prop] -and
+                    $null -ne $cert.$prop -and
+                    $null -ne $cert.$prop.PSObject.Properties['id'] -and
+                    -not [string]::IsNullOrWhiteSpace($cert.$prop.id)) {
+                    $certReviewerIdMap[$certId] = [string]$cert.$prop.id
+                    break
+                }
+            }
+        }
+        $uniqueCertifierIds = @($certReviewerIdMap.Values | Select-Object -Unique)
+        if ($uniqueCertifierIds.Count -eq 0) {
+            return @{ Success=$false; Data=@{}; Error='No reviewer/certifier IDs in certification objects. Check PAT scope includes sp:search:read.' }
+        }
+
+        # Step 3: Certification items
+        $allItems = [System.Collections.Generic.List[object]]::new()
+        foreach ($cert in $allCerts) {
+            $itemsResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
+            if ($itemsResult.Success) { foreach ($item in @($itemsResult.Data)) { $allItems.Add($item) } }
+        }
+        if ($allItems.Count -eq 0) {
+            return @{ Success=$true; Data=@{ ReportsGenerated=0; CampaignCount=$campaigns.Count; Message='No certification items found' }; Error=$null }
+        }
+
+        # Step 4: Group decisions
+        $decisions = Group-SPAuditDecisions -Items $allItems.ToArray() -CorrelationID $CorrelationID
+
+        # Step 5: Build org tree
+        $orgTreeResult = Build-SPOrgTree -IdentityIds $uniqueCertifierIds -MaxDepth 5 -CorrelationID $CorrelationID
+        if (-not $orgTreeResult.Success) {
+            return @{ Success=$false; Data=@{}; Error="Org tree failed: $($orgTreeResult.Error)" }
+        }
+
+        # Step 6: Build hierarchy
+        $hierarchyResult = Build-SPLeadershipHierarchy -Decisions $decisions -OrgTree $orgTreeResult.Data `
+            -CertReviewerIdMap $certReviewerIdMap -CorrelationID $CorrelationID
+        if (-not $hierarchyResult.Success) {
+            return @{ Success=$false; Data=@{}; Error="Hierarchy build failed: $($hierarchyResult.Error)" }
+        }
+
+        # Step 7: Generate HTML
+        $startDate = (Get-Date).AddDays(-$DaysBack).ToString('yyyy-MM-dd')
+        $endDate   = (Get-Date).ToString('yyyy-MM-dd')
+        $exportResult = Export-SPHierarchicalLeadershipHtml `
+            -HierarchyData $hierarchyResult.Data `
+            -OutputPath    $outputPath `
+            -ReportTitle   'Governance Certification Rollup' `
+            -DateRange     "$startDate to $endDate" `
+            -CampaignCount $campaigns.Count `
+            -MinReportLevel $MinReportLevel `
+            -CorrelationID  $CorrelationID
+
+        if (-not $exportResult.Success) {
+            return @{ Success=$false; Data=@{}; Error=$exportResult.Error }
+        }
+
+        return @{
+            Success = $true
+            Data    = @{
+                ReportsGenerated = $exportResult.Data.FileCount
+                CampaignCount    = $campaigns.Count
+                CertCount        = $allCerts.Count
+                ItemCount        = $allItems.Count
+                OrgNodes         = $orgTreeResult.Data.Nodes.Count
+                OutputPath       = $outputPath
+                Files            = $exportResult.Data.Files
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        Write-SPLog -Message "Invoke-SPGuiHierarchicalReport failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'HierarchicalReport' -CorrelationID $CorrelationID
+        return @{ Success=$false; Data=@{}; Error=$_.Exception.Message }
+    }
+}
+
+#endregion Hierarchical Leadership Report Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -2865,5 +3032,6 @@ Export-ModuleMember -Function @(
     'Export-SPGuiDashboardData',
     'Get-SPGuiGovernanceReports',
     'Get-SPGuiDisconnectedAppStatus',
-    'Invoke-SPGuiReportDistribution'
+    'Invoke-SPGuiReportDistribution',
+    'Invoke-SPGuiHierarchicalReport'
 )

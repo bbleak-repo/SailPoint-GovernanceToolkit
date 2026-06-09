@@ -1024,6 +1024,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
@@ -1240,8 +1241,86 @@
                         </Grid>
                     </Border>
 
-                    <!-- Row 5: Recent Governance Reports -->
-                    <Grid Grid.Row="5">
+                    <!-- Row 5: Hierarchical Leadership Report -->
+                    <Border Grid.Row="5" Background="#252538" CornerRadius="6"
+                            BorderBrush="#3D3D5C" BorderThickness="1"
+                            Padding="12,10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Title row -->
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="Hierarchical Drill-Down Reports:"
+                                           Foreground="#C77DFF" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" FontSize="12"
+                                           Margin="0,0,12,0"
+                                           ToolTip="Generate per-leader HTML reports showing the full org-tree certification rollup — VP expands to Directors, Directors to Managers, Managers to certified identities, identities to entitlement decisions."/>
+                                <TextBlock Grid.Column="1"
+                                           x:Name="HierStatusLabel"
+                                           Foreground="#AAAACC" FontSize="11" FontStyle="Italic"
+                                           VerticalAlignment="Center"
+                                           Text="Ready. Each top-level leader gets one self-contained HTML file."/>
+                            </Grid>
+
+                            <!-- Controls row -->
+                            <WrapPanel Grid.Row="1" Orientation="Horizontal">
+                                <TextBlock Text="Days Back:" Foreground="#CCCCDD"
+                                           FontSize="11" VerticalAlignment="Center"
+                                           Margin="0,0,4,0"/>
+                                <TextBox x:Name="TxtHierDaysBack"
+                                         Text="30" Width="42" FontSize="11"
+                                         Background="#1E1E2E" Foreground="#E0E0E0"
+                                         BorderBrush="#3D3D5C" Margin="0,0,10,0"
+                                         VerticalContentAlignment="Center" Padding="4,2"
+                                         ToolTip="Number of calendar days to look back for campaigns (default 30)"/>
+
+                                <TextBlock Text="Campaign Filter:" Foreground="#CCCCDD"
+                                           FontSize="11" VerticalAlignment="Center"
+                                           Margin="0,0,4,0"/>
+                                <TextBox x:Name="TxtHierCampaignContains"
+                                         Width="150" FontSize="11"
+                                         Background="#1E1E2E" Foreground="#E0E0E0"
+                                         BorderBrush="#3D3D5C" Margin="0,0,10,0"
+                                         VerticalContentAlignment="Center" Padding="4,2"
+                                         ToolTip="Optional: only include campaigns whose name contains this text (e.g. 'Daily Attestation', 'AD Delta Cert')"/>
+
+                                <TextBlock Text="Min Level:" Foreground="#CCCCDD"
+                                           FontSize="11" VerticalAlignment="Center"
+                                           Margin="0,0,4,0"/>
+                                <ComboBox x:Name="CboHierMinLevel"
+                                          Width="130" FontSize="11"
+                                          Background="#1E1E2E" Foreground="#E0E0E0"
+                                          BorderBrush="#3D3D5C" Margin="0,0,10,0"
+                                          ToolTip="Minimum org level to generate a top-level file for. Each leader at this level gets their own HTML file showing their full subtree.">
+                                    <ComboBoxItem Content="Directors+ (level 1)" Tag="1" IsSelected="True"/>
+                                    <ComboBoxItem Content="VPs+ (level 2)" Tag="2"/>
+                                    <ComboBoxItem Content="All Certifiers (level 0)" Tag="0"/>
+                                </ComboBox>
+
+                                <Button x:Name="BtnHierPreview"
+                                        Content="Preview"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,6,0" Padding="12,5" FontSize="11"
+                                        ToolTip="Show which campaigns and certifications would be included — no files written"/>
+                                <Button x:Name="BtnHierGenerate"
+                                        Content="Generate Drill-Down Reports"
+                                        Style="{StaticResource ToolkitButton}"
+                                        Padding="12,5" FontSize="11"
+                                        ToolTip="Generate hierarchical HTML reports — one per leader at the selected minimum level"/>
+                            </WrapPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Row 6: Recent Governance Reports -->
+                    <Grid Grid.Row="6">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>

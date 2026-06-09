@@ -289,11 +289,13 @@ if ($allCerts.Count -eq 0) {
 }
 
 # Step 3: Build certifier ID map (certId → reviewerIdentityId)
+# ISC v3 API uses 'reviewer' on certification objects; some internal/SDK paths use 'certifier'.
+# We check both so the script works against the real ISC API, mock servers, and SDK payloads.
 $certReviewerIdMap = @{}
 foreach ($cert in $allCerts) {
     $certId = [string]$cert.id
     $certifierId = ''
-    foreach ($prop in @('certifier')) {
+    foreach ($prop in @('certifier', 'reviewer')) {
         if ($null -ne $cert.PSObject.Properties[$prop] -and
             $null -ne $cert.$prop -and
             $null -ne $cert.$prop.PSObject.Properties['id'] -and
@@ -310,8 +312,9 @@ $uniqueCertifierIds = @($certReviewerIdMap.Values | Select-Object -Unique)
 Write-Host "  Found $($uniqueCertifierIds.Count) unique certifier(s)" -ForegroundColor DarkGray
 
 if ($uniqueCertifierIds.Count -eq 0) {
-    Write-Host '  No certifier identity IDs found in certifications. Cannot build org tree.' -ForegroundColor Yellow
-    Write-Host '  Ensure certifications have certifier.id populated (requires sp:scopes:all or sp:search:read).' -ForegroundColor DarkGray
+    Write-Host '  No reviewer/certifier identity IDs found in certifications. Cannot build org tree.' -ForegroundColor Yellow
+    Write-Host '  ISC certification objects must have reviewer.id (v3 API) or certifier.id (SDK).' -ForegroundColor DarkGray
+    Write-Host '  This field is populated by default for standard certifications — check your PAT scopes.' -ForegroundColor DarkGray
     exit 1
 }
 

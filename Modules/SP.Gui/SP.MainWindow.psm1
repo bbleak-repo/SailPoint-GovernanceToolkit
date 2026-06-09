@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     SailPoint ISC Governance Toolkit - WPF Main Window Host
@@ -3677,7 +3677,143 @@ function Initialize-GovernanceTab {
         $statusLabel.Text = 'Ready. Click Run Health Check to populate badges.'
     }
 
+    # Hierarchical Leadership Report buttons
+    $btnHierPreview  = Find-Control -Parent $TabContent -Name 'BtnHierPreview'
+    $btnHierGenerate = Find-Control -Parent $TabContent -Name 'BtnHierGenerate'
+
+    if ($btnHierPreview) {
+        $btnHierPreview.Add_Click({
+            & $module { param($tc) Invoke-GuiHierarchicalReport -TabContent $tc -PreviewOnly } $TabContent
+        }.GetNewClosure())
+    }
+    if ($btnHierGenerate) {
+        $btnHierGenerate.Add_Click({
+            & $module { param($tc) Invoke-GuiHierarchicalReport -TabContent $tc } $TabContent
+        }.GetNewClosure())
+    }
+
     Load-GovernanceReports -TabContent $TabContent
+}
+
+function Invoke-GuiHierarchicalReport {
+    <#
+    .SYNOPSIS
+        Runs the hierarchical leadership drill-down report in a background STA runspace.
+        Reads DaysBack, CampaignNameContains, and MinReportLevel from the Governance tab controls.
+    #>
+    [CmdletBinding()]
+    param(
+        $TabContent,
+        [switch]$PreviewOnly
+    )
+
+    $hierLabel  = Find-Control -Parent $TabContent -Name 'HierStatusLabel'
+    $txtDays    = Find-Control -Parent $TabContent -Name 'TxtHierDaysBack'
+    $txtFilter  = Find-Control -Parent $TabContent -Name 'TxtHierCampaignContains'
+    $cboLevel   = Find-Control -Parent $TabContent -Name 'CboHierMinLevel'
+
+    # Read control values
+    $daysBack  = 30
+    if ($null -ne $txtDays)   { [int]::TryParse([string]$txtDays.Text, [ref]$daysBack) | Out-Null }
+    $campaignFilter = if ($null -ne $txtFilter) { [string]$txtFilter.Text } else { '' }
+
+    $minLevel = 1
+    if ($null -ne $cboLevel -and $null -ne $cboLevel.SelectedItem) {
+        $selTag = $cboLevel.SelectedItem.Tag
+        if ($null -ne $selTag) { [int]::TryParse([string]$selTag, [ref]$minLevel) | Out-Null }
+    }
+
+    $levelLabel = switch ($minLevel) {
+        0 { 'All Certifiers' }
+        1 { 'Directors+' }
+        2 { 'VPs+' }
+        default { "Level $minLevel+" }
+    }
+
+    if ($PreviewOnly) {
+        # Quick preview: just count campaigns without generating files
+        if ($null -ne $hierLabel) { $hierLabel.Text = "Fetching campaigns (DaysBack=$daysBack)..." }
+        $campParams = @{ DaysBack=$daysBack; Status=@('COMPLETED','ACTIVE') }
+        if (-not [string]::IsNullOrWhiteSpace($campaignFilter)) {
+            $campParams['CampaignNameContains'] = $campaignFilter
+        }
+        try {
+            $res = Get-SPAuditCampaigns @campParams
+            $cnt = if ($res.Success) { @($res.Data).Count } else { 0 }
+            $msg = "Preview: $cnt campaign(s) in last $daysBack day(s)"
+            if (-not [string]::IsNullOrWhiteSpace($campaignFilter)) { $msg += " matching '$campaignFilter'" }
+            $msg += ". Click 'Generate' to produce $levelLabel reports."
+            if ($null -ne $hierLabel) { $hierLabel.Text = $msg }
+        }
+        catch {
+            if ($null -ne $hierLabel) { $hierLabel.Text = "Preview failed: $($_.Exception.Message)" }
+        }
+        return
+    }
+
+    # Full generation — run in background STA runspace
+    if ($null -ne $hierLabel) { $hierLabel.Text = "Generating $levelLabel reports (DaysBack=$daysBack)..." }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',      $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',       $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('HierLabel',        $hierLabel)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',         $daysBack)
+    $runspace.SessionStateProxy.SetVariable('CampaignFilter',   $campaignFilter)
+    $runspace.SessionStateProxy.SetVariable('MinLevel',         $minLevel)
+    $runspace.SessionStateProxy.SetVariable('LevelLabel',       $levelLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $psInstance.AddScript({
+        foreach ($rel in @(
+            'Modules\SP.Core\SP.Core.psd1',
+            'Modules\SP.Api\SP.Api.psd1',
+            'Modules\SP.Audit\SP.Audit.psd1',
+            'Modules\SP.DeltaCert\SP.DeltaCert.psd1',
+            'Modules\SP.Gui\SP.Gui.psd1'
+        )) {
+            $modPath = Join-Path $ToolkitRoot $rel
+            if (Test-Path $modPath) {
+                Import-Module $modPath -Force -DisableNameChecking -ErrorAction SilentlyContinue
+            }
+        }
+
+        $bridgeParams = @{
+            DaysBack       = $DaysBack
+            MinReportLevel = $MinLevel
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignFilter)) {
+            $bridgeParams['CampaignNameContains'] = $CampaignFilter
+        }
+
+        $result = Invoke-SPGuiHierarchicalReport @bridgeParams
+
+        $msg = if ($result.Success) {
+            $d = $result.Data
+            if ($d.ReportsGenerated -gt 0) {
+                "$($d.ReportsGenerated) $LevelLabel report(s) generated - $($d.CampaignCount) campaign(s), $($d.OrgNodes) org nodes"
+            }
+            else {
+                "No reports generated. $($d.Message)"
+            }
+        }
+        else {
+            "Error: $($result.Error)"
+        }
+
+        $MainWindow.Dispatcher.Invoke([Action]{
+            if ($null -ne $HierLabel) {
+                $HierLabel.Text = $msg
+            }
+        })
+    }) | Out-Null
+
+    $psInstance.BeginInvoke() | Out-Null
 }
 
 function Invoke-GuiReportDistribution {
