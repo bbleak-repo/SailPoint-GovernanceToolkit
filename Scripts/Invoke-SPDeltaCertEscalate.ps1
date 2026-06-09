@@ -381,7 +381,9 @@ if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $stale
             $csvOutputDir = [string]$config.DeltaCert.OutputPath
         }
         if (-not (Test-Path -LiteralPath $csvOutputDir -PathType Container)) {
-            New-Item -Path $csvOutputDir -ItemType Directory -Force | Out-Null
+            # -WhatIf:$false: the audit CSV is a read-only reporting artifact and must be
+            # produced even in dry-run mode. Only the ISC reassignment calls are gated by WhatIf.
+            New-Item -Path $csvOutputDir -ItemType Directory -Force -WhatIf:$false | Out-Null
         }
         $csvStamp           = (Get-Date -Format 'yyyyMMdd-HHmmss')
         $effectiveCsvPath   = Join-Path $csvOutputDir "escalation-audit-$csvStamp.csv"
@@ -452,11 +454,22 @@ if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $stale
     }
 
     try {
-        $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8
-        Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
-        Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
-            -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
-            -CorrelationID $correlationID
+        # -WhatIf:$false forces the write even under -WhatIf (Export-Csv supports ShouldProcess
+        # and would otherwise be silently suppressed, yielding a false "CSV written" claim).
+        $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
+        if (Test-Path -LiteralPath $effectiveCsvPath) {
+            Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
+            Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
+                -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+                -CorrelationID $correlationID
+        }
+        else {
+            # Defensive: never claim success when no file landed on disk.
+            Write-Host "  WARNING: CSV export reported no error but file is missing: $effectiveCsvPath" -ForegroundColor Yellow
+            Write-SPLog -Message "Escalation audit CSV missing after export: $effectiveCsvPath" `
+                -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+                -CorrelationID $correlationID
+        }
     }
     catch {
         Write-Host "  WARNING: Failed to write CSV: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -521,7 +534,9 @@ try {
     }
 
     if (-not (Test-Path -Path $outputPath -PathType Container)) {
-        New-Item -Path $outputPath -ItemType Directory -Force | Out-Null
+        # -WhatIf:$false: the JSONL is an audit log that records dry runs too (note the
+        # WhatIf field below); its directory must exist or the AppendAllText call throws.
+        New-Item -Path $outputPath -ItemType Directory -Force -WhatIf:$false | Out-Null
     }
 
     $escalatedIds = @()
