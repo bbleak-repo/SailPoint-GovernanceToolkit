@@ -394,22 +394,34 @@ if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $stale
     $csvRows = [System.Collections.Generic.List[object]]::new()
 
     foreach ($sc in $staleCerts) {
-        $reviewerId  = $sc.ReviewerIdentityId
-        $skipName    = ''
-        $skipId      = ''
-        $skipFound   = $false
-        $outcome     = 'Pending'
+        $reviewerId    = $sc.ReviewerIdentityId
+        $reviewerEmail = ''
+        $skipName      = ''
+        $skipId        = ''
+        $skipEmail     = ''
+        $skipFound     = $false
+        $outcome       = 'Pending'
 
-        # Determine skip-level (reviewer's manager) — same resolution the runner uses
+        # Determine skip-level (reviewer's manager) — same resolution the runner uses.
+        # The reviewer + manager detail lookups also carry .Email, which we surface in the
+        # CSV at no extra API cost. Captured into per-row variables (reset above) so a stale
+        # $mgDetail from a prior iteration can never leak onto a row whose lookup didn't run.
         if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
             try {
                 $detail = Get-SPDeltaIdentityDetail -IdentityId $reviewerId -CorrelationID $correlationID
+                if ($detail.Found) { $reviewerEmail = [string]$detail.Email }
                 if ($detail.Found -and -not [string]::IsNullOrWhiteSpace($detail.ManagerId)) {
                     $skipId    = $detail.ManagerId
                     $skipFound = $true
                     try {
-                        $mgDetail  = Get-SPDeltaIdentityDetail -IdentityId $detail.ManagerId -CorrelationID $correlationID
-                        $skipName  = if ($mgDetail.Found) { $mgDetail.DisplayName } else { $detail.ManagerId }
+                        $mgDetail = Get-SPDeltaIdentityDetail -IdentityId $detail.ManagerId -CorrelationID $correlationID
+                        if ($mgDetail.Found) {
+                            $skipName  = $mgDetail.DisplayName
+                            $skipEmail = [string]$mgDetail.Email
+                        }
+                        else {
+                            $skipName = $detail.ManagerId
+                        }
                     } catch { $skipName = $detail.ManagerId }
                 }
             } catch { }
@@ -440,9 +452,11 @@ if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $stale
             CampaignStatus       = $sc.CampaignStatus
             CertificationId      = $sc.CertificationId
             ReviewerName         = $sc.ReviewerName
+            ReviewerEmail        = $reviewerEmail
             ReviewerIdentityId   = $sc.ReviewerIdentityId
             Classification       = $sc.ReviewerClassification
             SkipLevelName        = $skipName
+            SkipLevelEmail       = $skipEmail
             SkipLevelIdentityId  = $skipId
             SkipLevelResolved    = $skipFound
             HoursOpen            = $sc.HoursOpen
