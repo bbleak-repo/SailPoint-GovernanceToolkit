@@ -296,25 +296,28 @@ function Get-SPAuditCampaigns {
         Retrieves certification campaigns with optional name, status, and date filters.
     .DESCRIPTION
         GETs /v3/campaigns and auto-paginates across all pages.
-        Name and status filters are applied server-side via the ISC 'filters' query
-        parameter.  Date filtering is applied client-side because the ISC campaign
-        API does not support filtering on the 'created' field directly.
+        Exact/starts-with name and status filters are applied server-side via the ISC
+        'filters' query parameter. Date AND substring (contains) filtering are applied
+        client-side: ISC does not support filtering on 'created', and its `name co` is
+        unreliable (a bare contains 400s, and it is case-sensitive).
 
-        Supported server-side filter operators used here:
+        Server-side filter operators used here:
           name eq "..."    - exact name match
           name sw "..."    - starts-with match
-          name co "..."    - substring (contains) match
           status in (...)  - one or more status values
+        Client-side:
+          name contains    - case-insensitive substring (-CampaignNameContains)
+          created date     - DaysBack / CreatedAfter / CreatedBefore
     .PARAMETER CampaignName
         Optional exact name match. Translates to: name eq "..."
     .PARAMETER CampaignNameStartsWith
         Optional starts-with name match. Translates to: name sw "..."
         Ignored if CampaignName is also specified.
     .PARAMETER CampaignNameContains
-        Optional substring (contains) name match. Translates to: name co "..."
-        Ignored if CampaignName or CampaignNameStartsWith is also specified.
-        This is the recommended filter for fuzzy searching -- ISC does not support
-        wildcards (*test*) and the admin UI only does prefix matching.
+        Optional substring (contains) name match, applied CLIENT-SIDE and case-insensitively
+        (campaigns are fetched by status/date, then filtered locally). Ignored if CampaignName
+        or CampaignNameStartsWith is also specified. This is the recommended fuzzy filter --
+        ISC's server-side `name co` 400s on a bare contains and is case-sensitive.
     .PARAMETER Status
         Optional array of status values to filter by.
         Valid values: STAGED, ACTIVATING, ACTIVE, COMPLETING, COMPLETED, ERROR.
@@ -412,10 +415,11 @@ function Get-SPAuditCampaigns {
             $escaped = $CampaignNameStartsWith.Replace('"', '\"')
             $filterParts.Add("name sw `"$escaped`"")
         }
-        elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
-            $escaped = $CampaignNameContains.Replace('"', '\"')
-            $filterParts.Add("name co `"$escaped`"")
-        }
+        # NOTE: -CampaignNameContains is applied CLIENT-SIDE (after the fetch, below), NOT as a
+        # server-side `name co` filter. ISC /v3/campaigns rejects a *bare* `name co` (with no
+        # other indexed predicate) with HTTP 400, and `co` is case-sensitive -- both of which
+        # bit the GUI (Audit/Hierarchical/Adaptive). Client-side -like is case-insensitive and
+        # never 400s, matching the "contains" expectation everywhere.
 
         if ($null -ne $Status -and $Status.Count -gt 0) {
             $quotedStatuses = ($Status | ForEach-Object { "`"$_`"" }) -join ','
@@ -580,6 +584,23 @@ function Get-SPAuditCampaigns {
             Write-SPLog -Message "Date filtering disabled (DaysBack=$DaysBack). Returning all $($filteredCampaigns.Count) campaigns." `
                 -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' `
                 -CorrelationID $CorrelationID
+        }
+
+        # Client-side, case-insensitive name-contains filter (-CampaignNameContains). Applied
+        # here -- like the date filter above -- because ISC /v3/campaigns handles `name co`
+        # unreliably (400 on a bare contains; case-sensitive when it does run). PowerShell
+        # -like is case-insensitive; wildcards in the keyword are escaped so a literal match.
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $kwEsc     = [System.Management.Automation.WildcardPattern]::Escape($CampaignNameContains)
+            $beforeCo  = $filteredCampaigns.Count
+            $coMatched = [System.Collections.Generic.List[object]]::new()
+            foreach ($campaign in $filteredCampaigns) {
+                $nm = if ($null -ne $campaign.name) { [string]$campaign.name } else { '' }
+                if ($nm -like "*$kwEsc*") { $coMatched.Add($campaign) }
+            }
+            $filteredCampaigns = $coMatched
+            Write-SPLog -Message "Name-contains filter ('$CampaignNameContains', client-side, case-insensitive): $beforeCo -> $($filteredCampaigns.Count) campaigns" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'Get-SPAuditCampaigns' -CorrelationID $CorrelationID
         }
 
         return @{ Success = $true; Data = $filteredCampaigns.ToArray(); Error = $null }

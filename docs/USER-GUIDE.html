@@ -1896,7 +1896,7 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 </tr>
 <tr>
 <td><code>-CampaignNameContains &lt;kw&gt;</code></td>
-<td>Name contains keyword (ISC <code>co</code> filter; best for fuzzy search).</td>
+<td>Name contains keyword (case-insensitive, filtered client-side; best for fuzzy search).</td>
 </tr>
 <tr>
 <td><code>-Status &lt;list&gt;</code></td>
@@ -2232,7 +2232,7 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 </tr>
 <tr>
 <td><code>-CampaignNameContains &lt;kw&gt;</code></td>
-<td>Substring (ISC <code>co</code> filter)</td>
+<td>Substring, case-insensitive (client-side)</td>
 <td>Fuzzy / keyword search.</td>
 </tr>
 </tbody></table>

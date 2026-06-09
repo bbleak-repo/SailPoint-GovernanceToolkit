@@ -161,7 +161,7 @@ summary + a JSONL audit trail.
 |---|---|
 | `-CampaignName <name>` | Exact (case-insensitive) campaign name. |
 | `-CampaignNameStartsWith <prefix>` | Name begins with prefix. |
-| `-CampaignNameContains <kw>` | Name contains keyword (ISC `co` filter; best for fuzzy search). |
+| `-CampaignNameContains <kw>` | Name contains keyword (case-insensitive, filtered client-side; best for fuzzy search). |
 | `-Status <list>` | `STAGED`/`ACTIVE`/`COMPLETING`/`COMPLETED`. Defaults to `Audit.DefaultStatuses`. |
 | `-DaysBack <n>` | Only campaigns created in the last *n* days (default 30 / `Audit.DefaultDaysBack`). |
 | `-IdentityEventDays <n>` | Days before campaign end to search lifecycle events for revoked identities (default 2). |
@@ -454,7 +454,7 @@ The six report scripts below — `Invoke-SPCampaignAudit`, `Invoke-SPGovernanceR
 |---|---|---|
 | `-CampaignName <name>` | Exact, case-insensitive | You know the full name. |
 | `-CampaignNameStartsWith <prefix>` | Name begins with the prefix | A stable prefix identifies a family (e.g. `Daily Attestation Manager Campaign - Tuesday`). |
-| `-CampaignNameContains <kw>` | Substring (ISC `co` filter) | Fuzzy / keyword search. |
+| `-CampaignNameContains <kw>` | Substring, case-insensitive (client-side) | Fuzzy / keyword search. |
 
 Precedence is **exact → starts-with → contains** (pass more than one and the most specific
 wins). Filters combine with the window, so `-CampaignNameContains 'Tuesday' -DaysBack 30`
