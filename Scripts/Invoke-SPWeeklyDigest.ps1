@@ -81,6 +81,16 @@ param(
     [Parameter()]
     [int]$DaysBack = 7,
 
+    # Campaign name filters (optional; combined with the period window)
+    [Parameter()]
+    [string]$CampaignName,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
+    [string]$CampaignNameContains,
+
     [Parameter()]
     [string]$ConfigPath,
 
@@ -347,7 +357,14 @@ $campaignAudits   = @()
 
 try {
     Write-Host '    Fetching campaigns...' -ForegroundColor DarkGray
-    $campaignResult = Get-SPAuditCampaigns -DaysBack $DaysBack -CorrelationID $correlationID
+    # Optional campaign name filters, applied to both the current and previous windows
+    # so the week-over-week comparison stays apples-to-apples.
+    $nameFilter = @{}
+    if ($CampaignName)           { $nameFilter['CampaignName']           = $CampaignName }
+    if ($CampaignNameStartsWith) { $nameFilter['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+    if ($CampaignNameContains)   { $nameFilter['CampaignNameContains']   = $CampaignNameContains }
+
+    $campaignResult = Get-SPAuditCampaigns -DaysBack $DaysBack -CorrelationID $correlationID @nameFilter
     if ($campaignResult.Success -and $null -ne $campaignResult.Data) {
         $currentCampaigns = @($campaignResult.Data)
     }
@@ -357,7 +374,7 @@ try {
     $prevStart = $startTime.AddDays(-($DaysBack * 2))
     $prevEnd   = $startTime.AddDays(-$DaysBack)
     $prevResult = Get-SPAuditCampaigns -CreatedAfter $prevStart -CreatedBefore $prevEnd `
-        -CorrelationID $correlationID
+        -CorrelationID $correlationID @nameFilter
     if ($prevResult.Success -and $null -ne $prevResult.Data) {
         $prevCampaigns = @($prevResult.Data)
     }

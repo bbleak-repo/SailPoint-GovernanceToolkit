@@ -94,6 +94,16 @@ param(
     [Parameter()]
     [int]$DaysBack = 90,
 
+    # Campaign name filters (optional; combined with the DaysBack window)
+    [Parameter()]
+    [string]$CampaignName,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
+    [string]$CampaignNameContains,
+
     # Modes
     [Parameter()]
     [switch]$CaptureOnly,
@@ -361,7 +371,11 @@ if (-not $TrendOnly) {
     try {
         # Fetch campaigns
         Write-Host '    Fetching campaigns...' -ForegroundColor DarkGray
-        $campaignResult = Get-SPAuditCampaigns -DaysBack $DaysBack -CorrelationID $correlationID
+        $campaignParams = @{ DaysBack = $DaysBack; CorrelationID = $correlationID }
+        if ($CampaignName)           { $campaignParams['CampaignName']           = $CampaignName }
+        if ($CampaignNameStartsWith) { $campaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+        if ($CampaignNameContains)   { $campaignParams['CampaignNameContains']   = $CampaignNameContains }
+        $campaignResult = Get-SPAuditCampaigns @campaignParams
         if ($campaignResult.Success -and $null -ne $campaignResult.Data) {
             $currentCampaigns = @($campaignResult.Data)
         }

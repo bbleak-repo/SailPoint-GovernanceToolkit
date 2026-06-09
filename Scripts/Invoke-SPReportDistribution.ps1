@@ -87,6 +87,16 @@ param(
     [Parameter()]
     [int]$DaysBack = 30,
 
+    # Campaign name filters (optional; combined with -Status and the DaysBack window)
+    [Parameter()]
+    [string]$CampaignName,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
+    [string]$CampaignNameContains,
+
     [Parameter()]
     [int]$LeadershipDepth = 4,
 
@@ -337,7 +347,11 @@ $runStart = Get-Date
 
 Write-Host "  Querying campaigns (Status=$($Status -join ','), DaysBack=$effectiveDaysBack)..." -ForegroundColor Cyan
 
-$campaignsResult = Get-SPAuditCampaigns -Status $Status -DaysBack $effectiveDaysBack -CorrelationID $correlationID
+$campaignParams = @{ Status = $Status; DaysBack = $effectiveDaysBack; CorrelationID = $correlationID }
+if ($CampaignName)           { $campaignParams['CampaignName']           = $CampaignName }
+if ($CampaignNameStartsWith) { $campaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+if ($CampaignNameContains)   { $campaignParams['CampaignNameContains']   = $CampaignNameContains }
+$campaignsResult = Get-SPAuditCampaigns @campaignParams
 
 if (-not $campaignsResult.Success) {
     Write-Host "ERROR: Failed to retrieve campaigns: $($campaignsResult.Error)" -ForegroundColor Red

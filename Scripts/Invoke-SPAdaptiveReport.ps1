@@ -75,6 +75,11 @@ param(
     [Parameter()][string]$CreatedAfter,
     [Parameter()][string]$CreatedBefore,
 
+    # Campaign name filters (optional; combined with the status/date window)
+    [Parameter()][string]$CampaignName,
+    [Parameter()][string]$CampaignNameStartsWith,
+    [Parameter()][string]$CampaignNameContains,
+
     # --- Leadership distribution (additive; off by default) ---
     [Parameter()][switch]$DistributeToLeadership,
     [Parameter()][string[]]$TargetBands,
@@ -144,6 +149,9 @@ try {
     if ($CreatedAfter)  { $campArgs['CreatedAfter']  = $CreatedAfter }
     if ($CreatedBefore) { $campArgs['CreatedBefore'] = $CreatedBefore }
     if (-not $CreatedAfter) { $campArgs['DaysBack'] = $DaysBack }
+    if ($CampaignName)           { $campArgs['CampaignName']           = $CampaignName }
+    if ($CampaignNameStartsWith) { $campArgs['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+    if ($CampaignNameContains)   { $campArgs['CampaignNameContains']   = $CampaignNameContains }
     $cr = Get-SPAuditCampaigns @campArgs
     if ($cr.Success -and $null -ne $cr.Data) { $campaigns = @($cr.Data) }
 }
