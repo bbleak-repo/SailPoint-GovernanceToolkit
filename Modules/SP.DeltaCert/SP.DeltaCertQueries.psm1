@@ -1335,10 +1335,23 @@ function Build-SPOrgTree {
                 if (-not $nodes.ContainsKey($managerId)) {
                     $mgrDetail = Get-SPDeltaIdentityDetail -IdentityId $managerId -CorrelationID $CorrelationID
 
+                    # When the manager's own identity lookup is empty/not-found, fall back to
+                    # the name we already learned from the child's record -- ISC returned the
+                    # child's manager.name when we resolved the child. This keeps real names
+                    # on leadership nodes instead of raw identity GUIDs.
+                    $mgrName = if (-not [string]::IsNullOrWhiteSpace($mgrDetail.DisplayName)) {
+                        $mgrDetail.DisplayName
+                    }
+                    elseif ($null -ne $currentNode.Identity -and
+                            -not [string]::IsNullOrWhiteSpace($currentNode.Identity.ManagerName)) {
+                        $currentNode.Identity.ManagerName
+                    }
+                    else { '' }
+
                     $nodes[$managerId] = @{
                         Identity  = @{
                             Id          = $managerId
-                            Name        = $mgrDetail.DisplayName
+                            Name        = $mgrName
                             ManagerId   = $mgrDetail.ManagerId
                             ManagerName = $mgrDetail.ManagerName
                             Found       = $mgrDetail.Found

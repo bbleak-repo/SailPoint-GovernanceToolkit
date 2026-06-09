@@ -295,7 +295,8 @@ Describe "HR-005: Generated HTML has correct structure and content" {
                 -ReportTitle   'Q1 Rollup' `
                 -MinReportLevel 2  | Out-Null  # VP-level: one file for Victoria
 
-            $files = Get-ChildItem -Path $script:outDir2 -Filter '*.html'
+            # -Recurse: Export-SPHierarchicalLeadershipHtml writes into a run-<stamp> subdir.
+            $files = Get-ChildItem -Path $script:outDir2 -Filter '*.html' -Recurse
             if ($files.Count -gt 0) {
                 $script:htmlContent = Get-Content $files[0].FullName -Raw
             } else {

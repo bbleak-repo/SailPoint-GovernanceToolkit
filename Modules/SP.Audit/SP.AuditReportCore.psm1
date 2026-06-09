@@ -2181,8 +2181,10 @@ function _Build-SPHierarchyNodeInternal {
         $certifiedIdentities = @($certList | Sort-Object Name)
     }
 
-    $displayName = if ($null -ne $identity -and $identity.Found -and
-                       -not [string]::IsNullOrWhiteSpace($identity.Name)) {
+    # Prefer the resolved name whenever we have one -- even if the identity's own lookup
+    # was not "Found". A name propagated from a child's manager.name (Build-SPOrgTree) still
+    # beats a raw identity GUID for a leadership node's display/filename.
+    $displayName = if ($null -ne $identity -and -not [string]::IsNullOrWhiteSpace($identity.Name)) {
         $identity.Name
     }
     else { $NodeId }
