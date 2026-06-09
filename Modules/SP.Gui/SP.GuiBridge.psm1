@@ -2948,18 +2948,41 @@ function Invoke-SPGuiHierarchicalReport {
             return @{ Success=$false; Data=@{}; Error='No reviewer/certifier IDs in certification objects. Check PAT scope includes sp:search:read.' }
         }
 
-        # Step 3: Certification items
+        # Step 3: Certification items (wrapped with cert/campaign context for Group-SPAuditDecisions)
+        $campNameById2 = @{}
+        foreach ($camp in $campaigns) {
+            if ($camp.PSObject.Properties['id'] -and $camp.PSObject.Properties['name']) {
+                $campNameById2[[string]$camp.id] = [string]$camp.name
+            }
+        }
         $allItems = [System.Collections.Generic.List[object]]::new()
         foreach ($cert in $allCerts) {
-            $itemsResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
-            if ($itemsResult.Success) { foreach ($item in @($itemsResult.Data)) { $allItems.Add($item) } }
+            $certId2   = [string]$cert.id
+            $certName2 = if ($cert.PSObject.Properties['name']) { [string]$cert.name } else { $certId2 }
+            $campId2   = ''
+            if ($cert.PSObject.Properties['campaign'] -and $null -ne $cert.campaign -and
+                $cert.campaign.PSObject.Properties['id']) { $campId2 = [string]$cert.campaign.id }
+            $campName2 = if (-not [string]::IsNullOrWhiteSpace($campId2) -and $campNameById2.ContainsKey($campId2)) {
+                $campNameById2[$campId2] } else { '' }
+
+            $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId2 -CorrelationID $CorrelationID
+            if ($itemsResult.Success) {
+                foreach ($item in @($itemsResult.Data)) {
+                    $allItems.Add(@{
+                        Item              = $item
+                        CertificationId   = $certId2
+                        CertificationName = $certName2
+                        CampaignName      = $campName2
+                    })
+                }
+            }
         }
         if ($allItems.Count -eq 0) {
             return @{ Success=$true; Data=@{ ReportsGenerated=0; CampaignCount=$campaigns.Count; Message='No certification items found' }; Error=$null }
         }
 
         # Step 4: Group decisions
-        $decisions = Group-SPAuditDecisions -Items $allItems.ToArray() -CorrelationID $CorrelationID
+        $decisions = Group-SPAuditDecisions -Items $allItems.ToArray()
 
         # Step 5: Build org tree
         $orgTreeResult = Build-SPOrgTree -IdentityIds $uniqueCertifierIds -MaxDepth 5 -CorrelationID $CorrelationID

@@ -319,7 +319,16 @@ if ($uniqueCertifierIds.Count -eq 0) {
 }
 
 # Step 4: Get certification items (decision data)
+# Group-SPAuditDecisions expects enriched wrappers: @{Item; CertificationId; CertificationName; CampaignName}
+# Build a campaign-name lookup from the campaigns array for efficient access
 Write-Host "  Step 3: Fetching certification items (decisions)..." -ForegroundColor Cyan
+$campNameById = @{}
+foreach ($camp in $campaigns) {
+    if ($camp.PSObject.Properties['id'] -and $camp.PSObject.Properties['name']) {
+        $campNameById[[string]$camp.id] = [string]$camp.name
+    }
+}
+
 $allItems = [System.Collections.Generic.List[object]]::new()
 $certCount = $allCerts.Count
 $certIdx   = 0
@@ -328,9 +337,25 @@ foreach ($cert in $allCerts) {
     if ($certCount -le 50 -or ($certIdx % 10 -eq 0)) {
         Write-Host "    Processing cert $certIdx of $certCount..." -ForegroundColor DarkGray
     }
-    $itemsResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
+    $certId   = [string]$cert.id
+    $certName = if ($cert.PSObject.Properties['name']) { [string]$cert.name } else { $certId }
+    $campId   = ''
+    if ($cert.PSObject.Properties['campaign'] -and $null -ne $cert.campaign -and
+        $cert.campaign.PSObject.Properties['id']) { $campId = [string]$cert.campaign.id }
+    $campName = if (-not [string]::IsNullOrWhiteSpace($campId) -and $campNameById.ContainsKey($campId)) {
+        $campNameById[$campId] } else { '' }
+
+    $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId -CorrelationID $correlationID
     if ($itemsResult.Success) {
-        foreach ($item in @($itemsResult.Data)) { $allItems.Add($item) }
+        foreach ($item in @($itemsResult.Data)) {
+            # Wrap raw item with cert/campaign context required by Group-SPAuditDecisions
+            $allItems.Add(@{
+                Item              = $item
+                CertificationId   = $certId
+                CertificationName = $certName
+                CampaignName      = $campName
+            })
+        }
     }
 }
 Write-Host "  Found $($allItems.Count) certification item(s)" -ForegroundColor DarkGray
@@ -342,7 +367,7 @@ if ($allItems.Count -eq 0) {
 
 # Step 5: Group decisions
 Write-Host "  Step 4: Grouping decisions..." -ForegroundColor Cyan
-$decisions = Group-SPAuditDecisions -Items $allItems.ToArray() -CorrelationID $correlationID
+$decisions = Group-SPAuditDecisions -Items $allItems.ToArray()
 
 $totalA = @($decisions.Approved).Count
 $totalR = @($decisions.Revoked).Count
