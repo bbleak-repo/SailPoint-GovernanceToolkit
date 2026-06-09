@@ -29,6 +29,12 @@ $script:SourceNameCache = @{}
 # Module-scope account cache: keyed by identity ID, value is @{SamAccountName; UserPrincipalName; Email; NativeIdentity}.
 $script:AccountCache = @{}
 
+# Persistent (disk-backed) account-cache state. $script:_AccountCachedAt records the
+# CachedAt timestamp per identity so resolutions can be aged out and persisted across
+# runs; the disk warm-load happens once per session.
+$script:_AccountCachedAt   = @{}
+$script:_AccountDiskLoaded = $false
+
 #region Internal Functions
 
 function Get-SPAuditSourceName {
@@ -1423,14 +1429,122 @@ function Resolve-SPAuditIdentityAccounts {
         -Severity INFO -Component 'SP.AuditQueries' -Action 'Resolve-SPAuditIdentityAccounts' `
         -CorrelationID $CorrelationID
 
+    # --- Resolve the disk cache file + TTL (best-effort) ----------------------
+    $acctCacheFile = $null
+    $acctTtlMin    = 1440   # 24h default; account attributes are stable
     try {
-        $results = @{}
-        foreach ($id in $IdentityIds) {
-            if ([string]::IsNullOrWhiteSpace($id)) { continue }
-            $results[$id] = Get-SPAuditAccountForIdentity -IdentityId $id -CorrelationID $CorrelationID
+        $cfg = Get-SPConfig
+        $cacheDir = $null
+        if ($null -ne $cfg.PSObject.Properties['Audit']) {
+            if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
+                $cacheDir = [string]$cfg.Audit.CachePath
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $cacheDir = Join-Path $cfg.Audit.OutputPath '.cache'
+            }
+            if ($null -ne $cfg.Audit.PSObject.Properties['AccountCacheTtlMinutes'] -and
+                $null -ne $cfg.Audit.AccountCacheTtlMinutes) {
+                $acctTtlMin = [int]$cfg.Audit.AccountCacheTtlMinutes
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($cacheDir)) { $cacheDir = '.\Audit\.cache' }
+        $acctCacheFile = Join-Path $cacheDir 'accounts.jsonl'
+    } catch { $acctCacheFile = $null }
+
+    # --- Warm the in-memory cache from disk once per session ------------------
+    if (-not $script:_AccountDiskLoaded -and $null -ne $acctCacheFile -and (Test-Path $acctCacheFile)) {
+        try {
+            $nowWarm = Get-Date
+            Get-Content $acctCacheFile | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_)) { return }
+                $rec = $_ | ConvertFrom-Json
+                $rid = [string]$rec.IdentityId
+                $rat = [datetime]::Parse([string]$rec.CachedAt)
+                if (-not [string]::IsNullOrWhiteSpace($rid) -and
+                    ($nowWarm - $rat).TotalMinutes -lt $acctTtlMin) {
+                    if (-not $script:AccountCache.ContainsKey($rid)) {
+                        $script:AccountCache[$rid] = @{
+                            SamAccountName    = [string]$rec.Account.SamAccountName
+                            UserPrincipalName = [string]$rec.Account.UserPrincipalName
+                            Email             = [string]$rec.Account.Email
+                            NativeIdentity    = [string]$rec.Account.NativeIdentity
+                        }
+                    }
+                    $script:_AccountCachedAt[$rid] = $rat
+                }
+            }
+        } catch { }
+    }
+    $script:_AccountDiskLoaded = $true
+
+    try {
+        $ids       = @($IdentityIds | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $total     = $ids.Count
+        $results   = @{}
+        $fetched   = 0
+        $fromCache = 0
+        $idx       = 0
+        $step      = [Math]::Max(25, [int][Math]::Ceiling($total / 20.0))   # ~20 heartbeats max
+        $showProgress = $total -gt 50
+        if ($showProgress) {
+            Write-Host "    Resolving account details for $total identit(ies) (cache reused; rest fetched from ISC)..." -ForegroundColor DarkGray
         }
 
-        Write-SPLog -Message "Account resolution complete: $($results.Count) identit(ies) resolved" `
+        foreach ($id in $ids) {
+            $idx++
+            $hadIt = $script:AccountCache.ContainsKey($id)
+            $results[$id] = Get-SPAuditAccountForIdentity -IdentityId $id -CorrelationID $CorrelationID
+            if ($hadIt) {
+                $fromCache++
+            }
+            else {
+                $fetched++
+                # Stamp non-empty resolutions for persistence; skip empty/failed lookups so a
+                # transient miss is not cached across runs.
+                $acct = $results[$id]
+                $nonEmpty = (-not [string]::IsNullOrWhiteSpace([string]$acct.SamAccountName)) -or
+                            (-not [string]::IsNullOrWhiteSpace([string]$acct.UserPrincipalName)) -or
+                            (-not [string]::IsNullOrWhiteSpace([string]$acct.Email))
+                if ($nonEmpty) { $script:_AccountCachedAt[$id] = Get-Date }
+            }
+            if ($showProgress -and ($idx % $step -eq 0)) {
+                $pct = [int](($idx / [double]$total) * 100)
+                Write-Host ("      ...$idx / $total ($pct%)  [cache: $fromCache, fetched: $fetched]") -ForegroundColor DarkGray
+            }
+        }
+        if ($showProgress) {
+            Write-Host ("      ...done: $total resolved ($fromCache from cache, $fetched fetched)") -ForegroundColor DarkGray
+        }
+
+        # --- Persist newly-fetched resolutions back to disk -------------------
+        if ($fetched -gt 0 -and $null -ne $acctCacheFile) {
+            try {
+                $cacheDirPath = Split-Path -Parent $acctCacheFile
+                if (-not [string]::IsNullOrWhiteSpace($cacheDirPath) -and -not (Test-Path $cacheDirPath)) {
+                    New-Item -Path $cacheDirPath -ItemType Directory -Force -WhatIf:$false | Out-Null
+                }
+                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                $sb = New-Object System.Text.StringBuilder
+                foreach ($cid in $script:_AccountCachedAt.Keys) {
+                    if (-not $script:AccountCache.ContainsKey($cid)) { continue }
+                    $rec = [ordered]@{
+                        IdentityId = $cid
+                        CachedAt   = ([datetime]$script:_AccountCachedAt[$cid]).ToString('o')
+                        Account    = $script:AccountCache[$cid]
+                    }
+                    [void]$sb.AppendLine(($rec | ConvertTo-Json -Depth 6 -Compress))
+                }
+                [System.IO.File]::WriteAllText($acctCacheFile, $sb.ToString(), $utf8NoBom)
+            }
+            catch {
+                Write-SPLog -Message "Account cache persist failed: $($_.Exception.Message)" `
+                    -Severity DEBUG -Component 'SP.AuditQueries' -Action 'Resolve-SPAuditIdentityAccounts' `
+                    -CorrelationID $CorrelationID
+            }
+        }
+
+        Write-SPLog -Message "Account resolution complete: $($results.Count) identit(ies) ($fromCache cached, $fetched fetched)" `
             -Severity INFO -Component 'SP.AuditQueries' -Action 'Resolve-SPAuditIdentityAccounts' `
             -CorrelationID $CorrelationID
 
@@ -6783,9 +6897,49 @@ function Get-SPCachedCampaignItems {
         $certs = @($certsResult.Data)
     }
 
-    $allItems   = [System.Collections.Generic.List[object]]::new()
-    $certIdx    = 0
-    $certTotal  = $certs.Count
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $allItems  = [System.Collections.Generic.List[object]]::new()
+
+    # --- Resume from a partial fetch -----------------------------------------
+    # A partial cache = the items .jsonl is present but the .meta.json is not (meta is
+    # written only when a fetch completes). Reload its items and skip those certs so an
+    # interrupted long pull resumes where it left off instead of restarting.
+    $doneCertIds = @{}
+    $resuming    = $false
+    if ($isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) {
+        try {
+            Get-Content $itemsFile | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_)) { return }
+                $wi = $_ | ConvertFrom-Json
+                $allItems.Add($wi)
+                $cidKey = [string]$wi.CertificationId
+                if (-not [string]::IsNullOrWhiteSpace($cidKey)) { $doneCertIds[$cidKey] = $true }
+            }
+            if ($allItems.Count -gt 0) {
+                $resuming = $true
+                Write-Host "  [Cache] Resuming partial fetch: $($allItems.Count) item(s) from $($doneCertIds.Count) cert(s) already on disk." -ForegroundColor DarkYellow
+            }
+        }
+        catch {
+            # Corrupt / truncated partial -- discard and start clean.
+            $allItems.Clear(); $doneCertIds = @{}; $resuming = $false
+        }
+    }
+
+    # Ensure the cache dir exists; drop a stale/unreadable partial so we append cleanly.
+    if ($isCacheable) {
+        try {
+            if (-not (Test-Path $effectiveCachePath)) {
+                New-Item -Path $effectiveCachePath -ItemType Directory -Force -WhatIf:$false | Out-Null
+            }
+            if (-not $resuming -and (Test-Path $itemsFile)) {
+                [System.IO.File]::Delete($itemsFile)
+            }
+        } catch { }
+    }
+
+    $certIdx   = 0
+    $certTotal = $certs.Count
 
     foreach ($cert in $certs) {
         $certIdx++
@@ -6795,15 +6949,29 @@ function Get-SPCachedCampaignItems {
         $certId2   = [string]$cert.id
         $certName2 = if ($cert.PSObject.Properties['name'] -and $cert.name) { [string]$cert.name } else { $certId2 }
 
+        if ($doneCertIds.ContainsKey($certId2)) { continue }   # already cached (resume)
+
         $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId2 -CorrelationID $CorrelationID
         if ($itemsResult.Success) {
+            $certLines = New-Object System.Text.StringBuilder
             foreach ($rawItem in @($itemsResult.Data)) {
-                $allItems.Add([PSCustomObject]@{
+                $wi = [PSCustomObject]@{
                     Item              = $rawItem
                     CertificationId   = $certId2
                     CertificationName = $certName2
                     CampaignName      = $campName
-                })
+                }
+                $allItems.Add($wi)
+                if ($isCacheable) { [void]$certLines.AppendLine(($wi | ConvertTo-Json -Depth 12 -Compress)) }
+            }
+            # Flush this cert's items immediately so a kill mid-pull keeps everything
+            # fetched up to the last completed certification.
+            if ($isCacheable -and $certLines.Length -gt 0) {
+                try { [System.IO.File]::AppendAllText($itemsFile, $certLines.ToString(), $utf8NoBom) }
+                catch {
+                    Write-SPLog -Message "Incremental cache append failed for '$campName' cert '$certId2': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' -CorrelationID $CorrelationID
+                }
             }
         }
     }
@@ -6811,20 +6979,10 @@ function Get-SPCachedCampaignItems {
     Write-Host "  Fetched $($allItems.Count) item(s) from ISC for '$campName'" -ForegroundColor DarkGray
 
     # ---------------------------------------------------------------------------
-    # Write cache (disk + memory)
+    # Finalize cache: items were streamed to disk above; write meta to mark complete.
     # ---------------------------------------------------------------------------
     if ($isCacheable -and $allItems.Count -gt 0) {
         try {
-            if (-not (Test-Path $effectiveCachePath)) {
-                New-Item -Path $effectiveCachePath -ItemType Directory -Force | Out-Null
-            }
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            $sb = New-Object System.Text.StringBuilder
-            foreach ($wi in $allItems) {
-                $sb.AppendLine(($wi | ConvertTo-Json -Depth 12 -Compress)) | Out-Null
-            }
-            [System.IO.File]::WriteAllText($itemsFile, $sb.ToString(), $utf8NoBom)
-
             $meta2 = [ordered]@{
                 CampaignId   = $campId
                 CampaignName = $campName
@@ -6842,10 +7000,14 @@ function Get-SPCachedCampaignItems {
             Write-Host "  [Cache] Saved $($allItems.Count) items to disk for future runs." -ForegroundColor DarkGreen
         }
         catch {
-            Write-SPLog -Message "Cache write failed for '$campName': $($_.Exception.Message)" `
+            Write-SPLog -Message "Cache finalize failed for '$campName': $($_.Exception.Message)" `
                 -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
                 -CorrelationID $CorrelationID
         }
+    }
+    elseif ($isCacheable -and $allItems.Count -eq 0 -and (Test-Path $itemsFile)) {
+        # Nothing fetched -- remove the empty partial so it is not mistaken for a resume.
+        try { [System.IO.File]::Delete($itemsFile) } catch { }
     }
 
     $memEntry3 = @{
@@ -6922,6 +7084,53 @@ function Clear-SPAuditItemCache {
     }
 }
 
+function Clear-SPAuditAccountCache {
+    <#
+    .SYNOPSIS
+        Clears the persistent identity->account resolution cache (memory and/or disk).
+    .DESCRIPTION
+        Forces the next account resolution to re-fetch from ISC. Use after identities have
+        been renamed / re-mailed and you need fresh attributes before the TTL expires.
+    .PARAMETER DiskOnly
+        Clear the on-disk accounts.jsonl only (keep the session memory cache).
+    .PARAMETER MemoryOnly
+        Clear the in-memory cache only (keep the disk file).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [switch]$DiskOnly,
+        [Parameter()] [switch]$MemoryOnly
+    )
+
+    if (-not $DiskOnly) {
+        $script:AccountCache.Clear()
+        $script:_AccountCachedAt.Clear()
+        $script:_AccountDiskLoaded = $false
+        Write-Host "  Account memory cache cleared." -ForegroundColor DarkGray
+    }
+
+    if (-not $MemoryOnly) {
+        try {
+            $cfg = Get-SPConfig
+            $cacheDir = '.\Audit\.cache'
+            if ($null -ne $cfg.PSObject.Properties['Audit']) {
+                if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
+                    $cacheDir = [string]$cfg.Audit.CachePath
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                    $cacheDir = Join-Path $cfg.Audit.OutputPath '.cache'
+                }
+            }
+            $acctFile = Join-Path $cacheDir 'accounts.jsonl'
+            if (Test-Path $acctFile) {
+                Remove-Item $acctFile -Force -ErrorAction SilentlyContinue
+                Write-Host "  Account disk cache cleared." -ForegroundColor DarkGray
+            }
+        } catch { }
+    }
+}
+
 #endregion Campaign Item Cache
 
 Export-ModuleMember -Function @(
@@ -6948,5 +7157,6 @@ Export-ModuleMember -Function @(
     'Get-SPReviewerDelegations',
     'Test-SPSourceOnboardingReadiness',
     'Get-SPCachedCampaignItems',
-    'Clear-SPAuditItemCache'
+    'Clear-SPAuditItemCache',
+    'Clear-SPAuditAccountCache'
 )

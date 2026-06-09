@@ -57,6 +57,7 @@
         "OutputPath": ".\\Audit",
         "CachePath": ".\\Audit\\.cache",
         "CacheActiveTtlMinutes": 30,
+        "AccountCacheTtlMinutes": 1440,
         "DefaultDaysBack": 1,
         "DefaultIdentityEventDays": 2,
         "DefaultStatuses": [

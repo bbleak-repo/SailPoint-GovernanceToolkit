@@ -39,6 +39,7 @@
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
         'Clear-SPAuditItemCache'
+        'Clear-SPAuditAccountCache'
         'Get-SPAuditCampaignReport'
         'Import-SPAuditCampaignReport'
         'Get-SPAuditIdentityEvents'

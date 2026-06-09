@@ -497,6 +497,23 @@ Clear-SPAuditItemCache -CampaignId '<id>'    # just one
 Cache location and the active-campaign TTL are configurable via `Audit.CachePath` and
 `Audit.CacheActiveTtlMinutes` in `settings.json`.
 
+**Three things that make long runs survivable.** A big campaign (thousands of items /
+identities) can take many minutes, so the report scripts now:
+
+- **Show progress during the quiet phases.** Account resolution and the revoked-identity
+  event lookups print a periodic heartbeat (`...1200 / 3500 (34%) [cache: 800, fetched: 400]`)
+  so you can see it is still working, not hung. If the heartbeat slows, you are being
+  rate-limited by ISC (the log shows the `Rate limit … Waiting` waits) — it will still finish.
+- **Cache identity→account resolution to disk.** Resolving each identity's
+  sAMAccountName / UPN / email is a per-identity API call and was the slow, silent phase that
+  re-ran on *every* report. It is now cached to `Audit\.cache\accounts.jsonl` with a TTL
+  (`Audit.AccountCacheTtlMinutes`, default 1440 = 24h), so the **second report onward reuses
+  it**. Force a refresh with `Clear-SPAuditAccountCache` (`-CampaignId` not needed — accounts
+  are campaign-independent).
+- **Resume an interrupted item fetch.** The item cache is now written *per certification as it
+  is fetched*. If a long first-time pull is killed mid-way, the next run **resumes from the
+  last completed certification** instead of restarting (`[Cache] Resuming partial fetch: …`).
+
 ### `Invoke-SPGovernanceHealthCheck.ps1`
 **Purpose:** one consolidated health report across six dimensions — source aggregation,
 data quality, policy compliance, config drift, orphan accounts, campaign coverage gaps —

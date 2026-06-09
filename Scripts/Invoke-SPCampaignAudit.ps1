@@ -506,7 +506,11 @@ foreach ($campaign in $campaigns) {
     $identityEvents = @()
     if ($revokedIdentityIds.Count -gt 0 -and ($config.Audit -and $config.Audit.IncludeIdentityEvents -ne $false)) {
         Write-Host "    Fetching identity events for $($revokedIdentityIds.Count) revoked identit(ies)..." -ForegroundColor DarkGray
+        $evtTotal = $revokedIdentityIds.Count
+        $evtIdx   = 0
+        $evtStep  = [Math]::Max(25, [int][Math]::Ceiling($evtTotal / 20.0))
         foreach ($identityId in $revokedIdentityIds) {
+            $evtIdx++
             $eventResult = Get-SPAuditIdentityEvents `
                 -IdentityId $identityId `
                 -DaysBack $effectiveIdentityEventDays `
@@ -521,6 +525,9 @@ foreach ($campaign in $campaigns) {
                 Write-Host "    WARN: Could not retrieve identity events for ${identityId}: $($eventResult.Error)" -ForegroundColor Yellow
                 Write-SPLog -Message "Could not retrieve identity events for identity '${identityId}': $($eventResult.Error)" `
                     -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetIdentityEvents' -CorrelationID $correlationID
+            }
+            if ($evtTotal -gt 50 -and ($evtIdx % $evtStep -eq 0)) {
+                Write-Host ("      ...$evtIdx / $evtTotal identity-event lookups") -ForegroundColor DarkGray
             }
         }
     }

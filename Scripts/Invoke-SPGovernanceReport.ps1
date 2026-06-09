@@ -517,10 +517,20 @@ foreach ($campaign in $campaigns) {
 
     $identityEvents = @()
     if ($revokedIdentityIds.Count -gt 0 -and ($config.Audit -and $config.Audit.IncludeIdentityEvents -ne $false)) {
+        $evtTotal = $revokedIdentityIds.Count
+        $evtIdx   = 0
+        $evtStep  = [Math]::Max(25, [int][Math]::Ceiling($evtTotal / 20.0))
+        if ($evtTotal -gt 50) {
+            Write-Host "      Fetching identity events for $evtTotal revoked identit(ies)..." -ForegroundColor DarkGray
+        }
         foreach ($identityId in $revokedIdentityIds) {
+            $evtIdx++
             $eventResult = Get-SPAuditIdentityEvents -IdentityId $identityId -DaysBack 2 -CorrelationID $correlationID
             if ($eventResult.Success -and $null -ne $eventResult.Data) {
                 foreach ($evt in $eventResult.Data) { $identityEvents += $evt }
+            }
+            if ($evtTotal -gt 50 -and ($evtIdx % $evtStep -eq 0)) {
+                Write-Host ("        ...$evtIdx / $evtTotal identity-event lookups") -ForegroundColor DarkGray
             }
         }
     }
