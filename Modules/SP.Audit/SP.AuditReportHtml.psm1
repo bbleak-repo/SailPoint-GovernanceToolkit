@@ -11273,8 +11273,10 @@ function _Render-SPHierarchyNodeHtml {
 
             $encodedName  = [System.Web.HttpUtility]::HtmlEncode($identity.Name)
             $identityTotal = $identity.Approved + $identity.Revoked + $identity.Pending
+            # class="identity-node" lets the "Hide Identities" CSS toggle suppress this level
+            # while still showing the manager-level KPI counts in the summary bar above.
             $bodyHtml += @"
-<details data-total="$identityTotal" style="margin:3px 0;border:1px solid #dee2e6;border-radius:4px;">
+<details class="identity-node" data-total="$identityTotal" style="margin:3px 0;border:1px solid #dee2e6;border-radius:4px;">
   <summary style="cursor:pointer;padding:6px 10px;background:#f8f9fa;list-style:none;display:list-item;">
     <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
       <td style="font-size:12px;font-weight:500;">$encodedName</td>
@@ -11457,6 +11459,7 @@ details>summary{list-style:none;}
 details>summary::-webkit-details-marker{display:none;}
 .rpt-footer{margin-top:20px;font-size:11px;color:#adb5bd;text-align:center;}
 body.hide-empty details[data-total="0"]{display:none;}
+body.hide-identities .identity-node{display:none;}
 '@
 
         # Generate one HTML file per report node.
@@ -11519,6 +11522,19 @@ function toggleEmpty(){
     btn.style.background='#ffc107';
   }
 }
+function toggleIdentities(){
+  var body=document.body;
+  var btn=document.getElementById('btnHideIdent');
+  if(body.classList.contains('hide-identities')){
+    body.classList.remove('hide-identities');
+    btn.textContent='Hide Identities';
+    btn.style.background='#e2e3e5';
+  } else {
+    body.classList.add('hide-identities');
+    btn.textContent='Show Identities';
+    btn.style.background='#cce5ff';
+  }
+}
 </script>
 </head>
 <body>
@@ -11528,8 +11544,10 @@ function toggleEmpty(){
   <div style="margin-top:8px;">
     <button onclick="toggleAll(true)"  style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:6px;">Expand All</button>
     <button onclick="toggleAll(false)" style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:12px;">Collapse All</button>
-    <button id="btnHideEmpty" onclick="toggleEmpty()" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e2e3e5;border:1px solid #adb5bd;border-radius:3px;"
+    <button id="btnHideEmpty" onclick="toggleEmpty()" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e2e3e5;border:1px solid #adb5bd;border-radius:3px;margin-right:6px;"
             title="Hide leaders, managers and identities with zero certification items in this window">Hide Empty</button>
+    <button id="btnHideIdent" onclick="toggleIdentities()" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e2e3e5;border:1px solid #adb5bd;border-radius:3px;"
+            title="Hide the individual identity list under each manager — manager counts (approved/revoked/pending) remain visible">Hide Identities</button>
   </div>
 </div>
 <div class="kpi-section">$kpiHtml</div>
