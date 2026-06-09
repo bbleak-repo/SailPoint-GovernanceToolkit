@@ -390,21 +390,12 @@ if ($needsAuditData -and $currentCampaigns.Count -gt 0) {
                 $certifications = @($certResult.Data)
             }
 
-            # Get access review items per certification
+            # Get access review items (cached). Pass the certs already fetched so the cache
+            # reuses them; items come back pre-wrapped for Group-SPAuditDecisions.
             $wrappedItems = [System.Collections.Generic.List[object]]::new()
-            foreach ($cert in $certifications) {
-                $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id `
-                    -CorrelationID $correlationID
-                if ($itemResult.Success -and $null -ne $itemResult.Data) {
-                    foreach ($item in @($itemResult.Data)) {
-                        $wrappedItems.Add(@{
-                            Item              = $item
-                            CertificationId   = [string]$cert.id
-                            CertificationName = if ($null -ne $cert.name) { [string]$cert.name } else { '' }
-                            CampaignName      = $campName
-                        })
-                    }
-                }
+            $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+            if ($cacheResult.Success) {
+                foreach ($wi in $cacheResult.Data) { $wrappedItems.Add($wi) }
             }
 
             # Build decision groups and metrics

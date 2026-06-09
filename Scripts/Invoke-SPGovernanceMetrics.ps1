@@ -383,20 +383,11 @@ if (-not $TrendOnly) {
                         $certifications = @($certResult.Data)
                     }
 
+                    # Cached items: pass the certs already fetched; items return pre-wrapped.
                     $wrappedItems = [System.Collections.Generic.List[object]]::new()
-                    foreach ($cert in $certifications) {
-                        $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id `
-                            -CorrelationID $correlationID
-                        if ($itemResult.Success -and $null -ne $itemResult.Data) {
-                            foreach ($item in @($itemResult.Data)) {
-                                $wrappedItems.Add(@{
-                                    Item              = $item
-                                    CertificationId   = [string]$cert.id
-                                    CertificationName = if ($null -ne $cert.name) { [string]$cert.name } else { '' }
-                                    CampaignName      = $campName
-                                })
-                            }
-                        }
+                    $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+                    if ($cacheResult.Success) {
+                        foreach ($wi in $cacheResult.Data) { $wrappedItems.Add($wi) }
                     }
 
                     $campaignMetadata = @{

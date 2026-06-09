@@ -438,25 +438,25 @@ foreach ($campaign in $campaigns) {
         Write-Host "      WARN: Could not retrieve certifications: $($certResult.Error)" -ForegroundColor Yellow
     }
 
-    # Certification items (wrapped with context)
+    # Certification items (cached). Fetched from ISC once per campaign, then served from
+    # disk/memory on later runs (COMPLETED campaigns are cached permanently). We pass the
+    # certs already fetched above so the cache doesn't re-enumerate them. The cache returns
+    # items pre-wrapped as @{Item;CertificationId;CertificationName;CampaignName}; the raw
+    # $allItems list (used below for revoked-identity extraction) is rebuilt from .Item.
     $wrappedAllItems = [System.Collections.Generic.List[object]]::new()
     $allItems        = [System.Collections.Generic.List[object]]::new()
-    foreach ($cert in $certifications) {
-        $certName   = if ($null -ne $cert.name) { $cert.name } else { '' }
-        $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
-        if ($itemResult.Success -and $null -ne $itemResult.Data) {
-            foreach ($rawItem in $itemResult.Data) {
-                $allItems.Add($rawItem)
-                $wrappedAllItems.Add(@{
-                    Item              = $rawItem
-                    CertificationId   = $cert.id
-                    CertificationName = $certName
-                    CampaignName      = $campName
-                })
-            }
+    $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+    if ($cacheResult.Success) {
+        foreach ($wi in $cacheResult.Data) {
+            $wrappedAllItems.Add($wi)
+            $allItems.Add($wi.Item)
         }
+        $srcLabel = if ($cacheResult.FromCache) { 'cache' } else { 'ISC' }
+        Write-Host "      $($allItems.Count) review items across $($certifications.Count) certification(s) [from $srcLabel]." -ForegroundColor DarkGray
     }
-    Write-Host "      $($allItems.Count) review items across $($certifications.Count) certification(s)." -ForegroundColor DarkGray
+    else {
+        Write-Host "      WARN: Could not retrieve items: $($cacheResult.Error)" -ForegroundColor Yellow
+    }
 
     # Campaign reports (API)
     $campaignReportRows = $null

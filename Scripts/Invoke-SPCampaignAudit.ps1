@@ -432,28 +432,27 @@ foreach ($campaign in $campaigns) {
             -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetCertifications' -CorrelationID $correlationID
     }
 
-    # --- Certification items (wrapped with context for categorization functions) ---
+    # --- Certification items (cached, wrapped with context for categorization functions) ---
+    # Fetched from ISC once per campaign, then served from disk/memory on later runs. The
+    # certs fetched above are passed through so the cache doesn't re-enumerate them. Items
+    # come back pre-wrapped as @{Item;CertificationId;CertificationName;CampaignName}; the raw
+    # $allItems list (used for revocation identity extraction below) is rebuilt from .Item.
     $wrappedAllItems = [System.Collections.Generic.List[object]]::new()
     $allItems        = [System.Collections.Generic.List[object]]::new()
-    foreach ($cert in $certifications) {
-        $certName   = if ($null -ne $cert.name) { $cert.name } else { '' }
-        $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
-        if ($itemResult.Success -and $null -ne $itemResult.Data) {
-            foreach ($rawItem in $itemResult.Data) {
-                $allItems.Add($rawItem)
-                $wrappedAllItems.Add(@{
-                    Item              = $rawItem
-                    CertificationId   = $cert.id
-                    CertificationName = $certName
-                    CampaignName      = $campName
-                })
-            }
+    $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+    if ($cacheResult.Success) {
+        foreach ($wi in $cacheResult.Data) {
+            $wrappedAllItems.Add($wi)
+            $allItems.Add($wi.Item)
         }
-        else {
-            Write-Host "    WARN: Could not retrieve items for certification $($cert.id): $($itemResult.Error)" -ForegroundColor Yellow
-        }
+        $srcLabel = if ($cacheResult.FromCache) { 'cache' } else { 'ISC' }
+        Write-Host "    Collected $($allItems.Count) review items across $($certifications.Count) certification(s) [from $srcLabel]." -ForegroundColor DarkGray
     }
-    Write-Host "    Collected $($allItems.Count) review items across $($certifications.Count) certification(s)." -ForegroundColor DarkGray
+    else {
+        Write-Host "    WARN: Could not retrieve items: $($cacheResult.Error)" -ForegroundColor Yellow
+        Write-SPLog -Message "Could not retrieve items for campaign ${campId}: $($cacheResult.Error)" `
+            -Severity WARN -Component 'Invoke-SPCampaignAudit' -Action 'GetItems' -CorrelationID $correlationID
+    }
 
     # --- Campaign report (CSV) ---
     $campaignReportRows = $null

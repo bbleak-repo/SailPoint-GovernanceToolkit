@@ -6608,6 +6608,12 @@ function Get-SPCachedCampaignItems {
     .PARAMETER NoCache
         When set, bypasses disk and memory cache and fetches fresh from ISC.
         Useful when you know the campaign just completed or data has changed.
+    .PARAMETER Certifications
+        Optional pre-fetched certification list for the campaign. When supplied (on a
+        cache MISS), it is used instead of an internal Get-SPAuditCertifications call --
+        avoiding a redundant fetch for callers that already have the certs in hand and
+        guaranteeing the cached cert set matches the caller's. MUST be the FULL cert set
+        for the campaign; a filtered subset would be cached as if complete.
     .PARAMETER CorrelationID
         Unique ID for log tracing.
     .OUTPUTS
@@ -6640,6 +6646,9 @@ function Get-SPCachedCampaignItems {
 
         [Parameter()]
         [switch]$NoCache,
+
+        [Parameter()]
+        [object[]]$Certifications,
 
         [Parameter()]
         [string]$CorrelationID
@@ -6759,13 +6768,20 @@ function Get-SPCachedCampaignItems {
     Write-SPLog -Message "Cache MISS: fetching items from ISC for campaign '$campName'" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
         -CorrelationID $CorrelationID
-    Write-Host "  Fetching certifications for '$campName'..." -ForegroundColor DarkGray
-
-    $certsResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
-    if (-not $certsResult.Success) {
-        return @{ Success=$false; Data=@(); CertCount=0; ItemCount=0; FromCache=$false; CacheFile=''; Error=$certsResult.Error }
+    # Use caller-supplied certs when provided; otherwise fetch them. This avoids a
+    # redundant Get-SPAuditCertifications call for callers that already enumerated the
+    # campaign's certs (e.g. for reviewer metrics) and keeps both cert sets identical.
+    if ($PSBoundParameters.ContainsKey('Certifications') -and $null -ne $Certifications) {
+        $certs = @($Certifications)
     }
-    $certs = @($certsResult.Data)
+    else {
+        Write-Host "  Fetching certifications for '$campName'..." -ForegroundColor DarkGray
+        $certsResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+        if (-not $certsResult.Success) {
+            return @{ Success=$false; Data=@(); CertCount=0; ItemCount=0; FromCache=$false; CacheFile=''; Error=$certsResult.Error }
+        }
+        $certs = @($certsResult.Data)
+    }
 
     $allItems   = [System.Collections.Generic.List[object]]::new()
     $certIdx    = 0

@@ -158,12 +158,12 @@ $audits = New-Object System.Collections.Generic.List[hashtable]
 foreach ($camp in $campaigns) {
     try {
         $wrapped = New-Object System.Collections.Generic.List[object]
-        $certR = Get-SPAuditCertifications -CampaignId $camp.id -CorrelationID $correlationID
-        foreach ($cert in @(if ($certR.Success) { $certR.Data } else { @() })) {
-            $itemR = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $correlationID
-            foreach ($item in @(if ($itemR.Success) { $itemR.Data } else { @() })) {
-                $wrapped.Add(@{ Item = $item; CertificationId = [string]$cert.id; CertificationName = [string]$cert.name; CampaignName = [string]$camp.name })
-            }
+        # Cached items: fetched from ISC once per campaign, then served from disk/memory on
+        # later runs. The cache enumerates the campaign's certs itself and returns items
+        # pre-wrapped as @{Item;CertificationId;CertificationName;CampaignName}.
+        $cacheResult = Get-SPCachedCampaignItems -Campaign $camp -CorrelationID $correlationID
+        foreach ($wi in @(if ($cacheResult.Success) { $cacheResult.Data } else { @() })) {
+            $wrapped.Add($wi)
         }
         $dg = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = ''; CompletionDate = '' }
         $audits.Add(@{ CampaignName = [string]$camp.name; CampaignId = [string]$camp.id; Decisions = $dg })
