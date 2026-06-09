@@ -21,6 +21,13 @@
 
 .PARAMETER DaysBack
     Number of days to include in the digest. Default: 7 (weekly).
+.PARAMETER CampaignName
+    Exact (case-insensitive) campaign name filter. Applied to both the current and prior
+    period so the week-over-week comparison stays apples-to-apples.
+.PARAMETER CampaignNameStartsWith
+    Campaign name begins with this prefix.
+.PARAMETER CampaignNameContains
+    Campaign name contains this substring (ISC 'co' filter).
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to Config\settings.json relative to toolkit root.
 .PARAMETER Token

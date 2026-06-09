@@ -441,6 +441,62 @@ deliveries.
 
 ## 5. Governance & reporting
 
+### Campaign filtering & the item cache (read this first)
+
+The six report scripts below — `Invoke-SPCampaignAudit`, `Invoke-SPGovernanceReport`,
+`Invoke-SPGovernanceMetrics`, `Invoke-SPWeeklyDigest`, `Invoke-SPAdaptiveReport`,
+`Invoke-SPReportDistribution` — share two behaviours worth understanding before you run them.
+
+**Campaign name filters.** Every one accepts the same three optional filters (on top of
+`-Status` / `-DaysBack` / date windows):
+
+| Filter | Match | Use when |
+|---|---|---|
+| `-CampaignName <name>` | Exact, case-insensitive | You know the full name. |
+| `-CampaignNameStartsWith <prefix>` | Name begins with the prefix | A stable prefix identifies a family (e.g. `Daily Attestation Manager Campaign - Tuesday`). |
+| `-CampaignNameContains <kw>` | Substring (ISC `co` filter) | Fuzzy / keyword search. |
+
+Precedence is **exact → starts-with → contains** (pass more than one and the most specific
+wins). Filters combine with the window, so `-CampaignNameContains 'Tuesday' -DaysBack 30`
+returns **every** Tuesday campaign in the last 30 days — narrow it (e.g.
+`-CampaignNameContains 'Tuesday, June 09'`) to target a single day. Omitting all three keeps
+the previous behaviour: every campaign in the status/date window.
+
+**The campaign item cache.** Pulling a campaign's review items from ISC is the slow part —
+one API call per certification, minutes for a large campaign. Each script fetches a campaign's
+items **once** and reuses them on every later run:
+
+- First run for a campaign logs `... [from ISC]` and writes `Audit\.cache\items-<id>.jsonl`.
+- Later runs — the *same* report or a *different* one — log `... [from cache]` and return in seconds.
+- **COMPLETED** campaigns are cached **permanently** (their data is sealed); **ACTIVE**
+  campaigns use a **30-minute TTL** so mid-day reviewer decisions aren't served stale;
+  `STAGED` / `ERROR` are never cached.
+
+The cache is keyed by campaign ID and shared across all six scripts, so the practical pattern
+is **pull once, report many**:
+
+```powershell
+# 1) First report pulls Tuesday's items from ISC and caches them (slow, once).
+.\Scripts\Invoke-SPCampaignAudit.ps1    -CampaignNameContains 'Tuesday, June 09' -OutputMode Both   # [from ISC]
+# 2) Every other report on the same campaign now reads the cache (fast).
+.\Scripts\Invoke-SPGovernanceReport.ps1 -CampaignNameContains 'Tuesday, June 09'                     # [from cache]
+.\Scripts\Invoke-SPWeeklyDigest.ps1     -CampaignNameContains 'Tuesday, June 09'                     # [from cache]
+```
+
+Across a week of **completed** daily campaigns (Mon–Sat), each is pulled once and every
+subsequent report for the rest of the week is a cache hit.
+
+**Force a fresh pull** (e.g. a campaign just completed and you want to re-cache it):
+
+```powershell
+Import-Module .\Modules\SP.Audit\SP.Audit.psd1 -Force -DisableNameChecking
+Clear-SPAuditItemCache                       # all campaigns
+Clear-SPAuditItemCache -CampaignId '<id>'    # just one
+```
+
+Cache location and the active-campaign TTL are configurable via `Audit.CachePath` and
+`Audit.CacheActiveTtlMinutes` in `settings.json`.
+
 ### `Invoke-SPGovernanceHealthCheck.ps1`
 **Purpose:** one consolidated health report across six dimensions — source aggregation,
 data quality, policy compliance, config drift, orphan accounts, campaign coverage gaps —
@@ -475,6 +531,7 @@ even after raw audit data is archived.
 | `-TrendDaysBack <n>` | History window for trends (default 180). |
 | `-TrendGranularity <p>` | `Daily`/`Weekly`/`Monthly` (default Weekly). |
 | `-AlertOnDecline` / `-AlertRecipients <emails>` | Notify when KPIs decline >5% over 4 periods. |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Filter captured campaigns by name (see *Campaign filtering & the item cache*). |
 | `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
 
 ```powershell
@@ -529,6 +586,7 @@ resolves bands, groups decisions by level. Generate-only by default.
 |---|---|
 | `-Status <list>` *(required)* | Campaign statuses to include. |
 | `-DaysBack <n>` | Look-back (default 30). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Filter campaigns by name (see *Campaign filtering & the item cache*). |
 | `-LeadershipDepth <n>` | Org-tree levels above reviewed identities (default 4). |
 | `-TargetBands <letters>` | Limit to specific bands (e.g. `@('B','C')`). |
 | `-SendReports` | Actually email each report (needs `Audit.Smtp.Enabled = true`). |
@@ -669,6 +727,7 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 | Parameter | Description |
 |---|---|
 | `-DaysBack <n>` | Window (default 7). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Filter campaigns by name — applied to **both** the current and prior period so the week-over-week comparison stays apples-to-apples (see *Campaign filtering & the item cache*). |
 | `-Skip*` switches | Drop any section (`-SkipIdentityRisk`, `-SkipReviewerAnalysis`, …). |
 | `-SendNotification` / `-NotifyRecipients` | Deliver via configured backends. |
 | `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
@@ -707,6 +766,7 @@ campaign/certification endpoints (no extra scopes).
 | `-Status <list>` | Campaign status filter (default `COMPLETED, ACTIVE`). |
 | `-DaysBack <n>` | Campaign window in days (default 90). |
 | `-CreatedAfter` / `-CreatedBefore <date>` | Explicit creation-date bounds (take precedence over `-DaysBack`). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Filter campaigns by name (see *Campaign filtering & the item cache*). |
 | `-OutputPath <dir>` | Destination (default `Audit\adaptive`). |
 | `-OutputMode` | `Console` (default) / `JSON` / `HTML` / `Both` — controls the run summary; the HTML report files are always written. |
 

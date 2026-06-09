@@ -44,6 +44,12 @@
     Lower bound on campaign creation date (ISO 8601). Takes precedence over -DaysBack.
 .PARAMETER CreatedBefore
     Upper bound on campaign creation date (ISO 8601).
+.PARAMETER CampaignName
+    Exact (case-insensitive) campaign name filter. Combined with the status/date window.
+.PARAMETER CampaignNameStartsWith
+    Campaign name begins with this prefix.
+.PARAMETER CampaignNameContains
+    Campaign name contains this substring (ISC 'co' filter).
 .PARAMETER OutputPath
     Directory for the generated HTML (default {Audit.OutputPath}\adaptive).
 .PARAMETER OutputMode

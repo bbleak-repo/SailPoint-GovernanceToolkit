@@ -24,6 +24,12 @@
     COMPLETING, COMPLETED. Required.
 .PARAMETER DaysBack
     Only include campaigns created within the last N days. Default: 30.
+.PARAMETER CampaignName
+    Exact (case-insensitive) campaign name filter. Combined with -Status and the DaysBack window.
+.PARAMETER CampaignNameStartsWith
+    Campaign name begins with this prefix.
+.PARAMETER CampaignNameContains
+    Campaign name contains this substring (ISC 'co' filter).
 .PARAMETER LeadershipDepth
     Maximum number of levels to walk above the reviewed identities when building
     the org tree. Default: 4.

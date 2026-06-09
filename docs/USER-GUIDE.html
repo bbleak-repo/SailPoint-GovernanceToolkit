@@ -2211,6 +2211,46 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 </div>
 <div id="section-cli-governance-reporting" class="report-section" style="display:none">
 <h2>5. Governance &amp; reporting</h2>
+<h3 id="campaign-filtering-the-item-cache-read-this-first">Campaign filtering &amp; the item cache (read this first)</h3>
+<p>The six report scripts below — <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPGovernanceReport</code>, <code>Invoke-SPGovernanceMetrics</code>, <code>Invoke-SPWeeklyDigest</code>, <code>Invoke-SPAdaptiveReport</code>, <code>Invoke-SPReportDistribution</code> — share two behaviours worth understanding before you run them.</p>
+<p><strong>Campaign name filters.</strong> Every one accepts the same three optional filters (on top of <code>-Status</code> / <code>-DaysBack</code> / date windows):</p>
+<table>
+<thead><tr>
+<th>Filter</th>
+<th>Match</th>
+<th>Use when</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignName &lt;name&gt;</code></td>
+<td>Exact, case-insensitive</td>
+<td>You know the full name.</td>
+</tr>
+<tr>
+<td><code>-CampaignNameStartsWith &lt;prefix&gt;</code></td>
+<td>Name begins with the prefix</td>
+<td>A stable prefix identifies a family (e.g. <code>Daily Attestation Manager Campaign - Tuesday</code>).</td>
+</tr>
+<tr>
+<td><code>-CampaignNameContains &lt;kw&gt;</code></td>
+<td>Substring (ISC <code>co</code> filter)</td>
+<td>Fuzzy / keyword search.</td>
+</tr>
+</tbody></table>
+<p>Precedence is <strong>exact → starts-with → contains</strong> (pass more than one and the most specific wins). Filters combine with the window, so <code>-CampaignNameContains 'Tuesday' -DaysBack 30</code> returns <strong>every</strong> Tuesday campaign in the last 30 days — narrow it (e.g. <code>-CampaignNameContains 'Tuesday, June 09'</code>) to target a single day. Omitting all three keeps the previous behaviour: every campaign in the status/date window.</p>
+<p><strong>The campaign item cache.</strong> Pulling a campaign's review items from ISC is the slow part — one API call per certification, minutes for a large campaign. Each script fetches a campaign's items <strong>once</strong> and reuses them on every later run:</p>
+<ul><li>First run for a campaign logs <code>... [from ISC]</code> and writes <code>Audit\.cache\items-&lt;id&gt;.jsonl</code>.</li><li>Later runs — the <em>same</em> report or a <em>different</em> one — log <code>... [from cache]</code> and return in seconds.</li><li><strong>COMPLETED</strong> campaigns are cached <strong>permanently</strong> (their data is sealed); <strong>ACTIVE</strong> campaigns use a <strong>30-minute TTL</strong> so mid-day reviewer decisions aren't served stale; <code>STAGED</code> / <code>ERROR</code> are never cached.</li></ul>
+<p>The cache is keyed by campaign ID and shared across all six scripts, so the practical pattern is <strong>pull once, report many</strong>:</p>
+<pre><code># 1) First report pulls Tuesday's items from ISC and caches them (slow, once).
+.\Scripts\Invoke-SPCampaignAudit.ps1    -CampaignNameContains 'Tuesday, June 09' -OutputMode Both   # [from ISC]
+# 2) Every other report on the same campaign now reads the cache (fast).
+.\Scripts\Invoke-SPGovernanceReport.ps1 -CampaignNameContains 'Tuesday, June 09'                     # [from cache]
+.\Scripts\Invoke-SPWeeklyDigest.ps1     -CampaignNameContains 'Tuesday, June 09'                     # [from cache]</code></pre>
+<p>Across a week of <strong>completed</strong> daily campaigns (Mon–Sat), each is pulled once and every subsequent report for the rest of the week is a cache hit.</p>
+<p><strong>Force a fresh pull</strong> (e.g. a campaign just completed and you want to re-cache it):</p>
+<pre><code>Import-Module .\Modules\SP.Audit\SP.Audit.psd1 -Force -DisableNameChecking
+Clear-SPAuditItemCache                       # all campaigns
+Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
+<p>Cache location and the active-campaign TTL are configurable via <code>Audit.CachePath</code> and <code>Audit.CacheActiveTtlMinutes</code> in <code>settings.json</code>.</p>
 <h3 id="invoke-spgovernancehealthcheck-ps1"><code>Invoke-SPGovernanceHealthCheck.ps1</code></h3>
 <p><strong>Purpose:</strong> one consolidated health report across six dimensions — source aggregation, data quality, policy compliance, config drift, orphan accounts, campaign coverage gaps — with a pass/fail/warn per check and an overall grade. <strong>When to use:</strong> routine governance posture checks; before audits.</p>
 <table>
@@ -2275,6 +2315,10 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <tr>
 <td><code>-AlertOnDecline</code> / <code>-AlertRecipients &lt;emails&gt;</code></td>
 <td>Notify when KPIs decline &gt;5% over 4 periods.</td>
+</tr>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Filter captured campaigns by name (see <em>Campaign filtering &amp; the item cache</em>).</td>
 </tr>
 <tr>
 <td><code>-OutputMode</code></td>
@@ -2357,6 +2401,10 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <tr>
 <td><code>-DaysBack &lt;n&gt;</code></td>
 <td>Look-back (default 30).</td>
+</tr>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Filter campaigns by name (see <em>Campaign filtering &amp; the item cache</em>).</td>
 </tr>
 <tr>
 <td><code>-LeadershipDepth &lt;n&gt;</code></td>
@@ -2583,6 +2631,10 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <td>Window (default 7).</td>
 </tr>
 <tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Filter campaigns by name — applied to <strong>both</strong> the current and prior period so the week-over-week comparison stays apples-to-apples (see <em>Campaign filtering &amp; the item cache</em>).</td>
+</tr>
+<tr>
 <td><code>-Skip*</code> switches</td>
 <td>Drop any section (<code>-SkipIdentityRisk</code>, <code>-SkipReviewerAnalysis</code>, …).</td>
 </tr>
@@ -2634,6 +2686,10 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <tr>
 <td><code>-CreatedAfter</code> / <code>-CreatedBefore &lt;date&gt;</code></td>
 <td>Explicit creation-date bounds (take precedence over <code>-DaysBack</code>).</td>
+</tr>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Filter campaigns by name (see <em>Campaign filtering &amp; the item cache</em>).</td>
 </tr>
 <tr>
 <td><code>-OutputPath &lt;dir&gt;</code></td>

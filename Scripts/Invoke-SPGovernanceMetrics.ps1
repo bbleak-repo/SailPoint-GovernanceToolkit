@@ -28,6 +28,12 @@
     Source IDs to scope analytics. If omitted, uses configured sources.
 .PARAMETER DaysBack
     Campaign lookback window in days for current analytics. Default 90.
+.PARAMETER CampaignName
+    Exact (case-insensitive) campaign name filter. Combined with the DaysBack window.
+.PARAMETER CampaignNameStartsWith
+    Campaign name begins with this prefix.
+.PARAMETER CampaignNameContains
+    Campaign name contains this substring (ISC 'co' filter).
 .PARAMETER CaptureOnly
     Save metrics without generating trend report.
 .PARAMETER TrendOnly
