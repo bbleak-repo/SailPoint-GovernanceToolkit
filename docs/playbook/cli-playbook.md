@@ -542,6 +542,70 @@ resolves bands, groups decisions by level. Generate-only by default.
 ```
 **Related GUI:** Governance tab (report generation).
 
+### `Invoke-SPHierarchicalReport.ps1`
+**Purpose:** generates **hierarchical leadership drill-down HTML reports** — one self-contained
+file per leader at (or above) the specified org level. Each report shows the full certification
+rollup for that leader's subtree as collapsible sections: VP expands to Directors, Directors
+to Managers, Managers to certified identities, identities to entitlement-level decisions.
+All decision counts bubble upward so each level always shows its subtree totals.
+**When to use:** after a certification period closes, to give each executive/director a
+single file showing everything that happened under them — approved, revoked, and pending.
+Also useful as a spot-check at any point during an active campaign window.
+
+| Parameter | Description |
+|---|---|
+| `-DaysBack <n>` | Campaign look-back window (default 30). |
+| `-CampaignNameContains <str>` | Filter campaigns by name substring (e.g. `'Daily Attestation'`). |
+| `-MinReportLevel <0-5>` | Minimum org level to generate a file for. `0`=all certifiers, `1`=directors+ (default), `2`=VPs+. |
+| `-OrgDepth <n>` | Levels to walk up the manager chain (default 5). |
+| `-OutputPath <dir>` | Output root (default `.\Audit\HierarchicalReports`). |
+| `-ReportTitle <str>` | Title shown in every report header. |
+| `-OutputMode` | `Console`/`JSON`/`Both`. |
+| `-WhatIf` | Preview: shows campaign/cert count without generating files. |
+
+```powershell
+# Preview first — see how many campaigns and certs will be included
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -DaysBack 30 -WhatIf
+
+# Generate director-and-above reports for last 30 days (default)
+.\Scripts\Invoke-SPHierarchicalReport.ps1
+
+# Scope to a specific campaign type, generate VP-and-above only
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -CampaignNameContains 'Daily Attestation' -MinReportLevel 2
+
+# Catch-up: last 90 days, all levels
+.\Scripts\Invoke-SPHierarchicalReport.ps1 -DaysBack 90 -MinReportLevel 0
+```
+
+**Output structure:** each run creates a timestamped subdirectory so multiple runs never
+overwrite each other:
+```
+Audit\HierarchicalReports\
+  run-20260609-041423\
+    hierarchy-report-James_Smith.html    ← VP-level: full org subtree (699 KB)
+    hierarchy-report-Mary_Johnson.html
+    hierarchy-report-John_Jones.html
+    ...
+```
+
+**HTML report controls** (all in the report header bar):
+
+| Button | Behaviour |
+|---|---|
+| **Expand All** | Open every collapsible section |
+| **Collapse All** | Collapse everything to root-level summaries |
+| **Hide Empty** (turns yellow) | Hide any node whose subtree has zero decisions in this window — removes org-chart noise |
+| **Hide Identities** (turns blue) | Hide individual identity rows; manager-level counts (approved/revoked/pending) stay visible — executive summary view |
+
+Combining **Hide Empty + Hide Identities** gives a clean count-only view of the org
+hierarchy with inactive managers suppressed — ideal for sharing upward.
+
+**Required scope:** `sp:search:read` (identity resolution for org tree walks).
+The `reviewer.id` field on certification objects must be populated — this is standard
+for all ISC certifications.
+
+**Related GUI:** Governance tab → Hierarchical Drill-Down Reports.
+
 ### Band Classification Guide
 
 The leadership report system classifies identities into **bands** based on their

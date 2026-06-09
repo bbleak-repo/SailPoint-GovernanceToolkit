@@ -129,8 +129,35 @@ manage the **disconnected-app** pipeline.
 | **Export Dashboard Data** (`BtnExportDashboardData`) | Export the dashboard data set. |
 | **Open Folder** / **Refresh Reports** | Open the `Reports\` folder / reload the report list. |
 
+**Leadership Reports** (flat, per-band): `BtnDistributionPreview` / `BtnDistributionGenerate` /
+`BtnDistributionSend` — generates per-leader HTML files grouped by org band and optionally
+emails each leader their report.
+
+**Hierarchical Drill-Down Reports** (new): generates one self-contained HTML report per
+leader at or above the selected level, showing their full org subtree with collapsible
+sections and decision counts that aggregate upward.
+
+| Control | Description |
+|---|---|
+| **Days Back** (`TxtHierDaysBack`, default 30) | Look-back window for campaign selection. |
+| **Campaign Filter** (`TxtHierCampaignContains`) | Optional substring filter (e.g. `Daily Attestation`). |
+| **Min Level** (`CboHierMinLevel`) | Directors+ (default), VPs+, or All Certifiers. |
+| **Preview** (`BtnHierPreview`) | Instantly shows matching campaign count — no files written. |
+| **Generate Drill-Down Reports** (`BtnHierGenerate`) | Runs in background; status label updates on completion. |
+
+Reports are written to `Audit\HierarchicalReports\run-YYYYMMDD-HHmmss\`. Each generated
+HTML report has four controls in its header bar:
+
+| Button | Effect |
+|---|---|
+| Expand All | Open every collapsible section |
+| Collapse All | Collapse to root-level summaries |
+| **Hide Empty** | Hide nodes with zero decisions in the window (turns yellow when active) |
+| **Hide Identities** | Show org hierarchy + counts only, hide individual names (turns blue when active) |
+
 **Related CLI:** `Invoke-SPGovernanceHealthCheck.ps1`, `Invoke-SPGovernanceReport.ps1`,
-`Invoke-SPGovernanceMetrics.ps1`, `Invoke-SPDataQualityReport.ps1`.
+`Invoke-SPGovernanceMetrics.ps1`, `Invoke-SPDataQualityReport.ps1`,
+`Invoke-SPHierarchicalReport.ps1`.
 
 ---
 
