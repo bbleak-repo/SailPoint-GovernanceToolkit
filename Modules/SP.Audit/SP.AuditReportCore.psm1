@@ -181,8 +181,30 @@ function Group-SPAuditDecisions {
             if ($CampaignMetadata.ContainsKey('CompletionDate')) { $campaignCompletionDate = [string]$CampaignMetadata['CompletionDate'] }
         }
 
-        # Decision and remediation status
-        $decision = if ($null -ne $rawItem.decision) { [string]$rawItem.decision } else { '' }
+        # Decision and remediation status.
+        # ISC returns 'decision' as a flat string ('APPROVE'/'REVOKE') on standard tenants.
+        # Some ISC versions/tenants return past-tense ('APPROVED'/'REVOKED'), the value
+        # 'CERTIFY' instead of 'APPROVE', or a nested object like {value:'APPROVE'}.
+        # For ACTIVE certifications where the reviewer has not yet signed off, 'decision'
+        # is null even if the manager clicked approve in the UI -- ISC only commits
+        # item-level decisions to the API after the reviewer submits/signs the cert.
+        $decision = ''
+        if ($null -ne $rawItem.PSObject.Properties['decision'] -and $null -ne $rawItem.decision) {
+            $rawDecision = $rawItem.decision
+            if ($rawDecision -is [string]) {
+                $decision = $rawDecision
+            }
+            else {
+                # Nested object: try common property names for the decision value
+                foreach ($prop in @('value', 'decision', 'type', 'name')) {
+                    if ($null -ne $rawDecision.PSObject.Properties[$prop] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$rawDecision.$prop)) {
+                        $decision = [string]$rawDecision.$prop
+                        break
+                    }
+                }
+            }
+        }
         $remediationStatus = 'N/A'
         $remediationDate   = ''
         if ($decision.ToUpperInvariant() -eq 'REVOKE') {
@@ -226,10 +248,20 @@ function Group-SPAuditDecisions {
             CampaignCompletionDate = $campaignCompletionDate
         }
 
+        # Normalise decision variants to the three canonical buckets.
+        # APPROVE / APPROVED / CERTIFY  → Approved  (CERTIFY used by some ISC versions)
+        # REVOKE  / REVOKED  / DENY / REJECT / EXCEPTION → Revoked
+        # anything else (null/empty)    → Pending
         switch ($decision.ToUpperInvariant()) {
-            'APPROVE' { $approved.Add($out) }
-            'REVOKE'  { $revoked.Add($out)  }
-            default   { $pending.Add($out)  }
+            'APPROVE'   { $approved.Add($out) }
+            'APPROVED'  { $approved.Add($out) }
+            'CERTIFY'   { $approved.Add($out) }
+            'REVOKE'    { $revoked.Add($out)  }
+            'REVOKED'   { $revoked.Add($out)  }
+            'DENY'      { $revoked.Add($out)  }
+            'REJECT'    { $revoked.Add($out)  }
+            'EXCEPTION' { $revoked.Add($out)  }
+            default     { $pending.Add($out)  }
         }
     }
 

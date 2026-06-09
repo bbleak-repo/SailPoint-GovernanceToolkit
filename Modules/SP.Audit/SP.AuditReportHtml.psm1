@@ -1454,39 +1454,94 @@ function Export-SPAuditHtml {
         $totalRevoked  = 0
         $totalPending  = 0
 
+        # Build per-campaign summary rows for the breakdown table
+        $perCampaignRows = ''
+        $rowIdx = 0
         foreach ($audit in $CampaignAudits) {
             if ($null -eq $audit) { continue }
+            $rowIdx++
             $d = if ($audit.ContainsKey('Decisions') -and $null -ne $audit['Decisions']) { $audit['Decisions'] } else { $null }
+            $campApproved = 0; $campRevoked = 0; $campPending = 0
             if ($null -ne $d) {
-                $totalApproved += if ($null -ne $d['Approved']) { @($d['Approved']).Count } else { 0 }
-                $totalRevoked  += if ($null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
-                $totalPending  += if ($null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
+                $campApproved = if ($null -ne $d['Approved']) { @($d['Approved']).Count } else { 0 }
+                $campRevoked  = if ($null -ne $d['Revoked'])  { @($d['Revoked']).Count  } else { 0 }
+                $campPending  = if ($null -ne $d['Pending'])  { @($d['Pending']).Count  } else { 0 }
+                $totalApproved += $campApproved
+                $totalRevoked  += $campRevoked
+                $totalPending  += $campPending
             }
+
+            $cName    = if ($audit.ContainsKey('CampaignName') -and $null -ne $audit['CampaignName']) { [string]$audit['CampaignName'] } else { "Campaign $rowIdx" }
+            $cStatus  = if ($audit.ContainsKey('Status')   -and $null -ne $audit['Status'])   { [string]$audit['Status']   } else { '' }
+            $cCreated = if ($audit.ContainsKey('Created')  -and $null -ne $audit['Created'])  { [string]$audit['Created']  } else { '' }
+
+            # Show just the date portion for readability
+            $cDate = if ($cCreated.Length -ge 10) { $cCreated.Substring(0, 10) } else { $cCreated }
+
+            # Status badge color
+            $statusColor = switch ($cStatus.ToUpperInvariant()) {
+                'COMPLETED'  { '#339933' }
+                'ACTIVE'     { '#1565c0' }
+                'STAGED'     { '#e65100' }
+                default      { '#777777' }
+            }
+
+            # For ACTIVE campaigns with zero approvals, add a note explaining ISC's
+            # certification sign-off model: item decisions are committed to the API only
+            # after the reviewer submits/signs their certification. Managers who have
+            # approved items but not yet signed off will show 0 approved here.
+            $approvedDisplay = "$campApproved"
+            $activeNote = ''
+            if ($cStatus.ToUpperInvariant() -eq 'ACTIVE' -and $campApproved -eq 0 -and $campPending -gt 0) {
+                $activeNote = ' <span style="font-size:10px;color:#666;font-style:italic;">(campaign active &mdash; approvals shown after reviewer sign-off)</span>'
+            }
+
+            $rowBg = if ($rowIdx % 2 -eq 0) { 'background:#f9f9f9;' } else { '' }
+            $perCampaignRows += @"
+<tr style="$rowBg">
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; max-width:320px; word-wrap:break-word;">$([System.Net.WebUtility]::HtmlEncode($cName))</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; white-space:nowrap;">$([System.Net.WebUtility]::HtmlEncode($cDate))</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:11px; white-space:nowrap;"><span style="background:$statusColor;color:#fff;padding:2px 6px;border-radius:3px;">$([System.Net.WebUtility]::HtmlEncode($cStatus))</span></td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#339933; font-weight:bold;">$approvedDisplay$activeNote</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#CC3333; font-weight:bold;">$campRevoked</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#FF8800; font-weight:bold;">$campPending</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; font-weight:bold;">$($campApproved + $campRevoked + $campPending)</td>
+</tr>
+"@
         }
 
         $tocHtml = "<ul style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:14px; line-height:1.8;"">`n" + ($tocEntries -join "`n") + "`n</ul>"
 
         $summaryHtml = @"
 <h1 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; font-size:24px; margin-bottom:8px;">SailPoint Campaign Audit - Combined Report</h1>
-<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:20px;">Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt))</p>
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:20px;">Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; $($CampaignAudits.Count) campaign(s)</p>
 
-<h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; font-size:18px;">Cross-Campaign Summary</h2>
-<table style="width:auto; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:24px;">
+<h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; font-size:18px;">Per-Campaign Breakdown</h2>
+<table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:24px;">
     <thead>
         <tr>
-            <th style="background:#34495e; color:#fff; padding:8px 20px; text-align:left;">Metric</th>
-            <th style="background:#34495e; color:#fff; padding:8px 20px; text-align:right;">Count</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:left;">Campaign</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:left;">Created</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:left;">Status</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:right;">Approved</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:right;">Revoked</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:right;">Pending</th>
+            <th style="background:#34495e; color:#fff; padding:8px 12px; text-align:right;">Total</th>
         </tr>
     </thead>
     <tbody>
-        <tr><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0;">Campaigns</td><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0; text-align:right; font-weight:bold;">$($CampaignAudits.Count)</td></tr>
-        <tr style="background:#f9f9f9;"><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0;">Total Approved</td><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0; text-align:right; color:#339933; font-weight:bold;">$totalApproved</td></tr>
-        <tr><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0;">Total Revoked</td><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0; text-align:right; color:#CC3333; font-weight:bold;">$totalRevoked</td></tr>
-        <tr style="background:#f9f9f9;"><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0;">Total Pending</td><td style="padding:7px 20px; border-bottom:1px solid #e0e0e0; text-align:right; color:#FF8800; font-weight:bold;">$totalPending</td></tr>
+        $perCampaignRows
+        <tr style="background:#e8eaf0; font-weight:bold; border-top:2px solid #34495e;">
+            <td style="padding:8px 12px;" colspan="3">TOTAL ($($CampaignAudits.Count) campaigns)</td>
+            <td style="padding:8px 12px; text-align:right; color:#339933;">$totalApproved</td>
+            <td style="padding:8px 12px; text-align:right; color:#CC3333;">$totalRevoked</td>
+            <td style="padding:8px 12px; text-align:right; color:#FF8800;">$totalPending</td>
+            <td style="padding:8px 12px; text-align:right;">$($totalApproved + $totalRevoked + $totalPending)</td>
+        </tr>
     </tbody>
 </table>
 
-<h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; font-size:18px;">Table of Contents</h2>
+<h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; font-size:18px;">Campaign Details</h2>
 $tocHtml
 
 <hr style="border:none; border-top:1px solid #dee2e6; margin:28px 0;" />
