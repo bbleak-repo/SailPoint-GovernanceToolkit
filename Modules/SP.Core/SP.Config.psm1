@@ -90,7 +90,7 @@ function Get-SPConfigDefaults {
         Audit = @{
             OutputPath               = '.\Audit'
             CachePath                = '.\Audit\.cache'
-            CacheActiveTtlMinutes    = 30
+            CacheActiveTtlMinutes    = 180
             AccountCacheTtlMinutes   = 1440
             DefaultDaysBack          = 30
             DefaultIdentityEventDays = 2
@@ -453,7 +453,7 @@ function Get-SPConfigTemplate {
         Audit = [ordered]@{
             OutputPath               = '.\Audit'
             CachePath                = '.\Audit\.cache'
-            CacheActiveTtlMinutes    = 30
+            CacheActiveTtlMinutes    = 180
             AccountCacheTtlMinutes   = 1440
             DefaultDaysBack          = 30
             DefaultIdentityEventDays = 2

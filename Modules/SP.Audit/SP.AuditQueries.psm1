@@ -37,6 +37,51 @@ $script:_AccountDiskLoaded = $false
 
 #region Internal Functions
 
+function Get-SPAuditCacheDir {
+    # Returns the ABSOLUTE cache directory, stable regardless of the caller's current
+    # directory. Honors Audit.CachePath (or Audit.OutputPath\.cache); a relative value is
+    # anchored to the toolkit root -- this module lives at <root>\Modules\SP.Audit, so
+    # $PSScriptRoot\..\.. is <root> -- matching the path convention used elsewhere in the
+    # toolkit (vault, snapshots, supplement). Without this, launching a script from a
+    # subdirectory (e.g. Scripts\) would scatter the cache to <cwd>\Audit\.cache and break
+    # reuse across runs.
+    $dir = $null
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit']) {
+            if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
+                $dir = [string]$cfg.Audit.CachePath
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $dir = Join-Path ([string]$cfg.Audit.OutputPath) '.cache'
+            }
+        }
+    } catch { }
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = '.\Audit\.cache' }
+
+    if (-not [System.IO.Path]::IsPathRooted($dir)) {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $dir = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $dir))
+    }
+    return $dir
+}
+
+function Get-SPAuditActiveCacheTtl {
+    # Active-campaign cache TTL in minutes. Honors Audit.CacheActiveTtlMinutes; default 180
+    # (3h). COMPLETED campaigns ignore this (cached permanently); it only bounds ACTIVE ones.
+    $ttl = 180
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+            $null -ne $cfg.Audit.PSObject.Properties['CacheActiveTtlMinutes'] -and
+            $null -ne $cfg.Audit.CacheActiveTtlMinutes) {
+            $ttl = [int]$cfg.Audit.CacheActiveTtlMinutes
+        }
+    } catch { }
+    return $ttl
+}
+
 function Get-SPAuditSourceName {
     <#
     .SYNOPSIS
@@ -1433,23 +1478,13 @@ function Resolve-SPAuditIdentityAccounts {
     $acctCacheFile = $null
     $acctTtlMin    = 1440   # 24h default; account attributes are stable
     try {
+        $acctCacheFile = Join-Path (Get-SPAuditCacheDir) 'accounts.jsonl'
         $cfg = Get-SPConfig
-        $cacheDir = $null
-        if ($null -ne $cfg.PSObject.Properties['Audit']) {
-            if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
-                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
-                $cacheDir = [string]$cfg.Audit.CachePath
-            }
-            elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
-                $cacheDir = Join-Path $cfg.Audit.OutputPath '.cache'
-            }
-            if ($null -ne $cfg.Audit.PSObject.Properties['AccountCacheTtlMinutes'] -and
-                $null -ne $cfg.Audit.AccountCacheTtlMinutes) {
-                $acctTtlMin = [int]$cfg.Audit.AccountCacheTtlMinutes
-            }
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+            $null -ne $cfg.Audit.PSObject.Properties['AccountCacheTtlMinutes'] -and
+            $null -ne $cfg.Audit.AccountCacheTtlMinutes) {
+            $acctTtlMin = [int]$cfg.Audit.AccountCacheTtlMinutes
         }
-        if ([string]::IsNullOrWhiteSpace($cacheDir)) { $cacheDir = '.\Audit\.cache' }
-        $acctCacheFile = Join-Path $cacheDir 'accounts.jsonl'
     } catch { $acctCacheFile = $null }
 
     # --- Warm the in-memory cache from disk once per session ------------------
@@ -6717,8 +6752,9 @@ function Get-SPCachedCampaignItems {
         Directory for cache files. Defaults to Audit.CachePath from config,
         falling back to '{OutputPath}\.cache'.
     .PARAMETER TtlMinutes
-        Cache TTL for non-COMPLETED campaigns. Default: 30.
-        Set to 0 to always refresh ACTIVE campaign data.
+        Cache TTL (minutes) for non-COMPLETED (ACTIVE) campaigns. When omitted (-1) the
+        value is read from config (Audit.CacheActiveTtlMinutes, default 180 = 3h).
+        Set to 0 to always refresh ACTIVE campaign data. COMPLETED campaigns ignore this.
     .PARAMETER NoCache
         When set, bypasses disk and memory cache and fetches fresh from ISC.
         Useful when you know the campaign just completed or data has changed.
@@ -6756,7 +6792,7 @@ function Get-SPCachedCampaignItems {
         [string]$CachePath,
 
         [Parameter()]
-        [int]$TtlMinutes = 30,
+        [int]$TtlMinutes = -1,
 
         [Parameter()]
         [switch]$NoCache,
@@ -6781,26 +6817,20 @@ function Get-SPCachedCampaignItems {
     $isCacheable = $status.ToUpperInvariant() -notin @('STAGED', 'ERROR')
 
     # ---------------------------------------------------------------------------
-    # Resolve cache directory
+    # Resolve cache directory. An explicit -CachePath is honored as-is; otherwise use the
+    # toolkit-root-anchored default so the cache is the same place regardless of the
+    # caller's current directory.
     # ---------------------------------------------------------------------------
-    $effectiveCachePath = $CachePath
-    if ([string]::IsNullOrWhiteSpace($effectiveCachePath)) {
-        try {
-            $cfg = Get-SPConfig
-            if ($null -ne $cfg.PSObject.Properties['Audit'] -and
-                $null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
-                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
-                $effectiveCachePath = $cfg.Audit.CachePath
-            }
-            elseif ($null -ne $cfg.PSObject.Properties['Audit'] -and
-                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
-                $effectiveCachePath = Join-Path $cfg.Audit.OutputPath '.cache'
-            }
-        } catch { }
-        if ([string]::IsNullOrWhiteSpace($effectiveCachePath)) {
-            $effectiveCachePath = '.\Audit\.cache'
-        }
+    if (-not [string]::IsNullOrWhiteSpace($CachePath)) {
+        $effectiveCachePath = $CachePath
     }
+    else {
+        $effectiveCachePath = Get-SPAuditCacheDir
+    }
+
+    # Active-campaign TTL: explicit -TtlMinutes wins; otherwise read config
+    # (Audit.CacheActiveTtlMinutes, default 180). COMPLETED campaigns ignore it entirely.
+    $effectiveTtl = if ($TtlMinutes -ge 0) { $TtlMinutes } else { Get-SPAuditActiveCacheTtl }
 
     $safeCampId   = $campId -replace '[^A-Za-z0-9_\-]', '_'
     $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
@@ -6812,7 +6842,7 @@ function Get-SPCachedCampaignItems {
     if (-not $NoCache -and $script:_ItemMemCache.ContainsKey($campId)) {
         $memEntry = $script:_ItemMemCache[$campId]
         $memValid = $memEntry.IsPermanent -or
-                    ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $TtlMinutes
+                    ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $effectiveTtl
         if ($memValid) {
             Write-SPLog -Message "Cache HIT (memory): campaign '$campName' ($($memEntry.Items.Count) items)" `
                 -Severity DEBUG -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
@@ -6837,7 +6867,7 @@ function Get-SPCachedCampaignItems {
             $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
             $cachedAt  = [datetime]::Parse($meta.CachedAt)
             $diskValid = $meta.IsPermanent -or
-                         ((Get-Date) - $cachedAt).TotalMinutes -lt $TtlMinutes
+                         ((Get-Date) - $cachedAt).TotalMinutes -lt $effectiveTtl
             if ($diskValid) {
                 Write-SPLog -Message "Cache HIT (disk): campaign '$campName' ($($meta.ItemCount) items, cached $($cachedAt.ToString('yyyy-MM-dd HH:mm')))" `
                     -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
@@ -7060,17 +7090,7 @@ function Clear-SPAuditItemCache {
 
     if (-not $MemoryOnly) {
         try {
-            $cfg = Get-SPConfig
-            $cachePath = '.\Audit\.cache'
-            if ($null -ne $cfg.PSObject.Properties['Audit']) {
-                if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
-                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
-                    $cachePath = $cfg.Audit.CachePath
-                }
-                elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
-                    $cachePath = Join-Path $cfg.Audit.OutputPath '.cache'
-                }
-            }
+            $cachePath = Get-SPAuditCacheDir
             if (Test-Path $cachePath) {
                 $pattern = if ([string]::IsNullOrWhiteSpace($CampaignId)) { 'items-*.jsonl' } else {
                     $safId = $CampaignId -replace '[^A-Za-z0-9_\-]','_'
@@ -7111,18 +7131,7 @@ function Clear-SPAuditAccountCache {
 
     if (-not $MemoryOnly) {
         try {
-            $cfg = Get-SPConfig
-            $cacheDir = '.\Audit\.cache'
-            if ($null -ne $cfg.PSObject.Properties['Audit']) {
-                if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
-                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
-                    $cacheDir = [string]$cfg.Audit.CachePath
-                }
-                elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
-                    $cacheDir = Join-Path $cfg.Audit.OutputPath '.cache'
-                }
-            }
-            $acctFile = Join-Path $cacheDir 'accounts.jsonl'
+            $acctFile = Join-Path (Get-SPAuditCacheDir) 'accounts.jsonl'
             if (Test-Path $acctFile) {
                 Remove-Item $acctFile -Force -ErrorAction SilentlyContinue
                 Write-Host "  Account disk cache cleared." -ForegroundColor DarkGray

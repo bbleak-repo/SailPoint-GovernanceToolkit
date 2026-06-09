@@ -469,8 +469,8 @@ items **once** and reuses them on every later run:
 - First run for a campaign logs `... [from ISC]` and writes `Audit\.cache\items-<id>.jsonl`.
 - Later runs — the *same* report or a *different* one — log `... [from cache]` and return in seconds.
 - **COMPLETED** campaigns are cached **permanently** (their data is sealed); **ACTIVE**
-  campaigns use a **30-minute TTL** so mid-day reviewer decisions aren't served stale;
-  `STAGED` / `ERROR` are never cached.
+  campaigns use a TTL (`Audit.CacheActiveTtlMinutes`, **default 180 = 3h**) so in-progress
+  reviewer decisions aren't served stale indefinitely; `STAGED` / `ERROR` are never cached.
 
 The cache is keyed by campaign ID and shared across all six scripts, so the practical pattern
 is **pull once, report many**:
@@ -495,7 +495,9 @@ Clear-SPAuditItemCache -CampaignId '<id>'    # just one
 ```
 
 Cache location and the active-campaign TTL are configurable via `Audit.CachePath` and
-`Audit.CacheActiveTtlMinutes` in `settings.json`.
+`Audit.CacheActiveTtlMinutes` in `settings.json`. A relative `CachePath` is anchored to the
+**toolkit root**, so the cache lands in the same place no matter which directory you launch
+the script from (running from `Scripts\` no longer scatters it to `Scripts\Audit\.cache`).
 
 **Three things that make long runs survivable.** A big campaign (thousands of items /
 identities) can take many minutes, so the report scripts now:
