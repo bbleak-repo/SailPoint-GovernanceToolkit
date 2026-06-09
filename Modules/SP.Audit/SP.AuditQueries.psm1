@@ -6566,6 +6566,348 @@ function Test-SPSourceOnboardingReadiness {
 
 #endregion
 
+#region Campaign Item Cache (P18-01)
+# ---------------------------------------------------------------------------
+# Session-scoped in-memory cache.  Survives multiple calls within one PS session;
+# cleared on module reload.  Backed by the disk cache for cross-session reuse.
+# ---------------------------------------------------------------------------
+$script:_ItemMemCache = @{}   # key: campaignId -> @{Items; CachedAt; Status}
+
+function Get-SPCachedCampaignItems {
+    <#
+    .SYNOPSIS
+        Fetches all certification review items for a campaign with two-layer caching.
+    .DESCRIPTION
+        Addresses the "20-minute full run" problem when the same campaign data is needed
+        by multiple reports. On first call the items are fetched from ISC (slow) and
+        written to a disk cache file. Every subsequent call -- in the same session or a
+        future one -- reads from disk (sub-second) without touching ISC.
+
+        Two-layer architecture:
+          Layer 1 -- Memory cache ($script:_ItemMemCache): instant, session-scoped.
+          Layer 2 -- Disk cache (Audit\.cache\items-{id}.jsonl): fast, cross-session.
+
+        TTL rules:
+          COMPLETED / COMPLETING  -> permanent on disk (sealed data never changes).
+          ACTIVE / ACTIVATING     -> configurable TTL (default 30 min; respects
+                                     reviewers acting during the day).
+          STAGED / ERROR          -> never cached.
+
+        Returned items are pre-wrapped in @{Item; CertificationId; CertificationName;
+        CampaignName} hashtables ready for Group-SPAuditDecisions -- no further
+        transformation needed by the caller.
+
+    .PARAMETER Campaign
+        Campaign object from Get-SPAuditCampaigns. Must have: id, name, status.
+    .PARAMETER CachePath
+        Directory for cache files. Defaults to Audit.CachePath from config,
+        falling back to '{OutputPath}\.cache'.
+    .PARAMETER TtlMinutes
+        Cache TTL for non-COMPLETED campaigns. Default: 30.
+        Set to 0 to always refresh ACTIVE campaign data.
+    .PARAMETER NoCache
+        When set, bypasses disk and memory cache and fetches fresh from ISC.
+        Useful when you know the campaign just completed or data has changed.
+    .PARAMETER CorrelationID
+        Unique ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{
+            Success   = $bool
+            Data      = @(wrapped items for Group-SPAuditDecisions)
+            CertCount = [int]
+            ItemCount = [int]
+            FromCache = $bool   # $true = served from disk/memory
+            CacheFile = [string]
+            Error     = $string
+        }
+    .EXAMPLE
+        # First call: ~3-5 min (fetches from ISC, writes cache)
+        # Subsequent calls: <1 sec (reads from cache)
+        $result = Get-SPCachedCampaignItems -Campaign $campaign
+        $decisions = Group-SPAuditDecisions -Items $result.Data
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Campaign,
+
+        [Parameter()]
+        [string]$CachePath,
+
+        [Parameter()]
+        [int]$TtlMinutes = 30,
+
+        [Parameter()]
+        [switch]$NoCache,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $campId   = [string]$Campaign.id
+    $campName = if ($null -ne $Campaign.PSObject.Properties['name'] -and
+                    -not [string]::IsNullOrWhiteSpace($Campaign.name)) { [string]$Campaign.name } else { $campId }
+    $status   = if ($null -ne $Campaign.PSObject.Properties['status'] -and
+                    $null -ne $Campaign.status) { [string]$Campaign.status } else { '' }
+    $isPermanent = $status.ToUpperInvariant() -in @('COMPLETED', 'COMPLETING')
+    $isCacheable = $status.ToUpperInvariant() -notin @('STAGED', 'ERROR')
+
+    # ---------------------------------------------------------------------------
+    # Resolve cache directory
+    # ---------------------------------------------------------------------------
+    $effectiveCachePath = $CachePath
+    if ([string]::IsNullOrWhiteSpace($effectiveCachePath)) {
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                $null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
+                $effectiveCachePath = $cfg.Audit.CachePath
+            }
+            elseif ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $effectiveCachePath = Join-Path $cfg.Audit.OutputPath '.cache'
+            }
+        } catch { }
+        if ([string]::IsNullOrWhiteSpace($effectiveCachePath)) {
+            $effectiveCachePath = '.\Audit\.cache'
+        }
+    }
+
+    $safeCampId   = $campId -replace '[^A-Za-z0-9_\-]', '_'
+    $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
+    $metaFile     = Join-Path $effectiveCachePath "items-$safeCampId.meta.json"
+
+    # ---------------------------------------------------------------------------
+    # Layer 1: memory cache check
+    # ---------------------------------------------------------------------------
+    if (-not $NoCache -and $script:_ItemMemCache.ContainsKey($campId)) {
+        $memEntry = $script:_ItemMemCache[$campId]
+        $memValid = $memEntry.IsPermanent -or
+                    ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $TtlMinutes
+        if ($memValid) {
+            Write-SPLog -Message "Cache HIT (memory): campaign '$campName' ($($memEntry.Items.Count) items)" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success   = $true
+                Data      = @($memEntry.Items)
+                CertCount = $memEntry.CertCount
+                ItemCount = $memEntry.Items.Count
+                FromCache = $true
+                CacheFile = $itemsFile
+                Error     = $null
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------------------
+    # Layer 2: disk cache check
+    # ---------------------------------------------------------------------------
+    if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
+        try {
+            $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
+            $cachedAt  = [datetime]::Parse($meta.CachedAt)
+            $diskValid = $meta.IsPermanent -or
+                         ((Get-Date) - $cachedAt).TotalMinutes -lt $TtlMinutes
+            if ($diskValid) {
+                Write-SPLog -Message "Cache HIT (disk): campaign '$campName' ($($meta.ItemCount) items, cached $($cachedAt.ToString('yyyy-MM-dd HH:mm')))" `
+                    -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                    -CorrelationID $CorrelationID
+                Write-Host "  [Cache] Loading $($meta.ItemCount) items from disk ($campName)..." -ForegroundColor DarkGray
+
+                $items = [System.Collections.Generic.List[object]]::new()
+                Get-Content $itemsFile | ForEach-Object {
+                    if (-not [string]::IsNullOrWhiteSpace($_)) {
+                        $items.Add(($_ | ConvertFrom-Json))
+                    }
+                }
+
+                $memEntry2 = @{
+                    Items       = $items.ToArray()
+                    CachedAt    = $cachedAt
+                    CertCount   = $meta.CertCount
+                    IsPermanent = $meta.IsPermanent
+                }
+                $script:_ItemMemCache[$campId] = $memEntry2
+
+                return @{
+                    Success   = $true
+                    Data      = @($items.ToArray())
+                    CertCount = $meta.CertCount
+                    ItemCount = $items.Count
+                    FromCache = $true
+                    CacheFile = $itemsFile
+                    Error     = $null
+                }
+            }
+        } catch {
+            Write-SPLog -Message "Disk cache read failed for '$campName': $($_.Exception.Message) -- fetching fresh" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
+
+    # ---------------------------------------------------------------------------
+    # Cache miss: fetch from ISC
+    # ---------------------------------------------------------------------------
+    Write-SPLog -Message "Cache MISS: fetching items from ISC for campaign '$campName'" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+        -CorrelationID $CorrelationID
+    Write-Host "  Fetching certifications for '$campName'..." -ForegroundColor DarkGray
+
+    $certsResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+    if (-not $certsResult.Success) {
+        return @{ Success=$false; Data=@(); CertCount=0; ItemCount=0; FromCache=$false; CacheFile=''; Error=$certsResult.Error }
+    }
+    $certs = @($certsResult.Data)
+
+    $allItems   = [System.Collections.Generic.List[object]]::new()
+    $certIdx    = 0
+    $certTotal  = $certs.Count
+
+    foreach ($cert in $certs) {
+        $certIdx++
+        if ($certTotal -le 20 -or ($certIdx % 10 -eq 0)) {
+            Write-Host "    Cert $certIdx / $certTotal..." -ForegroundColor DarkGray
+        }
+        $certId2   = [string]$cert.id
+        $certName2 = if ($cert.PSObject.Properties['name'] -and $cert.name) { [string]$cert.name } else { $certId2 }
+
+        $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId2 -CorrelationID $CorrelationID
+        if ($itemsResult.Success) {
+            foreach ($rawItem in @($itemsResult.Data)) {
+                $allItems.Add([PSCustomObject]@{
+                    Item              = $rawItem
+                    CertificationId   = $certId2
+                    CertificationName = $certName2
+                    CampaignName      = $campName
+                })
+            }
+        }
+    }
+
+    Write-Host "  Fetched $($allItems.Count) item(s) from ISC for '$campName'" -ForegroundColor DarkGray
+
+    # ---------------------------------------------------------------------------
+    # Write cache (disk + memory)
+    # ---------------------------------------------------------------------------
+    if ($isCacheable -and $allItems.Count -gt 0) {
+        try {
+            if (-not (Test-Path $effectiveCachePath)) {
+                New-Item -Path $effectiveCachePath -ItemType Directory -Force | Out-Null
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            $sb = New-Object System.Text.StringBuilder
+            foreach ($wi in $allItems) {
+                $sb.AppendLine(($wi | ConvertTo-Json -Depth 12 -Compress)) | Out-Null
+            }
+            [System.IO.File]::WriteAllText($itemsFile, $sb.ToString(), $utf8NoBom)
+
+            $meta2 = [ordered]@{
+                CampaignId   = $campId
+                CampaignName = $campName
+                Status       = $status
+                IsPermanent  = $isPermanent
+                CachedAt     = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                CertCount    = $certs.Count
+                ItemCount    = $allItems.Count
+            }
+            $meta2 | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
+
+            Write-SPLog -Message "Wrote cache for '$campName': $($allItems.Count) items -> $itemsFile (permanent=$isPermanent)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+            Write-Host "  [Cache] Saved $($allItems.Count) items to disk for future runs." -ForegroundColor DarkGreen
+        }
+        catch {
+            Write-SPLog -Message "Cache write failed for '$campName': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
+
+    $memEntry3 = @{
+        Items       = $allItems.ToArray()
+        CachedAt    = Get-Date
+        CertCount   = $certs.Count
+        IsPermanent = $isPermanent
+    }
+    $script:_ItemMemCache[$campId] = $memEntry3
+
+    return @{
+        Success   = $true
+        Data      = @($allItems.ToArray())
+        CertCount = $certs.Count
+        ItemCount = $allItems.Count
+        FromCache = $false
+        CacheFile = if ($isCacheable) { $itemsFile } else { '' }
+        Error     = $null
+    }
+}
+
+function Clear-SPAuditItemCache {
+    <#
+    .SYNOPSIS
+        Clears the campaign item cache (memory and/or disk).
+    .PARAMETER CampaignId
+        Clear cache for a specific campaign only. If omitted, clears all.
+    .PARAMETER DiskOnly
+        Clear disk cache only (keep session memory cache).
+    .PARAMETER MemoryOnly
+        Clear in-memory cache only (keep disk files).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [string]$CampaignId,
+        [Parameter()] [switch]$DiskOnly,
+        [Parameter()] [switch]$MemoryOnly
+    )
+
+    if (-not $DiskOnly) {
+        if ([string]::IsNullOrWhiteSpace($CampaignId)) {
+            $script:_ItemMemCache.Clear()
+            Write-Host "  Memory cache cleared." -ForegroundColor DarkGray
+        }
+        elseif ($script:_ItemMemCache.ContainsKey($CampaignId)) {
+            $script:_ItemMemCache.Remove($CampaignId)
+            Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
+        }
+    }
+
+    if (-not $MemoryOnly) {
+        try {
+            $cfg = Get-SPConfig
+            $cachePath = '.\Audit\.cache'
+            if ($null -ne $cfg.PSObject.Properties['Audit']) {
+                if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) {
+                    $cachePath = $cfg.Audit.CachePath
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                    $cachePath = Join-Path $cfg.Audit.OutputPath '.cache'
+                }
+            }
+            if (Test-Path $cachePath) {
+                $pattern = if ([string]::IsNullOrWhiteSpace($CampaignId)) { 'items-*.jsonl' } else {
+                    $safId = $CampaignId -replace '[^A-Za-z0-9_\-]','_'
+                    "items-$safId.*"
+                }
+                $files = Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
+                foreach ($f in $files) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
+                Write-Host "  Disk cache cleared ($($files.Count) file(s) removed)." -ForegroundColor DarkGray
+            }
+        } catch { }
+    }
+}
+
+#endregion Campaign Item Cache
+
 Export-ModuleMember -Function @(
     'Get-SPAuditCampaigns',
     'Get-SPAuditCertifications',
@@ -6588,5 +6930,7 @@ Export-ModuleMember -Function @(
     'Get-SPSourceAggregationHealth',
     'Measure-SPIdentityDataQuality',
     'Get-SPReviewerDelegations',
-    'Test-SPSourceOnboardingReadiness'
+    'Test-SPSourceOnboardingReadiness',
+    'Get-SPCachedCampaignItems',
+    'Clear-SPAuditItemCache'
 )

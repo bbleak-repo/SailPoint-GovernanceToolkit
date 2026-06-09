@@ -318,44 +318,22 @@ if ($uniqueCertifierIds.Count -eq 0) {
     exit 1
 }
 
-# Step 4: Get certification items (decision data)
-# Group-SPAuditDecisions expects enriched wrappers: @{Item; CertificationId; CertificationName; CampaignName}
-# Build a campaign-name lookup from the campaigns array for efficient access
-Write-Host "  Step 3: Fetching certification items (decisions)..." -ForegroundColor Cyan
-$campNameById = @{}
-foreach ($camp in $campaigns) {
-    if ($camp.PSObject.Properties['id'] -and $camp.PSObject.Properties['name']) {
-        $campNameById[[string]$camp.id] = [string]$camp.name
-    }
-}
-
+# Step 4: Get certification items via cache (Get-SPCachedCampaignItems)
+# First call: fetches from ISC and writes to Audit\.cache\ (slow but cached for future).
+# Subsequent calls for same campaign: reads from disk cache (sub-second).
+# COMPLETED campaigns cached permanently; ACTIVE campaigns use 30-min TTL.
+Write-Host "  Step 3: Fetching certification items (cached)..." -ForegroundColor Cyan
 $allItems = [System.Collections.Generic.List[object]]::new()
-$certCount = $allCerts.Count
-$certIdx   = 0
-foreach ($cert in $allCerts) {
-    $certIdx++
-    if ($certCount -le 50 -or ($certIdx % 10 -eq 0)) {
-        Write-Host "    Processing cert $certIdx of $certCount..." -ForegroundColor DarkGray
-    }
-    $certId   = [string]$cert.id
-    $certName = if ($cert.PSObject.Properties['name']) { [string]$cert.name } else { $certId }
-    $campId   = ''
-    if ($cert.PSObject.Properties['campaign'] -and $null -ne $cert.campaign -and
-        $cert.campaign.PSObject.Properties['id']) { $campId = [string]$cert.campaign.id }
-    $campName = if (-not [string]::IsNullOrWhiteSpace($campId) -and $campNameById.ContainsKey($campId)) {
-        $campNameById[$campId] } else { '' }
 
-    $itemsResult = Get-SPAuditCertificationItems -CertificationId $certId -CorrelationID $correlationID
-    if ($itemsResult.Success) {
-        foreach ($item in @($itemsResult.Data)) {
-            # Wrap raw item with cert/campaign context required by Group-SPAuditDecisions
-            $allItems.Add(@{
-                Item              = $item
-                CertificationId   = $certId
-                CertificationName = $certName
-                CampaignName      = $campName
-            })
-        }
+foreach ($camp in $campaigns) {
+    $cacheResult = Get-SPCachedCampaignItems -Campaign $camp -CorrelationID $correlationID
+    if ($cacheResult.Success) {
+        $src = if ($cacheResult.FromCache) { 'cache' } else { 'ISC' }
+        Write-Host "    $($camp.name): $($cacheResult.ItemCount) item(s) from $src" -ForegroundColor DarkGray
+        foreach ($item in @($cacheResult.Data)) { $allItems.Add($item) }
+    }
+    else {
+        Write-Host "    WARNING: Could not load items for '$($camp.name)': $($cacheResult.Error)" -ForegroundColor Yellow
     }
 }
 Write-Host "  Found $($allItems.Count) certification item(s)" -ForegroundColor DarkGray

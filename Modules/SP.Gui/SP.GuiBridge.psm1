@@ -654,36 +654,30 @@ function Invoke-SPGuiAudit {
             Write-SPLog -Message "Auditing campaign '$campName' ($campId)" `
                 -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
 
-            # --- Certifications ---
-            $certResult     = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
-            $certifications = @()
-            if ($certResult.Success -and $null -ne $certResult.Data) {
-                $certifications = @($certResult.Data)
-            }
-            else {
-                Write-SPLog -Message "Could not retrieve certifications for '$campId': $($certResult.Error)" `
+            # --- Certification items via cache (Get-SPCachedCampaignItems) ---
+            # First call per campaign: fetches from ISC (slow) and writes to disk cache.
+            # Subsequent calls for the same campaign: reads from disk/memory (sub-second).
+            # COMPLETED campaigns are cached permanently; ACTIVE use 30-min TTL.
+            $cacheResult = Get-SPCachedCampaignItems -Campaign $rawCampaign -CorrelationID $CorrelationID
+            $certifications = @()  # needed downstream for reviewer metrics
+            if (-not $cacheResult.Success) {
+                Write-SPLog -Message "Could not retrieve items for campaign '$campName': $($cacheResult.Error)" `
                     -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
             }
-
-            # --- Certification items (wrapped for Group-SPAuditDecisions) ---
-            $wrappedItems = [System.Collections.Generic.List[object]]::new()
-            foreach ($cert in $certifications) {
-                $certName  = if ($null -ne $cert.name) { $cert.name } else { '' }
-                $itemResult = Get-SPAuditCertificationItems -CertificationId $cert.id -CorrelationID $CorrelationID
-                if ($itemResult.Success -and $null -ne $itemResult.Data) {
-                    foreach ($rawItem in $itemResult.Data) {
-                        $wrappedItems.Add(@{
-                            Item              = $rawItem
-                            CertificationId   = $cert.id
-                            CertificationName = $certName
-                            CampaignName      = $campName
-                        })
-                    }
+            else {
+                if ($cacheResult.FromCache) {
+                    Write-Host "    [Cache] $($cacheResult.ItemCount) item(s) loaded from cache ($campName)" -ForegroundColor DarkGray
                 }
-                else {
-                    Write-SPLog -Message "Could not retrieve items for certification '$($cert.id)': $($itemResult.Error)" `
-                        -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiAudit' -CorrelationID $CorrelationID
+                # Fetch certifications separately for reviewer metrics (lightweight, not cached)
+                $certResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+                if ($certResult.Success -and $null -ne $certResult.Data) {
+                    $certifications = @($certResult.Data)
                 }
+            }
+            $wrappedItems = if ($cacheResult.Success) {
+                [System.Collections.Generic.List[object]]::new($cacheResult.Data)
+            } else {
+                [System.Collections.Generic.List[object]]::new()
             }
 
             # --- Optional: Campaign reports (v3-first with legacy fallback) ---
