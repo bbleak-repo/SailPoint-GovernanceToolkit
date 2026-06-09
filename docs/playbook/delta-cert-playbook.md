@@ -197,7 +197,7 @@ overrides).
 | `SourceIds` | Default AD source(s) to monitor. Passed as `-SourceId` default. |
 | `DefaultHoursBack` | Look-back window for grant detection. `24` = last 24 hours. |
 | `DefaultDeadlineDays` | How many days managers have to review. `2` = 48-hour deadline. |
-| `PrivilegedOnly` | `false` (default) — certify all grants. `true` — only grants to privileged entitlements (ISC `privileged:true` or name-pattern match). Best volume control available. |
+| `PrivilegedOnly` | **`true` (default)** — only certify grants to privileged entitlements. Set to `false` to certify all grants regardless of privilege flag. Checks ISC `privileged:true` attribute; falls back to `Audit.RiskIndicators.PrivilegedPatterns` for untagged entitlements. |
 | `CampaignNamePrefix` | Daily delta campaign names: `"AD Delta Cert 2026-06-08 - Manager Smith"`. |
 | `MaxCampaignsPerRun` | Safety cap — refuses to create more than this many campaigns in one run. |
 | `ExcludeLifecycleStates` | Identities in these states are skipped even if they received new access. |
@@ -290,9 +290,10 @@ A group named "Finance-Admins" would be caught by the "Admin" pattern.
 **ISC scope required:** `idn:entitlement:read` or `sp:scopes:all` (needs to read entitlement
 metadata to check the privileged attribute).
 
-**Make it the permanent default:** Set `"PrivilegedOnly": true` in the `DeltaCert` section
-of `settings.json` — then every daily run automatically uses the filter without needing the
-command-line switch.
+**This is the default.** `"PrivilegedOnly": true` is already set in `settings.json`. Every
+daily run automatically filters to privileged grants only. To certify ALL grants instead,
+pass `-PrivilegedOnly:$false` on the command line or set `"PrivilegedOnly": false` in
+`settings.json`.
 
 **For the ISC `at-access(privileged:true)` Lucene query:** This ISC search expression finds
 identities who hold ANY privileged access. `-PrivilegedOnly` is more specific — it filters by
@@ -311,6 +312,61 @@ identity happened to already hold other privileged access.
 # Traditional wall-clock mode (15h after creation = run at 2pm for 11pm campaigns)
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 15
 ```
+
+### Org chart audit — validate manager chains before going live (-DaysBack)
+
+Before enabling automatic escalation against real campaigns, validate that ISC's
+manager chain data is complete for every reviewer who has appeared in the last N days.
+
+```powershell
+# Dry-run org chart audit: last 30 days, all campaign statuses, no write calls
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf
+
+# Same, but against a specific campaign prefix (e.g. a peer's campaign)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 `
+    -CampaignNamePrefix 'Daily Attestation' `
+    -DaysBack 30 -WhatIf
+```
+
+What `-DaysBack` does differently from normal mode:
+- Searches **all** campaign statuses (ACTIVE + COMPLETED + STAGED), not just ACTIVE
+- Returns **all** certifications regardless of signed/stale status
+- In `-WhatIf`, shows the full reviewer → skip-level chain per certification
+- Lines printed in **red** = ISC could not resolve a skip-level manager — those are org chain
+  gaps that would cause live escalation to silently skip the cert
+
+**Fix the red lines before running live escalation.** Take the `ReviewerIdentityId` values
+and have your AD/HR team correct the `manager` attribute in the source system.
+
+### Org chart audit with CSV export (-Csv)
+
+Combine `-DaysBack` with `-Csv` to produce a spreadsheet you can review, share, or
+archive as evidence:
+
+```powershell
+# 30-day org chain audit → CSV auto-named in DeltaCert.OutputPath
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv
+
+# Custom path
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf `
+    -CsvPath 'C:\temp\org-chain-audit.csv'
+```
+
+The CSV has one row per certification with these columns:
+
+| Column | Meaning |
+|---|---|
+| `CampaignName` | Which campaign the cert belongs to |
+| `CampaignStatus` | ACTIVE / COMPLETED / etc. |
+| `ReviewerName` | The manager who was/is assigned the cert |
+| `SkipLevelName` | Who ISC would escalate to |
+| `SkipLevelResolved` | **False = org chain gap** (no manager in ISC) |
+| `HoursOpen` | How long the cert has been open |
+| `EscalationReason` | Stale / Deadline / Both / AuditAll |
+| `CertSigned` | Whether the cert was completed before the audit |
+| `Outcome` | WouldEscalate / Skip-NoManagerInISC / Skip-MaxLevelsReached / etc. |
+
+Open in Excel, filter `SkipLevelResolved = False` to see every org chain gap.
 
 ### Clean up completed/stale campaigns
 

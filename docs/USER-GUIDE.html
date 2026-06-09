@@ -2589,7 +2589,7 @@ campaigns may find recent grants but existing access will never have been certif
 </tr>
 <tr>
 <td><code>PrivilegedOnly</code></td>
-<td><code>false</code> (default) — certify all grants. <code>true</code> — only grants to privileged entitlements (ISC <code>privileged:true</code> or name-pattern match). Best volume control available.</td>
+<td><strong><code>true</code> (default)</strong> — only certify grants to privileged entitlements. Set to <code>false</code> to certify all grants regardless of privilege flag. Checks ISC <code>privileged:true</code> attribute; falls back to <code>Audit.RiskIndicators.PrivilegedPatterns</code> for untagged entitlements.</td>
 </tr>
 <tr>
 <td><code>CampaignNamePrefix</code></td>
@@ -2676,7 +2676,7 @@ campaigns may find recent grants but existing access will never have been certif
 <p><strong>What "privileged" means in ISC:</strong> In ISC Admin → Entitlements, each AD group entry can have its <code>privileged</code> attribute set to <code>true</code>. ISC populates this from your source connector (AD has no native "privileged" flag, so someone must tag them manually or via an ISC rule).</p>
 <p><strong>Pattern-match fallback:</strong> If the entitlement isn't in ISC yet (not yet aggregated, or the source hasn't been fully catalogued), the toolkit falls back to the name patterns in <code>Audit.RiskIndicators.PrivilegedPatterns</code> (default: <code>Admin</code>, <code>Root</code>, <code>DBA</code>, <code>Domain Admins</code>). A group named "Finance-Admins" would be caught by the "Admin" pattern.</p>
 <p><strong>ISC scope required:</strong> <code>idn:entitlement:read</code> or <code>sp:scopes:all</code> (needs to read entitlement metadata to check the privileged attribute).</p>
-<p><strong>Make it the permanent default:</strong> Set <code>"PrivilegedOnly": true</code> in the <code>DeltaCert</code> section of <code>settings.json</code> — then every daily run automatically uses the filter without needing the command-line switch.</p>
+<p><strong>This is the default.</strong> <code>"PrivilegedOnly": true</code> is already set in <code>settings.json</code>. Every daily run automatically filters to privileged grants only. To certify ALL grants instead, pass <code>-PrivilegedOnly:$false</code> on the command line or set <code>"PrivilegedOnly": false</code> in <code>settings.json</code>.</p>
 <p><strong>For the ISC <code>at-access(privileged:true)</code> Lucene query:</strong> This ISC search expression finds identities who hold ANY privileged access. <code>-PrivilegedOnly</code> is more specific — it filters by whether the specific <em>new grant event</em> is for a privileged entitlement, not whether the identity happened to already hold other privileged access.</p>
 <h3 id="escalation-deadline-aware-recommended">Escalation — deadline-aware (recommended)</h3>
 <pre><code># Escalate if campaign deadline is within 8 hours AND cert is unsigned
@@ -2687,6 +2687,70 @@ campaigns may find recent grants but existing access will never have been certif
 
 # Traditional wall-clock mode (15h after creation = run at 2pm for 11pm campaigns)
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 15</code></pre>
+<h3 id="org-chart-audit-validate-manager-chains-before-going-live-daysback">Org chart audit — validate manager chains before going live (-DaysBack)</h3>
+<p>Before enabling automatic escalation against real campaigns, validate that ISC's manager chain data is complete for every reviewer who has appeared in the last N days.</p>
+<pre><code># Dry-run org chart audit: last 30 days, all campaign statuses, no write calls
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf
+
+# Same, but against a specific campaign prefix (e.g. a peer's campaign)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 `
+    -CampaignNamePrefix 'Daily Attestation' `
+    -DaysBack 30 -WhatIf</code></pre>
+<p>What <code>-DaysBack</code> does differently from normal mode:</p>
+<ul><li>Searches <strong>all</strong> campaign statuses (ACTIVE + COMPLETED + STAGED), not just ACTIVE</li><li>Returns <strong>all</strong> certifications regardless of signed/stale status</li><li>In <code>-WhatIf</code>, shows the full reviewer → skip-level chain per certification</li><li>Lines printed in <strong>red</strong> = ISC could not resolve a skip-level manager — those are org chain gaps that would cause live escalation to silently skip the cert</li></ul>
+<p><strong>Fix the red lines before running live escalation.</strong> Take the <code>ReviewerIdentityId</code> values and have your AD/HR team correct the <code>manager</code> attribute in the source system.</p>
+<h3 id="org-chart-audit-with-csv-export-csv">Org chart audit with CSV export (-Csv)</h3>
+<p>Combine <code>-DaysBack</code> with <code>-Csv</code> to produce a spreadsheet you can review, share, or archive as evidence:</p>
+<pre><code># 30-day org chain audit → CSV auto-named in DeltaCert.OutputPath
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv
+
+# Custom path
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf `
+    -CsvPath 'C:\temp\org-chain-audit.csv'</code></pre>
+<p>The CSV has one row per certification with these columns:</p>
+<table>
+<thead><tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr></thead><tbody>
+<tr>
+<td><code>CampaignName</code></td>
+<td>Which campaign the cert belongs to</td>
+</tr>
+<tr>
+<td><code>CampaignStatus</code></td>
+<td>ACTIVE / COMPLETED / etc.</td>
+</tr>
+<tr>
+<td><code>ReviewerName</code></td>
+<td>The manager who was/is assigned the cert</td>
+</tr>
+<tr>
+<td><code>SkipLevelName</code></td>
+<td>Who ISC would escalate to</td>
+</tr>
+<tr>
+<td><code>SkipLevelResolved</code></td>
+<td><strong>False = org chain gap</strong> (no manager in ISC)</td>
+</tr>
+<tr>
+<td><code>HoursOpen</code></td>
+<td>How long the cert has been open</td>
+</tr>
+<tr>
+<td><code>EscalationReason</code></td>
+<td>Stale / Deadline / Both / AuditAll</td>
+</tr>
+<tr>
+<td><code>CertSigned</code></td>
+<td>Whether the cert was completed before the audit</td>
+</tr>
+<tr>
+<td><code>Outcome</code></td>
+<td>WouldEscalate / Skip-NoManagerInISC / Skip-MaxLevelsReached / etc.</td>
+</tr>
+</tbody></table>
+<p>Open in Excel, filter <code>SkipLevelResolved = False</code> to see every org chain gap.</p>
 <h3 id="clean-up-completed-stale-campaigns">Clean up completed/stale campaigns</h3>
 <pre><code># Complete campaigns older than CleanupDaysStale (default 3 days)
 .\Scripts\Invoke-SPADDeltaCert.ps1 -SourceId 'YOUR-SOURCE-ID' -RunCleanup</code></pre>
