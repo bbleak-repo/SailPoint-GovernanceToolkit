@@ -490,11 +490,19 @@ if ($staleCerts.Count -eq 0) {
 
 Write-Host "  Found $($staleCerts.Count) stale certification(s). Escalating..." -ForegroundColor Cyan
 
-# Step 2: Escalate stale certifications
-$escalateResult = Invoke-SPDeltaCertEscalate `
-    -StaleCertifications $staleCerts `
-    -MaxEscalationLevels $effectiveMaxLevels `
-    -CorrelationID $correlationID
+# Step 2: Escalate stale certifications.
+# $WhatIfPreference does not reliably propagate across module boundaries in PS5.1:
+# the runner (SP.DeltaCertRunner.psm1) runs in its own module scope and may not
+# inherit $WhatIfPreference = $true from this script scope. Passing -WhatIf
+# explicitly via splatting ensures the common parameter is honoured inside the
+# runner, preventing live reassignment API calls in dry-run mode.
+$escalateParams = @{
+    StaleCertifications = $staleCerts
+    MaxEscalationLevels = $effectiveMaxLevels
+    CorrelationID       = $correlationID
+}
+if ($WhatIfPreference -eq $true) { $escalateParams['WhatIf'] = $true }
+$escalateResult = Invoke-SPDeltaCertEscalate @escalateParams
 
 $runEnd      = Get-Date
 $runDuration = ($runEnd - $runStart).TotalSeconds
