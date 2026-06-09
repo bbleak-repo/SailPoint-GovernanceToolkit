@@ -24,9 +24,15 @@ try {
     }
 } catch { }
 
-# Script-scoped rate limiter queue: stores DateTime of each request timestamp
-# within the current sliding window.
+# Per-scope (per-runspace) sliding-window rate limiter.
+# Correct for single-runspace CLI use; insufficient when multiple GUI background
+# runspaces run simultaneously -- see SPApiRateLimiter in SP.Auth.psm1 for the
+# AppDomain-static cross-runspace guard that complements this.
 $script:RequestTimestamps = [System.Collections.Generic.Queue[datetime]]::new()
+
+# Lazy configuration flag for SPApiRateLimiter.  Configure() is idempotent after
+# the first call, but we avoid calling it on every request for performance.
+$script:_sharedRateLimitConfigured = $false
 
 #region Internal Functions
 
@@ -332,11 +338,37 @@ function Invoke-SPApiRequest {
     $lastStatusCode     = 0
     $lastError          = ''
 
+    # Lazy-configure the AppDomain-static cross-runspace rate limiter on first request
+    # in this module scope. Subsequent calls skip this block (flag check is cheap).
+    if (-not $script:_sharedRateLimitConfigured) {
+        try {
+            $sharedEnabled = $true
+            if ($null -ne $config.PSObject.Properties['Api'] -and
+                $null -ne $config.Api -and
+                $null -ne $config.Api.PSObject.Properties['SharedRateLimitEnabled']) {
+                $sharedEnabled = [bool]$config.Api.SharedRateLimitEnabled
+            }
+            $sharedMax = [int]$config.Api.RateLimitRequestsPerWindow
+            $sharedWin = [int]$config.Api.RateLimitWindowSeconds
+            [SPApiRateLimiter]::Configure($sharedMax, $sharedWin, $sharedEnabled)
+        }
+        catch {
+            # SP.Core not yet imported or type not available -- shared limiter inactive
+        }
+        $script:_sharedRateLimitConfigured = $true
+    }
+
     while ($attempt -le $maxRetries) {
-        # Rate limiting: wait if window is saturated
+        # Cross-runspace guard: blocks this runspace thread if the aggregate request
+        # rate across all runspaces in this process has reached the window limit.
+        # Complements the per-scope limiter below; no-op if SPApiRateLimiter is
+        # unavailable (e.g. SP.Core not loaded in this session).
+        try { [SPApiRateLimiter]::WaitForSlot() } catch { }
+
+        # Per-scope rate limiting: wait if THIS runspace's window is saturated
         $waitMs = Get-SPRateLimitWaitMs -Config $config
         if ($waitMs -gt 0) {
-            Write-SPLog -Message "Rate limit reached. Waiting $waitMs ms before request." `
+            Write-SPLog -Message "Rate limit reached (per-scope). Waiting $waitMs ms before request." `
                 -Severity WARN -Component 'SP.ApiClient' -Action 'RateLimit' `
                 -CorrelationID $CorrelationID -CampaignTestId $CampaignTestId
             Start-Sleep -Milliseconds $waitMs

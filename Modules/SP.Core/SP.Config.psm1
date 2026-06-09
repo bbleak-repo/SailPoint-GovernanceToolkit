@@ -67,6 +67,7 @@ function Get-SPConfigDefaults {
             # forever if the API ever returns full pages indefinitely
             # (offset bug, cursor drift, tenant-side regression).
             MaxPaginationPages       = 200
+            SharedRateLimitEnabled  = $true
         }
         Testing = @{
             IdentitiesCsvPath                  = '.\Config\test-identities.csv'
@@ -426,6 +427,7 @@ function Get-SPConfigTemplate {
             RateLimitRequestsPerWindow = 95
             RateLimitWindowSeconds     = 10
             MaxPaginationPages         = 200
+            SharedRateLimitEnabled     = $true
         }
         Testing = [ordered]@{
             IdentitiesCsvPath                = '.\Config\test-identities.csv'

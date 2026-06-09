@@ -31,7 +31,9 @@
         "MaxRetryDelaySeconds": 60,
         "RateLimitRequestsPerWindow": 95,
         "RateLimitWindowSeconds": 10,
-        "MaxPaginationPages": 200
+        "MaxPaginationPages": 200,
+        "SharedRateLimitEnabled": true,
+        "_SharedRateLimitNote": "When true, SPApiRateLimiter enforces RateLimitRequestsPerWindow/WindowSeconds as a shared budget across all background runspaces in the same process. Disable (false) only for single-process CLI use where the per-scope limiter alone is sufficient."
     },
     "Testing": {
         "IdentitiesCsvPath": ".\\Config\\test-identities.csv",

@@ -56,6 +56,92 @@ public static class SPAuthRunspaceCache {
 '@
 } catch { }  # Type already defined in this AppDomain -- reuse the existing instance.
 
+# ---------------------------------------------------------------------------
+# SPApiRateLimiter: AppDomain-static cross-runspace rate limiter.
+#
+# Problem: SP.ApiClient's $script:RequestTimestamps is per-scope, so each GUI
+# background STA runspace has an independent counter.  When several operations
+# run simultaneously (e.g. Hierarchical Report + Delta Cert Escalation + Health
+# Check) their individual counters never exceed 95/10s, but ISC sees the
+# aggregate traffic and returns 429.
+#
+# Fix: a thread-safe sliding-window queue shared across ALL runspaces in the
+# same powershell.exe process (AppDomain). SP.ApiClient calls WaitForSlot()
+# before every ISC request. The existing per-scope limiter remains as a
+# belt-and-suspenders guard for single-runspace CLI scenarios.
+#
+# Architecture note: separate from SPAuthRunspaceCache by design -- different
+# access semantics (token = rarely-changing singleton; rate limit = updated on
+# every API call with time-based eviction). Mixing them would obscure intent.
+#
+# The try/catch handles the common case of a background runspace reimporting
+# this module after the type is already compiled in the AppDomain.
+# ---------------------------------------------------------------------------
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Threading;
+
+public static class SPApiRateLimiter {
+
+    private static readonly Queue<long> _timestamps = new Queue<long>();
+    private static readonly object      _lock       = new object();
+    private static int  _maxRequests = 95;
+    private static int  _windowMs    = 10000;
+    private static bool _enabled     = true;
+
+    // Called once by SP.ApiClient at first use, using RateLimitRequestsPerWindow
+    // and RateLimitWindowSeconds from settings.json.
+    public static void Configure(int maxRequests, int windowSeconds, bool enabled) {
+        lock (_lock) {
+            if (maxRequests > 0)   _maxRequests = maxRequests;
+            if (windowSeconds > 0) _windowMs    = windowSeconds * 1000;
+            _enabled = enabled;
+        }
+    }
+
+    // Called before every Invoke-RestMethod in Invoke-SPApiRequest.
+    // Blocks the calling runspace thread until a slot is available in the
+    // current window, then records the call timestamp and returns.
+    // Thread-safe: the lock is held only for the check; sleeping happens outside.
+    public static void WaitForSlot() {
+        if (!_enabled) return;
+
+        while (true) {
+            long sleepMs = 0;
+            lock (_lock) {
+                long nowMs       = DateTime.UtcNow.Ticks / 10000L;
+                long windowStart = nowMs - _windowMs;
+
+                // Evict timestamps older than the window
+                while (_timestamps.Count > 0 && _timestamps.Peek() < windowStart) {
+                    _timestamps.Dequeue();
+                }
+
+                if (_timestamps.Count < _maxRequests) {
+                    _timestamps.Enqueue(nowMs);
+                    return; // slot acquired -- proceed with the API call
+                }
+
+                // Window saturated: calculate sleep duration and release the lock
+                long oldestMs = _timestamps.Peek();
+                sleepMs = (_windowMs - (nowMs - oldestMs)) + 5L; // +5ms buffer
+                if (sleepMs < 1L) sleepMs = 1L;
+            }
+            // Sleep outside the lock so other runspaces can check while we wait
+            Thread.Sleep((int)sleepMs);
+        }
+    }
+
+    // Reset visible to tests and admin/reset tooling.
+    public static void Reset() {
+        lock (_lock) { _timestamps.Clear(); }
+    }
+}
+'@
+} catch { }  # Type already defined -- reuse the existing instance.
+
 #region Internal Functions
 
 function Get-SPCredentialsFromConfig {
