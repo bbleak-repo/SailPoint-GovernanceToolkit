@@ -303,27 +303,57 @@ function Get-SPAuthToken {
         #    they must reuse a token acquired by the UI thread. The static cache is the
         #    only mechanism that crosses runspace module-scope boundaries within one
         #    powershell.exe process.
+        #
+        #    TENANT ISOLATION GUARD: The cache is keyed on 'TenantUrl'. If this
+        #    toolkit instance is configured for a different ISC tenant than the
+        #    cached token, the cache is cleared before re-authentication. This
+        #    prevents silent credential bleed-over when two toolkit installations
+        #    (e.g. prod and non-prod) are run from the same powershell.exe session.
+        #    Separate processes (separate AppDomains) are always fully isolated;
+        #    this guard covers the same-process corner case.
         if (-not $Force) {
             try {
-                $xToken  = [SPAuthRunspaceCache]::Store['Token']     -as [string]
-                $xExpiry = [SPAuthRunspaceCache]::Store['ExpiresAt'] -as [datetime]
-                if (-not [string]::IsNullOrWhiteSpace($xToken) -and
-                    $null -ne $xExpiry -and
-                    $xExpiry -gt (Get-Date).AddMinutes(5)) {
-                    $xMode = [string][SPAuthRunspaceCache]::Store['Mode']
-                    $xData = @{
-                        Mode      = $xMode
-                        Token     = $xToken
-                        Headers   = @{ 'Authorization' = "Bearer $xToken"; 'Content-Type' = 'application/json' }
-                        ExpiresAt = $xExpiry
+                # Determine the configured tenant URL for this toolkit instance
+                $configTenantUrl = ''
+                if ($null -ne $config -and
+                    $null -ne $config.PSObject.Properties['Authentication'] -and
+                    $null -ne $config.Authentication.PSObject.Properties['ConfigFile'] -and
+                    $null -ne $config.Authentication.ConfigFile.PSObject.Properties['TenantUrl']) {
+                    $configTenantUrl = [string]$config.Authentication.ConfigFile.TenantUrl
+                }
+
+                # If a cached token exists for a DIFFERENT tenant, evict it now
+                $cachedTenantUrl = [SPAuthRunspaceCache]::Store['TenantUrl'] -as [string]
+                if (-not [string]::IsNullOrWhiteSpace($cachedTenantUrl) -and
+                    -not [string]::IsNullOrWhiteSpace($configTenantUrl) -and
+                    $cachedTenantUrl -ne $configTenantUrl) {
+                    Write-SPLog -Message "Tenant URL mismatch in auth cache (cached='$cachedTenantUrl' config='$configTenantUrl'). Clearing stale token to prevent cross-environment bleed." `
+                        -Severity 'WARN' -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
+                    [SPAuthRunspaceCache]::Store.Clear()
+                    $script:CurrentToken = $null
+                    $script:TokenExpiry  = $null
+                }
+                else {
+                    $xToken  = [SPAuthRunspaceCache]::Store['Token']     -as [string]
+                    $xExpiry = [SPAuthRunspaceCache]::Store['ExpiresAt'] -as [datetime]
+                    if (-not [string]::IsNullOrWhiteSpace($xToken) -and
+                        $null -ne $xExpiry -and
+                        $xExpiry -gt (Get-Date).AddMinutes(5)) {
+                        $xMode = [string][SPAuthRunspaceCache]::Store['Mode']
+                        $xData = @{
+                            Mode      = $xMode
+                            Token     = $xToken
+                            Headers   = @{ 'Authorization' = "Bearer $xToken"; 'Content-Type' = 'application/json' }
+                            ExpiresAt = $xExpiry
+                        }
+                        # Also warm the module-scope cache so repeated calls in this
+                        # runspace don't re-hit the static dictionary.
+                        $script:CurrentToken = $xData
+                        $script:TokenExpiry  = $xExpiry
+                        Write-SPLog -Message 'Using cross-runspace cached authentication token' -Severity 'DEBUG' `
+                            -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
+                        return @{ Success = $true; Data = $xData; Error = $null }
                     }
-                    # Also warm the module-scope cache so repeated calls in this
-                    # runspace don't re-hit the static dictionary.
-                    $script:CurrentToken = $xData
-                    $script:TokenExpiry  = $xExpiry
-                    Write-SPLog -Message 'Using cross-runspace cached authentication token' -Severity 'DEBUG' `
-                        -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
-                    return @{ Success = $true; Data = $xData; Error = $null }
                 }
             } catch { }
         }
@@ -394,12 +424,18 @@ function Get-SPAuthToken {
 
         # Cache the token -- both module-scope (this runspace) and AppDomain-static
         # (all other runspaces in this process).
+        # TenantUrl is stored alongside the token so the isolation guard (above)
+        # can evict stale entries when the toolkit is switched to a different ISC
+        # tenant within the same powershell.exe session.
         $script:CurrentToken = $tokenData
         $script:TokenExpiry  = $expiresAt
         try {
             [SPAuthRunspaceCache]::Store['Token']     = $response.access_token
             [SPAuthRunspaceCache]::Store['ExpiresAt'] = $expiresAt
             [SPAuthRunspaceCache]::Store['Mode']      = $mode
+            if (-not [string]::IsNullOrWhiteSpace($configTenantUrl)) {
+                [SPAuthRunspaceCache]::Store['TenantUrl'] = $configTenantUrl
+            }
         } catch { }
 
         Write-SPLog -Message "OAuth 2.0 token acquired (mode: $mode, expires: $($expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')))" `
@@ -499,12 +535,28 @@ function Set-SPBrowserToken {
         }
 
         # Cache the token -- both module-scope and AppDomain-static.
+        # Extract the ISC tenant URL from the JWT 'iss' claim so the isolation
+        # guard can evict this entry when switching to a different tenant.
+        $browserTenantUrl = ''
+        try {
+            $payloadB64 = $segments[1].PadRight(($segments[1].Length + 3) -band -bnot 3, '=')
+            $payloadJson = [System.Text.Encoding]::UTF8.GetString(
+                [System.Convert]::FromBase64String($payloadB64))
+            $payloadObj  = $payloadJson | ConvertFrom-Json
+            if ($null -ne $payloadObj.PSObject.Properties['iss']) {
+                $browserTenantUrl = [string]$payloadObj.iss -replace '/oauth/token.*$','' -replace '/v3.*$',''
+            }
+        } catch { }
+
         $script:CurrentToken = $tokenData
         $script:TokenExpiry  = $expiresAt
         try {
             [SPAuthRunspaceCache]::Store['Token']     = $jwt
             [SPAuthRunspaceCache]::Store['ExpiresAt'] = $expiresAt
             [SPAuthRunspaceCache]::Store['Mode']      = 'BrowserToken'
+            if (-not [string]::IsNullOrWhiteSpace($browserTenantUrl)) {
+                [SPAuthRunspaceCache]::Store['TenantUrl'] = $browserTenantUrl
+            }
         } catch { }
 
         Write-SPLog -Message "Browser token injected (expires: $($expiresAt.ToString('yyyy-MM-ddTHH:mm:ssZ')), segments: $($segments.Count))" `
@@ -552,6 +604,7 @@ function Clear-SPAuthToken {
         [SPAuthRunspaceCache]::Store.TryRemove('Token',     [ref]$null) | Out-Null
         [SPAuthRunspaceCache]::Store.TryRemove('ExpiresAt', [ref]$null) | Out-Null
         [SPAuthRunspaceCache]::Store.TryRemove('Mode',      [ref]$null) | Out-Null
+        [SPAuthRunspaceCache]::Store.TryRemove('TenantUrl', [ref]$null) | Out-Null
     } catch { }
 
     [System.GC]::Collect()
