@@ -120,6 +120,9 @@ param(
     [switch]$RefreshIdentities,
 
     [Parameter()]
+    [string]$OrgSupplementPath,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -371,6 +374,34 @@ if (-not $orgTreeResult.Success) {
 }
 $orgTree = $orgTreeResult.Data
 Write-Host "  Org tree: $($orgTree.Nodes.Count) node(s), top level=$($orgTree.TopLevel)" -ForegroundColor DarkGray
+
+# Fill ISC manager-chain gaps from the org-chart supplement (identityEmail -> managerEmail).
+# ISC's manager attribute is blank for some identities, so chains dead-end; the supplement
+# stitches past those holes.
+if ($OrgSupplementPath) {
+    if (Test-Path -LiteralPath $OrgSupplementPath) {
+        Write-Host "  Merging org-chart supplement: $OrgSupplementPath" -ForegroundColor Cyan
+        $supResult = Import-SPOrgChartSupplement -FilePath $OrgSupplementPath -CorrelationID $correlationID
+        if ($supResult.Success) {
+            $emailMap = @{}
+            foreach ($nid in $orgTree.Nodes.Keys) {
+                $n = $orgTree.Nodes[$nid]
+                if ($null -ne $n.Identity -and -not [string]::IsNullOrWhiteSpace([string]$n.Identity.Email)) {
+                    $emailMap[$nid] = $n.Identity.Email
+                }
+            }
+            $orgTree = Merge-SPOrgTreeWithSupplement -OrgTree $orgTree -Supplement $supResult.Data.Entries `
+                -IdentityEmailMap $emailMap -CorrelationID $correlationID
+            Write-Host "    Supplement merged: $($orgTree.Nodes.Count) node(s) after merge" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "    WARN: Could not load supplement: $($supResult.Error)" -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "  WARN: -OrgSupplementPath not found: $OrgSupplementPath" -ForegroundColor Yellow
+    }
+}
 
 # Step 7: Build leadership hierarchy (join decisions to org tree)
 Write-Host "  Step 6: Building leadership hierarchy..." -ForegroundColor Cyan
