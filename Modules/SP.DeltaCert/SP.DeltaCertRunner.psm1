@@ -964,12 +964,6 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Cert '$certId' has no ReviewerIdentityId (campaign='$campaignName') -- cannot escalate, skipping" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
-                if (($WhatIfPreference -eq $true)) {
-                    Write-Host "    $campaignName" -ForegroundColor DarkGray
-                    Write-Host "      Reviewer:    [NONE — cert has no reviewer ID]" -ForegroundColor Red
-                    Write-Host "      Skip-level:  SKIP — cannot escalate" -ForegroundColor Red
-                    Write-Host ''
-                }
                 $skipped.Add($certId)
                 continue
             }
@@ -981,13 +975,6 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Reviewer '$reviewerId' not found in ISC -- cannot escalate cert '$certId'" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
-                if (($WhatIfPreference -eq $true)) {
-                    $reviewerDisplay = if (-not [string]::IsNullOrWhiteSpace($staleCert.ReviewerName)) { $staleCert.ReviewerName } else { $reviewerId }
-                    Write-Host "    $campaignName" -ForegroundColor DarkGray
-                    Write-Host "      Reviewer:    $reviewerDisplay" -ForegroundColor White
-                    Write-Host "      Skip-level:  WARNING — reviewer not found in ISC" -ForegroundColor Red
-                    Write-Host ''
-                }
                 $skipped.Add($certId)
                 continue
             }
@@ -996,12 +983,6 @@ function Invoke-SPDeltaCertEscalate {
                 Write-SPLog -Message "Reviewer '$reviewerId' ($($reviewerDetail.DisplayName)) has no manager -- cannot escalate cert '$certId'" `
                     -Severity WARN -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                     -CorrelationID $CorrelationID
-                if (($WhatIfPreference -eq $true)) {
-                    Write-Host "    $campaignName" -ForegroundColor DarkGray
-                    Write-Host "      Reviewer:    $($reviewerDetail.DisplayName)" -ForegroundColor White
-                    Write-Host "      Skip-level:  WARNING — NO MANAGER in ISC (org chain gap)" -ForegroundColor Red
-                    Write-Host ''
-                }
                 $skipped.Add($certId)
                 continue
             }

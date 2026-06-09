@@ -1224,7 +1224,7 @@ Describe "DC-027: Get-SPDeltaCertStaleCertifications returns only unsigned certs
             Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
             Mock Get-SPConfig -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
 
-            Mock Search-SPCampaigns -ModuleName SP.DeltaCertQueries {
+            Mock Get-SPAuditCampaigns -ModuleName SP.DeltaCertQueries {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1292,7 +1292,7 @@ Describe "DC-028: Get-SPDeltaCertStaleCertifications returns empty when all cert
             Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
             Mock Get-SPConfig -ModuleName SP.DeltaCertQueries { New-MockDeltaConfig }
 
-            Mock Search-SPCampaigns -ModuleName SP.DeltaCertQueries {
+            Mock Get-SPAuditCampaigns -ModuleName SP.DeltaCertQueries {
                 return @{
                     Success = $true
                     Data    = @(
@@ -1442,10 +1442,14 @@ Describe "DC-029: Invoke-SPDeltaCertEscalate reassigns stale cert to reviewer's 
                     CertificationId        = 'cert-stale-001'
                     CampaignId             = 'camp-001'
                     CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr One'
+                    CampaignStatus         = 'ACTIVE'
                     ReviewerIdentityId     = 'reviewer-001'
                     ReviewerName           = 'Reviewer One'
                     HoursOpen              = 36
+                    HoursUntilDeadline     = $null
+                    EscalationReason       = 'Stale'
                     ReviewerClassification = 'Primary'
+                    CertSigned             = $false
                 }
             )
 
@@ -1469,10 +1473,14 @@ Describe "DC-029: Invoke-SPDeltaCertEscalate reassigns stale cert to reviewer's 
                     CertificationId        = 'cert-stale-002'
                     CampaignId             = 'camp-002'
                     CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr Two'
+                    CampaignStatus         = 'ACTIVE'
                     ReviewerIdentityId     = 'reviewer-002'
                     ReviewerName           = 'Reviewer Two'
                     HoursOpen              = 48
+                    HoursUntilDeadline     = $null
+                    EscalationReason       = 'Stale'
                     ReviewerClassification = 'Primary'
+                    CertSigned             = $false
                 }
             )
 
@@ -1518,15 +1526,18 @@ Describe "DC-030: Invoke-SPDeltaCertEscalate skips reviewer with no manager" {
                     CertificationId        = 'cert-nomanager-001'
                     CampaignId             = 'camp-003'
                     CampaignName           = 'AD Delta Cert 2026-05-20 - Top Exec'
+                    CampaignStatus         = 'ACTIVE'
                     ReviewerIdentityId     = 'exec-001'
                     ReviewerName           = 'Top Level Exec'
                     HoursOpen              = 48
+                    HoursUntilDeadline     = $null
+                    EscalationReason       = 'Stale'
                     ReviewerClassification = 'Primary'
+                    CertSigned             = $false
                 }
             )
 
             $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts
-
             $result.Success             | Should -Be $true
             $result.Data.Skipped.Count  | Should -Be 1
             $result.Data.Skipped[0]     | Should -Be 'cert-nomanager-001'
@@ -1582,10 +1593,14 @@ Describe "DC-031: Invoke-SPDeltaCertEscalate WhatIf does not call reassignment A
                     CertificationId        = 'cert-whatif-001'
                     CampaignId             = 'camp-004'
                     CampaignName           = 'AD Delta Cert 2026-05-20 - Mgr One'
+                    CampaignStatus         = 'ACTIVE'
                     ReviewerIdentityId     = 'reviewer-whatif-001'
                     ReviewerName           = 'Reviewer One'
                     HoursOpen              = 36
+                    HoursUntilDeadline     = $null
+                    EscalationReason       = 'Stale'
                     ReviewerClassification = 'Primary'
+                    CertSigned             = $false
                 }
             )
 

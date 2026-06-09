@@ -794,7 +794,8 @@ Describe "P12-T14: Invoke-SPWeeklyDigest.ps1 syntax validation" {
             $params | Should -Contain 'OutputMode'
             $params | Should -Contain 'SendNotification'
             $params | Should -Contain 'Help'
-            $params | Should -Contain 'WhatIf'
+            # WhatIf is provided by [CmdletBinding(SupportsShouldProcess)] as a common parameter,
+            # not declared explicitly in the param block (CLAUDE.md: explicit $WhatIf + SupportsShouldProcess = parse error)
         }
     }
 }
