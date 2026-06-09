@@ -11271,9 +11271,10 @@ function _Render-SPHierarchyNodeHtml {
 </table>
 "@
 
-            $encodedName = [System.Web.HttpUtility]::HtmlEncode($identity.Name)
+            $encodedName  = [System.Web.HttpUtility]::HtmlEncode($identity.Name)
+            $identityTotal = $identity.Approved + $identity.Revoked + $identity.Pending
             $bodyHtml += @"
-<details style="margin:3px 0;border:1px solid #dee2e6;border-radius:4px;">
+<details data-total="$identityTotal" style="margin:3px 0;border:1px solid #dee2e6;border-radius:4px;">
   <summary style="cursor:pointer;padding:6px 10px;background:#f8f9fa;list-style:none;display:list-item;">
     <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
       <td style="font-size:12px;font-weight:500;">$encodedName</td>
@@ -11287,12 +11288,14 @@ function _Render-SPHierarchyNodeHtml {
         $bodyHtml += '</div>'
     }
 
-    # Wrap in a <details> collapsible block
-    $openAttr = if ($Depth -le 1) { ' open' } else { '' }  # top 2 levels open by default
+    # Wrap in a <details> collapsible block.
+    # data-total enables CSS-based "Hide Empty" toggle (JS toggles body.hide-empty class).
+    $openAttr     = if ($Depth -le 1) { ' open' } else { '' }  # top 2 levels open by default
     $detailsStyle = "margin:4px 0 4px $($Depth*8)px;border-left:3px solid $border;border-radius:0 4px 4px 0;"
+    $nodeTotal    = $Node.Agg.Total
 
     return @"
-<details$openAttr style="$detailsStyle">
+<details$openAttr data-total="$nodeTotal" style="$detailsStyle">
   <summary style="cursor:pointer;padding:6px 8px;background:$bg;list-style:none;
                   border-radius:0 3px 3px 0;user-select:none;">$summaryHtml</summary>
   <div style="padding:4px 0;">$bodyHtml</div>
@@ -11413,6 +11416,11 @@ function Export-SPHierarchicalLeadershipHtml {
         $files     = [System.Collections.Generic.List[string]]::new()
         $topNodes  = @($HierarchyData.TopNodes)
 
+        # Create a run-level subdirectory (matches other toolkit output: governanceReport-STAMP/)
+        # so each invocation produces its own folder and filenames stay short/clean.
+        $runDir = Join-Path $OutputPath "run-$runStamp"
+        New-Item -Path $runDir -ItemType Directory -Force | Out-Null
+
         # Collect all leaders at or above MinReportLevel to generate individual files
         # (walk the tree, collect nodes at >= MinReportLevel)
         $reportNodes = [System.Collections.Generic.List[object]]::new()
@@ -11448,13 +11456,16 @@ body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe U
 details>summary{list-style:none;}
 details>summary::-webkit-details-marker{display:none;}
 .rpt-footer{margin-top:20px;font-size:11px;color:#adb5bd;text-align:center;}
+body.hide-empty details[data-total="0"]{display:none;}
 '@
 
-        # Generate one HTML file per report node
+        # Generate one HTML file per report node.
+        # Files go into the run-level subdirectory ($runDir) created above.
+        # Filenames use just the leader name (no timestamp) since the directory is already stamped.
         foreach ($rNode in $reportNodes) {
             $safeFileName = ($rNode.DisplayName -replace '[^A-Za-z0-9_\-]', '_').Substring(0, [math]::Min(40, ($rNode.DisplayName -replace '[^A-Za-z0-9_\-]', '_').Length))
-            $fileName = "hierarchy-report-$safeFileName-$runStamp.html"
-            $filePath = Join-Path $OutputPath $fileName
+            $fileName = "hierarchy-report-$safeFileName.html"
+            $filePath = Join-Path $runDir $fileName
 
             # Aggregate for this subtree root
             $totalA = $rNode.Agg.Approved
@@ -11495,6 +11506,19 @@ details>summary::-webkit-details-marker{display:none;}
 function toggleAll(open){
   document.querySelectorAll('details').forEach(function(d){d.open=open;});
 }
+function toggleEmpty(){
+  var body=document.body;
+  var btn=document.getElementById('btnHideEmpty');
+  if(body.classList.contains('hide-empty')){
+    body.classList.remove('hide-empty');
+    btn.textContent='Hide Empty';
+    btn.style.background='#e2e3e5';
+  } else {
+    body.classList.add('hide-empty');
+    btn.textContent='Show Empty';
+    btn.style.background='#ffc107';
+  }
+}
 </script>
 </head>
 <body>
@@ -11503,7 +11527,9 @@ function toggleAll(open){
   <div class="rpt-meta">$encodedName &nbsp;|&nbsp; $encodedRange$campNote &nbsp;|&nbsp; Generated: $genDate</div>
   <div style="margin-top:8px;">
     <button onclick="toggleAll(true)"  style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:6px;">Expand All</button>
-    <button onclick="toggleAll(false)" style="font-size:11px;padding:3px 10px;cursor:pointer;">Collapse All</button>
+    <button onclick="toggleAll(false)" style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:12px;">Collapse All</button>
+    <button id="btnHideEmpty" onclick="toggleEmpty()" style="font-size:11px;padding:3px 10px;cursor:pointer;background:#e2e3e5;border:1px solid #adb5bd;border-radius:3px;"
+            title="Hide leaders, managers and identities with zero certification items in this window">Hide Empty</button>
   </div>
 </div>
 <div class="kpi-section">$kpiHtml</div>
@@ -11522,7 +11548,7 @@ function toggleAll(open){
                 -CorrelationID $CorrelationID
         }
 
-        Write-Host "  Hierarchical leadership reports: $($files.Count) file(s) in '$OutputPath'" -ForegroundColor Green
+        Write-Host "  Hierarchical leadership reports: $($files.Count) file(s) in '$runDir'" -ForegroundColor Green
 
         return @{
             Success = $true
@@ -11530,6 +11556,7 @@ function toggleAll(open){
                 Files      = $files.ToArray()
                 FileCount  = $files.Count
                 TotalNodes = $HierarchyData.NodeCount
+                RunDir     = $runDir
             }
             Error   = $null
         }

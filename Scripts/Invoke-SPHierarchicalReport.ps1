@@ -459,8 +459,9 @@ switch ($OutputMode) {
         Write-Host "  Certifications:       $($allCerts.Count)" -ForegroundColor DarkGray
         Write-Host "  Decision items:       $($allItems.Count)   (A=$totalA R=$totalR P=$totalP)" -ForegroundColor DarkGray
         Write-Host "  Org nodes:            $($orgTree.Nodes.Count)" -ForegroundColor DarkGray
+        $runDir = if ($exportResult.Data.RunDir) { $exportResult.Data.RunDir } else { $effectiveOutputPath }
         Write-Host "  Reports generated:    $($exportResult.Data.FileCount)" -ForegroundColor Green
-        Write-Host "  Output directory:     $effectiveOutputPath" -ForegroundColor DarkGray
+        Write-Host "  Run directory:        $runDir" -ForegroundColor DarkGray
         Write-Host "  Duration:             $runDuration s" -ForegroundColor DarkGray
         Write-Host ''
         if ($exportResult.Data.FileCount -gt 0) {
