@@ -291,10 +291,21 @@ function Select-SPPrivilegedGrantEvents {
                 $items = @($apiResult.Data)
                 if ($items.Count -gt 0 -and $null -ne $items[0]) {
                     $foundInISC = $true
+                    # ISC v3 API: top-level 'privileged' boolean.
+                    # Mock / older payloads may nest it under 'attributes.privileged'.
                     $privProp = $items[0].PSObject.Properties['privileged']
                     if ($null -ne $privProp -and $privProp.Value -eq $true) {
                         $isPrivileged = $true
                         $privilegedISC++
+                    }
+                    elseif ($null -eq $privProp) {
+                        $attrProp = $items[0].PSObject.Properties['attributes']
+                        if ($null -ne $attrProp -and $null -ne $attrProp.Value -and
+                            $null -ne $attrProp.Value.PSObject.Properties['privileged'] -and
+                            $attrProp.Value.PSObject.Properties['privileged'].Value -eq $true) {
+                            $isPrivileged = $true
+                            $privilegedISC++
+                        }
                     }
                 }
             }
@@ -3916,6 +3927,7 @@ function Get-SPDeltaManagersForSources {
 #endregion
 
 Export-ModuleMember -Function @(
+    'Select-SPPrivilegedGrantEvents',
     'Get-SPDeltaGrantEvents',
     'Get-SPDeltaAffectedIdentities',
     'Group-SPDeltaByManager',
