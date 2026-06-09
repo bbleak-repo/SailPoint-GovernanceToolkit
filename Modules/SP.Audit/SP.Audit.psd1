@@ -80,6 +80,10 @@
         # SP.AuditReportHtml - Rolling 7/30-day manager-cert trend HTML (T-06)
         'Export-SPRollingTrendHtml'
 
+        # SP.AuditReportCore + SP.AuditReportHtml - Hierarchical Leadership Rollup (P17-01)
+        'Build-SPLeadershipHierarchy'
+        'Export-SPHierarchicalLeadershipHtml'
+
         'Export-SPEntitlementInventoryHtml'
         'Export-SPAccessProfileInventoryHtml'
         'Export-SPRoleInventoryHtml'

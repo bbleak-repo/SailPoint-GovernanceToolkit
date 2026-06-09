@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     SailPoint ISC Governance Toolkit - Audit Report HTML and Export Generation
@@ -11102,5 +11102,448 @@ Export-ModuleMember -Function @(
     'Export-SPReviewerDelegationHtml',
     'Export-SPPolicyComplianceHtml',
     'Export-SPConfigDriftHtml',
-    'Export-SPRollingTrendHtml'
+    'Export-SPRollingTrendHtml',
+    'Export-SPHierarchicalLeadershipHtml'
 )
+
+# ===========================================================================
+# Hierarchical Leadership Report (P17-01)
+# Appended — does not replace or modify any existing functions above.
+# ===========================================================================
+
+#region Hierarchical Leadership Report HTML helpers (not exported)
+
+function _Render-SPHierarchyBarHtml {
+    # Table-based percentage bar (no flexbox/CSS-grid — Word copy-paste safe)
+    param([int]$Approved, [int]$Revoked, [int]$Pending)
+    $total = $Approved + $Revoked + $Pending
+    if ($total -eq 0) { return '' }
+    $ap = [math]::Round($Approved * 100.0 / $total, 0)
+    $rp = [math]::Round($Revoked  * 100.0 / $total, 0)
+    $pp = [math]::Round($Pending  * 100.0 / $total, 0)
+    # Keep sum at 100
+    $sum = $ap + $rp + $pp
+    if ($sum -lt 100) { $ap += (100 - $sum) }
+    elseif ($sum -gt 100) { $ap -= ($sum - 100) }
+
+    $bar = ''
+    if ($ap -gt 0) { $bar += "<td width=`"$ap%`" style=`"background:#339933;height:6px;`"></td>" }
+    if ($rp -gt 0) { $bar += "<td width=`"$rp%`" style=`"background:#CC3333;height:6px;`"></td>" }
+    if ($pp -gt 0) { $bar += "<td width=`"$pp%`" style=`"background:#FF8800;height:6px;`"></td>" }
+    # Fill remaining with grey
+    $filled = $ap + $rp + $pp
+    if ($filled -lt 100) { $bar += "<td width=`"$($100-$filled)%`" style=`"background:#dee2e6;height:6px;`"></td>" }
+
+    return "<table width=`"100%`" cellpadding=`"0`" cellspacing=`"0`" border=`"0`" style=`"height:6px;`"><tr>$bar</tr></table>"
+}
+
+function _Render-SPHierarchyKpiHtml {
+    param([int]$Approved, [int]$Revoked, [int]$Pending, [int]$Identities)
+    $total = $Approved + $Revoked + $Pending
+    $ap    = if ($total -gt 0) { [math]::Round($Approved * 100.0 / $total, 0) } else { 0 }
+    $bar   = _Render-SPHierarchyBarHtml -Approved $Approved -Revoked $Revoked -Pending $Pending
+    return @"
+<table cellpadding="0" cellspacing="0" border="0" style="display:inline-table;vertical-align:middle;">
+<tr>
+  <td style="padding:0 6px;white-space:nowrap;">
+    <span style="color:#339933;font-weight:700;">$Approved ✓</span>
+  </td>
+  <td style="padding:0 6px;white-space:nowrap;">
+    <span style="color:#CC3333;font-weight:700;">$Revoked ✗</span>
+  </td>
+  <td style="padding:0 6px;white-space:nowrap;">
+    <span style="color:#FF8800;font-weight:700;">$Pending ⏳</span>
+  </td>
+  <td style="padding:0 6px;white-space:nowrap;color:#777;">
+    $Identities identit$(if($Identities-eq 1){'y'}else{'ies'})
+  </td>
+  <td style="padding:0 6px;color:#555;font-size:11px;">$ap%</td>
+</tr>
+<tr><td colspan="5" style="padding:2px 6px 0;">$bar</td></tr>
+</table>
+"@
+}
+
+function _Render-SPHierarchyNodeHtml {
+    param(
+        [object]$Node,
+        [int]$Depth = 0
+    )
+
+    $bandColors = @{
+        0 = '#f5f0e8:#cc8800'   # leaf/certifier: light tan border
+        1 = '#eaf4ea:#2e7d32'   # manager: green
+        2 = '#e8f0fc:#1565c0'   # director: blue
+        3 = '#fef6e4:#e65100'   # VP: orange
+        4 = '#fce4ec:#880e4f'   # exec: red-purple
+    }
+    $level  = $Node.Level
+    $bKey   = [math]::Min($level, 4)
+    $colors = $bandColors[$bKey].Split(':')
+    $bg     = $colors[0]
+    $border = $colors[1]
+
+    $kpiHtml  = _Render-SPHierarchyKpiHtml `
+        -Approved $Node.Agg.Approved -Revoked $Node.Agg.Revoked `
+        -Pending $Node.Agg.Pending -Identities $Node.Agg.Identities
+
+    # No-data note
+    $noDataNote = ''
+    if ($Node.Agg.Total -eq 0 -and -not $Node.IsCertifier -and $Node.Children.Count -eq 0) {
+        $noDataNote = '<td style="padding:2px 8px;color:#999;font-style:italic;font-size:11px;">No certifications in window</td>'
+    }
+
+    # Build summary row (inside <summary> — kept to inline table for Word compat)
+    $summaryHtml = @"
+<table cellpadding="2" cellspacing="0" border="0" width="100%">
+<tr>
+  <td style="width:20px;color:#888;font-size:10px;">$(if($Depth-gt 0){'&nbsp;'*($Depth*2)})</td>
+  <td style="font-size:13px;font-weight:600;color:#212529;padding:2px 6px;">
+    $([System.Web.HttpUtility]::HtmlEncode($Node.DisplayName))
+  </td>
+  <td style="padding:2px 6px;">$kpiHtml</td>
+  $noDataNote
+</tr>
+</table>
+"@
+
+    # Build body content (child nodes OR identity decision table)
+    $bodyHtml = ''
+
+    # Child hierarchy nodes
+    foreach ($child in @($Node.Children)) {
+        $bodyHtml += _Render-SPHierarchyNodeHtml -Node $child -Depth ($Depth + 1)
+    }
+
+    # Identity-level decisions (only rendered if this node is a certifier)
+    if ($Node.IsCertifier -and $Node.CertifiedIdentities.Count -gt 0) {
+        $bodyHtml += "<div style=`"margin-left:$($Depth*16+16)px;margin-top:4px;margin-bottom:8px;`">"
+        foreach ($identity in @($Node.CertifiedIdentities)) {
+            $idKpi = _Render-SPHierarchyKpiHtml `
+                -Approved $identity.Approved -Revoked $identity.Revoked `
+                -Pending $identity.Pending -Identities 1
+
+            # Identity decision table (hidden inside nested <details>)
+            $rowsHtml = ''
+            foreach ($item in @($identity.Items)) {
+                $dec     = [string]$item.Decision
+                $decCls  = switch ($dec) {
+                    'APPROVE'  { 'approve' }
+                    'APPROVED' { 'approve' }
+                    'REVOKE'   { 'revoke'  }
+                    'REVOKED'  { 'revoke'  }
+                    default    { 'pending' }
+                }
+                $decColor = switch ($decCls) {
+                    'approve' { '#339933' }
+                    'revoke'  { '#CC3333' }
+                    default   { '#FF8800' }
+                }
+                $accessName  = [System.Web.HttpUtility]::HtmlEncode([string]$item.AccessName)
+                $accessType  = [System.Web.HttpUtility]::HtmlEncode([string]$item.AccessType)
+                $sourceName  = [System.Web.HttpUtility]::HtmlEncode([string]$item.SourceName)
+                $decDate     = [string]$item.DecisionDate
+                $decDisplay  = $dec
+                $rowsHtml += @"
+<tr style="border-left:3px solid $decColor;">
+  <td style="padding:4px 8px;font-size:12px;">$accessName</td>
+  <td style="padding:4px 8px;font-size:12px;color:#555;">$accessType</td>
+  <td style="padding:4px 8px;font-size:12px;color:#555;">$sourceName</td>
+  <td style="padding:4px 8px;font-size:12px;font-weight:600;color:$decColor;">$decDisplay</td>
+  <td style="padding:4px 8px;font-size:11px;color:#888;">$decDate</td>
+</tr>
+"@
+            }
+
+            $itemTableHtml = @"
+<table cellpadding="0" cellspacing="1" border="0" width="100%"
+       style="border-collapse:collapse;font-size:12px;">
+  <thead>
+    <tr style="background:#e9ecef;">
+      <th style="padding:5px 8px;text-align:left;font-size:11px;border-bottom:2px solid #dee2e6;">Access Item</th>
+      <th style="padding:5px 8px;text-align:left;font-size:11px;border-bottom:2px solid #dee2e6;">Type</th>
+      <th style="padding:5px 8px;text-align:left;font-size:11px;border-bottom:2px solid #dee2e6;">Source</th>
+      <th style="padding:5px 8px;text-align:left;font-size:11px;border-bottom:2px solid #dee2e6;">Decision</th>
+      <th style="padding:5px 8px;text-align:left;font-size:11px;border-bottom:2px solid #dee2e6;">Date</th>
+    </tr>
+  </thead>
+  <tbody>$rowsHtml</tbody>
+</table>
+"@
+
+            $encodedName = [System.Web.HttpUtility]::HtmlEncode($identity.Name)
+            $bodyHtml += @"
+<details style="margin:3px 0;border:1px solid #dee2e6;border-radius:4px;">
+  <summary style="cursor:pointer;padding:6px 10px;background:#f8f9fa;list-style:none;display:list-item;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>
+      <td style="font-size:12px;font-weight:500;">$encodedName</td>
+      <td style="text-align:right;">$idKpi</td>
+    </tr></table>
+  </summary>
+  <div style="padding:4px 8px;">$itemTableHtml</div>
+</details>
+"@
+        }
+        $bodyHtml += '</div>'
+    }
+
+    # Wrap in a <details> collapsible block
+    $openAttr = if ($Depth -le 1) { ' open' } else { '' }  # top 2 levels open by default
+    $detailsStyle = "margin:4px 0 4px $($Depth*8)px;border-left:3px solid $border;border-radius:0 4px 4px 0;"
+
+    return @"
+<details$openAttr style="$detailsStyle">
+  <summary style="cursor:pointer;padding:6px 8px;background:$bg;list-style:none;
+                  border-radius:0 3px 3px 0;user-select:none;">$summaryHtml</summary>
+  <div style="padding:4px 0;">$bodyHtml</div>
+</details>
+"@
+}
+
+#endregion Hierarchical Leadership Report HTML helpers
+
+function Export-SPHierarchicalLeadershipHtml {
+    <#
+    .SYNOPSIS
+        Generates hierarchical leadership certification rollup reports as self-contained HTML files.
+    .DESCRIPTION
+        Consumes the output of Build-SPLeadershipHierarchy and produces one HTML file per
+        top-level leader (or per leader at a specified minimum level). Each file contains
+        the full org-tree drill-down for that leader using collapsible <details>/<summary>
+        elements: the top 2 levels are expanded by default; deeper levels are collapsed.
+
+        Layout: table-based (Word copy-paste compatible), inline CSS only, no flexbox/grid.
+        No external dependencies — files work offline.
+
+        Report structure per leader:
+          ┌────────────────────────────────────────┐
+          │  Header: name, period, campaign count  │
+          │  Org-wide KPI summary cards            │
+          ├────────────────────────────────────────┤
+          │  ▶ Director A         847✓ 32✗ 22⏳   │
+          │    ▶ Mgr Smith         124✓  3✗  1⏳   │
+          │      ▼ Carol User      12 items         │
+          │          Finance-Admins   APPROVE        │
+          │          VPN-Standard     REVOKE         │
+          │      ▼ Dave Brown       8 items          │
+          │    ▶ Mgr Chen          89✓  2✗  4⏳    │
+          │  ▶ Director B         ...               │
+          └────────────────────────────────────────┘
+
+    .PARAMETER HierarchyData
+        The .Data property from Build-SPLeadershipHierarchy output.
+        Must have: TopNodes (HierarchyNode[]), NodeCount (int).
+    .PARAMETER OutputPath
+        Directory to write HTML files into. Created if it does not exist.
+    .PARAMETER ReportTitle
+        Title shown in the report header. Default: 'Certification Governance Rollup'.
+    .PARAMETER DateRange
+        Human-readable date range string shown in the report header.
+    .PARAMETER CampaignCount
+        Number of campaigns included in the data. Shown in the header.
+    .PARAMETER MinReportLevel
+        Minimum org level to generate a top-level file for.
+        0 = certifiers (managers), 1 = directors, 2 = VPs, etc.
+        Default: 1 (one file per director and above).
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                Files      = [string[]]   # absolute paths of generated HTML files
+                FileCount  = [int]
+                TotalNodes = [int]
+            }
+            Error   = $string
+        }
+    .EXAMPLE
+        $hierarchy = Build-SPLeadershipHierarchy -Decisions $dec -OrgTree $tree `
+                         -CertReviewerIdMap $idMap
+        $result = Export-SPHierarchicalLeadershipHtml `
+            -HierarchyData $hierarchy.Data `
+            -OutputPath '.\Reports\Leadership' `
+            -ReportTitle 'Q1 2026 Access Review Rollup' `
+            -DateRange '2026-01-01 to 2026-03-31' `
+            -CampaignCount 47
+        $result.Data.Files | ForEach-Object { Start-Process $_ }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$HierarchyData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$ReportTitle = 'Certification Governance Rollup',
+
+        [Parameter()]
+        [string]$DateRange = '',
+
+        [Parameter()]
+        [int]$CampaignCount = 0,
+
+        [Parameter()]
+        [int]$MinReportLevel = 1,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Export-SPHierarchicalLeadershipHtml: OutputPath='$OutputPath' MinLevel=$MinReportLevel" `
+        -Severity INFO -Component 'SP.AuditReportHtml' -Action 'Export-SPHierarchicalLeadershipHtml' `
+        -CorrelationID $CorrelationID
+
+    try {
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+
+        $runStamp  = (Get-Date -Format 'yyyyMMdd-HHmmss')
+        $genDate   = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        $files     = [System.Collections.Generic.List[string]]::new()
+        $topNodes  = @($HierarchyData.TopNodes)
+
+        # Collect all leaders at or above MinReportLevel to generate individual files
+        # (walk the tree, collect nodes at >= MinReportLevel)
+        $reportNodes = [System.Collections.Generic.List[object]]::new()
+        $nodeQueue   = [System.Collections.Generic.Queue[object]]::new()
+        foreach ($n in $topNodes) { $nodeQueue.Enqueue($n) }
+        while ($nodeQueue.Count -gt 0) {
+            $n = $nodeQueue.Dequeue()
+            if ($n.Level -ge $MinReportLevel) { $reportNodes.Add($n) }
+            foreach ($child in @($n.Children)) { $nodeQueue.Enqueue($child) }
+        }
+
+        if ($reportNodes.Count -eq 0) {
+            Write-SPLog -Message "No leaders found at level >= $MinReportLevel - generating one combined report" `
+                -Severity WARN -Component 'SP.AuditReportHtml' -Action 'Export-SPHierarchicalLeadershipHtml' `
+                -CorrelationID $CorrelationID
+            foreach ($n in $topNodes) { $reportNodes.Add($n) }
+        }
+
+        # CSS — table-based layout, no flexbox/grid, inline only
+        $css = @'
+body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:#f4f6f8;color:#212529;}
+.rpt-header{background:#fff;padding:16px 20px;border-radius:6px;margin-bottom:16px;border:1px solid #dee2e6;}
+.rpt-title{font-size:20px;font-weight:700;color:#1a1a2e;margin:0 0 4px;}
+.rpt-meta{font-size:12px;color:#6c757d;}
+.kpi-section{margin-bottom:16px;}
+.kpi-table{border-collapse:collapse;margin-bottom:12px;}
+.kpi-table td{padding:8px 20px;text-align:center;border-radius:4px;font-size:13px;}
+.kpi-approved{background:#d4edda;color:#155724;}
+.kpi-revoked{background:#f8d7da;color:#721c24;}
+.kpi-pending{background:#fff3cd;color:#856404;}
+.kpi-total{background:#d1ecf1;color:#0c5460;}
+.org-section{background:#fff;padding:12px;border-radius:6px;border:1px solid #dee2e6;}
+details>summary{list-style:none;}
+details>summary::-webkit-details-marker{display:none;}
+.rpt-footer{margin-top:20px;font-size:11px;color:#adb5bd;text-align:center;}
+'@
+
+        # Generate one HTML file per report node
+        foreach ($rNode in $reportNodes) {
+            $safeFileName = ($rNode.DisplayName -replace '[^A-Za-z0-9_\-]', '_').Substring(0, [math]::Min(40, ($rNode.DisplayName -replace '[^A-Za-z0-9_\-]', '_').Length))
+            $fileName = "hierarchy-report-$safeFileName-$runStamp.html"
+            $filePath = Join-Path $OutputPath $fileName
+
+            # Aggregate for this subtree root
+            $totalA = $rNode.Agg.Approved
+            $totalR = $rNode.Agg.Revoked
+            $totalP = $rNode.Agg.Pending
+            $totalT = $rNode.Agg.Total
+            $totalI = $rNode.Agg.Identities
+            $totalApprPct = if ($totalT -gt 0) { [math]::Round($totalA * 100.0 / $totalT, 1) } else { 0 }
+
+            $kpiHtml = @"
+<table class="kpi-table" cellpadding="8" cellspacing="4" border="0">
+<tr>
+  <td class="kpi-approved">Approved<br/><b>$totalA ($totalApprPct%)</b></td>
+  <td class="kpi-revoked">Revoked<br/><b>$totalR</b></td>
+  <td class="kpi-pending">Pending<br/><b>$totalP</b></td>
+  <td class="kpi-total">Total Items<br/><b>$totalT</b></td>
+  <td class="kpi-total">Identities Reviewed<br/><b>$totalI</b></td>
+</tr>
+</table>
+"@
+
+            $encodedTitle = [System.Web.HttpUtility]::HtmlEncode($ReportTitle)
+            $encodedName  = [System.Web.HttpUtility]::HtmlEncode($rNode.DisplayName)
+            $encodedRange = [System.Web.HttpUtility]::HtmlEncode($DateRange)
+            $campNote     = if ($CampaignCount -gt 0) { " | $CampaignCount campaign(s)" } else { '' }
+
+            $treeHtml = _Render-SPHierarchyNodeHtml -Node $rNode -Depth 0
+
+            $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$encodedTitle — $encodedName</title>
+<style>$css</style>
+<script>
+function toggleAll(open){
+  document.querySelectorAll('details').forEach(function(d){d.open=open;});
+}
+</script>
+</head>
+<body>
+<div class="rpt-header">
+  <div class="rpt-title">$encodedTitle</div>
+  <div class="rpt-meta">$encodedName &nbsp;|&nbsp; $encodedRange$campNote &nbsp;|&nbsp; Generated: $genDate</div>
+  <div style="margin-top:8px;">
+    <button onclick="toggleAll(true)"  style="font-size:11px;padding:3px 10px;cursor:pointer;margin-right:6px;">Expand All</button>
+    <button onclick="toggleAll(false)" style="font-size:11px;padding:3px 10px;cursor:pointer;">Collapse All</button>
+  </div>
+</div>
+<div class="kpi-section">$kpiHtml</div>
+<div class="org-section">$treeHtml</div>
+<div class="rpt-footer">SailPoint ISC Governance Toolkit &mdash; $genDate &mdash; CorrelationID: $CorrelationID</div>
+</body>
+</html>
+"@
+
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($filePath, $html, $utf8NoBom)
+            $files.Add($filePath)
+
+            Write-SPLog -Message "Wrote hierarchical report for '$($rNode.DisplayName)' (level=$($rNode.Level)) → $filePath" `
+                -Severity INFO -Component 'SP.AuditReportHtml' -Action 'Export-SPHierarchicalLeadershipHtml' `
+                -CorrelationID $CorrelationID
+        }
+
+        Write-Host "  Hierarchical leadership reports: $($files.Count) file(s) in '$OutputPath'" -ForegroundColor Green
+
+        return @{
+            Success = $true
+            Data    = @{
+                Files      = $files.ToArray()
+                FileCount  = $files.Count
+                TotalNodes = $HierarchyData.NodeCount
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Export-SPHierarchicalLeadershipHtml failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReportHtml' `
+            -Action 'Export-SPHierarchicalLeadershipHtml' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+# Second Export-ModuleMember call is required because Export-SPHierarchicalLeadershipHtml is
+# defined after the primary Export-ModuleMember call at the top of this section.
+# In PS5.1, Export-ModuleMember calls are cumulative; this additive call registers the
+# new hierarchical report function.
+Export-ModuleMember -Function 'Export-SPHierarchicalLeadershipHtml'

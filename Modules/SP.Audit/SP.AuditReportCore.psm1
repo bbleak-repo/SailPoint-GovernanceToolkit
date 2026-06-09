@@ -2085,6 +2085,286 @@ function Measure-SPCampaignMetrics {
 
 #endregion
 
+#region Hierarchical Leadership Rollup (P17-01)
+# ---------------------------------------------------------------------------
+# Module-scope recursive helper — not exported.
+# Builds a HierarchyNode PSCustomObject bottom-up so each node carries
+# aggregate decision counts from its entire descendant subtree.
+# ---------------------------------------------------------------------------
+
+function _Build-SPHierarchyNodeInternal {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]   $NodeId,
+        [Parameter(Mandatory)][hashtable]$OrgNodes,      # OrgTree.Nodes dict
+        [Parameter(Mandatory)][hashtable]$DecisionIndex  # reviewerId->reviewedId->entry
+    )
+
+    $treeNode = $OrgNodes[$NodeId]
+    if ($null -eq $treeNode) { return $null }
+
+    $identity = $treeNode.Identity
+    $childIds  = @($treeNode.Children)
+
+    # Recurse children first (bottom-up so aggregation flows upward)
+    $childNodes = [System.Collections.Generic.List[object]]::new()
+    foreach ($cid in $childIds) {
+        $cn = _Build-SPHierarchyNodeInternal -NodeId $cid `
+                  -OrgNodes $OrgNodes -DecisionIndex $DecisionIndex
+        if ($null -ne $cn) { $childNodes.Add($cn) }
+    }
+
+    # Aggregate from child subtrees
+    $agg = @{ Approved=0; Revoked=0; Pending=0; Total=0; Identities=0 }
+    foreach ($child in $childNodes) {
+        $agg.Approved   += $child.Agg.Approved
+        $agg.Revoked    += $child.Agg.Revoked
+        $agg.Pending    += $child.Agg.Pending
+        $agg.Total      += $child.Agg.Total
+        $agg.Identities += $child.Agg.Identities
+    }
+
+    # Direct decisions where THIS node was the certifier (reviewer)
+    $certifiedIdentities = @()
+    if ($DecisionIndex.ContainsKey($NodeId)) {
+        $certMap  = $DecisionIndex[$NodeId]
+        $certList = [System.Collections.Generic.List[object]]::new()
+        foreach ($reviewedId in @($certMap.Keys)) {
+            $entry = $certMap[$reviewedId]
+            $agg.Approved   += $entry.Approved
+            $agg.Revoked    += $entry.Revoked
+            $agg.Pending    += $entry.Pending
+            $agg.Total      += ($entry.Approved + $entry.Revoked + $entry.Pending)
+            $agg.Identities += 1
+            $certList.Add([PSCustomObject]@{
+                IdentityId = $reviewedId
+                Name       = $entry.Name
+                Approved   = $entry.Approved
+                Revoked    = $entry.Revoked
+                Pending    = $entry.Pending
+                Items      = @($entry.Items)
+            })
+        }
+        # Sort by name for consistent output
+        $certifiedIdentities = @($certList | Sort-Object Name)
+    }
+
+    $displayName = if ($null -ne $identity -and $identity.Found -and
+                       -not [string]::IsNullOrWhiteSpace($identity.Name)) {
+        $identity.Name
+    }
+    else { $NodeId }
+
+    return [PSCustomObject]@{
+        NodeId              = $NodeId
+        DisplayName         = $displayName
+        Level               = [int]$treeNode.Level
+        Children            = $childNodes.ToArray()
+        CertifiedIdentities = $certifiedIdentities
+        IsCertifier         = ($certifiedIdentities.Count -gt 0)
+        Agg                 = $agg
+    }
+}
+
+function Build-SPLeadershipHierarchy {
+    <#
+    .SYNOPSIS
+        Builds a hierarchical org-tree enriched with certification decision statistics.
+    .DESCRIPTION
+        Joins certification decision data (from Group-SPAuditDecisions) to the org tree
+        (from Build-SPOrgTree) to produce a recursive tree structure where each node
+        carries aggregated decision counts (Approved, Revoked, Pending) from its entire
+        descendant subtree.
+
+        The join uses CertReviewerIdMap to go from CertificationId (present in every
+        decision item) → reviewer identity ID → org tree node.  Build this map from
+        Get-SPAuditCertifications output:
+
+            $certReviewerIdMap = @{}
+            foreach ($cert in $allCerts) {
+                if ($cert.certifier -and $cert.certifier.id) {
+                    $certReviewerIdMap[[string]$cert.id] = [string]$cert.certifier.id
+                }
+            }
+
+        The resulting HierarchyNode tree is consumed by Export-SPHierarchicalLeadershipHtml
+        to produce per-leader HTML reports with collapsible drill-down.
+
+    .PARAMETER Decisions
+        Output of Group-SPAuditDecisions: @{Approved=@(...); Revoked=@(...); Pending=@(...)}
+        Each item must have CertificationId, IdentityId, IdentityName fields.
+    .PARAMETER OrgTree
+        The .Data property from Build-SPOrgTree output.
+        Must have: Nodes (hashtable), TopLeaders (string[]).
+    .PARAMETER CertReviewerIdMap
+        Hashtable mapping certificationId (string) → reviewerIdentityId (string).
+        Built from Get-SPAuditCertifications output (cert.id → cert.certifier.id).
+        Without this, decisions cannot be attributed to specific org tree nodes.
+    .PARAMETER CorrelationID
+        Unique ID for tracing related log entries.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = @{
+                TopNodes  = [PSCustomObject[]]  # one per TopLeader in OrgTree
+                NodeCount = [int]
+            }
+            Error   = $string
+        }
+        Each HierarchyNode (PSCustomObject): NodeId, DisplayName, Level,
+        Children (nested HierarchyNodes), CertifiedIdentities (only for leaf certifiers),
+        IsCertifier ($bool), Agg (@{Approved;Revoked;Pending;Total;Identities}).
+    .EXAMPLE
+        # Step 1: collect raw data
+        $certs = @($campaigns | ForEach-Object { (Get-SPAuditCertifications -CampaignId $_.id).Data })
+        $items = @($certs | ForEach-Object { (Get-SPAuditCertificationItems -CertificationId $_.id).Data })
+
+        # Step 2: build reviewer ID map (certId -> reviewerIdentityId)
+        $certReviewerIdMap = @{}
+        foreach ($cert in $certs) {
+            if ($cert.certifier -and $cert.certifier.id) {
+                $certReviewerIdMap[[string]$cert.id] = [string]$cert.certifier.id
+            }
+        }
+
+        # Step 3: group decisions and build org tree
+        $decisions = Group-SPAuditDecisions -Items $items
+        $certifierIds = @($certReviewerIdMap.Values | Select-Object -Unique)
+        $orgTree = (Build-SPOrgTree -IdentityIds $certifierIds -MaxDepth 5).Data
+
+        # Step 4: build hierarchy
+        $hierarchy = Build-SPLeadershipHierarchy -Decisions $decisions `
+            -OrgTree $orgTree -CertReviewerIdMap $certReviewerIdMap
+
+        # Step 5: generate HTML
+        Export-SPHierarchicalLeadershipHtml -HierarchyData $hierarchy.Data `
+            -OutputPath '.\Reports' -ReportTitle 'Q1 Access Review Rollup'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Decisions,
+
+        [Parameter(Mandatory)]
+        [hashtable]$OrgTree,
+
+        [Parameter()]
+        [hashtable]$CertReviewerIdMap = @{},
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    Write-SPLog -Message "Build-SPLeadershipHierarchy: building decision index" `
+        -Severity INFO -Component 'SP.AuditReportCore' -Action 'Build-SPLeadershipHierarchy' `
+        -CorrelationID $CorrelationID
+
+    try {
+        # -----------------------------------------------------------------------
+        # Step 1: Index decisions by reviewer identity ID
+        #   Join path: decision.CertificationId
+        #              → CertReviewerIdMap[certId] = reviewerIdentityId
+        #              → DecisionIndex[reviewerIdentityId][reviewedIdentityId]
+        # -----------------------------------------------------------------------
+        $decisionIndex = @{}   # reviewerId → reviewedId → @{Name;Items;Approved;Revoked;Pending}
+
+        $allBuckets = @(
+            @{ Items = @($Decisions.Approved); Bucket = 'Approved' }
+            @{ Items = @($Decisions.Revoked);  Bucket = 'Revoked'  }
+            @{ Items = @($Decisions.Pending);  Bucket = 'Pending'  }
+        )
+
+        foreach ($bucket in $allBuckets) {
+            $bucketName = $bucket.Bucket
+            foreach ($item in $bucket.Items) {
+                if ($null -eq $item) { continue }
+
+                $certId = if ($null -ne $item.PSObject.Properties['CertificationId']) {
+                    [string]$item.CertificationId
+                } else { '' }
+
+                if ([string]::IsNullOrWhiteSpace($certId)) { continue }
+
+                $reviewerId = ''
+                if ($CertReviewerIdMap.ContainsKey($certId)) {
+                    $reviewerId = [string]$CertReviewerIdMap[$certId]
+                }
+                if ([string]::IsNullOrWhiteSpace($reviewerId)) { continue }
+
+                $reviewedId   = [string]$item.IdentityId
+                $reviewedName = [string]$item.IdentityName
+
+                if (-not $decisionIndex.ContainsKey($reviewerId)) {
+                    $decisionIndex[$reviewerId] = @{}
+                }
+                if (-not $decisionIndex[$reviewerId].ContainsKey($reviewedId)) {
+                    $decisionIndex[$reviewerId][$reviewedId] = @{
+                        Name     = $reviewedName
+                        Items    = [System.Collections.Generic.List[object]]::new()
+                        Approved = 0
+                        Revoked  = 0
+                        Pending  = 0
+                    }
+                }
+
+                $entry = $decisionIndex[$reviewerId][$reviewedId]
+                $entry.Items.Add($item)
+                switch ($bucketName) {
+                    'Approved' { $entry.Approved++ }
+                    'Revoked'  { $entry.Revoked++  }
+                    'Pending'  { $entry.Pending++  }
+                }
+            }
+        }
+
+        $indexedReviewers  = $decisionIndex.Keys.Count
+        $indexedDecisions  = ($decisionIndex.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+        Write-SPLog -Message "Build-SPLeadershipHierarchy: indexed $indexedDecisions reviewed identities under $indexedReviewers reviewers" `
+            -Severity INFO -Component 'SP.AuditReportCore' -Action 'Build-SPLeadershipHierarchy' `
+            -CorrelationID $CorrelationID
+
+        # -----------------------------------------------------------------------
+        # Step 2: Walk org tree top-down, building HierarchyNodes with bottom-up
+        #         aggregation (children computed before parents via recursion)
+        # -----------------------------------------------------------------------
+        $orgNodes = $OrgTree.Nodes
+        $topLeaders = @($OrgTree.TopLeaders)
+
+        $topNodes = [System.Collections.Generic.List[object]]::new()
+        foreach ($topId in $topLeaders) {
+            $node = _Build-SPHierarchyNodeInternal -NodeId $topId `
+                        -OrgNodes $orgNodes -DecisionIndex $decisionIndex
+            if ($null -ne $node) { $topNodes.Add($node) }
+        }
+
+        Write-SPLog -Message "Build-SPLeadershipHierarchy: built hierarchy with $($topNodes.Count) top-level node(s)" `
+            -Severity INFO -Component 'SP.AuditReportCore' -Action 'Build-SPLeadershipHierarchy' `
+            -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                TopNodes  = $topNodes.ToArray()
+                NodeCount = $orgNodes.Count
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $errMsg = "Build-SPLeadershipHierarchy failed: $($_.Exception.Message)"
+        Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReportCore' `
+            -Action 'Build-SPLeadershipHierarchy' -CorrelationID $CorrelationID
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion Hierarchical Leadership Rollup
+
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'Group-SPReviewerActions',
@@ -2094,5 +2374,6 @@ Export-ModuleMember -Function @(
     'Measure-SPAuditRubberStampRisk',
     'Measure-SPCampaignMetrics',
     'Get-SPAuditRiskFlags',
-    'Group-SPAuditByLeadership'
+    'Group-SPAuditByLeadership',
+    'Build-SPLeadershipHierarchy'
 )
