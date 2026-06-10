@@ -2087,7 +2087,11 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 </tr></thead><tbody>
 <tr>
 <td><code>-CampaignNamePrefix &lt;s&gt;</code></td>
-<td>Prefix used to find delta-cert campaigns (default <code>DeltaCert.Escalation.CampaignNamePrefix</code>).</td>
+<td>Prefix (starts-with) used to find delta-cert campaigns (default <code>DeltaCert.Escalation.CampaignNamePrefix</code>).</td>
+</tr>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Same name-resolution options as <code>Invoke-SPCampaignDiff</code>. <strong><code>-CampaignNameContains 'Wednesday'</code></strong> matches a token mid-name (e.g. the weekday in <code>Daily Attestation Manager Wednesday</code>); <code>-CampaignName</code> is an exact match. Precedence: exact &gt; contains &gt; startsWith &gt; prefix.</td>
 </tr>
 <tr>
 <td><code>-StaleHours &lt;n&gt;</code></td>
