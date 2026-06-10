@@ -24,9 +24,20 @@
         in settings.json.
 
 .PARAMETER CampaignNamePrefix
-    Prefix used to find delta cert campaigns. Defaults to the
+    Prefix (starts-with) used to find delta cert campaigns. Defaults to the
     DeltaCert.Escalation.CampaignNamePrefix value in settings.json
     (fallback: 'AD Delta Cert').
+.PARAMETER CampaignName
+    Exact (case-insensitive) campaign name. Highest precedence.
+.PARAMETER CampaignNameStartsWith
+    Campaign name begins with this prefix (same as -CampaignNamePrefix; provided for parity with
+    Invoke-SPCampaignDiff).
+.PARAMETER CampaignNameContains
+    Substring (contains) match on the campaign name. Use it when the distinguishing token is in the
+    MIDDLE of the name, e.g. the weekday in 'Daily Attestation Manager Wednesday'
+    (-CampaignNameContains 'Wednesday'). Pairs with -DaysBack to bound the campaign-creation window.
+    Precedence when several are given: -CampaignName > -CampaignNameContains > -CampaignNameStartsWith
+    > -CampaignNamePrefix.
 .PARAMETER StaleHours
     Number of hours with no reviewer action before a certification is
     considered stale. Defaults to DeltaCert.Escalation.DefaultStaleHours
@@ -108,6 +119,10 @@
     # Full org-chart audit: the chain spreadsheet AND the copy-paste email lines.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf -Csv
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Wednesday' -DaysBack 1 -WhatIf -Csv -EmailList
+    # Find the campaign whose name CONTAINS 'Wednesday' (weekday mid-name), created in the last
+    # day, and produce the chain CSV + copy-paste email queue. No write calls (WhatIf).
     # Org chart audit against a peer's campaign name prefix with CSV output.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
@@ -132,6 +147,15 @@
 param(
     [Parameter()]
     [string]$CampaignNamePrefix,
+
+    [Parameter()]
+    [string]$CampaignName,
+
+    [Parameter()]
+    [string]$CampaignNameStartsWith,
+
+    [Parameter()]
+    [string]$CampaignNameContains,
 
     [Parameter()]
     [int]$StaleHours = 0,
@@ -294,6 +318,14 @@ if ([string]::IsNullOrWhiteSpace($effectivePrefix)) {
     }
 }
 
+# Human-readable description of the campaign-name filter actually in effect (precedence:
+# exact > contains > startsWith > prefix) -- shown in the console / WhatIf output.
+$nameFilterDesc =
+    if     (-not [string]::IsNullOrWhiteSpace($CampaignName))           { "name is '$CampaignName'" }
+    elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { "name contains '$CampaignNameContains'" }
+    elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { "name starts with '$CampaignNameStartsWith'" }
+    else   { "name starts with '$effectivePrefix'" }
+
 $effectiveStaleHours = $StaleHours
 if ($effectiveStaleHours -le 0) {
     if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
@@ -345,7 +377,7 @@ if (($WhatIfPreference -eq $true)) {
     else {
         Write-Host '  Would run escalation with:' -ForegroundColor Cyan
     }
-    Write-Host "    CampaignPrefix:              $effectivePrefix"
+    Write-Host "    Campaign filter:             $nameFilterDesc"
     Write-Host "    StaleHours:                  $effectiveStaleHours"
     if ($EscalateBeforeDeadlineHours -gt 0) {
         Write-Host "    EscalateBeforeDeadlineHours: $EscalateBeforeDeadlineHours"
@@ -376,6 +408,11 @@ if ($EscalateBeforeDeadlineHours -gt 0) {
 if ($DaysBack -gt 0) {
     $staleParams['DaysBack'] = $DaysBack
 }
+# Pass through the explicit name filters; the function applies precedence
+# (exact > contains > startsWith > prefix).
+if (-not [string]::IsNullOrWhiteSpace($CampaignName))           { $staleParams['CampaignName'] = $CampaignName }
+if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $staleParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { $staleParams['CampaignNameContains'] = $CampaignNameContains }
 
 $staleResult = Get-SPDeltaCertStaleCertifications @staleParams
 
@@ -585,12 +622,12 @@ if ($staleCerts.Count -eq 0) {
     Write-Host ''
     if ($DaysBack -gt 0) {
         Write-Host '  No certifications found in audit window.' -ForegroundColor Yellow
-        Write-Host "  Prefix:   $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  Filter:   $nameFilterDesc" -ForegroundColor DarkGray
         Write-Host "  DaysBack: $DaysBack days" -ForegroundColor DarkGray
     }
     else {
         Write-Host '  No stale certifications found.' -ForegroundColor Yellow
-        Write-Host "  Prefix:     $effectivePrefix" -ForegroundColor DarkGray
+        Write-Host "  Filter:     $nameFilterDesc" -ForegroundColor DarkGray
         Write-Host "  Threshold:  $effectiveStaleHours hours" -ForegroundColor DarkGray
     }
     Write-Host ''
