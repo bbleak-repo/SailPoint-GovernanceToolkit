@@ -244,6 +244,7 @@
 
         # SP.CertTracker - Executive certification progress tracker (pace/stage/projection)
         'Build-SPCertTrackerData'
+        'Export-SPCertTrackerHtml'
     )
 
     # Do not export variables or aliases from nested modules

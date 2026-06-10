@@ -240,4 +240,140 @@ function Build-SPCertTrackerData {
 
 #endregion
 
-Export-ModuleMember -Function @('Build-SPCertTrackerData')
+#region Public: HTML
+
+function Get-CTEnc { param([object]$v) if ($null -eq $v) { return '' } return [System.Web.HttpUtility]::HtmlEncode([string]$v) }
+
+function Export-SPCertTrackerHtml {
+    <#
+    .SYNOPSIS
+        Renders the executive Certification Progress Tracker (pipeline board + pace cards).
+    .PARAMETER TrackerData
+        Output of Build-SPCertTrackerData (.Data) -- @{ Campaigns; Program }.
+    .PARAMETER OutputPath
+        Target .html file (or directory).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=<path>; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$TrackerData,
+        [Parameter(Mandatory)][string]$OutputPath
+    )
+    try {
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+        $prog = Get-CTProp $TrackerData 'Program'
+        $camps = @(Get-CTProp $TrackerData 'Campaigns' @())
+        $ragColor = @{ Red = '#b00020'; Amber = '#9a6700'; Green = '#0a7d2c' }
+        $stages = @('Launched', 'In Review', 'Decisions Done', 'Signed Off', 'Remediation', 'Closed')
+
+        $css = @'
+body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:22px;background:#f4f7fb;}
+h1{font-size:21px;color:#1f3a5f;margin:0 0 2px;}
+.sub{color:#566;font-size:12px;margin-bottom:14px;}
+.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+.kpi{background:#fff;border:1px solid #d4dce6;border-radius:8px;padding:10px 16px;min-width:120px;}
+.kpi .n{font-size:26px;font-weight:700;color:#1f3a5f;display:block;line-height:1;}
+.kpi .l{font-size:11px;color:#566;text-transform:uppercase;letter-spacing:.04em;}
+.pipe{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;}
+.pipe .seg{background:#fff;border:1px solid #d4dce6;border-radius:6px;padding:6px 10px;font-size:11px;color:#566;}
+.pipe .seg b{color:#1f3a5f;font-size:15px;}
+.card{background:#fff;border:1px solid #d4dce6;border-left-width:5px;border-radius:8px;padding:14px 16px;margin-bottom:12px;}
+.card h2{font-size:15px;margin:0 0 2px;color:#1f3a5f;display:flex;align-items:center;gap:8px;}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block;}
+.rail{display:flex;gap:3px;margin:10px 0 6px;}
+.pill{flex:1;text-align:center;font-size:9.5px;padding:4px 2px;border-radius:4px;background:#e7edf4;color:#8a99ab;border:1px solid #dde5ee;}
+.pill.done{background:#0a7d2c;color:#fff;border-color:#0a7d2c;}
+.pill.cur{background:#1f3a5f;color:#fff;border-color:#1f3a5f;font-weight:700;}
+.heads{display:flex;gap:24px;margin:8px 0;flex-wrap:wrap;}
+.head .v{font-size:20px;font-weight:700;color:#1f3a5f;}
+.head .l{font-size:10px;color:#777;text-transform:uppercase;}
+.proj{font-size:13px;font-weight:700;}
+.bar{height:10px;background:#e7edf4;border-radius:5px;overflow:hidden;margin-top:4px;}
+.bar > span{display:block;height:100%;background:#3a6ea5;}
+.pace{font-size:11.5px;color:#566;margin-top:8px;}
+.tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;color:#fff;}
+.note{font-size:11px;color:#777;margin-top:14px;}
+'@
+        $title = 'Certification Progress Tracker'
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>$(Get-CTEnc $title)</title><style>$css</style></head><body>")
+        [void]$sb.Append("<h1>$(Get-CTEnc $title)</h1>")
+        [void]$sb.Append("<div class='sub'>Where each active certification campaign stands &mdash; pace, projection, and movement. Active &amp; incomplete is the normal state; the story is whether it's moving toward its deadline.</div>")
+
+        # Program KPIs
+        [void]$sb.Append("<div class='kpis'>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$($prog.ActiveCampaigns)</span><span class='l'>Active campaigns</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n' style='color:#9a6700'>$($prog.AtRiskCampaigns)</span><span class='l'>At-risk (amber+red)</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n' style='color:#b00020'>$($prog.OverdueCampaigns)</span><span class='l'>Overdue</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$($prog.TotalCampaigns)</span><span class='l'>Total tracked</span></div>")
+        [void]$sb.Append("</div>")
+
+        # Pipeline board (counts per stage)
+        [void]$sb.Append("<div class='pipe'>")
+        foreach ($st in $stages) { $c = if ($prog.ByStage.Contains($st)) { $prog.ByStage[$st] } else { 0 }; [void]$sb.Append("<div class='seg'><b>$c</b> $(Get-CTEnc $st)</div>") }
+        [void]$sb.Append("</div>")
+
+        # Cards, worst-first (Red, Amber, Green), then least complete
+        $order = @{ Red = 0; Amber = 1; Green = 2 }
+        $sorted = $camps | Sort-Object @{ Expression = { if ($order.ContainsKey($_.Rag)) { $order[$_.Rag] } else { 3 } } }, @{ Expression = { [double]$_.CompletionByReviewer } }
+        foreach ($c in $sorted) {
+            $rc = if ($ragColor.ContainsKey($c.Rag)) { $ragColor[$c.Rag] } else { '#888' }
+            [void]$sb.Append("<div class='card' style='border-left-color:$rc'>")
+            [void]$sb.Append("<h2><span class='dot' style='background:$rc'></span>$(Get-CTEnc $c.CampaignName)</h2>")
+            # stage rail
+            [void]$sb.Append("<div class='rail'>")
+            for ($i = 0; $i -lt $stages.Count; $i++) {
+                $idx = $i + 1
+                $cls = if ($idx -lt $c.StageIndex) { 'pill done' } elseif ($idx -eq $c.StageIndex) { 'pill cur' } else { 'pill' }
+                [void]$sb.Append("<div class='$cls'>$(Get-CTEnc $stages[$i])</div>")
+            }
+            [void]$sb.Append("</div>")
+            # headline numbers (BOTH framings)
+            $projLabel = switch ($c.ProjectedVsDeadline) {
+                'OnTrack'   { "<span class='proj' style='color:#0a7d2c'>On track</span>" }
+                'AtRisk'    { "<span class='proj' style='color:#9a6700'>At risk</span>" }
+                'Behind'    { "<span class='proj' style='color:#b00020'>Behind</span>" }
+                'Decided'   { "<span class='proj' style='color:#3a6ea5'>All decided</span>" }
+                'Stalled'   { "<span class='proj' style='color:#888'>Stalled (no pace)</span>" }
+                'NoDeadline'{ "<span class='proj' style='color:#888'>No deadline set</span>" }
+                default     { "<span class='proj' style='color:#888'>&mdash;</span>" }
+            }
+            $projWhen = if ($c.ProjectedClose) { try { ([datetime]::Parse($c.ProjectedClose)).ToString('MMM d') } catch { '' } } else { '' }
+            $dueWhen  = if ($c.DueDate) { try { ([datetime]::Parse($c.DueDate)).ToString('MMM d') } catch { '' } } else { '' }
+            [void]$sb.Append("<div class='heads'>")
+            [void]$sb.Append("<div class='head'><div class='v'>$($c.CompletionByReviewer)%</div><div class='l'>Reviewers complete</div></div>")
+            [void]$sb.Append("<div class='head'><div class='v'>$($c.CompletionByDecision)%</div><div class='l'>Decisions complete</div></div>")
+            [void]$sb.Append("<div class='head'><div>$projLabel</div><div class='l'>Projected $(Get-CTEnc $projWhen) vs due $(Get-CTEnc $dueWhen)</div></div>")
+            [void]$sb.Append("</div>")
+            # burndown bar (decided / total)
+            $pct = if ([int]$c.ItemsTotal -gt 0) { [math]::Round([int]$c.ItemsDecided * 100.0 / [int]$c.ItemsTotal) } else { 0 }
+            [void]$sb.Append("<div class='bar'><span style='width:$pct%'></span></div>")
+            # pace line
+            $vel = if ($null -eq $c.VelocityPerDay) { 'n/a' } else { "$($c.VelocityPerDay)/day" }
+            $dIn = if ($null -eq $c.DaysIn) { '?' } else { $c.DaysIn }
+            $mom = $c.Momentum
+            $momTag = switch ($mom) { 'Advanced' {"<span class='tag' style='background:#0a7d2c'>advanced</span>"} 'Moving' {"<span class='tag' style='background:#3a6ea5'>moving</span>"} 'Stalled' {"<span class='tag' style='background:#9a6700'>stalled</span>"} 'Slipped' {"<span class='tag' style='background:#b00020'>slipped</span>"} default {"<span class='tag' style='background:#888'>baseline</span>"} }
+            [void]$sb.Append("<div class='pace'>Day $dIn &middot; velocity $vel &middot; $momTag &middot; $($c.ItemsRemaining) items remaining &middot; $($c.ReviewersNotStarted) reviewer(s) not started &middot; $($c.PrivilegedPending) privileged pending &middot; $($c.RemediationPending) revocation(s) to remediate &middot; <i>$($c.Phase)</i></div>")
+            [void]$sb.Append("</div>")
+        }
+        if (@($camps).Count -eq 0) { [void]$sb.Append("<div class='note'>No campaigns to track.</div>") }
+        [void]$sb.Append("<div class='note'>Read-only. Projected close = remaining items &divide; recent decision velocity; it is an estimate, not a commitment. No reassignment or escalation is performed.</div>")
+        [void]$sb.Append("</body></html>")
+
+        $file = $OutputPath
+        if ($OutputPath -notmatch '\.html?$') {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
+            $file = Join-Path $OutputPath 'cert-tracker.html'
+        }
+        $u = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        return @{ Success = $true; Data = $file; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPCertTrackerHtml failed: $($_.Exception.Message)" } }
+}
+
+#endregion
+
+Export-ModuleMember -Function @('Build-SPCertTrackerData', 'Export-SPCertTrackerHtml')

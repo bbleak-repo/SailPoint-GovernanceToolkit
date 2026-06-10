@@ -113,6 +113,22 @@ Describe "CTK-04: RAG + program rollup" {
     }
 }
 
+Describe "CTK-06: HTML board" {
+    It "Renders a tracker board (stage rail + pace cards + both completion framings)" {
+        $c1 = New-TkSnapshot -Id 'c1' -Approved 0 -Revoked 0 -Pending 10 -RevTotal 2 -RevSigned 0 -Start '2026-06-09T08:00:00Z' -Due '2026-06-13T08:00:00Z' -Captured '2026-06-09T16:00:00Z'
+        $c2 = New-TkSnapshot -Id 'c2' -Approved 30 -Revoked 5 -Pending 5 -RevTotal 2 -RevSigned 1 -Start '2026-06-05T08:00:00Z' -Due '2026-06-10T08:00:00Z' -Captured '2026-06-09T16:00:00Z'
+        $data = (Build-SPCertTrackerData -Campaigns @(@{ Current = $c1; Previous = $null }, @{ Current = $c2; Previous = $null })).Data
+        $out = Join-Path $TestDrive 'board'
+        $e = Export-SPCertTrackerHtml -TrackerData $data -OutputPath $out
+        $e.Success | Should -Be $true
+        Test-Path $e.Data | Should -Be $true
+        $html = Get-Content $e.Data -Raw
+        $html | Should -Match 'Certification Progress Tracker'
+        $html | Should -Match 'Reviewers complete'
+        $html | Should -Match 'Decisions complete'
+    }
+}
+
 Describe "CTK-05: graceful degradation" {
     It "Handles no previous, no dates, zero velocity without error" {
         $cur = New-TkSnapshot -Approved 0 -Revoked 0 -Pending 10 -RevTotal 2 -RevSigned 0
