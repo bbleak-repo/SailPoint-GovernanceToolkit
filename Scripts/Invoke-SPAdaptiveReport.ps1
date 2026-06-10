@@ -1,9 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Generates adaptive governance reports (composable RC components + baseline
-    reports) from SailPoint ISC campaign data. ADDITIVE -- sits alongside the
-    existing reports; nothing is replaced.
+    [DEPRECATED -- see NOTES] Generates adaptive governance reports (composable RC
+    components + baseline reports) from SailPoint ISC campaign data.
+
+    DEPRECATED: these reports were ported verbatim from an EntraID group-enumerator
+    and render an AD "group -> members" view (SamAccountName, Enabled, nested groups)
+    that drops the ISC certification substance -- the decision (approve/revoke/pending),
+    the reviewer, the dates, and the remediation status. They have been replaced by the
+    ISC-native reports: Invoke-SPCertTracker.ps1 (executive progress tracker +
+    -EvidencePack for the attestation evidence pack), Invoke-SPCampaignTrendReport.ps1
+    (-Program for the cross-campaign trend), and Invoke-SPCampaignDiff.ps1. This script
+    is kept temporarily for back-compat and will be removed.
 .DESCRIPTION
     Pulls campaign-audit data for a selected date window, pivots it into the RC
     GroupResults shape via Build-SPRCDataset (entitlement or campaign anchor), and
@@ -143,7 +151,14 @@ if (-not [System.IO.Path]::IsPathRooted($effectiveOutputPath)) { $effectiveOutpu
 if (-not (Test-Path $effectiveOutputPath)) { New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null }
 
 Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
-Write-Host '  Adaptive Report'
+Write-Host '  Adaptive Report' -ForegroundColor Yellow
+Write-Host '  [DEPRECATED] These reports were ported verbatim from an EntraID group-enumerator and' -ForegroundColor Yellow
+Write-Host '  render an AD group/member view that loses the ISC certification substance (decision,' -ForegroundColor Yellow
+Write-Host '  reviewer, dates, remediation). Use the ISC-native replacements instead:' -ForegroundColor Yellow
+Write-Host '    Invoke-SPCertTracker.ps1            (executive progress tracker + -EvidencePack)' -ForegroundColor Yellow
+Write-Host '    Invoke-SPCampaignTrendReport.ps1    (KPI rate trend; -Program for cross-campaign)' -ForegroundColor Yellow
+Write-Host '    Invoke-SPCampaignDiff.ps1           (day-over-day completion/scope diff)' -ForegroundColor Yellow
+Write-Host ''
 Write-Host "  Anchor: $Anchor | Theme: $Theme | Window: $(if ($CreatedAfter) { "$CreatedAfter..$CreatedBefore" } else { "$DaysBack days" })"
 Write-Host "  CorrelationID: $correlationID"
 Write-Host ''

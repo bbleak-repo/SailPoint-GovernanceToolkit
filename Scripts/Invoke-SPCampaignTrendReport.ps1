@@ -40,6 +40,9 @@
 param(
     [Parameter()][string]$ConfigPath,
     [Parameter()][string]$CampaignId,
+    # Cross-campaign PROGRAM trend (throughput + privileged-approval direction across all
+    # campaigns) instead of a single campaign's series. -CampaignId is not required with -Program.
+    [Parameter()][switch]$Program,
     [Parameter()][ValidateSet('Daily', 'Weekly', 'Monthly')][string]$Granularity = 'Weekly',
     [Parameter()][int]$DaysBack = 365,
     [Parameter()][string]$Environment,
@@ -60,7 +63,7 @@ foreach ($mod in @('SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1', 'SP.Audit\SP.Au
     else { Write-Host "ERROR: required module not found: $p" -ForegroundColor Red; exit 4 }
 }
 
-if ([string]::IsNullOrWhiteSpace($CampaignId)) { Write-Host 'ERROR: -CampaignId is required.' -ForegroundColor Red; exit 2 }
+if (-not $Program -and [string]::IsNullOrWhiteSpace($CampaignId)) { Write-Host 'ERROR: -CampaignId is required (or use -Program for the cross-campaign trend).' -ForegroundColor Red; exit 2 }
 
 $startTime = Get-Date
 try {
@@ -83,8 +86,23 @@ if (-not [System.IO.Path]::IsPathRooted($effectiveOutputPath)) { $effectiveOutpu
 if (-not (Test-Path $effectiveOutputPath)) { New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null }
 
 Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
-Write-Host "  Campaign KPI Trend (read-only) | Campaign: $CampaignId | $Granularity | last $DaysBack days"
 Write-Host ''
+
+if ($Program) {
+    Write-Host "  Program Governance Trend (read-only) | $Granularity | last $DaysBack days"
+    $pr = Get-SPProgramTrend -DaysBack $DaysBack -Granularity $Granularity -Environment ([string]$Environment)
+    if (-not $pr.Success) { Write-Host "ERROR: $($pr.Error)" -ForegroundColor Red; exit 1 }
+    if ([int]$pr.Data.RowCount -eq 0) { Write-Host '  No program trend data yet -- it accumulates as diff/tracker runs append per-campaign KPI rows.' -ForegroundColor Yellow; exit 1 }
+    $ex = Export-SPProgramTrendHtml -Trend $pr.Data -OutputPath $effectiveOutputPath
+    $generated = @()
+    if ($ex.Success) { $generated += $ex.Data; Write-Host "  program trend: $($ex.Data)" -ForegroundColor Green }
+    Write-Host ''
+    Write-Host "  Across $($pr.Data.CampaignCount) campaign(s): priv-approval $($pr.Data.Direction.PrivApprovalRate), closings $($pr.Data.Direction.Closed), completion $($pr.Data.Direction.Completion)" -ForegroundColor Cyan
+    if ($OutputMode -in @('JSON', 'Both')) { [ordered]@{ Program = $true; Granularity = $Granularity; CampaignCount = $pr.Data.CampaignCount; Direction = $pr.Data.Direction; Reports = @($generated); OutputPath = $effectiveOutputPath } | ConvertTo-Json -Depth 6 }
+    exit $(if ($generated.Count -gt 0) { 0 } else { 1 })
+}
+
+Write-Host "  Campaign KPI Trend (read-only) | Campaign: $CampaignId | $Granularity | last $DaysBack days"
 
 $tr = Get-SPCampaignTrend -CampaignId $CampaignId -DaysBack $DaysBack -Granularity $Granularity -Environment ([string]$Environment)
 if (-not $tr.Success) { Write-Host "ERROR: $($tr.Error)" -ForegroundColor Red; exit 1 }

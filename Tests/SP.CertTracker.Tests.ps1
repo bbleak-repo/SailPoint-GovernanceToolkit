@@ -129,6 +129,34 @@ Describe "CTK-06: HTML board" {
     }
 }
 
+Describe "CTK-07: attestation evidence pack" {
+    It "Renders actual decisions/reviewer/date/justification + revocation closure" {
+        $decisions = @{
+            Approved = @(
+                [PSCustomObject]@{ IdentityName='Alice'; AccessName='Finance-Reader'; SourceName='AD'; Privileged=$false; ReviewerName='Mgr One'; ReviewerEmail='m1@x'; DecisionDate='2026-06-09T09:00:00Z'; Justification='Role-appropriate'; RemediationStatus='N/A' }
+                [PSCustomObject]@{ IdentityName='Eve'; AccessName='Domain Admins'; SourceName='AD'; Privileged=$true; ReviewerName='Mgr One'; DecisionDate='2026-06-09T09:05:00Z'; Justification='Approved with note' }
+            )
+            Revoked = @(
+                [PSCustomObject]@{ IdentityName='Bob'; AccessName='VPN'; SourceName='Okta'; Privileged=$false; ReviewerName='Mgr Two'; DecisionDate='2026-06-09T09:10:00Z'; Justification='No longer needed'; RemediationStatus='Pending' }
+            )
+            Pending = @(
+                [PSCustomObject]@{ IdentityName='Carol'; AccessName='App-Reader'; SourceName='AD'; Privileged=$false; ReviewerName='Mgr Two' }
+            )
+        }
+        $meta = @{ Name='Daily Attestation - Tue'; Id='camp-ev'; Status='ACTIVE'; StartDate='2026-06-06T08:00:00Z'; DueDate='2026-06-11T08:00:00Z'; CapturedAt='2026-06-09T16:00:00Z'; ReviewersSigned=1; ReviewersTotal=2 }
+        $out = Join-Path $TestDrive 'ev'
+        $e = Export-SPAttestationEvidenceHtml -CampaignMeta $meta -Decisions $decisions -OutputPath $out
+        $e.Success | Should -Be $true
+        Test-Path $e.Data | Should -Be $true
+        $html = Get-Content $e.Data -Raw
+        $html | Should -Match 'Attestation Evidence Pack'
+        $html | Should -Match 'Mgr One'           # real reviewer rendered
+        $html | Should -Match 'No longer needed'   # real justification rendered
+        $html | Should -Match 'Revocation closure' # closure section
+        $html | Should -Match 'Pending removal'    # revoked-not-remediated surfaced
+    }
+}
+
 Describe "CTK-05: graceful degradation" {
     It "Handles no previous, no dates, zero velocity without error" {
         $cur = New-TkSnapshot -Approved 0 -Revoked 0 -Pending 10 -RevTotal 2 -RevSigned 0

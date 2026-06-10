@@ -57,6 +57,9 @@ param(
     [Parameter()][int]$MaxCampaigns = 0,
     [Parameter()][switch]$NoCapture,
     [Parameter()][ValidateSet('Adjacent', 'IntraDay', 'Daily', 'Weekly', 'Monthly')][string]$Cadence = 'Adjacent',
+    # Also emit the per-campaign Attestation Evidence Pack (actual decisions/reviewer/date/
+    # justification/remediation) for compliance/audit. Requires a fresh capture (not -NoCapture).
+    [Parameter()][switch]$EvidencePack,
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'JSON', 'HTML', 'Both')][string]$OutputMode = 'Console',
     [Parameter()][Alias('?')][switch]$Help
@@ -161,7 +164,20 @@ foreach ($camp in $campaigns) {
             $decisions = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$camp.created; DueDate = [string]$camp.deadline; CompletionDate = '' }
             $current = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @($certObjs) -Decisions $decisions -Provenance $prov
             Save-SPCampaignSnapshot -Snapshot $current | Out-Null
+            # Long-term per-campaign KPI series (feeds the program trend); harmless if it fails.
+            try { Save-SPCampaignTrendPoint -Snapshot $current | Out-Null } catch { }
             try { $cutoff = [datetime]::Parse([string]$current.Meta.CapturedAt) } catch { $cutoff = Get-Date }
+
+            if ($EvidencePack) {
+                try {
+                    $em = @{ Name = [string]$camp.name; Id = [string]$camp.id; Status = [string]$camp.status
+                        StartDate = [string]$camp.created; DueDate = [string]$camp.deadline; CapturedAt = [string]$current.Meta.CapturedAt
+                        ReviewersSigned = [int]$current.Kpi.ReviewersSigned; ReviewersTotal = [int]$current.Kpi.ReviewersTotal }
+                    $evDir = Join-Path $effectiveOutputPath 'evidence'
+                    $ev = Export-SPAttestationEvidenceHtml -CampaignMeta $em -Decisions $decisions -OutputPath $evDir
+                    if ($ev.Success) { Write-Host "      evidence pack: $($ev.Data)" -ForegroundColor DarkGreen }
+                } catch { Write-Host "      WARN: evidence pack failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+            }
         }
         else {
             $listR = Get-SPCampaignSnapshotList -CampaignId ([string]$camp.id)

@@ -376,4 +376,142 @@ h1{font-size:21px;color:#1f3a5f;margin:0 0 2px;}
 
 #endregion
 
-Export-ModuleMember -Function @('Build-SPCertTrackerData', 'Export-SPCertTrackerHtml')
+#region Public: Attestation Evidence Pack (compliance/audit)
+
+function Export-SPAttestationEvidenceHtml {
+    <#
+    .SYNOPSIS
+        Renders the Attestation Evidence Pack -- the ACTUAL recorded certification decisions
+        (decision, reviewer, date, justification, remediation) for a campaign. The audit-grade
+        artifact a SOX/ITGC reviewer samples. Works on partial/active campaigns (the norm).
+    .PARAMETER CampaignMeta
+        Hashtable: Name; Id; Status; StartDate; DueDate; CapturedAt; ReviewersSigned; ReviewersTotal.
+    .PARAMETER Decisions
+        Group-SPAuditDecisions output: @{ Approved; Revoked; Pending } of decision items carrying
+        IdentityName/AccessName/SourceName/Privileged/ReviewerName/ReviewerEmail/DecisionDate/
+        Justification/RemediationStatus/RemediationDate.
+    .PARAMETER OutputPath
+        Target .html file (or directory).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=<path>; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][hashtable]$CampaignMeta,
+        [Parameter(Mandatory)][object]$Decisions,
+        [Parameter(Mandatory)][string]$OutputPath
+    )
+    try {
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+        $rows = [System.Collections.Generic.List[object]]::new()
+        foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
+            foreach ($it in @(Get-CTProp $Decisions $cat @())) {
+                if ($null -eq $it) { continue }
+                $rows.Add([ordered]@{
+                    Decision     = $cat
+                    IdentityName = [string](Get-CTProp $it 'IdentityName' '')
+                    AccessName   = [string](Get-CTProp $it 'AccessName' '')
+                    SourceName   = [string](Get-CTProp $it 'SourceName' '')
+                    Privileged   = [bool](Get-CTProp $it 'Privileged' $false)
+                    Reviewer     = [string](Get-CTProp $it 'ReviewerName' (Get-CTProp $it 'ReviewerEmail' ''))
+                    DecisionDate = [string](Get-CTProp $it 'DecisionDate' '')
+                    Justification = [string](Get-CTProp $it 'Justification' '')
+                    RemediationStatus = [string](Get-CTProp $it 'RemediationStatus' '')
+                    RemediationDate   = [string](Get-CTProp $it 'RemediationDate' '')
+                })
+            }
+        }
+        $approved = @($rows | Where-Object { $_.Decision -eq 'Approved' }).Count
+        $revoked  = @($rows | Where-Object { $_.Decision -eq 'Revoked' }).Count
+        $pending  = @($rows | Where-Object { $_.Decision -eq 'Pending' }).Count
+        $total = $rows.Count
+        $decided = $approved + $revoked
+        $complPct = if ($total -gt 0) { [math]::Round($decided * 100.0 / $total, 1) } else { 0 }
+        $revRows = @($rows | Where-Object { $_.Decision -eq 'Revoked' })
+        $remProvisioned = @($revRows | Where-Object { $_.RemediationStatus -match 'Provision' }).Count
+        $remPending = @($revRows | Where-Object { $_.RemediationStatus -match 'Pending' }).Count
+
+        $css = @'
+body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;}
+h1{font-size:20px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;}
+h2{font-size:14px;color:#1f3a5f;margin-top:22px;border-bottom:1px solid #d4dce6;padding-bottom:4px;}
+.meta{color:#566;font-size:12px;margin:6px 0;}
+.kpis{margin:10px 0;}
+.kpi{display:inline-block;min-width:96px;margin-right:10px;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;}
+.kpi .n{font-size:20px;font-weight:700;color:#1f3a5f;display:block;}
+.kpi .l{font-size:10px;color:#566;text-transform:uppercase;}
+table{border-collapse:collapse;width:100%;margin-top:8px;font-size:11.5px;}
+th{background:#1f3a5f;color:#fff;text-align:left;padding:5px 7px;}
+td{border-bottom:1px solid #e3e9f0;padding:4px 7px;vertical-align:top;}
+tr:nth-child(even) td{background:#f6f9fc;}
+.priv td{background:#fdecec !important;}
+.d-app{color:#0a7d2c;font-weight:700;} .d-rev{color:#b00020;font-weight:700;} .d-pen{color:#9a6700;font-weight:700;}
+.badge{display:inline-block;padding:1px 6px;border-radius:9px;font-size:9px;font-weight:700;background:#b00020;color:#fff;}
+.note{font-size:11px;color:#777;margin-top:10px;}
+'@
+        $name = [string]$CampaignMeta['Name']
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>$(Get-CTEnc "Attestation Evidence -- $name")</title><style>$css</style></head><body>")
+        [void]$sb.Append("<h1>Access Certification &mdash; Attestation Evidence Pack</h1>")
+        [void]$sb.Append("<div class='meta'><b>$(Get-CTEnc $name)</b> [$(Get-CTEnc ([string]$CampaignMeta['Id']))] &middot; Status $(Get-CTEnc ([string]$CampaignMeta['Status']))</div>")
+        $sd = [string]$CampaignMeta['StartDate']; $dd = [string]$CampaignMeta['DueDate']; $ca = [string]$CampaignMeta['CapturedAt']
+        [void]$sb.Append("<div class='meta'>Opened $(Get-CTEnc $sd) &middot; Due $(Get-CTEnc $dd) &middot; Evidence captured $(Get-CTEnc $ca)</div>")
+        $rs = [int]($CampaignMeta['ReviewersSigned']); $rt = [int]($CampaignMeta['ReviewersTotal'])
+        [void]$sb.Append("<div class='kpis'>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$complPct%</span><span class='l'>Decisions complete</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$approved</span><span class='l'>Approved</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$revoked</span><span class='l'>Revoked</span></div>")
+        [void]$sb.Append("<div class='kpi'><span class='n'>$pending</span><span class='l'>Pending</span></div>")
+        if ($rt -gt 0) { [void]$sb.Append("<div class='kpi'><span class='n'>$rs/$rt</span><span class='l'>Reviewers signed off</span></div>") }
+        [void]$sb.Append("</div>")
+        [void]$sb.Append("<div class='note'>This pack reflects the decisions ISC had recorded as of the capture time. Active campaigns are normally partial &mdash; pending items are not yet decided, not errors. 'Signed off' is the audit-authoritative attestation.</div>")
+
+        # Decision evidence
+        [void]$sb.Append("<h2>Decision record ($total items)</h2>")
+        if ($total -eq 0) { [void]$sb.Append("<div class='note'>No decision items.</div>") }
+        else {
+            $sorted = $rows | Sort-Object @{ Expression = { switch ($_.Decision) { 'Revoked' {0} 'Approved' {1} default {2} } } }, @{ Expression = { -[int]$_.Privileged } }, @{ Expression = { $_.Reviewer } }
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Decision</th><th>Reviewer</th><th>Date</th><th>Justification</th><th>Remediation</th></tr>")
+            foreach ($r in $sorted) {
+                $cls = if ($r.Privileged) { " class='priv'" } else { '' }
+                $pb = if ($r.Privileged) { " <span class='badge'>PRIV</span>" } else { '' }
+                $dc = switch ($r.Decision) { 'Approved' {"<span class='d-app'>Approve</span>"} 'Revoked' {"<span class='d-rev'>Revoke</span>"} default {"<span class='d-pen'>Pending</span>"} }
+                $dt = if ($r.DecisionDate) { try { ([datetime]::Parse($r.DecisionDate)).ToString('yyyy-MM-dd') } catch { $r.DecisionDate } } else { '&mdash;' }
+                $rem = if ($r.Decision -eq 'Revoked') { if ($r.RemediationStatus) { Get-CTEnc $r.RemediationStatus } else { 'Pending' } } else { '' }
+                [void]$sb.Append("<tr$cls><td>$(Get-CTEnc $r.IdentityName)</td><td>$(Get-CTEnc $r.AccessName)$pb</td><td>$(Get-CTEnc $r.SourceName)</td><td>$dc</td><td>$(Get-CTEnc $r.Reviewer)</td><td>$dt</td><td>$(Get-CTEnc $r.Justification)</td><td>$rem</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+
+        # Revocation closure
+        [void]$sb.Append("<h2>Revocation closure ($revoked revoked &mdash; $remProvisioned removed, $remPending pending)</h2>")
+        if ($revoked -eq 0) { [void]$sb.Append("<div class='note'>No revocations in this capture.</div>") }
+        else {
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Removal status</th><th>Removed date</th></tr>")
+            foreach ($r in @($revRows | Sort-Object @{ Expression = { if ($_.RemediationStatus -match 'Pending') { 0 } else { 1 } } })) {
+                $st = if ($r.RemediationStatus -match 'Provision') { "<span class='d-app'>Removed</span>" } else { "<span class='d-pen'>Pending removal</span>" }
+                $rd = if ($r.RemediationDate) { try { ([datetime]::Parse($r.RemediationDate)).ToString('yyyy-MM-dd') } catch { $r.RemediationDate } } else { '&mdash;' }
+                [void]$sb.Append("<tr><td>$(Get-CTEnc $r.IdentityName)</td><td>$(Get-CTEnc $r.AccessName)</td><td>$(Get-CTEnc $r.SourceName)</td><td>$(Get-CTEnc $r.Reviewer)</td><td>$st</td><td>$rd</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+        [void]$sb.Append("<div class='note'>Read-only evidence. No reassignment or escalation is performed by this report.</div>")
+        [void]$sb.Append("</body></html>")
+
+        $file = $OutputPath
+        if ($OutputPath -notmatch '\.html?$') {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
+            $safeId = ([string]$CampaignMeta['Id']) -replace '[^A-Za-z0-9_\-]', '_'
+            $file = Join-Path $OutputPath "attestation-evidence-$safeId.html"
+        }
+        $u = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        return @{ Success = $true; Data = $file; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPAttestationEvidenceHtml failed: $($_.Exception.Message)" } }
+}
+
+#endregion
+
+Export-ModuleMember -Function @('Build-SPCertTrackerData', 'Export-SPCertTrackerHtml', 'Export-SPAttestationEvidenceHtml')

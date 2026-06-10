@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend**, weekly digest, **adaptive reports**
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, weekly digest, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -878,6 +878,50 @@ and completion velocity.
 > Snapshots carry a `.sha256` sidecar and can be chained with
 > `New-SPAuditEvidenceChain -IncludeSnapshots` for tamper-evidence.
 
+> **Cross-campaign program trend.** `Invoke-SPCampaignTrendReport.ps1 -Program` aggregates
+> *all* campaigns' series into a leadership "are we trending the right way as a whole" view:
+> campaigns closing per period, privileged-approval direction, and completion movement across
+> the program. It accumulates as diff/tracker runs append rows; closures show up as COMPLETED
+> captures.
+
+### `Invoke-SPCertTracker.ps1`
+**Purpose:** the **executive Certification Progress Tracker** — a Domino's-style pipeline board
+showing where every active campaign stands. Because campaigns are *almost always active and
+incomplete*, it is **pace-centric**: the story is whether each campaign is *moving toward its
+deadline*, not whether it hit 100%. Useful from **hour 8 to day 30**.
+**When to use:** the daily/weekly leadership view of "what's moving, what's stuck, what's at risk."
+
+Each campaign card shows: a 6-stage rail (Launched → In Review → Decisions Done → Signed Off →
+Remediation → Closed) as context; **both** completion framings (reviewers-complete *and*
+decisions-complete — leadership picks); **projected close vs deadline** (On track / At risk /
+Behind) from decision velocity; momentum vs the prior capture; a burndown bar; and a pace line
+(day N, velocity/day, items remaining, reviewers-not-started, privileged-pending, revocations-to-
+remediate). Plus a program pipeline board (campaign count per stage) and RAG worst-first ordering.
+
+| Parameter | Description |
+|---|---|
+| `-CampaignName*` / `-Status` / `-DaysBack` | Which campaigns to track (default ACTIVE+COMPLETING, 60 days). |
+| `-Cadence` | Movement window: `Adjacent` (default) / `IntraDay` / `Daily` / `Weekly` / `Monthly`. |
+| `-NoCapture` | Build the board from existing snapshots (don't call ISC). |
+| `-EvidencePack` | **Also** emit the per-campaign **Attestation Evidence Pack** (below). |
+| `-MaxCampaigns <n>` | Safety cap (default `Safety.MaxCampaignsPerRun` or 25). |
+| `-OutputPath` / `-OutputMode` | Output root (default `.\Audit\tracker`) / run-summary format. |
+
+```powershell
+# The executive board for all active campaigns
+.\Scripts\Invoke-SPCertTracker.ps1
+
+# Board + the per-campaign attestation evidence packs (compliance/audit)
+.\Scripts\Invoke-SPCertTracker.ps1 -EvidencePack -Cadence Daily
+```
+
+> **Attestation Evidence Pack (`-EvidencePack`).** The compliance/audit artifact the AD-port
+> "access certification" report only *pretended* to be: it renders the **actual recorded**
+> decisions — Identity · Access · Source · Privileged · **Decision** · **Reviewer** ·
+> **Date** · **Justification** · **Remediation status** — per campaign, plus a revocation→closure
+> section ("we said revoke; here's what was actually removed"). Works on partial/active campaigns
+> (pending items are normal, not errors). Read-only.
+
 ### `Invoke-SPWeeklyDigest.ps1`
 **Purpose:** a consolidated **weekly digest** — campaign activity, campaign health, identity
 risk, reviewer performance, remediation tracking, and orchestrator reliability in one report.
@@ -896,7 +940,17 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 ```
 **Related GUI:** Governance tab.
 
-### `Invoke-SPAdaptiveReport.ps1`
+### `Invoke-SPAdaptiveReport.ps1` ⚠️ DEPRECATED
+> **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
+> EntraID group-enumerator and render an AD "group → members" view (`SamAccountName`, `Enabled`,
+> nested groups) that **drops the ISC certification substance** — the decision, the reviewer, the
+> dates, the remediation status. A SOX/IGA review panel found them either strictly-worse clones
+> of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the
+> ISC-native replacements: **`Invoke-SPCertTracker.ps1`** (executive tracker + `-EvidencePack`
+> attestation evidence), **`Invoke-SPCampaignTrendReport.ps1`** (KPI trend; `-Program` for
+> cross-campaign), **`Invoke-SPCampaignDiff.ps1`** (day-over-day diff). Kept temporarily for
+> back-compat; will be removed.
+
 **Purpose:** generate **adaptive, composable HTML reports** over your governance data —
 a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group
 table) plus a **baseline report library** (entitlement inventory, privileged review,

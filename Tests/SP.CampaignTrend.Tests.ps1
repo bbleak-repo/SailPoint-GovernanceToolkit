@@ -95,6 +95,35 @@ Describe "CT-05: HTML export" {
     }
 }
 
+Describe "CT-07: program (cross-campaign) trend" {
+    It "Aggregates across campaigns and counts closures per period" {
+        $dir = Join-Path $TestDrive 'prog'
+        # campaign A: active rows in two months
+        $a1 = New-CTSnapshot -Id 'camp-A' -PrivApproved 1 -PrivRevoked 2 -CapturedAt (Get-Date '2026-05-10T08:00:00').ToString('o')
+        Save-SPCampaignTrendPoint -Snapshot $a1 -TrendDir $dir | Out-Null
+        $a2 = New-CTSnapshot -Id 'camp-A' -PrivApproved 3 -PrivRevoked 1 -CapturedAt (Get-Date '2026-06-10T08:00:00').ToString('o')
+        Save-SPCampaignTrendPoint -Snapshot $a2 -TrendDir $dir | Out-Null
+        # campaign B: closes in June (status COMPLETED)
+        $b = New-CTSnapshot -Id 'camp-B' -PrivApproved 4 -PrivRevoked 1 -CapturedAt (Get-Date '2026-06-15T08:00:00').ToString('o')
+        $b.Meta.Status = 'COMPLETED'
+        Save-SPCampaignTrendPoint -Snapshot $b -TrendDir $dir | Out-Null
+
+        $p = (Get-SPProgramTrend -TrendDir $dir -Granularity Monthly).Data
+        $p.CampaignCount | Should -Be 2
+        $jun = @($p.Periods | Where-Object { $_.Period -eq '2026-06' })[0]
+        $jun.Campaigns | Should -Be 2
+        $jun.Closed | Should -Be 1
+    }
+    It "Exports the program trend HTML" {
+        $dir = Join-Path $TestDrive 'prog2'
+        Save-SPCampaignTrendPoint -Snapshot (New-CTSnapshot -Id 'camp-X' -CapturedAt (Get-Date '2026-06-01T08:00:00').ToString('o')) -TrendDir $dir | Out-Null
+        $p = (Get-SPProgramTrend -TrendDir $dir -Granularity Monthly).Data
+        $e = Export-SPProgramTrendHtml -Trend $p -OutputPath (Join-Path $TestDrive 'phtml')
+        $e.Success | Should -Be $true
+        (Get-Content $e.Data -Raw) | Should -Match 'Program Governance Trend'
+    }
+}
+
 Describe "CT-06: velocity from diff" {
     It "Derives decisions-per-hour from the diff interval + made-delta" {
         $dir = Join-Path $TestDrive 't6'

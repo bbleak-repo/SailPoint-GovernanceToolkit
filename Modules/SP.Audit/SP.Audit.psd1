@@ -237,6 +237,8 @@
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
         'Export-SPCampaignTrendHtml'
+        'Get-SPProgramTrend'
+        'Export-SPProgramTrendHtml'
 
         # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
         'Measure-SPReviewerVelocity'
@@ -245,6 +247,7 @@
         # SP.CertTracker - Executive certification progress tracker (pace/stage/projection)
         'Build-SPCertTrackerData'
         'Export-SPCertTrackerHtml'
+        'Export-SPAttestationEvidenceHtml'
     )
 
     # Do not export variables or aliases from nested modules

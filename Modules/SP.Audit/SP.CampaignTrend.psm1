@@ -409,8 +409,148 @@ td{border-bottom:1px solid #e3e9f0;padding:4px 9px;}
 
 #endregion
 
+#region Public: program (cross-campaign) trend
+
+function Get-SPProgramTrend {
+    <#
+    .SYNOPSIS
+        Aggregates ALL per-campaign KPI series into a PROGRAM-level trend: how many campaigns
+        close per period and how privileged-approval / completion move ACROSS the program over
+        time (the leadership "are we trending the right way as a whole" view). Fed by the
+        per-campaign series that every diff/tracker run appends; closure shows up as COMPLETED
+        rows.
+    .PARAMETER DaysBack
+        Window in days. Default 365.
+    .PARAMETER Granularity
+        Daily | Weekly | Monthly. Default Monthly.
+    .PARAMETER Environment
+        Environment subfolder. Optional.
+    .PARAMETER TrendDir
+        Override the trend root.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Granularity; RowCount; CampaignCount; Periods; Direction }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][int]$DaysBack = 365,
+        [Parameter()][ValidateSet('Daily', 'Weekly', 'Monthly')][string]$Granularity = 'Monthly',
+        [Parameter()][string]$Environment = '',
+        [Parameter()][string]$TrendDir
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($TrendDir)) { $TrendDir = Get-SPCampaignTrendDir -Environment $Environment }
+        if (-not (Test-Path $TrendDir)) { return @{ Success = $true; Data = @{ Granularity = $Granularity; RowCount = 0; CampaignCount = 0; Periods = @(); Direction = @{} }; Error = $null } }
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $cutoff = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+
+        $buckets = [ordered]@{}   # periodKey -> @{ Campaigns; Closed; PrivRates; Compl; Captures }
+        $allCampaigns = @{}; $rowCount = 0
+        foreach ($f in Get-ChildItem -Path $TrendDir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue) {
+            foreach ($ln in [System.IO.File]::ReadAllLines($f.FullName, $utf8)) {
+                if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+                $rec = $null; try { $rec = $ln | ConvertFrom-Json } catch { continue }
+                $ts = $null; try { $ts = [datetime]::Parse([string]$rec.timestamp).ToUniversalTime() } catch { continue }
+                if ($ts -lt $cutoff) { continue }
+                $rowCount++
+                $cid = [string]$rec.campaignId
+                if ($cid) { $allCampaigns[$cid] = $true }
+                $pk = Get-SPTrendPeriodKey -Dt $ts -Gran $Granularity
+                if (-not $buckets.Contains($pk)) { $buckets[$pk] = @{ Campaigns = @{}; Closed = @{}; PrivRates = (New-Object System.Collections.Generic.List[double]); Compl = (New-Object System.Collections.Generic.List[double]); Captures = 0 } }
+                $b = $buckets[$pk]; $b.Captures++
+                if ($cid) { $b.Campaigns[$cid] = $true; if (([string]$rec.status).ToUpperInvariant() -eq 'COMPLETED') { $b.Closed[$cid] = $true } }
+                $m = $rec.metrics
+                if ($null -ne $m) {
+                    $pr = if ($null -ne $m.PSObject.Properties['rates.privApprovalRate']) { $m.'rates.privApprovalRate' } else { $null }
+                    if ($null -ne $pr) { try { $b.PrivRates.Add([double]$pr) } catch { } }
+                    $cp = if ($null -ne $m.PSObject.Properties['completion.byReviewerPct']) { $m.'completion.byReviewerPct' } else { $null }
+                    if ($null -ne $cp) { try { $b.Compl.Add([double]$cp) } catch { } }
+                }
+            }
+        }
+        if ($buckets.Count -eq 0) { return @{ Success = $true; Data = @{ Granularity = $Granularity; RowCount = 0; CampaignCount = 0; Periods = @(); Direction = @{} }; Error = $null } }
+
+        $periods = [System.Collections.Generic.List[object]]::new()
+        foreach ($pk in $buckets.Keys) {
+            $b = $buckets[$pk]
+            $avgPriv = if ($b.PrivRates.Count -gt 0) { [math]::Round((($b.PrivRates | Measure-Object -Average).Average), 4) } else { $null }
+            $avgCompl = if ($b.Compl.Count -gt 0) { [math]::Round((($b.Compl | Measure-Object -Average).Average), 1) } else { $null }
+            $periods.Add([PSCustomObject]@{ Period = $pk; Campaigns = $b.Campaigns.Count; Closed = $b.Closed.Count; AvgPrivApprovalRate = $avgPriv; AvgCompletion = $avgCompl; Captures = $b.Captures })
+        }
+        $periods = @($periods | Sort-Object Period)
+
+        function _dir([object[]]$vals) {
+            $nn = @($vals | Where-Object { $null -ne $_ })
+            if ($nn.Count -lt 2) { return 'Flat' }
+            $first = [double]$nn[0]; $last = [double]$nn[$nn.Count - 1]
+            if ($first -eq 0) { return 'Flat' }
+            $pct = (($last - $first) / [math]::Abs($first)) * 100
+            if ($pct -gt 2) { return 'Up' } elseif ($pct -lt -2) { return 'Down' } else { return 'Flat' }
+        }
+        $direction = @{
+            PrivApprovalRate = _dir @($periods | ForEach-Object { $_.AvgPrivApprovalRate })
+            Closed           = _dir @($periods | ForEach-Object { [double]$_.Closed })
+            Completion       = _dir @($periods | ForEach-Object { $_.AvgCompletion })
+        }
+
+        return @{ Success = $true; Data = @{ Granularity = $Granularity; RowCount = $rowCount; CampaignCount = $allCampaigns.Count; Periods = $periods; Direction = $direction }; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPProgramTrend failed: $($_.Exception.Message)" } }
+}
+
+function Export-SPProgramTrendHtml {
+    <#
+    .SYNOPSIS
+        Renders the cross-campaign program trend (throughput + privileged-approval direction).
+    .PARAMETER Trend
+        Output of Get-SPProgramTrend (.Data).
+    .PARAMETER OutputPath
+        Target .html file (or directory).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=<path>; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)][object]$Trend, [Parameter(Mandatory)][string]$OutputPath)
+    try {
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+        $enc = { param($v) if ($null -eq $v) { '' } else { [System.Web.HttpUtility]::HtmlEncode([string]$v) } }
+        $arrow = { param($d) switch ($d) { 'Up' { "<span style='color:#9a6700;font-weight:700'>&#9650; up</span>" } 'Down' { "<span style='color:#0a7d2c;font-weight:700'>&#9660; down</span>" } default { "<span style='color:#888'>flat</span>" } } }
+        $css = "body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;}h1{font-size:20px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;}table{border-collapse:collapse;margin-top:8px;font-size:12px;}th{background:#1f3a5f;color:#fff;text-align:left;padding:6px 10px;}td{border-bottom:1px solid #e3e9f0;padding:5px 10px;}.mv{background:#fff7e6;border:1px solid #ffd97a;border-radius:6px;padding:8px 12px;margin:8px 0;color:#7a5a00;font-size:12px;}.note{font-size:11px;color:#777;margin-top:8px;}"
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Program Governance Trend</title><style>$css</style></head><body>")
+        [void]$sb.Append("<h1>Program Governance Trend</h1>")
+        [void]$sb.Append("<div class='mv'>Across-the-program movement ($($Trend.Granularity) rollup, $($Trend.CampaignCount) campaign(s), $($Trend.RowCount) capture(s)). Privileged-approval rate: $(& $arrow $Trend.Direction.PrivApprovalRate) &middot; Campaigns closing: $(& $arrow $Trend.Direction.Closed) &middot; Completion: $(& $arrow $Trend.Direction.Completion). Management view &mdash; not certification evidence.</div>")
+        if (@($Trend.Periods).Count -eq 0) { [void]$sb.Append("<div class='note'>No program trend data yet. It accumulates as diff/tracker runs append per-campaign KPI rows; closures appear as COMPLETED captures.</div>") }
+        else {
+            [void]$sb.Append("<table><tr><th>Period</th><th>Campaigns</th><th>Closed</th><th>Avg priv-approval rate</th><th>Avg completion</th><th>Captures</th></tr>")
+            foreach ($p in @($Trend.Periods)) {
+                $pr = if ($null -eq $p.AvgPrivApprovalRate) { '&mdash;' } else { "$([math]::Round($p.AvgPrivApprovalRate*100,1))%" }
+                $cp = if ($null -eq $p.AvgCompletion) { '&mdash;' } else { "$($p.AvgCompletion)%" }
+                [void]$sb.Append("<tr><td>$(& $enc $p.Period)</td><td>$($p.Campaigns)</td><td>$($p.Closed)</td><td>$pr</td><td>$cp</td><td>$($p.Captures)</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+        [void]$sb.Append("<div class='note'>Privileged-approval rate is normalized (approved of privileged reviewed), so it is robust to scope/throughput growth. A rising rate is a discussion prompt, not a finding.</div>")
+        [void]$sb.Append("</body></html>")
+        $file = $OutputPath
+        if ($OutputPath -notmatch '\.html?$') {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
+            $file = Join-Path $OutputPath "program-trend-$($Trend.Granularity).html"
+        }
+        $u = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        return @{ Success = $true; Data = $file; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPProgramTrendHtml failed: $($_.Exception.Message)" } }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Save-SPCampaignTrendPoint',
     'Get-SPCampaignTrend',
-    'Export-SPCampaignTrendHtml'
+    'Export-SPCampaignTrendHtml',
+    'Get-SPProgramTrend',
+    'Export-SPProgramTrendHtml'
 )
