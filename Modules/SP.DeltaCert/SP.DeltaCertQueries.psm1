@@ -1258,7 +1258,18 @@ function Get-SPDeltaCertStaleCertifications {
                 if ($cert.PSObject.Properties.Name -contains 'signed') {
                     $signedValue = $cert.signed
                 }
-                $isSigned = ($null -ne $signedValue -and -not [string]::IsNullOrWhiteSpace([string]$signedValue))
+                # `signed` may be a JSON boolean (true once signed) OR a sign-off TIMESTAMP string
+                # (truthy when present), depending on the API shape. A non-empty value means signed;
+                # but a real boolean $false -- or the strings 'false'/'0'/'no' -- does NOT (the old
+                # plain [string] cast treated signed:false as signed because [string]$false='False').
+                $isSigned = $false
+                if ($signedValue -is [bool]) {
+                    $isSigned = $signedValue
+                }
+                elseif ($null -ne $signedValue) {
+                    $sv = ([string]$signedValue).Trim()
+                    $isSigned = (-not [string]::IsNullOrWhiteSpace($sv)) -and ($sv.ToLowerInvariant() -notin @('false', '0', 'no'))
+                }
 
                 # In standard mode: skip signed certifications
                 if (-not $auditMode -and $isSigned) { continue }

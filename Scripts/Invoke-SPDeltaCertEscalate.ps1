@@ -498,7 +498,11 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
         $levelsConsumed  = if ($sc.ReviewerClassification -eq 'Reassigned') { 1 } else { 0 }
         $levelsRemaining = $effectiveMaxLevels - $levelsConsumed
 
-        if ([string]::IsNullOrWhiteSpace($reviewerId)) {
+        if ([bool]$sc.CertSigned) {
+            # Already signed/complete -- no escalation needed (matches the runner's skip).
+            $outcome = 'Skip-AlreadyComplete'
+        }
+        elseif ([string]::IsNullOrWhiteSpace($reviewerId)) {
             $outcome = 'Skip-NoReviewerId'
         }
         elseif ($levelsRemaining -le 0) {

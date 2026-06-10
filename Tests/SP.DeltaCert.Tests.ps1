@@ -1741,3 +1741,40 @@ Describe "DC-034: Get-SPDeltaAffectedIdentities includes all active identities w
 }
 
 #endregion DC-034
+
+# ---------------------------------------------------------------------------
+#region DC-040: Escalation skips already-signed/complete certs
+# ---------------------------------------------------------------------------
+
+Describe "DC-040: Invoke-SPDeltaCertEscalate skips already-signed certs" {
+
+    Context "When audit mode returns a mix of signed and unsigned certs" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.DeltaCertRunner { }
+            Mock Get-SPDeltaIdentityDetail -ModuleName SP.DeltaCertRunner {
+                return @{ IdentityId = $IdentityId; DisplayName = 'Reviewer'; ManagerId = 'mgr-boss-001'; ManagerName = 'Boss One'; IsActive = $true; Found = $true }
+            }
+            Mock Get-SPAuditCertificationItems -ModuleName SP.DeltaCertRunner {
+                return @{ Success = $true; Data = @([PSCustomObject]@{ id = 'item-001' }); Error = $null }
+            }
+            Mock Invoke-SPReassign      -ModuleName SP.DeltaCertRunner { }
+            Mock Invoke-SPReassignAsync -ModuleName SP.DeltaCertRunner { }
+        }
+
+        It "Skips the signed cert and escalates only the unsigned one" {
+            # Both have a resolvable manager + items, so WITHOUT the signed guard the runner would
+            # escalate both. The signed cert must be skipped (no escalation needed).
+            $staleCerts = @(
+                [PSCustomObject]@{ CertificationId = 'cert-signed-001';   CampaignId = 'c1'; CampaignName = 'C'; CampaignStatus = 'ACTIVE'; ReviewerIdentityId = 'rev-1'; ReviewerName = 'R1'; HoursOpen = 48; HoursUntilDeadline = $null; EscalationReason = 'AuditAll'; ReviewerClassification = 'Primary'; CertSigned = $true }
+                [PSCustomObject]@{ CertificationId = 'cert-unsigned-001'; CampaignId = 'c1'; CampaignName = 'C'; CampaignStatus = 'ACTIVE'; ReviewerIdentityId = 'rev-2'; ReviewerName = 'R2'; HoursOpen = 48; HoursUntilDeadline = $null; EscalationReason = 'AuditAll'; ReviewerClassification = 'Primary'; CertSigned = $false }
+            )
+            $result = Invoke-SPDeltaCertEscalate -StaleCertifications $staleCerts -WhatIf
+            $result.Success              | Should -Be $true
+            $result.Data.Skipped         | Should -Contain 'cert-signed-001'
+            $result.Data.Escalated.Count | Should -Be 1
+            $result.Data.Escalated       | Should -Contain 'cert-unsigned-001'
+        }
+    }
+}
+
+#endregion DC-040
