@@ -31,6 +31,7 @@
         'SP.AuditOperations.psm1'
         'SP.CampaignDelta.psm1'
         'SP.CampaignDiff.psm1'
+        'SP.CampaignTrend.psm1'
     )
 
     # Public functions exported by this module
@@ -229,6 +230,11 @@
         'Export-SPCampaignCompletionDiffHtml'
         'Export-SPCampaignScopeDiffHtml'
         'Export-SPCampaignDiffCsv'
+
+        # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
+        'Save-SPCampaignTrendPoint'
+        'Get-SPCampaignTrend'
+        'Export-SPCampaignTrendHtml'
     )
 
     # Do not export variables or aliases from nested modules

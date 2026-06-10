@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, weekly digest, **adaptive reports**
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend**, weekly digest, **adaptive reports**
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -822,8 +822,46 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 > respectfully alongside review-velocity context — **never** an automatic finding. Snapshots
 > live under `Audit.SnapshotPath` (toolkit-root anchored) and feed the KPI trend separately.
 
-**Related:** `Invoke-SPWeeklyDigest.ps1` (week-over-week roll-up), the item cache (*Campaign
-filtering & the item cache*).
+**Related:** `Invoke-SPCampaignTrendReport.ps1` (the rate trend over time),
+`Invoke-SPWeeklyDigest.ps1` (week-over-week roll-up), the item cache (*Campaign filtering &
+the item cache*).
+
+### `Invoke-SPCampaignTrendReport.ps1`
+**Purpose:** the **KPI trend report** for a recurring campaign — how its *rates* move over
+**days / weeks / months**, answering *"is privileged access trending in a direction?"* Each
+`Invoke-SPCampaignDiff` run appends one rate row to a per-campaign series; this script rolls
+that series up and renders it.
+**When to use:** after a few days/weeks of diff runs, to show leadership the direction of
+travel (charts/tables) for privileged-approval rate, revoke rate, privileged share of scope,
+and completion velocity.
+
+> **Why rates, not counts.** Raw "privileged approved" counts rise just because scope grows
+> as entitlements/sources onboard. The trend tracks **privileged approval rate**
+> = approved ÷ (approved + revoked) *among privileged* — robust to scope growth. A rising
+> rate is a **discussion prompt, not a finding** (direction-neutral ▲/▼). The trend is a
+> *management/maturity view*, **not** certification evidence (the immutable snapshots are).
+
+| Parameter | Description |
+|---|---|
+| `-CampaignId <id>` | The stable campaign id the diff runs used (required). |
+| `-Granularity` | `Daily` / `Weekly` (default) / `Monthly` rollup. |
+| `-DaysBack <n>` | Window in days (default 365). |
+| `-Environment <name>` | Environment the series was captured under (defaults to `Global.EnvironmentName`). |
+| `-OutputPath <dir>` | Output root (default `.\Audit\trend`). |
+| `-OutputMode` | `Console`/`JSON`/`HTML`/`Both` — the HTML is always written. |
+
+```powershell
+.\Scripts\Invoke-SPCampaignTrendReport.ps1 -CampaignId 'camp-7f3a...' -Granularity Weekly
+.\Scripts\Invoke-SPCampaignTrendReport.ps1 -CampaignId 'camp-7f3a...' -Granularity Monthly -DaysBack 730
+```
+
+> **Storage & retention.** The trend lives in a small per-campaign JSONL under
+> `Metrics.CampaignTrendPath` (default `.\Audit\metrics\campaign-trend\{env}\{campaignId}.jsonl`),
+> retained `Metrics.CampaignTrendRetentionDays` (default **1825** / 5 years) — the long-term
+> record. Full snapshots are pruned at `Audit.SnapshotRetentionDays` (90 days), but the prune
+> is **lifecycle-aware**: it never deletes a *signed / COMPLETED* (evidence) capture.
+> Snapshots carry a `.sha256` sidecar and can be chained with
+> `New-SPAuditEvidenceChain -IncludeSnapshots` for tamper-evidence.
 
 ### `Invoke-SPWeeklyDigest.ps1`
 **Purpose:** a consolidated **weekly digest** — campaign activity, campaign health, identity

@@ -115,7 +115,9 @@
     "Metrics": {
         "Path": ".\\Audit\\metrics",
         "RetentionDays": 365,
-        "AutoCapture": true
+        "AutoCapture": true,
+        "CampaignTrendPath": ".\\Audit\\metrics\\campaign-trend",
+        "CampaignTrendRetentionDays": 1825
     },
     "Retention": {
         "Enabled": false,

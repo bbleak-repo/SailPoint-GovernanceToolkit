@@ -190,9 +190,11 @@ function Get-SPConfigDefaults {
             ISCBandAttribute        = 'jobLevel'
         }
         Metrics = @{
-            Path          = '.\Audit\metrics'
-            RetentionDays = 365
-            AutoCapture   = $true
+            Path                       = '.\Audit\metrics'
+            RetentionDays              = 365
+            AutoCapture                = $true
+            CampaignTrendPath          = '.\Audit\metrics\campaign-trend'
+            CampaignTrendRetentionDays = 1825
         }
         Governance = @{
             MetricsOutputPath    = '.\GovernanceMetrics'
@@ -1328,6 +1330,7 @@ function Resolve-SPConfigOutputPaths {
         DeltaCert         = @('OutputPath')
         Logging           = @('Path')
         GovernanceMetrics = @('MetricsOutputPath')
+        Metrics           = @('Path', 'CampaignTrendPath')
         Sdk               = @('OutputPath')
     }
 

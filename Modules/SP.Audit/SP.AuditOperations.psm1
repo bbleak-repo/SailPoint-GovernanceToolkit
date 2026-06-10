@@ -2707,6 +2707,13 @@ function New-SPAuditEvidenceChain {
     .PARAMETER Scope
         Which directories to include: Full (both), AuditOnly, or
         DeltaCertOnly. Default: Full.
+    .PARAMETER IncludeSnapshots
+        Also chain the campaign-diff snapshot *.json captures (recursing
+        Audit.SnapshotPath). Off by default; these are the immutable certification
+        evidence captured by Invoke-SPCampaignDiff.
+    .PARAMETER SnapshotPath
+        Override the snapshot root scanned when -IncludeSnapshots is set
+        (default: Audit.SnapshotPath).
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries.
     .OUTPUTS
@@ -2744,6 +2751,12 @@ function New-SPAuditEvidenceChain {
         [Parameter()]
         [ValidateSet('Full', 'AuditOnly', 'DeltaCertOnly')]
         [string]$Scope = 'Full',
+
+        [Parameter()]
+        [switch]$IncludeSnapshots,
+
+        [Parameter()]
+        [string]$SnapshotPath,
 
         [Parameter()]
         [string]$CorrelationID
@@ -2908,6 +2921,27 @@ function New-SPAuditEvidenceChain {
     if ($Scope -ne 'AuditOnly' -and (Test-Path -Path $DeltaCertOutputPath -PathType Container)) {
         $found = Get-ChildItem -Path $DeltaCertOutputPath -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
         foreach ($f in $found) { $jsonlFiles.Add($f) }
+    }
+
+    # Campaign snapshots (opt-in): the immutable dated *.json captures are certification
+    # evidence too. Chain them so a cited snapshot can be proven unmodified after capture.
+    if ($IncludeSnapshots -and $Scope -ne 'DeltaCertOnly') {
+        if ([string]::IsNullOrWhiteSpace($SnapshotPath)) {
+            try {
+                $cfgS = Get-SPConfig
+                if ($null -ne $cfgS -and $cfgS.PSObject.Properties.Name -contains 'Audit' -and
+                    $cfgS.Audit.PSObject.Properties.Name -contains 'SnapshotPath' -and
+                    -not [string]::IsNullOrWhiteSpace($cfgS.Audit.SnapshotPath)) {
+                    $SnapshotPath = $cfgS.Audit.SnapshotPath
+                }
+            } catch { }
+        }
+        if ([string]::IsNullOrWhiteSpace($SnapshotPath)) { $SnapshotPath = '.\Audit\Snapshots' }
+        if (Test-Path -Path $SnapshotPath -PathType Container) {
+            # Recurse (snapshots live under per-campaign subfolders). Exclude .sha256 sidecars.
+            $foundSnaps = Get-ChildItem -Path $SnapshotPath -Filter '*.json' -File -Recurse -ErrorAction SilentlyContinue
+            foreach ($f in $foundSnaps) { $jsonlFiles.Add($f) }
+        }
     }
 
     # Apply date range filter

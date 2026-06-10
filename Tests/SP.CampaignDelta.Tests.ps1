@@ -235,3 +235,19 @@ Describe "CD-09: integrity sidecar, lifecycle retention, provenance/due-date" {
         @($s.Meta.PrivilegedPatterns).Count | Should -BeGreaterThan 0
     }
 }
+
+Describe "CD-10: snapshots chained into the audit evidence chain" {
+    It "Includes snapshot .json captures in New-SPAuditEvidenceChain" {
+        $snapDir  = Join-Path $TestDrive 'ec-snaps'
+        $emptyAud = Join-Path $TestDrive 'ec-empty-audit'; New-Item -ItemType Directory -Path $emptyAud -Force | Out-Null
+        $emptyDc  = Join-Path $TestDrive 'ec-empty-dc';    New-Item -ItemType Directory -Path $emptyDc -Force | Out-Null
+        $manOut   = Join-Path $TestDrive 'ec-manifest';    New-Item -ItemType Directory -Path $manOut -Force | Out-Null
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cec';name='EC';status='COMPLETED'}) -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        Save-SPCampaignSnapshot -Snapshot $s -SnapshotDir $snapDir | Out-Null
+
+        $r = New-SPAuditEvidenceChain -AuditOutputPath $emptyAud -DeltaCertOutputPath $emptyDc -IncludeSnapshots -SnapshotPath $snapDir -OutputPath $manOut
+        $r.Success | Should -Be $true
+        $r.Data.FileCount | Should -BeGreaterThan 0
+        Test-Path $r.Data.ManifestPath | Should -Be $true
+    }
+}

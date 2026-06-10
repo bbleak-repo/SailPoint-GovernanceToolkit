@@ -284,7 +284,16 @@ if ($IncludeCsv -or $OutputMode -in @('CSV', 'Both')) {
 
 if ($PruneOldSnapshots) {
     $pr = Remove-SPCampaignOldSnapshots -SnapshotDir $snapshotDir
-    if ($pr.Success) { Write-Host "  Retention sweep: removed $($pr.Data.Removed) old snapshot(s)." }
+    if ($pr.Success) { Write-Host "  Retention sweep: removed $($pr.Data.Removed) old snapshot(s), preserved $($pr.Data.PreservedEvidence) evidence capture(s)." }
+}
+
+# Append a KPI trend point (long-term rate series, separate from the snapshots). Only when
+# we captured fresh data this run -- a -NoCapture re-render must not double-count the series.
+if (-not $NoCapture) {
+    try {
+        $tp = Save-SPCampaignTrendPoint -Snapshot $currentSnapshot -Diff $diff
+        if ($tp.Success) { Write-Host "  Trend point appended: $($tp.Data.FilePath)" } else { Write-Host "  WARN: trend append failed: $($tp.Error)" -ForegroundColor Yellow }
+    } catch { Write-Host "  WARN: trend append error: $($_.Exception.Message)" -ForegroundColor Yellow }
 }
 
 # --- Summary ----------------------------------------------------------------
