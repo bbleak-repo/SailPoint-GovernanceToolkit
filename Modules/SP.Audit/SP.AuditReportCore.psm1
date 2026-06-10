@@ -231,6 +231,7 @@ function Group-SPAuditDecisions {
             AccountIdentifier      = $accountIdentifier
             AccessName             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
             AccessType             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
+            Privileged             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.privileged)             { [bool]$rawItem.access.privileged } else { $false }
             SourceName             = $sourceName
             ReviewerName           = $reviewerName
             ReviewerEmail          = $reviewerEmail

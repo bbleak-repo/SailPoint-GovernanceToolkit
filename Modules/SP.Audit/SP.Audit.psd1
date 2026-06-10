@@ -30,6 +30,7 @@
         'SP.AuditReportHtml.psm1'
         'SP.AuditOperations.psm1'
         'SP.CampaignDelta.psm1'
+        'SP.CampaignDiff.psm1'
     )
 
     # Public functions exported by this module
@@ -222,6 +223,12 @@
         'Get-SPCampaignSnapshotList'
         'Get-SPCampaignPreviousSnapshot'
         'Remove-SPCampaignOldSnapshots'
+
+        # SP.CampaignDiff - Snapshot comparison + diff reporting (completion/scope/compliance)
+        'Compare-SPCampaignSnapshots'
+        'Export-SPCampaignCompletionDiffHtml'
+        'Export-SPCampaignScopeDiffHtml'
+        'Export-SPCampaignDiffCsv'
     )
 
     # Do not export variables or aliases from nested modules

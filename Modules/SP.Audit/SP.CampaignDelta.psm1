@@ -81,9 +81,12 @@ function Test-SPGrantPrivileged {
     # "Both": prefer an explicit privileged attribute on the decision/access object when
     # present, otherwise fall back to entitlement-name patterns.
     param([object]$Decision, [string[]]$Patterns)
+    # OR semantics (matches DeltaCert's privileged rule): an explicit truthy ISC
+    # attribute makes it privileged; a false/absent attribute is NOT authoritative
+    # (ISC may simply not classify the entitlement), so fall through to name patterns.
     foreach ($p in @('Privileged', 'IsPrivileged')) {
         if ($null -ne $Decision.PSObject.Properties[$p] -and $null -ne $Decision.$p) {
-            try { return [bool]$Decision.$p } catch { }
+            try { if ([bool]$Decision.$p) { return $true } } catch { }
         }
     }
     $name = [string]$Decision.AccessName

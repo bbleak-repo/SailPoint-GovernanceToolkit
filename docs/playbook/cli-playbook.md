@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, weekly digest, **adaptive reports**
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, weekly digest, **adaptive reports**
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -768,6 +768,62 @@ validate an `org-chart-supplement.csv` before a big report run.
 .\Scripts\Invoke-SPOrgTreePreview.ps1 -CampaignNameContains 'Tuesday' -ShowBands
 .\Scripts\Invoke-SPOrgTreePreview.ps1 -Status COMPLETED -DaysBack 7 -OrgSupplementPath .\Config\org-chart-supplement.csv
 ```
+
+### `Invoke-SPCampaignDiff.ps1`
+**Purpose:** **day-over-day (or intra-day / weekly / monthly) diff reporting** for a
+recurring attestation campaign. Each run captures an immutable, datetime-stamped *snapshot*
+of the campaign and compares it against the prior snapshot, producing **two read-only
+reports**:
+
+- **Completion diff** — *who is doing their attestations.* Per reviewer: decisions made
+  since the last capture, completion %, **newly completed**, **stalled** (no progress
+  between captures), and **not started**.
+- **Scope diff** — *what changed in the campaign.* Grants **added** to scope (the same
+  campaign grows as entitlement groups and sources onboard), grants **removed**, and
+  **decision changes** — plus a **compliance summary**: newly-added privileged access,
+  stalled/not-started reviewers, overdue undecided items, and a *privileged-approved*
+  advisory.
+
+**When to use:** run it on the campaign's cadence (e.g. each morning) so leadership can
+see who is keeping up and what new (especially privileged) access appeared — **without**
+touching the delta-escalation chain. **Read-only: it never reassigns, escalates, or
+completes anything in ISC.** The snapshot is the single source of truth, so "yesterday vs
+today", "before noon vs now", and "this week vs last" all reduce to *which two snapshots*.
+
+> **Cadence = comparison granularity.** The diff compares the current snapshot to the most
+> recent *prior* one. Capture daily for a day-over-day view; capture twice a day for an
+> intra-day "before noon vs now" view. No prior snapshot (first run) ⇒ a baseline report.
+
+| Parameter | Description |
+|---|---|
+| `-CampaignId <id>` | Resolve the recurring campaign by its **stable id** (most precise). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Resolve by name (contains is client-side; ISC rejects bare `name co`). |
+| `-Status <list>` / `-DaysBack <n>` | Resolution window (default `ACTIVE` / 30). |
+| `-NoCapture` | Don't call ISC — diff the **two most recent existing snapshots** (re-render offline). |
+| `-CompareBefore <iso>` | Pick the "previous" snapshot as the most recent one strictly before this time. |
+| `-IncludeCsv` | Also write flat completion + scope **CSVs** (Excel / leadership). |
+| `-PruneOldSnapshots` | Run the retention sweep (`Audit.SnapshotRetentionDays`, default 90) after capturing. |
+| `-OutputPath <dir>` | Output root (default `.\Audit\diff`). |
+| `-OutputMode` | `Console`/`JSON`/`HTML`/`Both`/`CSV` — controls the run summary; the two HTML diffs are always written. |
+
+```powershell
+# Morning run: capture today's snapshot and diff vs yesterday's, with CSVs
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation' -IncludeCsv
+
+# Pin to a stable campaign id (recommended for a recurring campaign)
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -IncludeCsv
+
+# Re-render this morning's vs yesterday's capture WITHOUT calling ISC
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -NoCapture
+```
+
+> **On the *privileged-approved* signal:** approving privileged access is often entirely
+> legitimate. The count is a *conversation starter* for review quality — reviewed
+> respectfully alongside review-velocity context — **never** an automatic finding. Snapshots
+> live under `Audit.SnapshotPath` (toolkit-root anchored) and feed the KPI trend separately.
+
+**Related:** `Invoke-SPWeeklyDigest.ps1` (week-over-week roll-up), the item cache (*Campaign
+filtering & the item cache*).
 
 ### `Invoke-SPWeeklyDigest.ps1`
 **Purpose:** a consolidated **weekly digest** — campaign activity, campaign health, identity
