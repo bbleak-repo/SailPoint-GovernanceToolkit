@@ -48,10 +48,10 @@
 .PARAMETER HighRiskThreshold
     Risk score threshold for high-risk classification. Default 70.
 .PARAMETER OutputMode
-    Console (default): formatted summary to terminal.
+    Console: formatted summary to terminal.
     HTML: self-contained HTML report file.
     JSON: machine-parseable result object.
-    Both: console output and HTML file.
+    Both (default): console output and HTML file.
 .PARAMETER OutputPath
     Directory for output files. Defaults to daily-evidence subdirectory.
 .PARAMETER Help
@@ -112,7 +112,7 @@ param(
 
     [Parameter()]
     [ValidateSet('Console', 'HTML', 'JSON', 'Both')]
-    [string]$OutputMode = 'Console',
+    [string]$OutputMode = 'Both',
 
     [Parameter()]
     [string]$OutputPath,
@@ -351,7 +351,7 @@ if ($isWhatIf) {
     Write-Host '         Measure-SPAuditReviewerMetrics, Measure-SPAuditRubberStampRisk' -ForegroundColor Gray
     Write-Host "  [2] KPI 1 - Campaign Completion: Measure-SPCampaignMetrics" -ForegroundColor Gray
     Write-Host "  [3] KPI 2 - Overdue Reviews: Get-SPCampaignHealth, Get-SPCampaignCompletionForecast" -ForegroundColor Gray
-    Write-Host "  [4] KPI 3 - Revocations Executed: Get-SPRemediationStatus (SLA=${SlaHours}h)" -ForegroundColor Gray
+    Write-Host "  [4] KPI 3 - Revocations Executed: Group-SPAuditRemediationProof (SLA=${SlaHours}h)" -ForegroundColor Gray
     Write-Host "  [5] KPI 4 - Remediation Timeliness: aging bucket analysis" -ForegroundColor Gray
     Write-Host "  [6] KPI 5 - High-Risk Exposure: Measure-SPIdentityRisk (threshold=$HighRiskThreshold)" -ForegroundColor Gray
     Write-Host '  [7] KPI 6 - Reviewer Health: Measure-SPReviewerReputation' -ForegroundColor Gray
@@ -417,7 +417,6 @@ $currentCampaigns        = @()
 $campaignMetricsData     = $null
 $healthResult            = $null
 $forecastData            = $null
-$remediationResult       = $null
 $identityRiskData        = $null
 $reviewerReputationData  = $null
 $governanceMaturityData  = $null
@@ -445,8 +444,7 @@ $confidenceGrade         = 'N/A'
 $confidenceLevel         = 'N/A'
 
 # Evidence data
-$allDecisions            = [System.Collections.Generic.List[object]]::new()
-$allRevocations          = [System.Collections.Generic.List[object]]::new()
+$allRemediationProof     = [System.Collections.Generic.List[object]]::new()
 $agingBuckets            = [ordered]@{ '0-24h' = 0; '24-48h' = 0; '2-5d' = 0; '5-10d' = 0; '>10d' = 0 }
 $agingDetails            = [System.Collections.Generic.List[object]]::new()
 $highRiskPending         = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -517,6 +515,8 @@ try {
             $rubberStampRisk = Measure-SPAuditRubberStampRisk -Decisions $decisionGroups `
                 -Certifications $certifications
 
+            $reviewerActions = Group-SPReviewerActions -Certifications $certifications
+
             $campaignAudit = @{
                 CampaignName    = $campName
                 CampaignId      = $campId
@@ -528,6 +528,9 @@ try {
                 Decisions       = $decisionGroups
                 ReviewerMetrics = $reviewerMetrics
                 RubberStampRisk = $rubberStampRisk
+                WrappedItems    = $wrappedItems.ToArray()
+                Certifications  = $certifications
+                ReviewerActions = $reviewerActions
             }
             $auditList.Add($campaignAudit)
         }
@@ -545,27 +548,6 @@ try {
     $stepResults['CampaignFetch'] = @{ Status = 'Success'; Detail = "$($campaignAudits.Count) campaigns audited"; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "  Step 1: $($campaignAudits.Count) campaigns fetched and audited" -ForegroundColor Green
 
-    # Collect all decisions for evidence registers
-    foreach ($audit in $campaignAudits) {
-        $d = $audit['Decisions']
-        if ($null -eq $d) { continue }
-        foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
-            if ($null -ne $d[$cat]) {
-                foreach ($item in @($d[$cat])) {
-                    $allDecisions.Add([PSCustomObject]@{
-                        IdentityName = if ($null -ne $item.IdentityName) { $item.IdentityName } else { '' }
-                        AccessName   = if ($null -ne $item.AccessName) { $item.AccessName } else { '' }
-                        Decision     = $cat
-                        Reviewer     = if ($null -ne $item.ReviewerName) { $item.ReviewerName } else { '' }
-                        DecisionDate = if ($null -ne $item.DecisionDate) { $item.DecisionDate } else { '' }
-                        CampaignName = $audit['CampaignName']
-                        IdentityId   = if ($null -ne $item.IdentityId) { $item.IdentityId } else { '' }
-                        SourceName   = if ($null -ne $item.SourceName) { $item.SourceName } else { '' }
-                    })
-                }
-            }
-        }
-    }
 }
 catch {
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
@@ -741,58 +723,37 @@ Write-Host '  Step 4: KPI 3 - Revocations Executed' -ForegroundColor Cyan
 $stepStart = Get-Date
 
 try {
-    # Extract revocation decisions from campaign audits
+    # Build remediation proof from cached review items (no additional API calls)
+    $totalRevoked = 0
+    $totalRemediated = 0
+    $totalRemediationPending = 0
+
     foreach ($audit in $campaignAudits) {
-        $d = $audit['Decisions']
-        if ($null -ne $d -and $null -ne $d['Revoked']) {
-            foreach ($rev in @($d['Revoked'])) { $allRevocations.Add($rev) }
+        $items = $audit['WrappedItems']
+        $certs = $audit['Certifications']
+        if ($null -eq $items -or $null -eq $certs) { continue }
+
+        $proof = Group-SPAuditRemediationProof -Items $items -Certifications $certs
+        if ($null -ne $proof) {
+            $totalRevoked += $proof.TotalRevoked
+            $totalRemediated += $proof.RemediationCompleteCount
+            $totalRemediationPending += $proof.RemediationPendingCount
+            foreach ($ri in $proof.RevokedItems) { $allRemediationProof.Add($ri) }
         }
     }
 
-    $remediationResult = $null
-    $hasFailedRevocations = $false
-    if ($allRevocations.Count -gt 0) {
-        try {
-            $remediationResult = Get-SPRemediationStatus -RevocationDecisions $allRevocations.ToArray() `
-                -SlaHours $SlaHours -CorrelationID $correlationID
-        }
-        catch {
-            Write-Host "    WARN: Get-SPRemediationStatus: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-SPLog -Message "Remediation status exception: $($_.Exception.Message)" `
-                -Severity WARN -Component 'DailyEvidence' -Action 'RemediationError' -CorrelationID $correlationID
-        }
-    }
-
-    if ($null -ne $remediationResult -and $remediationResult.Success -and $null -ne $remediationResult.Data) {
-        $remData = $remediationResult.Data
-        $revocationTotal       = $remData.Summary.Total
-        $revocationProvisioned = $remData.Summary.Provisioned
-        $revocationExecutionRate = if ($revocationTotal -gt 0) {
-            [math]::Round(($revocationProvisioned / $revocationTotal) * 100, 0)
-        } else { 100 }
-
-        # Check for failed items
-        if ($null -ne $remData.Summary.Failed -and $remData.Summary.Failed -gt 0) {
-            $hasFailedRevocations = $true
-        }
-    }
-    elseif ($allRevocations.Count -eq 0) {
-        $revocationExecutionRate = 100
-        $revocationTotal         = 0
-        $revocationProvisioned   = 0
-    }
+    $revocationTotal = $totalRevoked
+    $revocationProvisioned = $totalRemediated
+    $revocationExecutionRate = if ($totalRevoked -gt 0) {
+        [math]::Round(($totalRemediated / $totalRevoked) * 100, 0)
+    } else { 100 }
 
     $kpi3Status = Get-KpiStatus -Value $revocationExecutionRate `
         -GreenThreshold $thresholds.RevocationExecution.Green `
         -YellowThreshold $thresholds.RevocationExecution.Yellow
-    # Override to Red if any failed
-    if ($hasFailedRevocations -and $kpi3Status -ne 'Red') {
-        $kpi3Status = 'Red'
-    }
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $detail = "$revocationProvisioned of $revocationTotal provisioned ($revocationExecutionRate%)"
-    if ($hasFailedRevocations) { $detail += ' [FAILED items detected]' }
+    $detail = "$revocationProvisioned of $revocationTotal remediated ($revocationExecutionRate%)"
     $stepResults['Revocations'] = @{ Status = 'Success'; Detail = $detail; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "  Step 4: $detail [$kpi3Status]" -ForegroundColor $(if ($kpi3Status -eq 'Green') { 'Green' } elseif ($kpi3Status -eq 'Yellow') { 'Yellow' } else { 'Red' })
 }
@@ -816,29 +777,27 @@ $stepStart = Get-Date
 try {
     $slaComplianceRate = $revocationExecutionRate
 
-    # Compute aging buckets from remediation data
+    # Compute aging buckets from remediation proof data (pending items only)
     $now = [datetime]::UtcNow
-    if ($null -ne $remediationResult -and $remediationResult.Success -and $null -ne $remediationResult.Data) {
-        foreach ($item in $remediationResult.Data.Items) {
-            if ($item.Status -notin @('Pending', 'Overdue')) { continue }
-            $decDate = [datetime]::MinValue
-            if (-not [datetime]::TryParse($item.DecisionDate, [ref]$decDate)) { continue }
-            $ageHours = ($now - $decDate.ToUniversalTime()).TotalHours
-            $bucket = if ($ageHours -le 24)  { '0-24h' }
-                      elseif ($ageHours -le 48)  { '24-48h' }
-                      elseif ($ageHours -le 120) { '2-5d' }
-                      elseif ($ageHours -le 240) { '5-10d' }
-                      else { '>10d' }
-            $agingBuckets[$bucket]++
-            $agingDetails.Add([PSCustomObject]@{
-                IdentityName    = $item.IdentityName
-                EntitlementName = $item.EntitlementName
-                DecisionDate    = $item.DecisionDate
-                Status          = $item.Status
-                AgeHours        = [math]::Round($ageHours, 1)
-                AgeBucket       = $bucket
-            })
-        }
+    foreach ($item in $allRemediationProof) {
+        if ($item.RemediationComplete) { continue }
+        $decDate = [datetime]::MinValue
+        if (-not [datetime]::TryParse($item.DecisionDate, [ref]$decDate)) { continue }
+        $ageHours = ($now - $decDate.ToUniversalTime()).TotalHours
+        $bucket = if ($ageHours -le 24)  { '0-24h' }
+                  elseif ($ageHours -le 48)  { '24-48h' }
+                  elseif ($ageHours -le 120) { '2-5d' }
+                  elseif ($ageHours -le 240) { '5-10d' }
+                  else { '>10d' }
+        $agingBuckets[$bucket]++
+        $agingDetails.Add([PSCustomObject]@{
+            IdentityName    = $item.IdentityName
+            EntitlementName = $item.AccessName
+            DecisionDate    = $item.DecisionDate
+            Status          = 'Pending'
+            AgeHours        = [math]::Round($ageHours, 1)
+            AgeBucket       = $bucket
+        })
     }
 
     # Additional RED trigger: any item in >10d bucket or 5+ items in 5-10d
@@ -992,7 +951,6 @@ try {
     if ($null -ne $identityRiskData)       { $maturityParams['IdentityRisk']       = $identityRiskData }
     if ($null -ne $reviewerReputationData) { $maturityParams['ReviewerReputation']  = $reviewerReputationData }
     if ($null -ne $campaignMetricsData -and $campaignMetricsData.Success) { $maturityParams['CampaignMetrics'] = $campaignMetricsData }
-    if ($null -ne $remediationResult -and $remediationResult.Success)     { $maturityParams['RemediationStatus'] = $remediationResult }
     $governanceMaturityData = Measure-SPGovernanceMaturity @maturityParams
 
     if ($null -ne $governanceMaturityData) {
@@ -1138,6 +1096,22 @@ if ($dominoWorstStatus -ne 'Green' -and $dominoCascadeStart -ge 0) {
     }
 }
 
+# Collect source names from decision data for Sources in Scope section
+$sourceCountMap = [ordered]@{}
+foreach ($audit in $campaignAudits) {
+    $d = $audit['Decisions']
+    if ($null -eq $d) { continue }
+    foreach ($cat in @('Approved', 'Revoked', 'Pending')) {
+        if ($null -ne $d[$cat]) {
+            foreach ($item in @($d[$cat])) {
+                $src = if ($null -ne $item.SourceName -and -not [string]::IsNullOrWhiteSpace($item.SourceName)) { $item.SourceName } else { 'Unknown' }
+                if (-not $sourceCountMap.Contains($src)) { $sourceCountMap[$src] = 0 }
+                $sourceCountMap[$src]++
+            }
+        }
+    }
+}
+
 #endregion
 
 #region Output
@@ -1245,7 +1219,7 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
     [void]$sb.AppendLine('.confidence-trend{font-size:13px;color:#777;margin-top:4px}')
     [void]$sb.AppendLine('.domino-section{padding:16px 32px}')
     [void]$sb.AppendLine('.domino-row{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap;margin:12px 0}')
-    [void]$sb.AppendLine('.domino-box{width:100px;padding:10px 6px;border-radius:6px;text-align:center;border:2px solid transparent}')
+    [void]$sb.AppendLine('.domino-box{width:120px;padding:10px 6px;border-radius:6px;text-align:center;border:2px solid transparent}')
     [void]$sb.AppendLine('.domino-box.cascade{border-style:dashed;opacity:.85}')
     [void]$sb.AppendLine('.domino-label{font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px}')
     [void]$sb.AppendLine('.domino-status{font-size:20px;font-weight:700}')
@@ -1314,22 +1288,26 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         }
         [void]$sb.AppendLine('<div class="confidence-trend">' + $arrowHtml + ' ' + (ConvertTo-SafeHtml $confTrend.Delta) + ' vs prior period</div>')
     }
+    [void]$sb.AppendLine('<div style="font-size:12px;color:#777;margin-top:10px;max-width:600px;margin-left:auto;margin-right:auto;line-height:1.5">')
+    [void]$sb.AppendLine('The Governance Confidence Score is computed across six dimensions: Coverage (are all entitlements reviewed?), Timeliness (are reviews completed on schedule?), Enforcement (are revocations carried out?), Accountability (are reviewers performing responsibly?), Documentation (is evidence being captured?), and Automation (is the governance process automated?). Each dimension contributes equally to the overall score. Grade: A (90+), B (80-89), C (70-79), D (60-69), F (below 60).')
+    [void]$sb.AppendLine('</div>')
     [void]$sb.AppendLine('</div>')
 
     # Domino section
     [void]$sb.AppendLine('<div class="section domino-section">')
     [void]$sb.AppendLine('<h2>Cascading Risk Tracker</h2>')
+    [void]$sb.AppendLine('<div style="text-align:center;font-size:11px;color:#777;margin-bottom:4px"><span style="color:#339933">Green = On Target</span> &nbsp;|&nbsp; <span style="color:#FF9900">Yellow = Needs Attention</span> &nbsp;|&nbsp; <span style="color:#CC3333">Red = Action Required</span></div>')
     [void]$sb.AppendLine('<div class="domino-row">')
     foreach ($i in 0..($dominoChain.Count - 1)) {
         $box = $dominoChain[$i]
         $cascadeClass = if ($box['CascadeHighlight']) { ' cascade' } else { '' }
-        $statusLetter = $box.Status.Substring(0, 1)
+        $statusWord = $box.Status
         if ($i -gt 0) {
             [void]$sb.AppendLine('<div class="domino-arrow">&rarr;</div>')
         }
         [void]$sb.AppendLine('<div class="domino-box domino-' + $box.Status + $cascadeClass + '">')
         [void]$sb.AppendLine('<div class="domino-label">' + (ConvertTo-SafeHtml $box.ShortName) + '</div>')
-        [void]$sb.AppendLine('<div class="domino-status">' + $statusLetter + '</div>')
+        [void]$sb.AppendLine('<div class="domino-status" style="font-size:14px">' + (ConvertTo-SafeHtml $statusWord) + '</div>')
         [void]$sb.AppendLine('</div>')
     }
     [void]$sb.AppendLine('</div>')
@@ -1363,6 +1341,24 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
     [void]$sb.AppendLine('</div>')
     [void]$sb.AppendLine('</div>')
 
+    # Sources in Scope section
+    if ($sourceCountMap.Count -gt 0) {
+        [void]$sb.AppendLine('<div class="section">')
+        [void]$sb.AppendLine('<h2>Sources in Scope</h2>')
+        [void]$sb.AppendLine('<div style="display:flex;flex-wrap:wrap;gap:12px">')
+        foreach ($srcName in $sourceCountMap.Keys) {
+            $srcCount = $sourceCountMap[$srcName]
+            $srcCountFormatted = '{0:N0}' -f $srcCount
+            [void]$sb.AppendLine('<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-radius:6px;padding:10px 16px;min-width:150px">')
+            [void]$sb.AppendLine('<div style="font-size:11px;font-weight:600;text-transform:uppercase;color:#555">' + (ConvertTo-SafeHtml $srcName) + '</div>')
+            [void]$sb.AppendLine('<div style="font-size:20px;font-weight:700;color:#264d73">' + $srcCountFormatted + '</div>')
+            [void]$sb.AppendLine('<div style="font-size:11px;color:#777">access items</div>')
+            [void]$sb.AppendLine('</div>')
+        }
+        [void]$sb.AppendLine('</div>')
+        [void]$sb.AppendLine('</div>')
+    }
+
     # Evidence Section A: Campaign Completion Evidence
     [void]$sb.AppendLine('<div class="section evidence-section">')
     [void]$sb.AppendLine('<h2>A. Campaign Completion Evidence</h2>')
@@ -1385,11 +1381,17 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
             try {
                 $dl = [datetime]::Parse($deadlineStr)
-                $daysLeft = [int]($dl.ToUniversalTime() - (Get-Date).ToUniversalTime()).TotalDays
+                $hoursLeft = ($dl.ToUniversalTime() - (Get-Date).ToUniversalTime()).TotalHours
                 if ($audit['Status'] -eq 'COMPLETED') { $deadlineStatus = 'Completed'; $deadlineClass = 'status-green' }
-                elseif ($daysLeft -le 0) { $deadlineStatus = 'Overdue'; $deadlineClass = 'status-red' }
-                elseif ($daysLeft -le 3) { $deadlineStatus = "Due in ${daysLeft}d"; $deadlineClass = 'status-yellow' }
-                else { $deadlineStatus = "Due in ${daysLeft}d"; $deadlineClass = 'status-green' }
+                elseif ($hoursLeft -le 0) { $deadlineStatus = 'Overdue'; $deadlineClass = 'status-red' }
+                elseif ($hoursLeft -le 24) {
+                    $hrsDisplay = [math]::Round($hoursLeft, 0)
+                    $deadlineStatus = "Due in ${hrsDisplay}h"; $deadlineClass = 'status-yellow'
+                }
+                else {
+                    $daysDisplay = [math]::Round($hoursLeft / 24, 0)
+                    $deadlineStatus = "Due in ${daysDisplay}d"; $deadlineClass = 'status-green'
+                }
             } catch { }
         }
         if ($audit['Status'] -eq 'COMPLETED') { $deadlineStatus = 'Completed'; $deadlineClass = 'status-green' }
@@ -1404,28 +1406,81 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
     [void]$sb.AppendLine('</tbody></table>')
     [void]$sb.AppendLine('</div>')
 
-    # Evidence Section B: Certifier Decision Register
+    # Evidence Section B: Reviewer Accountability
     [void]$sb.AppendLine('<div class="section evidence-section">')
-    [void]$sb.AppendLine('<h2>B. Certifier Decision Register</h2>')
-    $limitedDecisions = @($allDecisions | Select-Object -First $evidenceDetailLimit)
-    if ($limitedDecisions.Count -eq 0) {
-        [void]$sb.AppendLine('<p style="color:#777">No decision records available.</p>')
-    }
-    else {
-        [void]$sb.AppendLine('<table><thead><tr><th>Identity</th><th>Access</th><th>Decision</th><th>Reviewer</th><th>Date</th><th>Campaign</th></tr></thead><tbody>')
-        foreach ($dec in $limitedDecisions) {
-            $decClass = switch ($dec.Decision) {
-                'Approved' { 'status-green' }
-                'Revoked'  { 'status-red' }
-                'Pending'  { 'status-yellow' }
-                default    { 'status-gray' }
+    [void]$sb.AppendLine('<h2>B. Reviewer Accountability</h2>')
+
+    $hasAnyReviewerData = $false
+    foreach ($audit in $campaignAudits) {
+        $ra = $audit['ReviewerActions']
+        if ($null -eq $ra) { continue }
+
+        $primaryRows = $ra['Primary']
+        $reassignedRows = $ra['Reassigned']
+        $primaryCount = if ($null -ne $primaryRows) { @($primaryRows).Count } else { 0 }
+        $reassignedCount = if ($null -ne $reassignedRows) { @($reassignedRows).Count } else { 0 }
+        if ($primaryCount -eq 0 -and $reassignedCount -eq 0) { continue }
+        $hasAnyReviewerData = $true
+
+        [void]$sb.AppendLine('<h3 style="font-size:13px;color:#264d73;margin:16px 0 8px 0">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</h3>')
+
+        # Split primary reviewers into Signed Off and Active
+        $signedOff = @()
+        $active = @()
+        if ($primaryCount -gt 0) {
+            $signedOff = @($primaryRows | Where-Object { $_.Phase -eq 'SIGNED' } | Sort-Object -Property Name)
+            $active = @($primaryRows | Where-Object { $_.Phase -ne 'SIGNED' } | Sort-Object -Property Name)
+        }
+
+        # Signed Off Reviewers
+        [void]$sb.AppendLine('<details open>')
+        [void]$sb.AppendLine('<summary style="font-weight:bold;font-size:12px;margin-bottom:4px;cursor:pointer">Signed Off (' + $signedOff.Count + ')</summary>')
+        if ($signedOff.Count -eq 0) {
+            [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic">No reviewers have signed off yet.</p>')
+        }
+        else {
+            [void]$sb.AppendLine('<table><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
+            foreach ($r in $signedOff) {
+                $soDate = if (-not [string]::IsNullOrWhiteSpace($r.SignOffDate)) { ConvertTo-SafeHtml $r.SignOffDate } else { '-' }
+                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $r.Name) + '</td><td>' + (ConvertTo-SafeHtml $r.Email) + '</td><td>' + $r.CertsAssigned + '</td><td>' + $r.DecisionsMade + '</td><td>' + $soDate + '</td><td class="status-green">' + (ConvertTo-SafeHtml $r.Phase) + '</td></tr>')
             }
-            [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $dec.IdentityName) + '</td><td>' + (ConvertTo-SafeHtml $dec.AccessName) + '</td><td class="' + $decClass + '">' + (ConvertTo-SafeHtml $dec.Decision) + '</td><td>' + (ConvertTo-SafeHtml $dec.Reviewer) + '</td><td>' + (ConvertTo-SafeHtml $dec.DecisionDate) + '</td><td>' + (ConvertTo-SafeHtml $dec.CampaignName) + '</td></tr>')
+            [void]$sb.AppendLine('</tbody></table>')
         }
-        [void]$sb.AppendLine('</tbody></table>')
-        if ($allDecisions.Count -gt $evidenceDetailLimit) {
-            [void]$sb.AppendLine('<p style="color:#777;font-size:11px">Showing ' + $evidenceDetailLimit + ' of ' + $allDecisions.Count + ' records.</p>')
+        [void]$sb.AppendLine('</details>')
+
+        # Active Reviewers
+        [void]$sb.AppendLine('<details open>')
+        [void]$sb.AppendLine('<summary style="font-weight:bold;font-size:12px;margin-bottom:4px;margin-top:8px;cursor:pointer">Active (' + $active.Count + ')</summary>')
+        if ($active.Count -eq 0) {
+            [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic">No active reviewers.</p>')
         }
+        else {
+            [void]$sb.AppendLine('<table><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
+            foreach ($r in $active) {
+                $soDate = if (-not [string]::IsNullOrWhiteSpace($r.SignOffDate)) { ConvertTo-SafeHtml $r.SignOffDate } else { '-' }
+                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $r.Name) + '</td><td>' + (ConvertTo-SafeHtml $r.Email) + '</td><td>' + $r.CertsAssigned + '</td><td>' + $r.DecisionsMade + '</td><td>' + $soDate + '</td><td class="status-yellow">' + (ConvertTo-SafeHtml $r.Phase) + '</td></tr>')
+            }
+            [void]$sb.AppendLine('</tbody></table>')
+        }
+        [void]$sb.AppendLine('</details>')
+
+        # Reassigned Reviewers (if any)
+        if ($reassignedCount -gt 0) {
+            [void]$sb.AppendLine('<details>')
+            [void]$sb.AppendLine('<summary style="font-weight:bold;font-size:12px;margin-bottom:4px;margin-top:8px;cursor:pointer">Reassigned (' + $reassignedCount + ')</summary>')
+            [void]$sb.AppendLine('<table><thead><tr><th>Reviewer</th><th>Email</th><th>Reassigned From</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
+            foreach ($r in @($reassignedRows | Sort-Object -Property Name)) {
+                $soDate = if (-not [string]::IsNullOrWhiteSpace($r.SignOffDate)) { ConvertTo-SafeHtml $r.SignOffDate } else { '-' }
+                $phaseClass = if ($r.Phase -eq 'SIGNED') { 'status-green' } else { 'status-yellow' }
+                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $r.Name) + '</td><td>' + (ConvertTo-SafeHtml $r.Email) + '</td><td>' + (ConvertTo-SafeHtml $r.ReassignedFrom) + '</td><td>' + $r.DecisionsMade + '</td><td>' + $soDate + '</td><td class="' + $phaseClass + '">' + (ConvertTo-SafeHtml $r.Phase) + '</td></tr>')
+            }
+            [void]$sb.AppendLine('</tbody></table>')
+            [void]$sb.AppendLine('</details>')
+        }
+    }
+
+    if (-not $hasAnyReviewerData) {
+        [void]$sb.AppendLine('<p style="color:#777">No reviewer accountability data available.</p>')
     }
     [void]$sb.AppendLine('</div>')
 
@@ -1455,33 +1510,26 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
     [void]$sb.AppendLine('</div>')
 
     # Remediation detail table
-    if ($null -ne $remediationResult -and $remediationResult.Success -and $null -ne $remediationResult.Data -and $null -ne $remediationResult.Data.Items) {
-        $remItems = @($remediationResult.Data.Items | Select-Object -First $evidenceDetailLimit)
-        if ($remItems.Count -gt 0) {
-            [void]$sb.AppendLine('<table><thead><tr><th>Identity</th><th>Entitlement</th><th>Decision Date</th><th>Status</th><th>Days to Remediate</th><th>Source</th></tr></thead><tbody>')
-            foreach ($item in $remItems) {
-                $remStatusClass = switch ($item.Status) {
-                    'Provisioned' { 'status-green' }
-                    'Pending'     { 'status-yellow' }
-                    'Overdue'     { 'status-red' }
-                    'Failed'      { 'status-red' }
-                    default       { 'status-gray' }
-                }
-                $daysToRemediate = ''
-                if ($null -ne $item.DecisionDate -and -not [string]::IsNullOrWhiteSpace($item.DecisionDate)) {
-                    try {
-                        $dd = [datetime]::Parse($item.DecisionDate)
-                        $ageD = [math]::Round(([datetime]::UtcNow - $dd.ToUniversalTime()).TotalDays, 1)
-                        $daysToRemediate = "$ageD"
-                    } catch { }
-                }
-                $sourceName = if ($null -ne $item.SourceName) { ConvertTo-SafeHtml $item.SourceName } else { '' }
-                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $item.IdentityName) + '</td><td>' + (ConvertTo-SafeHtml $item.EntitlementName) + '</td><td>' + (ConvertTo-SafeHtml $item.DecisionDate) + '</td><td class="' + $remStatusClass + '">' + (ConvertTo-SafeHtml $item.Status) + '</td><td>' + $daysToRemediate + '</td><td>' + $sourceName + '</td></tr>')
+    if ($allRemediationProof.Count -gt 0) {
+        $remItems = @($allRemediationProof | Select-Object -First $evidenceDetailLimit)
+        [void]$sb.AppendLine('<table><thead><tr><th>Identity</th><th>Access</th><th>Decision Date</th><th>Status</th><th>Days Since Decision</th><th>Source</th></tr></thead><tbody>')
+        foreach ($item in $remItems) {
+            $remLabel = if ($item.RemediationComplete) { 'Remediated' } else { 'Pending' }
+            $remStatusClass = if ($item.RemediationComplete) { 'status-green' } else { 'status-yellow' }
+            $daysToRemediate = ''
+            if ($null -ne $item.DecisionDate -and -not [string]::IsNullOrWhiteSpace($item.DecisionDate)) {
+                try {
+                    $dd = [datetime]::Parse($item.DecisionDate)
+                    $ageD = [math]::Round(([datetime]::UtcNow - $dd.ToUniversalTime()).TotalDays, 1)
+                    $daysToRemediate = "$ageD"
+                } catch { }
             }
-            [void]$sb.AppendLine('</tbody></table>')
+            $sourceName = if ($null -ne $item.SourceName) { ConvertTo-SafeHtml $item.SourceName } else { '' }
+            [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $item.IdentityName) + '</td><td>' + (ConvertTo-SafeHtml $item.AccessName) + '</td><td>' + (ConvertTo-SafeHtml $item.DecisionDate) + '</td><td class="' + $remStatusClass + '">' + $remLabel + '</td><td>' + $daysToRemediate + '</td><td>' + $sourceName + '</td></tr>')
         }
-        else {
-            [void]$sb.AppendLine('<p style="color:#777">No remediation items to display.</p>')
+        [void]$sb.AppendLine('</tbody></table>')
+        if ($allRemediationProof.Count -gt $evidenceDetailLimit) {
+            [void]$sb.AppendLine('<p style="color:#777;font-size:11px">Showing ' + $evidenceDetailLimit + ' of ' + $allRemediationProof.Count + ' records.</p>')
         }
     }
     else {
@@ -1541,7 +1589,7 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
     [void]$sb.AppendLine('<div class="section evidence-section">')
     [void]$sb.AppendLine('<h2>F. Reviewer Performance Register</h2>')
     if ($null -ne $reviewerReputationData -and $null -ne $reviewerReputationData.Reviewers -and @($reviewerReputationData.Reviewers).Count -gt 0) {
-        $sortedReviewers = @($reviewerReputationData.Reviewers | Sort-Object -Property ReputationScore -Descending)
+        $sortedReviewers = @($reviewerReputationData.Reviewers | Sort-Object -Property ReviewerName)
         $limitedReviewers = @($sortedReviewers | Select-Object -First $evidenceDetailLimit)
         [void]$sb.AppendLine('<table><thead><tr><th>Reviewer</th><th>Score</th><th>Tier</th><th>Avg Response (hrs)</th><th>Rubber-Stamp Count</th></tr></thead><tbody>')
         foreach ($rev in $limitedReviewers) {
