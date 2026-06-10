@@ -262,3 +262,30 @@ Describe "CDF-08: per-director diff split + HTML export" {
         (Get-Content $betaFile -Raw) | Should -Match 'Domain Admins'
     }
 }
+
+Describe "CDF-09: baseline completion is honest (no 'newly completed' without a prior)" {
+    It "reports 0 newly-completed on a baseline even when a cert is already signed" {
+        $camp = [PSCustomObject]@{ id = 'camp-bl'; name = 'Daily Attestation Manager Monday'; status = 'ACTIVE' }
+        $certs = @(
+            [PSCustomObject]@{ id = 'cert-x'; reviewer = [PSCustomObject]@{ id = 'mgr-x'; name = 'Mgr X' }; decisionsTotal = 3; decisionsMade = 3; signed = $true }
+            [PSCustomObject]@{ id = 'cert-y'; reviewer = [PSCustomObject]@{ id = 'mgr-y'; name = 'Mgr Y' }; decisionsTotal = 4; decisionsMade = 1 }
+        )
+        $decisions = @{
+            Approved = @([PSCustomObject]@{ CertificationId = 'cert-x'; IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'Acc'; AccessType = 'ENTITLEMENT'; SourceName = 'AD'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T09:00:00Z' })
+            Revoked = @(); Pending = @()
+        }
+        $snap = Build-SPCampaignSnapshotData -Campaign $camp -Certifications $certs -Decisions $decisions
+        $r = Compare-SPCampaignSnapshots -Current $snap   # no -Previous -> baseline
+        $r.Success | Should -Be $true
+        $r.Data.Meta.HasPrevious | Should -Be $false
+        # The bug: cert-x is signed/completed, so it used to be counted as 'newly completed' on a
+        # baseline even though there is no prior capture to be 'newly' relative to.
+        $r.Data.Completion.NewlyCompletedCount | Should -Be 0
+        $r.Data.Completion.ReassignedCount     | Should -Be 0
+        # Absolute state is still reported honestly.
+        $xrev = @($r.Data.Completion.Reviewers | Where-Object { $_.CertId -eq 'cert-x' })[0]
+        $xrev.Completed      | Should -Be $true
+        $xrev.NewlyCompleted | Should -Be $false
+        $xrev.MadeDelta      | Should -Be 0
+    }
+}

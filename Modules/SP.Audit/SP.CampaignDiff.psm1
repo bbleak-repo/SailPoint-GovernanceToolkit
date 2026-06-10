@@ -181,6 +181,12 @@ function Compare-SPCampaignSnapshots {
             $isStall = (-not $cDone) -and ($delta -le 0) -and ($cTot -gt 0)
             # Reassigned: same cert, different effective reviewer than the prior capture.
             $isReassigned = ($pc -and $pRevId -and $cRevId -and ($pRevId -ne $cRevId))
+            # Baseline capture (no prior): there is nothing to measure change against, so the
+            # delta-based signals are NOT meaningful -- a cert that is already signed at first
+            # capture is NOT "newly completed", and progress/stall/reassign are undefined. Suppress
+            # them so the data matches the "baseline -- deltas appear next run" banner. Absolute
+            # state (Completed / CompletionPct / NotStarted / Outstanding) is still reported.
+            if (-not $hasPrev) { $delta = 0; $isNew = $false; $isStall = $false; $isReassigned = $false }
             if ($isNew)  { $newlyCompleted++ }
             if (-not $cDone) { $outstanding++ }
             if ($isNot)  { $notStarted++ }
