@@ -24,6 +24,7 @@ BeforeAll {
         'Invoke-SPADDeltaCert.ps1'
         'Invoke-SPCampaignAudit.ps1'
         'Invoke-SPCampaignDiff.ps1'
+        'Invoke-SPIscReconciliation.ps1'
         'Invoke-SPCampaignTrendReport.ps1'
         'Invoke-SPCertTracker.ps1'
         'Invoke-SPCampaignSearch.ps1'
@@ -61,6 +62,7 @@ BeforeAll {
     $script:ReadOnlyScripts = @(
         'Invoke-SPAdaptiveReport.ps1'
         'Invoke-SPCampaignDiff.ps1'
+        'Invoke-SPIscReconciliation.ps1'
         'Invoke-SPCampaignTrendReport.ps1'
         'Invoke-SPCertTracker.ps1'
         'Invoke-SPDeltaReport.ps1'
@@ -116,6 +118,7 @@ BeforeDiscovery {
         'Invoke-SPADDeltaCert.ps1'
         'Invoke-SPCampaignAudit.ps1'
         'Invoke-SPCampaignDiff.ps1'
+        'Invoke-SPIscReconciliation.ps1'
         'Invoke-SPCampaignTrendReport.ps1'
         'Invoke-SPCertTracker.ps1'
         'Invoke-SPCampaignSearch.ps1'
@@ -151,6 +154,7 @@ BeforeDiscovery {
     $script:ReadOnlyScripts = @(
         'Invoke-SPAdaptiveReport.ps1'
         'Invoke-SPCampaignDiff.ps1'
+        'Invoke-SPIscReconciliation.ps1'
         'Invoke-SPCampaignTrendReport.ps1'
         'Invoke-SPCertTracker.ps1'
         'Invoke-SPDeltaReport.ps1'
