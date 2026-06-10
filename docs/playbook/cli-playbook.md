@@ -822,6 +822,7 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 | `-Cadence` | Which prior snapshot to diff against: `Adjacent` (immediately prior, default), `IntraDay` (earlier today), `Daily` (~24h ago), `Weekly` (~168h ago), `Monthly` (~730h ago). This is what makes a *week-over-week* report compare this week's capture to **last week's**, not to yesterday's. |
 | `-IncludeCsv` | Also write flat completion + scope **CSVs** (Excel / leadership). |
 | `-VelocityAdvisory` | **Opt-in.** Also emit the review-velocity advisory (see caveat below). |
+| `-PerDirector` / `-OrgDepth <n>` | **Opt-in.** Also write **one HTML report per director** (their team's attestation progress + the access added/removed/changed for their reviewers) + an `index.html`, under `…\per-director\per-director-<stamp>\` — each self-contained and suitable to **send to that director individually**. A director = a reviewer's manager (one level up the org tree, `-OrgDepth` default 3); reviewers with no manager fall into one `Unassigned` report. |
 | `-PruneOldSnapshots` | Run the lifecycle-aware retention sweep (never deletes a signed/COMPLETED evidence capture). |
 | `-OutputPath <dir>` | Output root (default `.\Audit\diff`). |
 | `-OutputMode` | `Console`/`JSON`/`HTML`/`Both`/`CSV` — controls the run summary; the two HTML diffs are always written. |
@@ -832,6 +833,9 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 
 # Pin to a stable campaign id (recommended for a recurring campaign)
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -IncludeCsv
+
+# Day-over-day diff PLUS one HTML per director to send out individually
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation' -PerDirector -IncludeCsv
 
 # Week-over-week: compare this week's capture to last week's
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -Cadence Weekly
