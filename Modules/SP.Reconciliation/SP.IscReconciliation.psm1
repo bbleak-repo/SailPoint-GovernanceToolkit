@@ -377,7 +377,7 @@ function Save-SPIscReconciliationExport {
         $csvText = if ($rows) { (@($rows) | ConvertTo-Csv -NoTypeInformation) -join "`r`n" } else { '"EmployeeId"' }
         [System.IO.File]::WriteAllText($csvFile, $csvText, $utf8NoBom)
 
-        # Tamper-evidence sidecar over the JSON bytes (SOX/ITGC evidence integrity).
+        # Tamper-evidence sidecar over the JSON bytes (audit evidence integrity).
         $hash = $null
         try {
             $sha = [System.Security.Cryptography.SHA256]::Create()

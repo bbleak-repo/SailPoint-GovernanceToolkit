@@ -49,7 +49,7 @@ For the merge to be a join, the ISC export should carry per identity (keyed by `
 approver), `STATUS_MISMATCH` (AD enabled ≠ ISC active), `ACCESS_NOT_GOVERNED` (priv AD grant not in ISC
 = shadow access), `ORGCHART_DIVERGENCE`, `STATUS_TERMINATED` (active in AD/ISC, terminated in HR),
 `HR_NOT_PROVISIONED`, `AS_OF_SKEW` (merge-time). **The HR anchor decides** orphan vs coverage-gap.
-Each maps to SOX ITGC (access review/certification routing, least privilege, deprovisioning,
+Each maps to standard IT governance controls (access review/certification routing, least privilege, deprovisioning,
 reviewer independence, orphan ownership). Findings are worded as **process/control gaps, not blame.**
 
 ## Evidence requirements (for the merged report to be audit-defensible)

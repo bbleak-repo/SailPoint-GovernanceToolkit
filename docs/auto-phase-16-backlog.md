@@ -103,7 +103,7 @@ Answers: "Which accounts exist in our sources but are not linked to any known
 identity? Are there accounts belonging to terminated employees that were never
 deprovisioned?"
 
-Orphan accounts are a top audit finding in SOX, SOC 2, and ISO 27001 reviews.
+Orphan accounts are a top audit finding in compliance reviews.
 They represent access that is not governed by any identity lifecycle process --
 no certifications, no lifecycle triggers, no manager oversight. Common causes:
 accounts created before ISC onboarding, manual account creation outside

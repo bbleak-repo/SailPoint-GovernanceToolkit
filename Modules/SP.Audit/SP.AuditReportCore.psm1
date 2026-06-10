@@ -913,7 +913,7 @@ function Measure-SPAuditRubberStampRisk {
         Detects potential rubber-stamping patterns in certification review decisions.
     .DESCRIPTION
         Analyzes per-reviewer decision behavior to flag potential rubber-stamping.
-        Based on SOX/SOC2 auditor red flags:
+        Based on common auditor red flags:
 
         1. Decision velocity: items decided per minute. Flagged if >50 items in <60 seconds.
         2. Approval-only rate: % of decisions that are APPROVE. Flagged if 100% across >10 items.

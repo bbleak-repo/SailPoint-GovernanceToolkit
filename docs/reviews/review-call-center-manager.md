@@ -63,7 +63,7 @@ These are not edge cases. These are the literal first thing I need to do, and th
 | Lifecycle state | Never explained in the main text. Appears in the FAQ answer about acknowledge-only items. |
 | Source Owner | Section 2 contrasts this with manager reviews. I did not know "source owners" were a thing. |
 | Blast radius | Used repeatedly. I understand the metaphor, but it feels alarmist. Maybe "impact" or "damage if something goes wrong" would be less dramatic. |
-| SOX 404, SOC 2, ISO 27001, NIST 800-53 | These appear in a table in Section 3. I have no idea what any of them are. They are never explained. |
+| Compliance frameworks | These appear in a table in Section 3. I have no idea what any of them are. They are never explained. |
 | Break-glass process | Section 4.4 and Scenario 3 reference this. I do not know what this means. |
 | JIT (just-in-time) access | Same section. Not in the glossary. |
 | SailPoint VA | Section 6.2 table. What is a VA? Not in the glossary. |
@@ -103,7 +103,7 @@ The guide contains multiple warning callouts that made me feel like I was about 
 
 - "Approving everything in under 10 seconds flags your decisions for additional scrutiny." -- So if I approve things quickly because my campaign only has 2 items and they are both obviously fine, I get flagged? This made me feel like I am being watched and timed.
 
-- "In a SOX or regulatory audit, you may be interviewed about specific approvals." -- This is the sentence that scared me the most. I am a call center manager. I do not want to be interviewed by auditors. The guide makes it sound like every click I make could end up in a deposition.
+- "In a regulatory audit, you may be interviewed about specific approvals." -- This is the sentence that scared me the most. I am a call center manager. I do not want to be interviewed by auditors. The guide makes it sound like every click I make could end up in a deposition.
 
 ### The Rubber-Stamping Section Feels Accusatory
 

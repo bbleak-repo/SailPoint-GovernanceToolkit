@@ -19,7 +19,7 @@ partition "WITHOUT Integration" #FFEEEE {
     :No one reviews who\nhas access to your app;
 
     fork
-        #CC3333:SOX / SOC2 AUDIT FINDING\n"Unreviewed application access"\nMaterial weakness\nCost: $1.8M+ to remediate;
+        #CC3333:AUDIT FINDING\n"Unreviewed application access"\nMaterial weakness\nCost: $1.8M+ to remediate;
     fork again
         #CC3333:TERMINATED EMPLOYEE\nretains access 116 days avg\nOrphan accounts undetected\nInsider threat: $16.2M avg;
     fork again
@@ -53,7 +53,7 @@ partition "WITH Integration (What Changes)" #EEFFEE {
     :Revocations tracked\nfor compliance evidence;
 
     fork
-        #339933:AUDIT READY\nFull evidence trail\nSOX/SOC2 compliant\nReviews documented;
+        #339933:AUDIT READY\nFull evidence trail\nCompliance-ready\nReviews documented;
     fork again
         #339933:FAST DETECTION\nNew access reviewed\nwithin 24-48 hours\nnot 90+ days;
     fork again
@@ -86,12 +86,12 @@ partition "What YOU (Product Owner) Need to Do" #E8F4FD {
 stop
 
 legend right
-    **Key Compliance Frameworks:**
-    SOX 404: Periodic access review required
-    SOC 2 CC6.3: Access authorized + reviewed
-    HIPAA 164.312: Access only to authorized persons
-    PCI DSS 7/8: Need-to-know + review every 6 months
-    NIST AC-2: Periodic account review + automated audit
+    **Key Compliance Control Objectives:**
+    Periodic access review required
+    Access authorized + reviewed
+    Access only to authorized persons
+    Need-to-know + periodic review
+    Periodic account review + automated audit
 
     **Bottom Line:**
     Ungoverned apps are audit findings waiting to happen.

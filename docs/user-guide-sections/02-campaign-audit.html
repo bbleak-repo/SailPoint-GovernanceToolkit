@@ -426,7 +426,7 @@ metadata. The difference is in the decision detail tables.</p>
     <div class="detail-body">
         <p>Everything in Detailed plus: justification comments, remediation status and dates, identity
         lifecycle events, risk flags, and the full reassignment chain. This is the default and the
-        level required for SOX/SOC2 compliance evidence packages.</p>
+        level required for compliance evidence packages.</p>
         <pre><code>.\Scripts\Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Verbose</code></pre>
     </div>
 </details>
@@ -437,7 +437,7 @@ metadata. The difference is in the decision detail tables.</p>
 <h4>18 Mandatory Compliance Fields</h4>
 
 <p>Every access review decision is emitted as a <code>DecisionRecorded</code> event in the JSONL audit
-trail with exactly 18 fields. This structure supports SOX, SOC2, and NIST audit requirements:</p>
+trail with exactly 18 fields. This structure supports compliance and audit requirements:</p>
 
 <table class="param-table">
     <thead>
@@ -531,7 +531,7 @@ trail with exactly 18 fields. This structure supports SOX, SOC2, and NIST audit 
 
 <h4>Anti-Rubber-Stamping Detection</h4>
 
-<p>The <code>Measure-SPAuditRubberStampRisk</code> function performs four SOX/SOC2 red-flag checks on
+<p>The <code>Measure-SPAuditRubberStampRisk</code> function performs four red-flag checks on
 reviewer behavior, producing a per-reviewer risk severity (None, Low, Medium, High):</p>
 
 <table>

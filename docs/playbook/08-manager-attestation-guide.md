@@ -353,5 +353,5 @@ and roles are complete meals.
 | **Privileged Access** | Elevated permissions (server admin, database admin, etc.). Higher risk = more scrutiny. |
 | **Privilege Creep** | Gradual buildup of access over time, especially during role changes. Daily reviews prevent this. |
 | **Role** | A business-level access bundle spanning multiple systems (e.g., "Customer Service Rep" = CRM + phone + KB) |
-| **SOX / SOC 2** | Regulatory standards requiring documented access reviews. Your reviews are part of this evidence. |
+| **Compliance Standards** | Regulatory standards requiring documented access reviews. Your reviews are part of this evidence. |
 | **Source** | A connected system (Active Directory, your CRM, HR system) from which permissions are imported. |

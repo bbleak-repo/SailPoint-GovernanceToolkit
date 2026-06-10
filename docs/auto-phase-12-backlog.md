@@ -101,7 +101,7 @@ audit artifacts from a given date range into a single ZIP file with a JSON manif
 This is the "hand to auditors" deliverable -- one file containing every report, CSV,
 JSONL trail, and remediation proof for a review period.
 
-Auditors for SOX 404, SOC 2, and ISO 27001 need a self-contained evidence package
+Auditors for common compliance frameworks need a self-contained evidence package
 they can ingest without navigating the toolkit's directory structure. Currently the
 toolkit produces artifacts spread across Audit/, DeltaCert/, and leadership/
 subdirectories with no index.

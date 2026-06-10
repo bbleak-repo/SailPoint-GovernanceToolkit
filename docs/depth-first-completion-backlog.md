@@ -116,7 +116,7 @@ SP.AuditOperations.
 - Writes manifest.json with file paths, hashes, chain links, timestamps
 - Detects tampering: if any file is modified, the chain breaks
 
-**Why it matters:** SOX auditors ask "can you prove this evidence wasn't modified
+**Why it matters:** Auditors ask "can you prove this evidence wasn't modified
 after the fact?" This provides cryptographic proof.
 
 **Files:** Modules/SP.Audit/SP.AuditOperations.psm1, Modules/SP.Audit/SP.Audit.psd1

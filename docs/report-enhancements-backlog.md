@@ -2,7 +2,7 @@
 
 **Created:** 2026-05-23
 **Prereqs:** Leadership reports (L-01 to L-08) complete, IdentityId fix applied
-**Research:** Access review best practices (SOX, SOC2, ISO 27001, NIST) informing R-07 to R-09
+**Research:** Access review best practices informing R-07 to R-09
 
 ---
 
@@ -58,7 +58,7 @@ level down to Manager. The top level always gets an executive summary.
 
 ## Compliance Research Findings (Reference)
 
-From SOX/SOC2/ISO 27001/NIST analysis:
+From compliance and audit analysis:
 
 **18 mandatory fields** for audit evidence: Identity Name/ID, Account ID (UPN),
 Application/Source, Entitlement Name, Access Type, Reviewer Name, Reviewer Email,
@@ -352,7 +352,7 @@ Run/Cleanup/Escalation buttons).
 
 **Description:**
 Add a new section to campaign audit reports that flags potential rubber-stamping.
-Based on compliance research (SOX/SOC2 auditor red flags).
+Based on compliance research (common auditor red flags).
 
 **Metrics calculated per reviewer:**
 1. **Decision velocity**: items decided per minute. Flag if >50 items in <60 seconds.

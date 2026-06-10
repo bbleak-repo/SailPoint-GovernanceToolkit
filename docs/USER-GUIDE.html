@@ -1766,7 +1766,7 @@ pwsh -NoProfile -File Start-MockServer.ps1
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day)</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (SOX/IAG)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day)</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (audit/IAG)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -2627,56 +2627,48 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <p>The toolkit's reports map to common compliance frameworks. Use this guide when packaging evidence for auditors.</p>
 <table>
 <thead><tr>
-<th>Framework</th>
 <th>Control Area</th>
 <th>Toolkit Report</th>
 <th>What It Proves</th>
 </tr></thead><tbody>
 <tr>
-<td><strong>SOX</strong></td>
-<td>Access review (ITGC)</td>
+<td>Periodic access review / certification</td>
 <td>Campaign Audit, Leadership Rollup</td>
 <td>Access was reviewed and decisions were made by authorized reviewers</td>
 </tr>
 <tr>
-<td><strong>SOX</strong></td>
 <td>Segregation of duties</td>
 <td>Adaptive SoD Baseline</td>
 <td>Toxic combinations identified and reviewed</td>
 </tr>
 <tr>
-<td><strong>SOC 2</strong></td>
-<td>CC6.1 -- Logical access</td>
+<td>Logical access controls</td>
 <td>Campaign Audit, Data Quality</td>
 <td>Access is periodically reviewed; orphan accounts identified</td>
 </tr>
 <tr>
-<td><strong>SOC 2</strong></td>
-<td>CC6.2 -- Prior to access</td>
+<td>Access reviewed prior to provisioning</td>
 <td>Delta Report</td>
 <td>New access grants are certified promptly</td>
 </tr>
 <tr>
-<td><strong>SOC 2</strong></td>
-<td>CC6.3 -- Access removal</td>
+<td>Timely access removal</td>
 <td>Remediation Tracking (Weekly Digest)</td>
 <td>Revoked access is actually removed</td>
 </tr>
 <tr>
-<td><strong>ISO 27001</strong></td>
-<td>A.9.2.5 -- Review of access rights</td>
+<td>Review of access rights</td>
 <td>Governance Report</td>
 <td>Comprehensive governance posture snapshot</td>
 </tr>
 <tr>
-<td><strong>ISO 27001</strong></td>
-<td>A.9.2.6 -- Removal of access</td>
+<td>Removal of access</td>
 <td>Delta Report, Remediation Tracking</td>
 <td>Timely revocation and follow-through</td>
 </tr>
 </tbody></table>
 <p><strong>Packaging evidence for auditors:</strong></p>
-<ol><li>Run <code>Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality</code> to generate the full evidence package.</li><li>Collect the output directory (<code>Reports\</code>) -- it includes a manifest listing all artifacts.</li><li>Include the JSONL audit trail (<code>Audit\*.jsonl</code>) for machine-verifiable provenance.</li><li>For SOX, add the leadership rollup reports to show reviewer accountability.</li></ol>
+<ol><li>Run <code>Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality</code> to generate the full evidence package.</li><li>Collect the output directory (<code>Reports\</code>) -- it includes a manifest listing all artifacts.</li><li>Include the JSONL audit trail (<code>Audit\*.jsonl</code>) for machine-verifiable provenance.</li><li>For compliance evidence, add the leadership rollup reports to show reviewer accountability.</li></ol>
 <h3 id="invoke-sporgtreepreview-ps1"><code>Invoke-SPOrgTreePreview.ps1</code></h3>
 <p><strong>Purpose:</strong> prints the <strong>org tree as ASCII art</strong> for a campaign's certifiers, so you can eyeball the management chain (and band assignments) before generating leadership reports. Read-only; surfaces <code>Build-SPOrgTree</code> / <code>Show-SPOrgTree</code> as a one-command tool. <strong>When to use:</strong> sanity-check the org structure, spot where ISC manager data dead-ends, or validate an <code>org-chart-supplement.csv</code> before a big report run.</p>
 <table>
@@ -2906,7 +2898,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML</code></pre>
 <p><strong>Related GUI:</strong> Governance tab.</p>
 <h3 id="invoke-spdailyevidencereport-ps1"><code>Invoke-SPDailyEvidenceReport.ps1</code></h3>
-<p><strong>Purpose:</strong> a daily executive governance dashboard with six KPIs, a Governance Confidence Score, a cascading-risk "Domino Tracker", and SOX/IAG evidence registers. Designed to satisfy <strong>Step 6: Evidence and Reporting</strong> of the IAM governance program -- a single report that answers whether campaigns are completing, attestations are on time, revocations are being enforced, remediation is timely, high-risk access is being reviewed, and reviewers are performing responsibly.</p>
+<p><strong>Purpose:</strong> a daily executive governance dashboard with six KPIs, a Governance Confidence Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy <strong>Step 6: Evidence and Reporting</strong> of the IAM governance program -- a single report that answers whether campaigns are completing, attestations are on time, revocations are being enforced, remediation is timely, high-risk access is being reviewed, and reviewers are performing responsibly.</p>
 <p><strong>When to use:</strong> daily, scheduled after the daily orchestrator. Also useful on-demand with <code>-DaysBack 7</code> for a weekly evidence summary or <code>-CampaignNameContains 'Tuesday'</code> to scope to a specific campaign day.</p>
 <p><strong>KPI dashboard (above the fold -- one screen):</strong></p>
 <table>
@@ -3028,7 +3020,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf</code></pre>
 <p><strong>Thresholds</strong> are configurable in <code>settings.json</code> under the <code>DailyEvidence.Thresholds</code> section. The script uses sensible defaults if the section is missing. See Foundations for the settings reference.</p>
 <p><strong>Output files:</strong></p>
-<ul><li><code>daily-evidence-{timestamp}.html</code> -- self-contained HTML executive dashboard + evidence</li><li><code>daily-evidence-audit.jsonl</code> -- append-only JSONL evidence trail (written every run for SOX immutability)</li></ul>
+<ul><li><code>daily-evidence-{timestamp}.html</code> -- self-contained HTML executive dashboard + evidence</li><li><code>daily-evidence-audit.jsonl</code> -- append-only JSONL evidence trail (written every run for audit immutability)</li></ul>
 <table>
 <thead><tr>
 <th><em>Exit codes:</em> 0 all KPIs green + confidence A/B</th>
@@ -3041,7 +3033,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tbody></table>
 <p><strong>Related GUI:</strong> Governance tab. <strong>Related:</strong> <code>Invoke-SPGovernanceMetrics</code> (time-series capture), <code>Invoke-SPWeeklyDigest</code> (weekly narrative), <code>Invoke-SPGovernanceReport</code> (full audit package).</p>
 <h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ---- DEPRECATED</h3>
-<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. A SOX/IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. An IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
 <p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>
 <p><strong>Anchor — what becomes a "group" and its "members":</strong></p>
 <ul><li><code>Entitlement</code> (default) — group = an entitlement / access profile / role; members = the identities holding it. Drives inventory, top-N most-assigned, privileged- entitlement review, disabled-still-has-access, and SoD toxic combinations.</li><li><code>Campaign</code> — group = a certification campaign; members = the identities under it.</li></ul>
@@ -4049,7 +4041,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td>All access periodically re-certified</td>
 </tr>
 </tbody></table>
-<p>Delta cert runs indefinitely as long as new grants occur. Periodic full cert (<code>-FullCert</code>) runs quarterly or annually as your compliance framework requires (SOX, SOC 2, etc. typically require both). The two work together — neither is "once and done."</p>
+<p>Delta cert runs indefinitely as long as new grants occur. Periodic full cert (<code>-FullCert</code>) runs quarterly or annually as your compliance framework requires (most frameworks typically require both). The two work together — neither is "once and done."</p>
 <h3 id="volume-reality-check-200-managers">Volume reality check (200 managers)</h3>
 <p>A common concern: "Won't this create 200 campaigns every day?"</p>
 <p>No — <strong>daily delta only creates campaigns for managers who have at least one direct report that received new access today</strong>. If 8 people across the organization got new AD group memberships today and they report to 4 different managers, you get 4 campaigns. On quiet days you get 0. Quarterly <code>-FullCert</code> does touch all managers with AD staff — that's the planned large run, not the daily operation.</p>
