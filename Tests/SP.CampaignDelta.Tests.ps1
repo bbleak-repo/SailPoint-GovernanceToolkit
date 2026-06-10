@@ -98,6 +98,31 @@ Describe "CD-03: Get-SPCampaignPreviousSnapshot" {
         $prev.Success | Should -Be $true
         $prev.Data | Should -BeNullOrEmpty
     }
+    It "Does not self-select the just-captured snapshot (sub-second cutoff regression)" {
+        # Regression: a snapshot's filename is truncated to the SECOND, but Meta.CapturedAt carries
+        # sub-seconds. Passing the raw sub-second CapturedAt as -Before lets the just-captured
+        # snapshot's own (truncated) filename time sort before it, so it is returned as its OWN
+        # "previous" -> the day-over-day diff self-compares and shows 0 changes. Invoke-SPCampaignDiff
+        # aligns the cutoff to whole seconds; this locks that a second-aligned cutoff excludes the
+        # same-second snapshot and returns the genuinely prior one.
+        $dir = Join-Path $TestDrive 'subsec'
+        $older = Build-SPCampaignSnapshotData -Campaign $script:campaign -Certifications $script:certs -Decisions $script:decisions
+        $older.Meta.CapturedAt = (Get-Date '2026-06-09T09:00:00').ToString('o')
+        Save-SPCampaignSnapshot -Snapshot $older -SnapshotDir $dir | Out-Null
+
+        $current = Build-SPCampaignSnapshotData -Campaign $script:campaign -Certifications $script:certs -Decisions $script:decisions
+        $current.Meta.CapturedAt = (Get-Date '2026-06-09T10:00:00').AddMilliseconds(500).ToString('o')  # filename -> ...T100000
+        Save-SPCampaignSnapshot -Snapshot $current -SnapshotDir $dir | Out-Null
+
+        # Mirror the CLI: align the cutoff to whole seconds before requesting the previous snapshot.
+        $cutoff = [datetime]::Parse($current.Meta.CapturedAt)
+        $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [System.TimeSpan]::TicksPerSecond))
+        $prev = Get-SPCampaignPreviousSnapshot -CampaignId 'camp-cd-001' -SnapshotDir $dir -Before $cutoff
+
+        $prev.Success | Should -Be $true
+        $prev.Data    | Should -Not -BeNullOrEmpty
+        $prev.Data.CapturedAt.ToString('yyyy-MM-ddTHH:mm:ss') | Should -Be '2026-06-09T09:00:00'
+    }
 }
 
 Describe "CD-04: Remove-SPCampaignOldSnapshots" {

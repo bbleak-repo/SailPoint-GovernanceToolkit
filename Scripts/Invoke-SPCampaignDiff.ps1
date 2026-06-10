@@ -239,6 +239,12 @@ if ($null -eq $currentSnapshot) {
 else {
     if (-not $cutoff) {
         try { $cutoff = [datetime]::Parse([string]$currentSnapshot.Meta.CapturedAt) } catch { $cutoff = Get-Date }
+        # The just-captured snapshot is filenamed at SECOND precision (Save truncates CapturedAt),
+        # but Meta.CapturedAt carries sub-seconds. The snapshot-list filter compares filename-derived
+        # (second) times with a strict "< cutoff", so a sub-second cutoff lets the current snapshot
+        # (its own filename truncated to the second) slip in as a candidate -> the diff self-compares
+        # and shows 0 changes. Align the cutoff to whole seconds so the current capture is excluded.
+        $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [System.TimeSpan]::TicksPerSecond))
     }
 }
 
@@ -266,7 +272,7 @@ $diff = $cmp.Data
 
 # Zero-item / mass-removal guard: a capture that returns no items (API hiccup / partial auth)
 # would otherwise report the entire campaign as "removed from scope". Warn loudly.
-$curItemCount = [int](if ($null -ne $currentSnapshot.Meta) { $currentSnapshot.Meta.ItemCount } else { 0 })
+$curItemCount = [int]$(if ($null -ne $currentSnapshot.Meta) { $currentSnapshot.Meta.ItemCount } else { 0 })
 if ($curItemCount -eq 0 -and $diff.Meta.HasPrevious) {
     Write-Host "  WARNING: current capture has 0 items but a prior capture existed -- possible API/auth issue. Scope 'removed' counts may be spurious; not treating as real removals." -ForegroundColor Yellow
 }
