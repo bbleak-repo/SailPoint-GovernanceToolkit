@@ -84,11 +84,13 @@
     When set, writes a plain-text email-queue file to
     {DeltaCert.OutputPath}\escalation-emails-YYYYMMDD-HHmmss.txt for queueing an email
     OUTSIDE the tool. It contains two ready-to-paste, semicolon-separated lines:
-      1) the managers behind on their attestation (the stale certs' current reviewers), and
-      2) the skip-level / escalation path (each manager's manager).
+      1) the managers behind -- ONLY reviewers who have NOT completed their attestation
+         (incomplete certs); fully-signed reviewers are excluded, and
+      2) the skip-level / escalation path -- each late reviewer's manager chain, walked UP TO
+         MaxEscalationLevels levels (1 = direct manager, 2-3 = higher per config).
     Each list is de-duplicated and only includes resolvable emails. Like -Csv, it is a
     read-only reporting artifact and is produced even under -WhatIf. Combine with -Csv to
-    get both the full chain spreadsheet and the copy-paste email lines.
+    get both the full chain spreadsheet (all rows + Outcome) and the late-only email lines.
 .PARAMETER EmailListPath
     Override the auto-generated email-queue path. Implies -EmailList.
 .PARAMETER OutputMode
