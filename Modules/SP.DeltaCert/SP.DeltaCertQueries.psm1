@@ -1105,6 +1105,18 @@ function Get-SPDeltaCertStaleCertifications {
         [Parameter()]
         [string]$CampaignNamePrefix = 'AD Delta Cert',
 
+        # Campaign-name resolution, consistent with Invoke-SPCampaignDiff. Precedence when more
+        # than one is supplied: exact -CampaignName > -CampaignNameContains (substring) >
+        # -CampaignNameStartsWith > -CampaignNamePrefix (legacy starts-with default).
+        [Parameter()]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$CampaignNameStartsWith,
+
+        [Parameter()]
+        [string]$CampaignNameContains,
+
         [Parameter()]
         [int]$StaleHours = 24,
 
@@ -1136,26 +1148,32 @@ function Get-SPDeltaCertStaleCertifications {
         # Step 1: Find campaigns
         # Standard mode: ACTIVE only, no date limit (sw= prefix filter, indexed).
         # Audit mode:    All statuses, DaysBack date window (client-side date filter).
+        # Build the name filter once, with a clear precedence (exact > contains > startsWith >
+        # prefix), then reuse it for whichever search mode applies.
+        $nameFilter = @{}
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName)) {
+            $nameFilter['CampaignName'] = $CampaignName;             $nameLabel = "is '$CampaignName'"
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $nameFilter['CampaignNameContains'] = $CampaignNameContains; $nameLabel = "contains '$CampaignNameContains'"
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) {
+            $nameFilter['CampaignNameStartsWith'] = $CampaignNameStartsWith; $nameLabel = "starts with '$CampaignNameStartsWith'"
+        }
+        else {
+            $nameFilter['CampaignNameStartsWith'] = $CampaignNamePrefix; $nameLabel = "starts with '$CampaignNamePrefix'"
+        }
+
         if ($auditMode) {
-            $auditSearchParams = @{
-                CampaignNameStartsWith = $CampaignNamePrefix
-                CorrelationID          = $CorrelationID
-            }
-            if ($DaysBack -gt 0) {
-                $auditSearchParams['DaysBack'] = $DaysBack
-            }
-            else {
-                # AllCertifications without DaysBack: no date limit (DaysBack=0 disables it)
-                $auditSearchParams['DaysBack'] = 0
-            }
+            # Audit mode: all statuses, DaysBack date window (client-side date filter).
+            $auditSearchParams = @{ CorrelationID = $CorrelationID } + $nameFilter
+            $auditSearchParams['DaysBack'] = if ($DaysBack -gt 0) { $DaysBack } else { 0 }  # 0 = no date limit
             $searchResult = Get-SPAuditCampaigns @auditSearchParams
         }
         else {
-            $searchResult = Get-SPAuditCampaigns `
-                -CampaignNameStartsWith $CampaignNamePrefix `
-                -Status @('ACTIVE') `
-                -DaysBack 0 `
-                -CorrelationID $CorrelationID
+            # Standard mode: ACTIVE only, no date limit.
+            $stdParams = @{ Status = @('ACTIVE'); DaysBack = 0; CorrelationID = $CorrelationID } + $nameFilter
+            $searchResult = Get-SPAuditCampaigns @stdParams
         }
 
         if (-not $searchResult.Success) {
@@ -1169,9 +1187,9 @@ function Get-SPDeltaCertStaleCertifications {
 
         if ($foundCampaigns.Count -eq 0) {
             $noResultMsg = if ($auditMode) {
-                "No campaigns found matching '$CampaignNamePrefix' in last $DaysBack days"
+                "No campaigns found whose name $nameLabel in last $DaysBack days"
             } else {
-                "No active campaigns found matching '$CampaignNamePrefix'"
+                "No active campaigns found whose name $nameLabel"
             }
             Write-SPLog -Message $noResultMsg `
                 -Severity INFO -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaCertStaleCertifications' `

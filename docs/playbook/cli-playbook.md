@@ -309,7 +309,8 @@ to keep reviews moving.
 
 | Parameter | Description |
 |---|---|
-| `-CampaignNamePrefix <s>` | Prefix used to find delta-cert campaigns (default `DeltaCert.Escalation.CampaignNamePrefix`). |
+| `-CampaignNamePrefix <s>` | Prefix (starts-with) used to find delta-cert campaigns (default `DeltaCert.Escalation.CampaignNamePrefix`). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Same name-resolution options as `Invoke-SPCampaignDiff`. **`-CampaignNameContains 'Wednesday'`** matches a token mid-name (e.g. the weekday in `Daily Attestation Manager Wednesday`); `-CampaignName` is an exact match. Precedence: exact > contains > startsWith > prefix. |
 | `-StaleHours <n>` | Hours of inactivity before a cert is "stale" (default 24). |
 | `-MaxEscalationLevels <n>` | Max hops up the org tree from the original reviewer (default 2). |
 | `-DaysBack <n>` *(+ `-WhatIf`)* | **Org-chart audit mode:** check every cert in campaigns from the last N days and resolve each reviewer→skip-level chain — validates ISC manager chains without writing. |
