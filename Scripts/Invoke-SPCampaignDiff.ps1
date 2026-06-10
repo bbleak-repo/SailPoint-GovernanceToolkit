@@ -84,8 +84,14 @@ param(
 
     [Parameter()][switch]$NoCapture,
     [Parameter()][string]$CompareBefore,
+    # Which prior snapshot to diff against: Adjacent (immediately prior, default), IntraDay
+    # (earlier today), Daily (~24h ago), Weekly (~168h ago), Monthly (~730h ago).
+    [Parameter()][ValidateSet('Adjacent', 'IntraDay', 'Daily', 'Weekly', 'Monthly')][string]$Cadence = 'Adjacent',
     [Parameter()][switch]$IncludeCsv,
     [Parameter()][switch]$PruneOldSnapshots,
+    # OPT-IN: also emit the review-velocity advisory (a respectful rubber-stamp prompt;
+    # HTML only, heavily caveated, needs ISC decision timestamps). Off by default.
+    [Parameter()][switch]$VelocityAdvisory,
 
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'JSON', 'HTML', 'Both', 'CSV')][string]$OutputMode = 'Console',
@@ -236,16 +242,25 @@ else {
     }
 }
 
-$prevRef = Get-SPCampaignPreviousSnapshot -CampaignId ([string]$campaign.id) -SnapshotDir $snapshotDir -Before $cutoff
+# Cadence -> which prior snapshot to diff against.
+$prevArgs = @{ CampaignId = [string]$campaign.id; SnapshotDir = $snapshotDir; Before = $cutoff }
+switch ($Cadence) {
+    'IntraDay' { $prevArgs['IntraDay'] = $true }
+    'Daily'    { $prevArgs['TargetAgoHours'] = 24 }
+    'Weekly'   { $prevArgs['TargetAgoHours'] = 168 }
+    'Monthly'  { $prevArgs['TargetAgoHours'] = 730 }
+    default    { }   # Adjacent
+}
+$prevRef = Get-SPCampaignPreviousSnapshot @prevArgs
 $previousSnapshot = $null
 if ($prevRef.Success -and $null -ne $prevRef.Data) {
     $loadPrev = Get-SPCampaignSnapshot -Path $prevRef.Data.Path
-    if ($loadPrev.Success) { $previousSnapshot = $loadPrev.Data; Write-Host "  Previous snapshot: $($prevRef.Data.Path)" }
+    if ($loadPrev.Success) { $previousSnapshot = $loadPrev.Data; Write-Host "  Previous snapshot ($Cadence): $($prevRef.Data.Path)" }
 }
 if ($null -eq $previousSnapshot) { Write-Host '  No prior snapshot -- reporting baseline (first capture).' -ForegroundColor Yellow }
 
 # --- Compare + report -------------------------------------------------------
-$cmp = Compare-SPCampaignSnapshots -Current $currentSnapshot -Previous $previousSnapshot
+$cmp = Compare-SPCampaignSnapshots -Current $currentSnapshot -Previous $previousSnapshot -Cadence $Cadence
 if (-not $cmp.Success) { Write-Host "ERROR: comparison failed: $($cmp.Error)" -ForegroundColor Red; exit 1 }
 $diff = $cmp.Data
 
@@ -280,6 +295,22 @@ if ($IncludeCsv -or $OutputMode -in @('CSV', 'Both')) {
         Write-Host "  CSVs: $($csvR.Data.CompletionCsv); $($csvR.Data.ScopeCsv)" -ForegroundColor Green
     }
     else { Write-Host "  WARN: CSV export failed: $($csvR.Error)" -ForegroundColor Yellow }
+}
+
+# OPT-IN review-velocity advisory (HTML only; respectful, gameable-caveated). Uses the CURRENT
+# capture's decision timestamps -- most meaningful on a signed/completed campaign.
+if ($VelocityAdvisory) {
+    $vel = Measure-SPReviewerVelocity -Snapshot $currentSnapshot
+    if ($vel.Success) {
+        $velEx = Export-SPReviewerVelocityHtml -Velocity $vel.Data -OutputPath $effectiveOutputPath
+        if ($velEx.Success) {
+            $generated.Add([string]$velEx.Data)
+            Write-Host "  velocity advisory: $($velEx.Data) ($($vel.Data.Summary.FastPace) fast-pace of $($vel.Data.Summary.TotalReviewers); $($vel.Data.Summary.TimingCoveragePct)% timing coverage)" -ForegroundColor Green
+            Write-Host "    NOTE: advisory only -- review pace is gameable; never a finding or a performance score." -ForegroundColor DarkGray
+        }
+        else { Write-Host "  WARN: velocity advisory failed: $($velEx.Error)" -ForegroundColor Yellow }
+    }
+    else { Write-Host "  WARN: velocity measure failed: $($vel.Error)" -ForegroundColor Yellow }
 }
 
 if ($PruneOldSnapshots) {

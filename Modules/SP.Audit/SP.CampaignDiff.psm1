@@ -139,7 +139,10 @@ function Compare-SPCampaignSnapshots {
     [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)][object]$Current,
-        [Parameter()][object]$Previous
+        [Parameter()][object]$Previous,
+        # Display-only cadence label (Adjacent/IntraDay/Daily/Weekly/Monthly) chosen by the
+        # caller when it selected $Previous; surfaced in the report headers.
+        [Parameter()][string]$Cadence = 'Adjacent'
     )
     try {
         $curMeta = Get-SPDiffProp $Current 'Meta'
@@ -351,6 +354,7 @@ function Compare-SPCampaignSnapshots {
                 PreviousCapturedAt = $prevCap
                 HasPrevious       = $hasPrev
                 IntervalHours     = $intervalHours
+                Cadence           = $Cadence
             }
             Completion = [ordered]@{
                 Reviewers           = $reviewers.ToArray()
@@ -422,7 +426,9 @@ function Export-SPCampaignCompletionDiffHtml {
             $window = "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)$apart"
         }
         else { $window = "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
-        [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)<br/>$window</div>")
+        $cadLabel = [string](Get-SPDiffProp $meta 'Cadence' 'Adjacent')
+        $cadSuffix = if ($meta.HasPrevious -and $cadLabel) { " | Cadence: $(Get-SPDiffEnc $cadLabel)" } else { '' }
+        [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)$cadSuffix<br/>$window</div>")
         if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='first'>No prior snapshot &mdash; this is the baseline capture. Progress deltas appear from the next run onward.</div>") }
 
         # KPIs
@@ -507,7 +513,9 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append((Get-SPDiffHtmlHead -Title $title))
         [void]$sb.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
         $window = if ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
-        [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)<br/>$window</div>")
+        $cadLabel = [string](Get-SPDiffProp $meta 'Cadence' 'Adjacent')
+        $cadSuffix = if ($meta.HasPrevious -and $cadLabel) { " | Cadence: $(Get-SPDiffEnc $cadLabel)" } else { '' }
+        [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)$cadSuffix<br/>$window</div>")
         if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='first'>No prior snapshot &mdash; everything below is reported as the baseline (added). Add/remove deltas become meaningful from the next run.</div>") }
 
         # KPIs

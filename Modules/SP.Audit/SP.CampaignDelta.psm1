@@ -283,6 +283,7 @@ function Build-SPCampaignSnapshotData {
             CampaignName      = if ($null -ne $Campaign.PSObject.Properties['name']) { [string]$Campaign.name } else { [string]$Campaign.id }
             Status            = if ($null -ne $Campaign.PSObject.Properties['status']) { [string]$Campaign.status } else { '' }
             CapturedAt        = $capturedAt.ToString('o')
+            StartDate         = if ($null -ne $Campaign.PSObject.Properties['created']) { [string]$Campaign.created } else { '' }
             DueDate           = $dueDate
             CertCount         = $certRecords.Count
             ItemCount         = $items.Count
@@ -411,12 +412,38 @@ function Get-SPCampaignPreviousSnapshot {
     param(
         [Parameter(Mandatory)][string]$CampaignId,
         [Parameter()][string]$SnapshotDir,
-        [Parameter()][datetime]$Before = (Get-Date)
+        [Parameter()][datetime]$Before = (Get-Date),
+        # Cadence selection: when > 0, pick the prior snapshot CLOSEST to
+        # ($Before - TargetAgoHours) instead of the immediately-prior one. This is what makes
+        # "week-over-week" compare this week's capture to last week's (~168h), not to
+        # yesterday's. 0 (default) keeps the adjacent-prior behaviour.
+        [Parameter()][double]$TargetAgoHours = 0,
+        # IntraDay: restrict candidates to the SAME calendar day as $Before (e.g. "before
+        # noon vs now"); falls back to adjacent-prior if none earlier the same day.
+        [Parameter()][switch]$IntraDay
     )
     $listResult = Get-SPCampaignSnapshotList -CampaignId $CampaignId -SnapshotDir $SnapshotDir -Before $Before
     if (-not $listResult.Success) { return $listResult }
-    $prev = @($listResult.Data) | Select-Object -First 1
-    return @{ Success = $true; Data = $prev; Error = $null }
+    $candidates = @($listResult.Data)
+    if ($candidates.Count -eq 0) { return @{ Success = $true; Data = $null; Error = $null } }
+
+    if ($IntraDay) {
+        $sameDay = @($candidates | Where-Object { $_.CapturedAt.Date -eq $Before.Date })
+        if ($sameDay.Count -gt 0) { return @{ Success = $true; Data = ($sameDay | Select-Object -First 1); Error = $null } }
+        # no earlier capture today -> fall through to adjacent
+    }
+
+    if ($TargetAgoHours -gt 0) {
+        $target = $Before.AddHours(-$TargetAgoHours)
+        $best = $null; $bestDelta = [double]::MaxValue
+        foreach ($c in $candidates) {
+            $d = [math]::Abs(($c.CapturedAt - $target).TotalHours)
+            if ($d -lt $bestDelta) { $bestDelta = $d; $best = $c }
+        }
+        return @{ Success = $true; Data = $best; Error = $null }
+    }
+
+    return @{ Success = $true; Data = ($candidates | Select-Object -First 1); Error = $null }
 }
 
 function Remove-SPCampaignOldSnapshots {

@@ -801,8 +801,10 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 | `-Status <list>` / `-DaysBack <n>` | Resolution window (default `ACTIVE` / 30). |
 | `-NoCapture` | Don't call ISC — diff the **two most recent existing snapshots** (re-render offline). |
 | `-CompareBefore <iso>` | Pick the "previous" snapshot as the most recent one strictly before this time. |
+| `-Cadence` | Which prior snapshot to diff against: `Adjacent` (immediately prior, default), `IntraDay` (earlier today), `Daily` (~24h ago), `Weekly` (~168h ago), `Monthly` (~730h ago). This is what makes a *week-over-week* report compare this week's capture to **last week's**, not to yesterday's. |
 | `-IncludeCsv` | Also write flat completion + scope **CSVs** (Excel / leadership). |
-| `-PruneOldSnapshots` | Run the retention sweep (`Audit.SnapshotRetentionDays`, default 90) after capturing. |
+| `-VelocityAdvisory` | **Opt-in.** Also emit the review-velocity advisory (see caveat below). |
+| `-PruneOldSnapshots` | Run the lifecycle-aware retention sweep (never deletes a signed/COMPLETED evidence capture). |
 | `-OutputPath <dir>` | Output root (default `.\Audit\diff`). |
 | `-OutputMode` | `Console`/`JSON`/`HTML`/`Both`/`CSV` — controls the run summary; the two HTML diffs are always written. |
 
@@ -813,9 +815,22 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 # Pin to a stable campaign id (recommended for a recurring campaign)
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -IncludeCsv
 
+# Week-over-week: compare this week's capture to last week's
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -Cadence Weekly
+
 # Re-render this morning's vs yesterday's capture WITHOUT calling ISC
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -NoCapture
 ```
+
+> **`-VelocityAdvisory` — read before using.** This emits a separate, HTML-only
+> `velocity-advisory-*.html` measuring per-reviewer decision *pace* (time-to-start, active
+> span, decisions/minute, approval ratio) — the classic rubber-stamp shape is a fast,
+> all-approve burst across many items. It is **opt-in**, **never written to CSV**, and every
+> figure carries a mandatory caveat: **review pace is gameable and a fast pace is not proof
+> of an improper review.** Use it only as a prompt for a *respectful conversation* about
+> review quality — never as evidence of misconduct or an individual performance score. It
+> needs ISC decision timestamps (usually present only on **signed/completed** campaigns); it
+> degrades to "insufficient-timing-data" rather than guessing.
 
 > **On the *privileged-approved* signal:** approving privileged access is often entirely
 > legitimate. The count is a *conversation starter* for review quality — reviewed

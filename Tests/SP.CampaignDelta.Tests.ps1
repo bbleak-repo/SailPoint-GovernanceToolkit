@@ -236,6 +236,40 @@ Describe "CD-09: integrity sidecar, lifecycle retention, provenance/due-date" {
     }
 }
 
+Describe "CD-11: cadence-aware previous-snapshot selection" {
+    BeforeAll {
+        $script:cadDir = Join-Path $TestDrive 'cadence'
+        $camp = [PSCustomObject]@{ id='camp-cad'; name='Cad'; status='ACTIVE' }
+        # captures at now, -1d, -7d, -30d (and an earlier-today one)
+        foreach ($ago in @(0.0, 1.0, 7.0, 30.0)) {
+            $s = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()}
+            $s.Meta.CapturedAt = (Get-Date).AddDays(-$ago).ToString('o')
+            Save-SPCampaignSnapshot -Snapshot $s -SnapshotDir $script:cadDir | Out-Null
+        }
+        # an extra capture 3h ago (same calendar day as 'now' in most cases)
+        $se = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        $se.Meta.CapturedAt = (Get-Date).AddHours(-3).ToString('o')
+        Save-SPCampaignSnapshot -Snapshot $se -SnapshotDir $script:cadDir | Out-Null
+    }
+    It "Weekly picks the snapshot closest to ~168h ago" {
+        $now = Get-Date
+        $r = Get-SPCampaignPreviousSnapshot -CampaignId 'camp-cad' -SnapshotDir $script:cadDir -Before $now -TargetAgoHours 168
+        $r.Success | Should -Be $true
+        [math]::Round(($now - $r.Data.CapturedAt).TotalDays, 0) | Should -Be 7
+    }
+    It "Daily picks the snapshot closest to ~24h ago" {
+        $now = Get-Date
+        $r = Get-SPCampaignPreviousSnapshot -CampaignId 'camp-cad' -SnapshotDir $script:cadDir -Before $now -TargetAgoHours 24
+        [math]::Round(($now - $r.Data.CapturedAt).TotalDays, 0) | Should -Be 1
+    }
+    It "Adjacent (default) picks the immediately prior snapshot" {
+        $now = Get-Date
+        $r = Get-SPCampaignPreviousSnapshot -CampaignId 'camp-cad' -SnapshotDir $script:cadDir -Before $now.AddMinutes(-1)
+        # most recent before (now-1min) is the 3h-ago capture
+        [math]::Round(($now - $r.Data.CapturedAt).TotalHours, 0) | Should -Be 3
+    }
+}
+
 Describe "CD-10: snapshots chained into the audit evidence chain" {
     It "Includes snapshot .json captures in New-SPAuditEvidenceChain" {
         $snapDir  = Join-Path $TestDrive 'ec-snaps'

@@ -32,6 +32,7 @@
         'SP.CampaignDelta.psm1'
         'SP.CampaignDiff.psm1'
         'SP.CampaignTrend.psm1'
+        'SP.CampaignVelocity.psm1'
     )
 
     # Public functions exported by this module
@@ -235,6 +236,10 @@
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
         'Export-SPCampaignTrendHtml'
+
+        # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
+        'Measure-SPReviewerVelocity'
+        'Export-SPReviewerVelocityHtml'
     )
 
     # Do not export variables or aliases from nested modules
