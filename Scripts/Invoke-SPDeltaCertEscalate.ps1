@@ -572,26 +572,50 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
             $effectiveEmailListPath = Join-Path $reportOutputDir "escalation-emails-$reportStamp.txt"
         }
 
-        # Managers behind = the stale certs' current reviewers; escalation path = their managers.
-        # De-duplicated (case-insensitive via Sort-Object -Unique), blanks dropped.
-        $mgrEmails  = @($csvRows | ForEach-Object { [string]$_.ReviewerEmail }  | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
-        $skipEmails = @($csvRows | ForEach-Object { [string]$_.SkipLevelEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
-        $mgrMissing  = @($csvRows | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.ReviewerEmail) }).Count
-        $skipMissing = @($csvRows | Where-Object { $_.SkipLevelResolved -and [string]::IsNullOrWhiteSpace([string]$_.SkipLevelEmail) }).Count
+        # The email queue is a NUDGE list -- it must contain ONLY the reviewers who are actually
+        # behind (a signed/complete cert needs no email). In audit mode (-DaysBack) $csvRows
+        # includes completed certs too, so without this filter the queue would list everyone. The
+        # CSV deliberately keeps all rows (it has the Outcome column); the txt is the late-only view.
+        $lateRows = @($csvRows | Where-Object { -not [bool]$_.CertSigned })
+
+        # Line 1: the late reviewers themselves (managers who have not completed their attestation).
+        $mgrEmails = @($lateRows | ForEach-Object { [string]$_.ReviewerEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+
+        # Line 2: the escalation path -- walk each late reviewer's manager chain UP TO
+        # MaxEscalationLevels levels (1 = direct manager, 2-3 = higher per config). De-duplicated.
+        $skipSet = [ordered]@{}
+        foreach ($row in $lateRows) {
+            $curId = [string]$row.SkipLevelIdentityId
+            $lvl = 0
+            while (-not [string]::IsNullOrWhiteSpace($curId) -and $lvl -lt $effectiveMaxLevels) {
+                $d = Get-SPDeltaIdentityDetail -IdentityId $curId -CorrelationID $correlationID
+                if ($d.Found -and -not [string]::IsNullOrWhiteSpace([string]$d.Email)) {
+                    $em = ([string]$d.Email).Trim()
+                    if (-not $skipSet.Contains($em)) { $skipSet[$em] = $true }
+                }
+                $curId = if ($d.Found) { [string]$d.ManagerId } else { '' }
+                $lvl++
+            }
+        }
+        $skipEmails = @($skipSet.Keys | Sort-Object -Unique)
+
+        $mgrMissing  = @($lateRows | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.ReviewerEmail) }).Count
+        $skipMissing = @($lateRows | Where-Object { -not $_.SkipLevelResolved }).Count
         $mgrNote  = if ($mgrMissing  -gt 0) { " ($mgrMissing with no email on file)" } else { '' }
-        $skipNote = if ($skipMissing -gt 0) { " ($skipMissing unresolved)" } else { '' }
+        $skipNote = if ($skipMissing -gt 0) { " ($skipMissing with no manager in ISC)" } else { '' }
         $scopeLabel = if ($DaysBack -gt 0) { "org-chart audit, last $DaysBack day(s)" } else { "stale >= $effectiveStaleHours h" }
+        $lvlLabel   = if ($effectiveMaxLevels -le 1) { 'direct manager' } else { "up to $effectiveMaxLevels levels" }
 
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.AppendLine('# Delta Cert Escalation -- email queue')
         [void]$sb.AppendLine("# Generated: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))  |  Prefix: '$effectivePrefix'  |  Scope: $scopeLabel")
-        [void]$sb.AppendLine("# Managers behind: $($mgrEmails.Count)$mgrNote  |  Skip-level contacts: $($skipEmails.Count)$skipNote")
-        [void]$sb.AppendLine("# Copy the email line beneath each heading into your client's To/CC field.")
+        [void]$sb.AppendLine("# Managers behind (incomplete): $($mgrEmails.Count)$mgrNote  |  Escalation contacts ($lvlLabel): $($skipEmails.Count)$skipNote")
+        [void]$sb.AppendLine("# Only reviewers who have NOT completed their attestation are listed. Copy the line beneath each heading into your client's To/CC field.")
         [void]$sb.AppendLine('')
-        [void]$sb.AppendLine('Managers (reviewers who have not completed their attestation):')
+        [void]$sb.AppendLine('Managers behind (reviewers who have NOT completed their attestation):')
         [void]$sb.AppendLine(($mgrEmails -join '; '))
         [void]$sb.AppendLine('')
-        [void]$sb.AppendLine('Skip-level / escalation path (each manager''s manager):')
+        [void]$sb.AppendLine("Skip-level / escalation path ($lvlLabel):")
         [void]$sb.AppendLine(($skipEmails -join '; '))
 
         try {
