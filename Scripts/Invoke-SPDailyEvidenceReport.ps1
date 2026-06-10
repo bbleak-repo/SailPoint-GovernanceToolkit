@@ -119,11 +119,10 @@ param(
 
     [Parameter()]
     [Alias('?')]
-    [switch]$Help,
-
-    [Parameter()]
-    [switch]$WhatIf
+    [switch]$Help
 )
+# -WhatIf is provided automatically by [CmdletBinding(SupportsShouldProcess)]
+# and read below via $WhatIfPreference.
 
 Set-StrictMode -Version 1
 $ErrorActionPreference = 'Stop'
@@ -335,7 +334,7 @@ if ($null -ne $config.PSObject.Properties['DailyEvidence'] -and
 
 #region WhatIf
 
-$isWhatIf = ($WhatIfPreference -eq $true) -or $WhatIf
+$isWhatIf = ($WhatIfPreference -eq $true)
 
 if ($isWhatIf) {
     Write-Host '  === WhatIf Mode ===' -ForegroundColor Yellow
