@@ -2754,6 +2754,10 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td><strong>Opt-in.</strong> Also emit the review-velocity advisory (see caveat below).</td>
 </tr>
 <tr>
+<td><code>-PerDirector</code> / <code>-OrgDepth &lt;n&gt;</code></td>
+<td><strong>Opt-in.</strong> Also write <strong>one HTML report per director</strong> (their team's attestation progress + the access added/removed/changed for their reviewers) + an <code>index.html</code>, under <code>…\per-director\per-director-&lt;stamp&gt;\</code> — each self-contained and suitable to <strong>send to that director individually</strong>. A director = a reviewer's manager (one level up the org tree, <code>-OrgDepth</code> default 3); reviewers with no manager fall into one <code>Unassigned</code> report.</td>
+</tr>
+<tr>
 <td><code>-PruneOldSnapshots</code></td>
 <td>Run the lifecycle-aware retention sweep (never deletes a signed/COMPLETED evidence capture).</td>
 </tr>
@@ -2771,6 +2775,9 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 
 # Pin to a stable campaign id (recommended for a recurring campaign)
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -IncludeCsv
+
+# Day-over-day diff PLUS one HTML per director to send out individually
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation' -PerDirector -IncludeCsv
 
 # Week-over-week: compare this week's capture to last week's
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -Cadence Weekly

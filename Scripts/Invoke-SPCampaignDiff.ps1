@@ -53,6 +53,14 @@
     Also write flat completion + scope CSVs (for Excel / leadership).
 .PARAMETER PruneOldSnapshots
     Run the retention sweep (Audit.SnapshotRetentionDays) after capturing.
+.PARAMETER PerDirector
+    Also generate ONE HTML file PER DIRECTOR -- their team's attestation progress + the access
+    added/removed/changed for their reviewers -- plus an index.html, under
+    {OutputPath}\per-director\per-director-<stamp>\. Each file is self-contained and suitable to
+    send to that director individually. A director = a reviewer's manager (one level up the org
+    tree); reviewers with no manager in the tree fall into a single 'Unassigned' report.
+.PARAMETER OrgDepth
+    Max levels to walk up the manager chain when resolving directors for -PerDirector (default 3).
 .PARAMETER OutputPath
     Directory for the generated reports (default {Audit.OutputPath}\diff).
 .PARAMETER OutputMode
@@ -65,6 +73,9 @@
 .EXAMPLE
     # Re-render this morning's vs yesterday's capture without calling ISC:
     .\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-123' -NoCapture
+.EXAMPLE
+    # Day-over-day diff PLUS one HTML report per director to send out individually:
+    .\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-123' -PerDirector -IncludeCsv
 .NOTES
     Exit codes: 0 ok | 1 no campaign/data | 2 parameter | 3 auth | 4 config.
     Read-only: CLI-005 (no SupportsShouldProcess).
@@ -93,6 +104,9 @@ param(
     # HTML only, heavily caveated, needs ISC decision timestamps). Off by default.
     [Parameter()][switch]$VelocityAdvisory,
 
+    [Parameter()][switch]$PerDirector,
+    [Parameter()][int]$OrgDepth = 3,
+
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'JSON', 'HTML', 'Both', 'CSV')][string]$OutputMode = 'Console',
     [Parameter()][Alias('?')][switch]$Help
@@ -106,7 +120,7 @@ if ($Help) { Get-Help $MyInvocation.MyCommand.Path -Detailed; return }
 #region Module load
 $scriptRoot  = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $toolkitRoot = Split-Path -Parent $scriptRoot
-foreach ($mod in @('SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1', 'SP.Audit\SP.Audit.psd1')) {
+foreach ($mod in @('SP.Core\SP.Core.psd1', 'SP.Api\SP.Api.psd1', 'SP.Audit\SP.Audit.psd1', 'SP.DeltaCert\SP.DeltaCert.psd1')) {
     $p = Join-Path $toolkitRoot "Modules\$mod"
     if (Test-Path $p) { Import-Module $p -Force -DisableNameChecking -ErrorAction Stop }
     else { Write-Host "ERROR: required module not found: $p" -ForegroundColor Red; exit 4 }
@@ -239,6 +253,12 @@ if ($null -eq $currentSnapshot) {
 else {
     if (-not $cutoff) {
         try { $cutoff = [datetime]::Parse([string]$currentSnapshot.Meta.CapturedAt) } catch { $cutoff = Get-Date }
+        # The just-captured snapshot is filenamed at SECOND precision (Save truncates CapturedAt),
+        # but Meta.CapturedAt carries sub-seconds. The snapshot-list filter compares filename-derived
+        # (second) times with a strict "< cutoff", so a sub-second cutoff lets the current snapshot
+        # (its own filename truncated to the second) slip in as a candidate -> the diff self-compares
+        # and shows 0 changes. Align the cutoff to whole seconds so the current capture is excluded.
+        $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [System.TimeSpan]::TicksPerSecond))
     }
 }
 
@@ -266,7 +286,7 @@ $diff = $cmp.Data
 
 # Zero-item / mass-removal guard: a capture that returns no items (API hiccup / partial auth)
 # would otherwise report the entire campaign as "removed from scope". Warn loudly.
-$curItemCount = [int](if ($null -ne $currentSnapshot.Meta) { $currentSnapshot.Meta.ItemCount } else { 0 })
+$curItemCount = [int]$(if ($null -ne $currentSnapshot.Meta) { $currentSnapshot.Meta.ItemCount } else { 0 })
 if ($curItemCount -eq 0 -and $diff.Meta.HasPrevious) {
     Write-Host "  WARNING: current capture has 0 items but a prior capture existed -- possible API/auth issue. Scope 'removed' counts may be spurious; not treating as real removals." -ForegroundColor Yellow
 }
@@ -295,6 +315,38 @@ if ($IncludeCsv -or $OutputMode -in @('CSV', 'Both')) {
         Write-Host "  CSVs: $($csvR.Data.CompletionCsv); $($csvR.Data.ScopeCsv)" -ForegroundColor Green
     }
     else { Write-Host "  WARN: CSV export failed: $($csvR.Error)" -ForegroundColor Yellow }
+}
+
+# OPT-IN per-director reports: one HTML per director (their team's attestation progress + the
+# access added/removed/changed for their reviewers), plus an index -- suitable to send to each
+# director individually. Resolves an org tree on the diff's reviewers (managers), then slices.
+if ($PerDirector) {
+    $revIdSet = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($r in @($diff.Completion.Reviewers)) { if ($r.ReviewerId) { [void]$revIdSet.Add([string]$r.ReviewerId) } }
+    foreach ($it in @($diff.Scope.Added))   { if ($it.ReviewerId) { [void]$revIdSet.Add([string]$it.ReviewerId) } }
+    foreach ($it in @($diff.Scope.Removed))  { if ($it.ReviewerId) { [void]$revIdSet.Add([string]$it.ReviewerId) } }
+    foreach ($it in @($diff.Scope.Changed))  { if ($it.ReviewerId) { [void]$revIdSet.Add([string]$it.ReviewerId) } }
+    if ($revIdSet.Count -eq 0) {
+        Write-Host '  Per-director: no reviewers in the diff to map -- skipped.' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  Per-director: resolving org tree for $($revIdSet.Count) reviewer(s)..." -ForegroundColor DarkGray
+        try {
+            $orgRes = Build-SPOrgTree -IdentityIds (@($revIdSet)) -MaxDepth $OrgDepth -CorrelationID $correlationID
+            if ($orgRes.Success -and $null -ne $orgRes.Data) {
+                $pdRes = Export-SPCampaignDiffByDirectorHtml -Diff $diff -OrgTree $orgRes.Data -OutputPath (Join-Path $effectiveOutputPath 'per-director')
+                if ($pdRes.Success) {
+                    foreach ($f in @($pdRes.Data.Files)) { $generated.Add([string]$f) }
+                    $generated.Add([string]$pdRes.Data.Index)
+                    Write-Host "  Per-director: $($pdRes.Data.DirectorCount) report(s) -> $($pdRes.Data.RunDir)" -ForegroundColor Green
+                    Write-Host "    index: $($pdRes.Data.Index)" -ForegroundColor Green
+                }
+                else { Write-Host "  WARN: per-director export failed: $($pdRes.Error)" -ForegroundColor Yellow }
+            }
+            else { Write-Host "  WARN: org tree build failed: $($orgRes.Error)" -ForegroundColor Yellow }
+        }
+        catch { Write-Host "  WARN: per-director reports failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+    }
 }
 
 # OPT-IN review-velocity advisory (HTML only; respectful, gameable-caveated). Uses the CURRENT

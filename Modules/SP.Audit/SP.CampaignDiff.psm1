@@ -262,10 +262,14 @@ function Compare-SPCampaignSnapshots {
                         Key          = $k
                         IdentityName = [string](Get-SPDiffProp $ci 'IdentityName' '')
                         AccessName   = [string](Get-SPDiffProp $ci 'AccessName' '')
+                        AccessType   = [string](Get-SPDiffProp $ci 'AccessType' '')
                         SourceName   = [string](Get-SPDiffProp $ci 'SourceName' '')
                         Privileged   = [bool](Get-SPDiffProp $ci 'Privileged' $false)
                         PrevDecision = $pd
                         CurrDecision = $cd
+                        # ReviewerId carried so the per-director split can attribute a decision
+                        # change to the reviewer (manager) who owns the cert it belongs to.
+                        ReviewerId   = [string](Get-SPDiffProp $ci 'ReviewerId' '')
                     })
                 }
             }
@@ -718,9 +722,260 @@ function Resolve-SPDiffOutFile {
 
 #endregion
 
+#region Public: per-director diff (one HTML per director)
+
+function Resolve-SPDiffDirector {
+    # The 'director' for a cert reviewer = the reviewer's MANAGER (one level up in the org tree):
+    # the person who should receive a report of what changed across their team's attestations.
+    # Returns @{ Id; Name }. Reviewers with no manager in the tree fall into a shared bucket.
+    param([object]$Nodes, [string]$ReviewerId)
+    if (-not [string]::IsNullOrWhiteSpace($ReviewerId) -and $null -ne $Nodes -and ($Nodes -is [System.Collections.IDictionary]) -and $Nodes.Contains($ReviewerId)) {
+        $n   = $Nodes[$ReviewerId]
+        $idn = Get-SPDiffProp $n 'Identity'
+        $mid = [string](Get-SPDiffProp $n 'ManagerId' '')
+        if ([string]::IsNullOrWhiteSpace($mid)) { $mid = [string](Get-SPDiffProp $idn 'ManagerId' '') }
+        if (-not [string]::IsNullOrWhiteSpace($mid)) {
+            $dname = ''
+            if ($Nodes.Contains($mid)) { $dname = [string](Get-SPDiffProp (Get-SPDiffProp $Nodes[$mid] 'Identity') 'Name' '') }
+            if ([string]::IsNullOrWhiteSpace($dname)) { $dname = [string](Get-SPDiffProp $idn 'ManagerName' '') }
+            if ([string]::IsNullOrWhiteSpace($dname)) { $dname = $mid }
+            return @{ Id = $mid; Name = $dname }
+        }
+    }
+    return @{ Id = '__unassigned__'; Name = 'Unassigned (reviewer has no manager in the org tree)' }
+}
+
+function Split-SPCampaignDiffByDirector {
+    <#
+    .SYNOPSIS
+        Slices a campaign diff into per-director views. Each director (a reviewer's manager) gets
+        the completion progress of the reviewers reporting to them + the access added/removed/
+        changed for those reviewers' certs. PURE: diff + org tree in, sliced views out.
+    .PARAMETER Diff
+        Output of Compare-SPCampaignSnapshots (.Data).
+    .PARAMETER OrgTree
+        .Data from Build-SPOrgTree, built on the diff's reviewer identity ids.
+    .OUTPUTS
+        [hashtable] @{ Meta; Directors=@(@{DirectorId;DirectorName;Reviewers;Added;Removed;Changed;NewlyAddedPrivileged;Counts}) }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$Diff,
+        [Parameter(Mandatory)][object]$OrgTree
+    )
+    $nodes = Get-SPDiffProp $OrgTree 'Nodes'
+    if ($null -eq $nodes) { $nodes = @{} }
+
+    $completion = Get-SPDiffProp $Diff 'Completion'
+    $scope      = Get-SPDiffProp $Diff 'Scope'
+    $comp       = Get-SPDiffProp $Diff 'Compliance'
+
+    # Pass A: gather every reviewer id that appears anywhere in the diff.
+    $revIds = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($r in @(Get-SPDiffProp $completion 'Reviewers' @())) { [void]$revIds.Add([string](Get-SPDiffProp $r 'ReviewerId' '')) }
+    foreach ($sk in @('Added', 'Removed', 'Changed')) { foreach ($it in @(Get-SPDiffProp $scope $sk @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) } }
+    foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
+
+    # Pass B: resolve each reviewer -> director and create an (ordered) bucket per director.
+    $dirOf   = @{}
+    $buckets = [ordered]@{}
+    foreach ($rid in $revIds) {
+        $d = Resolve-SPDiffDirector -Nodes $nodes -ReviewerId $rid
+        $dirOf[$rid] = $d
+        if (-not $buckets.Contains($d.Id)) {
+            $buckets[$d.Id] = [ordered]@{
+                DirectorId           = $d.Id
+                DirectorName         = $d.Name
+                Reviewers            = [System.Collections.Generic.List[object]]::new()
+                Added                = [System.Collections.Generic.List[object]]::new()
+                Removed              = [System.Collections.Generic.List[object]]::new()
+                Changed              = [System.Collections.Generic.List[object]]::new()
+                NewlyAddedPrivileged = [System.Collections.Generic.List[object]]::new()
+            }
+        }
+    }
+
+    # Pass C: distribute each payload into its director's bucket.
+    foreach ($r in @(Get-SPDiffProp $completion 'Reviewers' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $r 'ReviewerId' '')].Id].Reviewers.Add($r) }
+    foreach ($it in @(Get-SPDiffProp $scope 'Added' @()))   { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Added.Add($it) }
+    foreach ($it in @(Get-SPDiffProp $scope 'Removed' @()))  { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Removed.Add($it) }
+    foreach ($it in @(Get-SPDiffProp $scope 'Changed' @()))  { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Changed.Add($it) }
+    foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].NewlyAddedPrivileged.Add($it) }
+
+    # Finalize: arrays + per-director counts; sort by name with the unassigned bucket last.
+    $dirs = [System.Collections.Generic.List[object]]::new()
+    foreach ($id in $buckets.Keys) {
+        $b = $buckets[$id]
+        $revs = @($b.Reviewers)
+        $dirs.Add([ordered]@{
+            DirectorId           = $b.DirectorId
+            DirectorName         = $b.DirectorName
+            Reviewers            = $revs
+            Added                = @($b.Added)
+            Removed              = @($b.Removed)
+            Changed              = @($b.Changed)
+            NewlyAddedPrivileged = @($b.NewlyAddedPrivileged)
+            Counts = [ordered]@{
+                Reviewers       = $revs.Count
+                Added           = @($b.Added).Count
+                Removed         = @($b.Removed).Count
+                Changed         = @($b.Changed).Count
+                AddedPrivileged = @($b.NewlyAddedPrivileged).Count
+                NewlyCompleted  = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NewlyCompleted' $false) }).Count
+                Stalled         = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'Stalled' $false) }).Count
+                NotStarted      = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NotStarted' $false) }).Count
+                Outstanding     = @($revs | Where-Object { -not [bool](Get-SPDiffProp $_ 'Completed' $false) }).Count
+            }
+        })
+    }
+    $sorted = @($dirs | Sort-Object `
+        @{ Expression = { if ($_.DirectorId -eq '__unassigned__') { 1 } else { 0 } } }, `
+        @{ Expression = { [string]$_.DirectorName } })
+
+    return @{ Meta = (Get-SPDiffProp $Diff 'Meta'); Directors = $sorted }
+}
+
+function Get-SPDiffDirectorBodyHtml {
+    # Renders one director's change report (completion of their reviewers + scope changes).
+    param([object]$Director, [object]$Meta, [string]$Window)
+    $d = $Director; $c = $d.Counts
+    $title = "Attestation Change Report -- $($d.DirectorName)"
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append((Get-SPDiffHtmlHead -Title $title))
+    [void]$sb.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
+    $cad = [string](Get-SPDiffProp $Meta 'Cadence' 'Adjacent')
+    [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $Meta.CampaignName) ($(Get-SPDiffEnc $Meta.CampaignId)) | Status $(Get-SPDiffEnc $Meta.Status) | Cadence $(Get-SPDiffEnc $cad)<br/>$Window</div>")
+    if (-not $Meta.HasPrevious) { [void]$sb.Append("<div class='first'>First capture &mdash; baseline. Add/remove deltas become meaningful from the next run.</div>") }
+
+    [void]$sb.Append("<div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Reviewers)</span><span class='l'>Reviewers (your team)</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.NewlyCompleted)</span><span class='l'>Newly completed</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Outstanding)</span><span class='l'>Outstanding</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Added)</span><span class='l'>Access added</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Removed)</span><span class='l'>Access removed</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.AddedPrivileged)</span><span class='l'>New privileged</span></div>")
+    [void]$sb.Append("</div>")
+
+    [void]$sb.Append("<h2>Reviewer progress ($($c.Reviewers))</h2>")
+    $revs = @($d.Reviewers)
+    if ($revs.Count -eq 0) { [void]$sb.Append("<div class='empty'>No reviewers mapped to you in this campaign.</div>") }
+    else {
+        [void]$sb.Append("<table><tr><th>Reviewer</th><th>Made (delta)</th><th>Total</th><th>Completion</th><th>Status</th></tr>")
+        foreach ($r in ($revs | Sort-Object @{ Expression = { [double](Get-SPDiffProp $_ 'CompletionPct' 0) } })) {
+            $made  = [int](Get-SPDiffProp $r 'CurrMade' 0)
+            $delta = [int](Get-SPDiffProp $r 'MadeDelta' 0)
+            $total = [int](Get-SPDiffProp $r 'Total' 0)
+            $pct   = [double](Get-SPDiffProp $r 'CompletionPct' 0)
+            $status = if ([bool](Get-SPDiffProp $r 'NewlyCompleted' $false)) { "<span class='up'>Newly completed</span>" }
+                      elseif ([bool](Get-SPDiffProp $r 'Signed' $false) -or [bool](Get-SPDiffProp $r 'Completed' $false)) { 'Completed' }
+                      elseif ([bool](Get-SPDiffProp $r 'NotStarted' $false)) { "<span class='down'>Not started</span>" }
+                      elseif ([bool](Get-SPDiffProp $r 'Stalled' $false)) { "<span class='down'>Stalled</span>" }
+                      else { 'In progress' }
+            [void]$sb.Append("<tr><td>$(Get-SPDiffEnc (Get-SPDiffProp $r 'ReviewerName' ''))</td><td>$made ($(Get-SPDiffDelta $delta))</td><td>$total</td><td>$([math]::Round($pct,1))%</td><td>$status</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    }
+
+    [void]$sb.Append("<h2>Access added to scope ($($c.Added))</h2>")
+    Append-SPScopeItemTable -Sb $sb -Items @($d.Added) -ShowDecision
+    if (@($d.NewlyAddedPrivileged).Count -gt 0) {
+        [void]$sb.Append("<h2>&#9888; Newly-added privileged access ($($c.AddedPrivileged))</h2>")
+        Append-SPScopeItemTable -Sb $sb -Items @($d.NewlyAddedPrivileged) -ShowDecision -ForcePriv
+    }
+    [void]$sb.Append("<h2>Access removed from scope ($($c.Removed))</h2>")
+    Append-SPScopeItemTable -Sb $sb -Items @($d.Removed) -ShowDecision
+    [void]$sb.Append("<h2>Decision changed ($($c.Changed))</h2>")
+    if (@($d.Changed).Count -eq 0) { [void]$sb.Append("<div class='empty'>No decision changes.</div>") }
+    else {
+        [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Now</th></tr>")
+        foreach ($ch in @($d.Changed)) {
+            $priv = [bool](Get-SPDiffProp $ch 'Privileged' $false)
+            $cls = if ($priv) { " class='priv'" } else { '' }
+            $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+            [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td></tr>")
+        }
+        [void]$sb.Append("</table>")
+    }
+    [void]$sb.Append("<div class='note'>Read-only change report for your org. No reassignment or escalation is performed. 'Newly completed' / 'Stalled' are context signals (timing / out-of-office), not findings.</div>")
+    [void]$sb.Append("</body></html>")
+    return $sb.ToString()
+}
+
+function Export-SPCampaignDiffByDirectorHtml {
+    <#
+    .SYNOPSIS
+        Writes ONE HTML file per director (their team's attestation progress + access changes),
+        plus an index.html, suitable for sending to each director individually.
+    .PARAMETER Diff
+        Output of Compare-SPCampaignSnapshots (.Data).
+    .PARAMETER OrgTree
+        .Data from Build-SPOrgTree (built on the diff's reviewer ids).
+    .PARAMETER OutputPath
+        Directory under which a per-director-<stamp> run folder is created.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ RunDir; Index; Files; DirectorCount }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$Diff,
+        [Parameter(Mandatory)][object]$OrgTree,
+        [Parameter(Mandatory)][string]$OutputPath
+    )
+    try {
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+        $split = Split-SPCampaignDiffByDirector -Diff $Diff -OrgTree $OrgTree
+        $meta  = $split.Meta
+        $stamp = Get-SPDiffStamp $meta
+        $runDir = Join-Path $OutputPath ("per-director-" + $stamp)
+        if (-not (Test-Path $runDir)) { New-Item -Path $runDir -ItemType Directory -Force -WhatIf:$false | Out-Null }
+
+        $window = if ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $files = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($d in @($split.Directors)) {
+            $safe = ([string]$d.DirectorName) -replace '[^A-Za-z0-9_\-]', '_'
+            if ($safe.Length -gt 40) { $safe = $safe.Substring(0, 40) }
+            if ([string]::IsNullOrWhiteSpace($safe)) { $safe = 'director' }
+            $file = Join-Path $runDir ("director-diff-$safe.html")
+            $d['File'] = (Split-Path $file -Leaf)   # for the index links
+            [System.IO.File]::WriteAllText($file, (Get-SPDiffDirectorBodyHtml -Director $d -Meta $meta -Window $window), $utf8)
+            [void]$files.Add($file)
+        }
+
+        # Index: campaign header + a roster row per director linking their file.
+        $title = "Per-Director Attestation Change Reports -- $($meta.CampaignName)"
+        $ib = New-Object System.Text.StringBuilder
+        [void]$ib.Append((Get-SPDiffHtmlHead -Title $title))
+        [void]$ib.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
+        [void]$ib.Append("<div class='meta'>$window | $(@($split.Directors).Count) director report(s)</div>")
+        [void]$ib.Append("<table><tr><th>Director</th><th>Reviewers</th><th>Newly completed</th><th>Outstanding</th><th>Added</th><th>Removed</th><th>Changed</th><th>New priv</th><th>Report</th></tr>")
+        foreach ($d in @($split.Directors)) {
+            $c = $d.Counts
+            $fn = [string](Get-SPDiffProp $d 'File' '')
+            $link = if ($fn) { "<a href='$(Get-SPDiffEnc $fn)'>$(Get-SPDiffEnc $fn)</a>" } else { '' }
+            [void]$ib.Append("<tr><td>$(Get-SPDiffEnc $d.DirectorName)</td><td>$($c.Reviewers)</td><td>$($c.NewlyCompleted)</td><td>$($c.Outstanding)</td><td>$($c.Added)</td><td>$($c.Removed)</td><td>$($c.Changed)</td><td>$($c.AddedPrivileged)</td><td>$link</td></tr>")
+        }
+        [void]$ib.Append("</table>")
+        [void]$ib.Append("<div class='note'>One HTML file per director &mdash; their team's attestation progress + access changes &mdash; suitable to send individually. Read-only; no reassignment or escalation.</div>")
+        [void]$ib.Append("</body></html>")
+        $indexPath = Join-Path $runDir 'index.html'
+        [System.IO.File]::WriteAllText($indexPath, $ib.ToString(), $utf8)
+
+        return @{ Success = $true; Data = @{ RunDir = $runDir; Index = $indexPath; Files = @($files); DirectorCount = @($split.Directors).Count }; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPCampaignDiffByDirectorHtml failed: $($_.Exception.Message)" } }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaignSnapshots',
     'Export-SPCampaignCompletionDiffHtml',
     'Export-SPCampaignScopeDiffHtml',
-    'Export-SPCampaignDiffCsv'
+    'Export-SPCampaignDiffCsv',
+    'Split-SPCampaignDiffByDirector',
+    'Export-SPCampaignDiffByDirectorHtml'
 )
