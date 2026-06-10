@@ -49,6 +49,10 @@ function Import-SPTestModules {
         Imports SP.SdkCommon, SP.SdkPatch, SP.SdkCampaignTemplates,
         SP.SdkCertSummaries, SP.SdkApprovals, SP.SdkWorkItems, SP.SdkWorkflows,
         SP.SdkCampaignFilters.
+    .PARAMETER Reconciliation
+        Imports SP.IscReconciliation (the ISC-side reconciliation operand builder/exporter).
+        The pure builder has no toolkit dependency; combine with -Core when exercising the
+        config-resolved export directory path.
     .PARAMETER SdkBridge
         Imports SP.SdkBridge flat (the .psm1 directly, NOT via SP.Gui.psd1) so
         Pester's `Mock -ModuleName SP.SdkBridge` reaches the call sites under
@@ -67,7 +71,8 @@ function Import-SPTestModules {
         [switch]$DeltaCert,
         [switch]$DisconnectedApps,
         [switch]$Sdk,
-        [switch]$SdkBridge
+        [switch]$SdkBridge,
+        [switch]$Reconciliation
     )
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
@@ -127,5 +132,8 @@ function Import-SPTestModules {
     }
     if ($SdkBridge) {
         Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.SdkBridge.psm1') -Force -DisableNameChecking
+    }
+    if ($Reconciliation) {
+        Import-Module (Join-Path $modulesRoot 'SP.Reconciliation\SP.IscReconciliation.psm1') -Force -DisableNameChecking
     }
 }
