@@ -312,10 +312,27 @@ to keep reviews moving.
 | `-CampaignNamePrefix <s>` | Prefix used to find delta-cert campaigns (default `DeltaCert.Escalation.CampaignNamePrefix`). |
 | `-StaleHours <n>` | Hours of inactivity before a cert is "stale" (default 24). |
 | `-MaxEscalationLevels <n>` | Max hops up the org tree from the original reviewer (default 2). |
+| `-DaysBack <n>` *(+ `-WhatIf`)* | **Org-chart audit mode:** check every cert in campaigns from the last N days and resolve each reviewer→skip-level chain — validates ISC manager chains without writing. |
+| `-Csv` / `-CsvPath <p>` | Write the full reviewer→skip-level chain to a CSV (read-only; produced even under `-WhatIf`). |
+| `-EmailList` / `-EmailListPath <p>` | Write a copy-paste **email-queue** text file for nudging people *outside the tool*: two `;`-separated lines — (1) the **managers behind** on their attestation, (2) the **skip-level / escalation path** (each manager's manager). De-duplicated, resolvable emails only; produced even under `-WhatIf`. |
 
 ```powershell
+# Live escalation
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt
+
+# Dry-run + the copy-paste email queue (managers behind + escalation path)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailList
+
+# Full org-chart audit: the chain spreadsheet AND the email lines
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList
 ```
+
+> **`-EmailList` — the email queue.** Writes `escalation-emails-*.txt` to `DeltaCert.OutputPath`:
+> a labelled header plus **two ready-to-paste lines** — the managers behind on their attestation,
+> and the skip-level/escalation path — each a `;`-separated list for pasting into an email client's
+> To/CC. Pair with `-Csv` for the full per-cert chain. Both are read-only reporting artifacts (no
+> ISC writes), so they're safe to generate under `-WhatIf`.
+
 **Related GUI:** Delta Cert tab → Escalate.
 
 ### `Invoke-SPDeltaReport.ps1`

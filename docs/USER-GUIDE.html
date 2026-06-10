@@ -2097,8 +2097,28 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <td><code>-MaxEscalationLevels &lt;n&gt;</code></td>
 <td>Max hops up the org tree from the original reviewer (default 2).</td>
 </tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code> <em>(+ <code>-WhatIf</code>)</em></td>
+<td><strong>Org-chart audit mode:</strong> check every cert in campaigns from the last N days and resolve each reviewer→skip-level chain — validates ISC manager chains without writing.</td>
+</tr>
+<tr>
+<td><code>-Csv</code> / <code>-CsvPath &lt;p&gt;</code></td>
+<td>Write the full reviewer→skip-level chain to a CSV (read-only; produced even under <code>-WhatIf</code>).</td>
+</tr>
+<tr>
+<td><code>-EmailList</code> / <code>-EmailListPath &lt;p&gt;</code></td>
+<td>Write a copy-paste <strong>email-queue</strong> text file for nudging people <em>outside the tool</em>: two <code>;</code>-separated lines — (1) the <strong>managers behind</strong> on their attestation, (2) the <strong>skip-level / escalation path</strong> (each manager's manager). De-duplicated, resolvable emails only; produced even under <code>-WhatIf</code>.</td>
+</tr>
 </tbody></table>
-<pre><code>.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt</code></pre>
+<pre><code># Live escalation
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt
+
+# Dry-run + the copy-paste email queue (managers behind + escalation path)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailList
+
+# Full org-chart audit: the chain spreadsheet AND the email lines
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong><code>-EmailList</code> — the email queue.</strong> Writes <code>escalation-emails-*.txt</code> to <code>DeltaCert.OutputPath</code>: a labelled header plus <strong>two ready-to-paste lines</strong> — the managers behind on their attestation, and the skip-level/escalation path — each a <code>;</code>-separated list for pasting into an email client's To/CC. Pair with <code>-Csv</code> for the full per-cert chain. Both are read-only reporting artifacts (no ISC writes), so they're safe to generate under <code>-WhatIf</code>.</p></div>
 <p><strong>Related GUI:</strong> Delta Cert tab → Escalate.</p>
 <h3 id="invoke-spdeltareport-ps1"><code>Invoke-SPDeltaReport.ps1</code></h3>
 <p><strong>Purpose:</strong> a lightweight <strong>daily change report</strong> (1–2 page HTML + JSONL for SIEM) — grants, revocations, recently-created delta campaigns, pending certs, and anomalies in the window. Not a full audit — just "what changed today." <strong>When to use:</strong> quick daily operations review / SIEM feed.</p>
