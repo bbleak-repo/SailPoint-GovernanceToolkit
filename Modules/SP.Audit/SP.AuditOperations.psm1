@@ -329,8 +329,8 @@ function Export-SPCompliancePackage {
     .DESCRIPTION
         Scans Audit and DeltaCert output directories for HTML, CSV, JSONL, and TXT
         artifacts, then packages them into a single ZIP file with a JSON manifest
-        containing SHA256 hashes per artifact. Designed for SOX 404, SOC 2, and
-        ISO 27001 evidence delivery.
+        containing SHA256 hashes per artifact. Designed for compliance and
+        audit evidence delivery.
     .PARAMETER After
         Include artifacts modified after this datetime.
     .PARAMETER Before
@@ -2684,7 +2684,7 @@ function New-SPAuditEvidenceChain {
         hashes, file sizes, and timestamps. A companion Verify flag can be
         passed to validate an existing manifest rather than create a new one.
 
-        Designed for SOX 404 / SOC 2 evidence integrity requirements.
+        Designed for compliance evidence integrity requirements.
     .PARAMETER AuditOutputPath
         Directory containing JSONL audit trail files. Resolved from
         config (Audit.OutputPath) if omitted.

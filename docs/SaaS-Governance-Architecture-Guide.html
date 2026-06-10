@@ -206,7 +206,7 @@ blockquote{background:#f7f8fa;border-left:3px solid #b0bec5;margin:14px 0;paddin
         <p><strong>Governance level:</strong> Full authorization governance. Certify individual permissions,
         roles, profiles, entitlements within the app.</p>
         <p><strong>When to use:</strong> The app has a complex access model (roles + permissions + profiles),
-        the data is SOX/compliance-critical, and incorrect in-app permissions create real business risk.</p>
+        the data is compliance-critical, and incorrect in-app permissions create real business risk.</p>
     </div>
 
     <!-- TIER 2 -->
@@ -489,7 +489,7 @@ SP_Salesforce_ReadOnly     -> Maps to Salesforce Read-Only profile
             <tr><td><strong>Group proliferation</strong></td><td>100 apps x 4 roles average = 400 IdP groups. This is manageable but requires disciplined naming conventions and periodic cleanup.</td><td>Enforce the naming convention. Use SailPoint Roles to bundle related groups. Automate group lifecycle.</td></tr>
             <tr><td><strong>No provisioning to the app</strong></td><td>Tier 2 provisions to the IdP (adds/removes group membership). The app must react to the group change. If the app does not support JIT or SCIM, the user may need to log out and back in for changes to take effect.</td><td>Use SCIM where available (near-real-time). For SAML-only, changes take effect on next login.</td></tr>
             <tr><td><strong>Revocation gap</strong></td><td>Removing a user from an IdP group removes their SSO access (they cannot log in). But some apps keep a local account active until explicitly deprovisioned.</td><td>For sensitive apps, pair Tier 2 with periodic app-level reconciliation or use SCIM for real deprovisioning.</td></tr>
-            <tr><td><strong>Auditor acceptance varies</strong></td><td>Some auditors accept IdP group-level certification as sufficient for SOX/SOC2. Others want to see in-app entitlement-level evidence.</td><td>Discuss with your auditors early. Frame Tier 2 as "role-based access certification" with evidence of the group-to-role mapping configuration as supplementary documentation.</td></tr>
+            <tr><td><strong>Auditor acceptance varies</strong></td><td>Some auditors accept IdP group-level certification as sufficient for compliance. Others want to see in-app entitlement-level evidence.</td><td>Discuss with your auditors early. Frame Tier 2 as "role-based access certification" with evidence of the group-to-role mapping configuration as supplementary documentation.</td></tr>
         </tbody>
     </table>
 

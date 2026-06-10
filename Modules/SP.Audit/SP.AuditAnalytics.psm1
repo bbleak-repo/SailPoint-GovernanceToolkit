@@ -1889,7 +1889,7 @@ function Measure-SPGovernanceMaturity {
     .DESCRIPTION
         Scores the organization across six governance dimensions (Coverage, Timeliness,
         Enforcement, Accountability, Documentation, Automation) from 0 to 100, then maps
-        to a five-level maturity model aligned with CMMI / ISO 27001 Annex A.9.
+        to a five-level maturity model (Initial through Optimized).
 
         Consumes pre-computed analytics outputs from existing toolkit functions. Dimensions
         with null input data score 0 with note "Insufficient data". All null inputs returns

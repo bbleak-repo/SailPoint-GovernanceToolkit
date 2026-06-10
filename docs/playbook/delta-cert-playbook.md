@@ -43,7 +43,7 @@ other:
 | **Compliance control** | New access reviewed promptly | All access periodically re-certified |
 
 Delta cert runs indefinitely as long as new grants occur. Periodic full cert (`-FullCert`)
-runs quarterly or annually as your compliance framework requires (SOX, SOC 2, etc. typically
+runs quarterly or annually as your compliance framework requires (most frameworks typically
 require both). The two work together — neither is "once and done."
 
 ### Volume reality check (200 managers)

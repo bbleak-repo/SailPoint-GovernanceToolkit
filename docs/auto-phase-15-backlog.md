@@ -98,8 +98,8 @@ for a compliance-ready violation report.
 Answers: "Which identities currently violate Separation of Duties policies? Which
 SoD policies have the most violations?"
 
-SoD is a fundamental pillar of access governance required by SOX 302/404, SOC 2,
-and ISO 27001 Annex A.9. The toolkit currently covers certification reviews, identity
+SoD is a fundamental pillar of access governance required by common compliance
+frameworks. The toolkit currently covers certification reviews, identity
 risk, stale access, and policy compliance, but has no visibility into SoD conflicts.
 An identity holding both "Finance-Approve" and "Finance-Pay" entitlements creates
 segregation risk that certification reviews alone may not catch -- reviewers approve
@@ -1134,7 +1134,7 @@ compliance audit cycle and bundles all evidence into a single deliverable packag
 Designed as the "quarterly audit preparation" command -- one invocation produces
 everything an auditor needs.
 
-Answers: "Our SOX auditors are coming next week. Can I generate all the evidence
+Answers: "Our auditors are coming next week. Can I generate all the evidence
 they need in one command?"
 
 Unlike `Invoke-SPGovernanceReport.ps1` (P13-09) which produces analytics reports,

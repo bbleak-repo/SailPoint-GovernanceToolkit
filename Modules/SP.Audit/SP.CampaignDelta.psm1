@@ -332,7 +332,7 @@ function Save-SPCampaignSnapshot {
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($file, ($Snapshot | ConvertTo-Json -Depth 8), $utf8NoBom)
         # Tamper-evidence: write a SHA-256 sidecar so a cited snapshot can be proven
-        # unmodified after capture (SOX/ITGC access-review evidence).
+        # unmodified after capture (access-review audit evidence).
         $hash = $null
         try {
             $sha = [System.Security.Cryptography.SHA256]::Create()

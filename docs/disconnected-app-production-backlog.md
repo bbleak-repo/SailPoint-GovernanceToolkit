@@ -106,7 +106,7 @@ When a manager revokes access in a disconnected app campaign, ISC cannot auto-pr
 the revocation (no connector). The app team must manually remove the access. This feature
 tracks revocation decisions and verifies they were executed by checking the next day's CSV.
 
-**The compliance problem:** SOX auditors require evidence that revocations were not just
+**The compliance problem:** Auditors require evidence that revocations were not just
 decided but actually executed. This closes that gap.
 
 **Flow:**

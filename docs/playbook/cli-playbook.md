@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (SOX/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -750,21 +750,21 @@ who-gets-what, then (3) send with `-SendReports`.
 The toolkit's reports map to common compliance frameworks. Use this guide when
 packaging evidence for auditors.
 
-| Framework | Control Area | Toolkit Report | What It Proves |
-|---|---|---|---|
-| **SOX** | Access review (ITGC) | Campaign Audit, Leadership Rollup | Access was reviewed and decisions were made by authorized reviewers |
-| **SOX** | Segregation of duties | Adaptive SoD Baseline | Toxic combinations identified and reviewed |
-| **SOC 2** | CC6.1 -- Logical access | Campaign Audit, Data Quality | Access is periodically reviewed; orphan accounts identified |
-| **SOC 2** | CC6.2 -- Prior to access | Delta Report | New access grants are certified promptly |
-| **SOC 2** | CC6.3 -- Access removal | Remediation Tracking (Weekly Digest) | Revoked access is actually removed |
-| **ISO 27001** | A.9.2.5 -- Review of access rights | Governance Report | Comprehensive governance posture snapshot |
-| **ISO 27001** | A.9.2.6 -- Removal of access | Delta Report, Remediation Tracking | Timely revocation and follow-through |
+| Control Area | Toolkit Report | What It Proves |
+|---|---|---|
+| Periodic access review / certification | Campaign Audit, Leadership Rollup | Access was reviewed and decisions were made by authorized reviewers |
+| Segregation of duties | Adaptive SoD Baseline | Toxic combinations identified and reviewed |
+| Logical access controls | Campaign Audit, Data Quality | Access is periodically reviewed; orphan accounts identified |
+| Access reviewed prior to provisioning | Delta Report | New access grants are certified promptly |
+| Timely access removal | Remediation Tracking (Weekly Digest) | Revoked access is actually removed |
+| Review of access rights | Governance Report | Comprehensive governance posture snapshot |
+| Removal of access | Delta Report, Remediation Tracking | Timely revocation and follow-through |
 
 **Packaging evidence for auditors:**
 1. Run `Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality` to generate the full evidence package.
 2. Collect the output directory (`Reports\`) -- it includes a manifest listing all artifacts.
 3. Include the JSONL audit trail (`Audit\*.jsonl`) for machine-verifiable provenance.
-4. For SOX, add the leadership rollup reports to show reviewer accountability.
+4. For compliance evidence, add the leadership rollup reports to show reviewer accountability.
 
 ### `Invoke-SPOrgTreePreview.ps1`
 **Purpose:** prints the **org tree as ASCII art** for a campaign's certifiers, so you can
@@ -970,7 +970,7 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 
 ### `Invoke-SPDailyEvidenceReport.ps1`
 **Purpose:** a daily executive governance dashboard with six KPIs, a Governance Confidence
-Score, a cascading-risk "Domino Tracker", and SOX/IAG evidence registers. Designed to satisfy
+Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy
 **Step 6: Evidence and Reporting** of the IAM governance program -- a single report that
 answers whether campaigns are completing, attestations are on time, revocations are being
 enforced, remediation is timely, high-risk access is being reviewed, and reviewers are
@@ -1032,7 +1032,7 @@ The script uses sensible defaults if the section is missing. See
 
 **Output files:**
 - `daily-evidence-{timestamp}.html` -- self-contained HTML executive dashboard + evidence
-- `daily-evidence-audit.jsonl` -- append-only JSONL evidence trail (written every run for SOX immutability)
+- `daily-evidence-audit.jsonl` -- append-only JSONL evidence trail (written every run for audit immutability)
 
 *Exit codes:* 0 all KPIs green + confidence A/B | 1 any KPI yellow or confidence C |
 5 any KPI red, confidence D/F, or critical failure | 2/3/4 parameter/auth/config.
@@ -1044,7 +1044,7 @@ The script uses sensible defaults if the section is missing. See
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
 > EntraID group-enumerator and render an AD "group → members" view (`SamAccountName`, `Enabled`,
 > nested groups) that **drops the ISC certification substance** — the decision, the reviewer, the
-> dates, the remediation status. A SOX/IGA review panel found them either strictly-worse clones
+> dates, the remediation status. An IGA review panel found them either strictly-worse clones
 > of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the
 > ISC-native replacements: **`Invoke-SPCertTracker.ps1`** (executive tracker + `-EvidencePack`
 > attestation evidence), **`Invoke-SPCampaignTrendReport.ps1`** (KPI trend; `-Program` for

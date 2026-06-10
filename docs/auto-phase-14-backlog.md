@@ -108,7 +108,7 @@ answer: "Are we at Level 3 or Level 4, and what is holding us back?"
 
 This function consumes pre-computed analytics outputs and scores each dimension from
 0 to 100, then maps to a five-level maturity model aligned with industry frameworks
-(CMMI, ISO 27001 Annex A.9).
+(CMMI, common compliance frameworks).
 
 **Files to Modify:**
 - `Modules/SP.Audit/SP.AuditReport.psm1` -- new `Measure-SPGovernanceMaturity` and
@@ -400,7 +400,7 @@ New function `Protect-SPAuditTrail` in SP.AuditReport.psm1 that appends a SHA-25
 hash chain to existing JSONL audit trail files for tamper detection. Also new function
 `Test-SPAuditTrailIntegrity` that verifies the chain.
 
-For SOX 404 and SOC 2 Type II audits, organizations must demonstrate that audit
+For common compliance and audit programs, organizations must demonstrate that audit
 evidence has not been altered after the fact. Currently JSONL files are plain text
 with no integrity mechanism. An operator (or attacker) could edit a line to change
 a decision from REVOKE to APPROVE without detection.

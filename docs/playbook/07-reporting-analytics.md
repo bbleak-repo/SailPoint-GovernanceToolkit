@@ -22,7 +22,7 @@ anyone who needs to know "what report do I give to whom?"
 | Governance Report | `Invoke-SPGovernanceReport.ps1` | Auditors, governance leads | Quarterly | Combined audit + leadership + policy + data quality package | HTML, JSONL |
 | Data Quality Report | `Invoke-SPDataQualityReport.ps1` | IAM operations | Weekly | Orphan accounts, identity quality, source health | HTML, JSON |
 | Governance Metrics | `Invoke-SPGovernanceMetrics.ps1` | KPI dashboards, BI tools | Daily (automated) | KPI time-series + trend reports + completion forecasts | HTML, JSON, JSONL |
-| Daily Evidence Report | `Invoke-SPDailyEvidenceReport.ps1` | CISO, VP Security, auditors | Daily | 6-KPI executive dashboard + domino risk tracker + SOX evidence registers | HTML, JSON, JSONL |
+| Daily Evidence Report | `Invoke-SPDailyEvidenceReport.ps1` | CISO, VP Security, auditors | Daily | 6-KPI executive dashboard + domino risk tracker + audit evidence registers | HTML, JSON, JSONL |
 | Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, risk, reviewer performance, remediation | HTML, JSON |
 | Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered reports, optionally emailed via SMTP | HTML |
 | Adaptive Composable | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N bars, drill-down tree, group table | HTML |
@@ -74,7 +74,7 @@ whether revocations were carried out.
 
 ### Who gets them
 
-- **Compliance team:** the full verbose report as evidence for SOX, SOC 2, ISO 27001
+- **Compliance team:** the full verbose report as compliance and audit evidence
 - **Audit committee:** summary-level reports for quarterly review meetings
 - **Campaign owners:** detailed-level reports for their specific campaigns
 
@@ -321,19 +321,19 @@ For external auditors, package the toolkit's output as compliance evidence:
 2. Collect the `Reports/` output directory -- it includes a manifest with SHA-256
    hashes for integrity verification
 3. Include the JSONL audit trail files from `Audit/` for machine-verifiable provenance
-4. For SOX, include the leadership rollup reports to demonstrate reviewer accountability
+4. For compliance evidence, include the leadership rollup reports to demonstrate reviewer accountability
 
-**Framework mapping:**
+**Control mapping:**
 
-| Framework | Control | Toolkit Evidence |
-|---|---|---|
-| **SOX** | Access review (ITGC) | Campaign Audit (Verbose) + Leadership Rollup |
-| **SOX** | Segregation of duties | Adaptive SoD Baseline (`-BaselineReport sod`) |
-| **SOC 2** | CC6.1 -- Logical access | Campaign Audit + Data Quality Report |
-| **SOC 2** | CC6.2 -- Prior to access | Delta Report (daily new-grant certification) |
-| **SOC 2** | CC6.3 -- Access removal | Remediation Tracking (Weekly Digest) |
-| **ISO 27001** | A.9.2.5 -- Review of access rights | Governance Report (full package) |
-| **ISO 27001** | A.9.2.6 -- Removal of access | Delta Report + Remediation Tracking |
+| Control objective | Toolkit Evidence |
+|---|---|
+| Periodic access review / certification | Campaign Audit (Verbose) + Leadership Rollup |
+| Segregation of duties | Adaptive SoD Baseline (`-BaselineReport sod`) |
+| Logical access controls | Campaign Audit + Data Quality Report |
+| Access reviewed prior to provisioning | Delta Report (daily new-grant certification) |
+| Timely access removal | Remediation Tracking (Weekly Digest) |
+| Review of access rights | Governance Report (full package) |
+| Removal of access | Delta Report + Remediation Tracking |
 
 ---
 
@@ -515,7 +515,7 @@ powershell.exe -ExecutionPolicy Bypass -File "C:\Toolkit\Scripts\Invoke-SPWeekly
 
 Use this decision tree to find the right report for your situation.
 
-### "I need evidence for SOX auditors"
+### "I need evidence for auditors"
 
 1. `Invoke-SPGovernanceReport.ps1 -Status COMPLETED -DaysBack 90 -IncludeLeadershipRollup -IncludeDataQuality -IncludePolicyCheck` -- full evidence package
 2. `Invoke-SPCampaignAudit.ps1 -Status COMPLETED -DetailLevel Verbose` -- per-campaign deep dive

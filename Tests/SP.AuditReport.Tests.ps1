@@ -529,3 +529,105 @@ Describe "AR-006: Export-SPAuditJsonl writes a valid JSONL audit trail" {
 }
 
 #endregion
+
+Describe "AR-001S: Group-SPAuditDecisions resolves Source from the account shape" {
+    BeforeEach { Mock Write-SPLog -ModuleName SP.AuditReportCore { } }
+
+    It "reads SourceId/SourceName from account.sourceId when access has no source (was blank)" {
+        $wrapped = @{
+            CertificationId = 'cert-1'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'item-1'
+                decision        = 'APPROVE'
+                decisionDate    = '2026-06-05T00:00:00Z'
+                identitySummary = [PSCustomObject]@{ id = 'id-1'; identityId = 'id-1'; name = 'User One' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'AD-SG-Finance-1' }  # no .source
+                account         = [PSCustomObject]@{ nativeIdentity = 'CN=u1'; sourceId = 'src-ad-001' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.SourceId   | Should -Be 'src-ad-001'
+        $d.SourceName | Should -Be 'src-ad-001'   # id fallback; the friendly name is resolved upstream
+        $d.AccessName | Should -Be 'AD-SG-Finance-1'
+        $d.AccessType | Should -Be 'ENTITLEMENT'
+    }
+
+    It "prefers access.source.name when present" {
+        $wrapped = @{
+            CertificationId = 'cert-2'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'item-2'
+                decision        = 'REVOKE'
+                identitySummary = [PSCustomObject]@{ id = 'id-2'; identityId = 'id-2'; name = 'User Two' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'X'; source = [PSCustomObject]@{ id = 'src-9'; name = 'Friendly Src' } }
+                account         = [PSCustomObject]@{ sourceId = 'src-ad-001' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Revoked)[0]
+        $d.SourceName | Should -Be 'Friendly Src'
+        $d.SourceId   | Should -Be 'src-9'
+    }
+}
+
+Describe "AR-001D: Group-SPAuditDecisions falls back to modified/created for DecisionDate" {
+    BeforeEach { Mock Write-SPLog -ModuleName SP.AuditReportCore { } }
+
+    It "uses the item's 'modified' timestamp when decisionDate is absent (real ISC shape)" {
+        $wrapped = @{
+            CertificationId = 'c'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'i1'
+                decision        = 'APPROVE'
+                modified        = '2026-06-08T14:30:00Z'   # ISC: decision time lives here, not decisionDate
+                identitySummary = [PSCustomObject]@{ id = 'id-1'; identityId = 'id-1'; name = 'U1' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'E1' }
+                account         = [PSCustomObject]@{ sourceId = 'src-ad-001' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.DecisionDate | Should -Be '2026-06-08T14:30:00Z'
+    }
+
+    It "still prefers an explicit decisionDate when present" {
+        $wrapped = @{
+            CertificationId = 'c'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'i2'
+                decision        = 'APPROVE'
+                decisionDate    = '2026-06-09T09:00:00Z'
+                modified        = '2026-06-08T14:30:00Z'
+                identitySummary = [PSCustomObject]@{ id = 'id-2'; identityId = 'id-2'; name = 'U2' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'E2' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.DecisionDate | Should -Be '2026-06-09T09:00:00Z'
+    }
+}
+
+Describe "AR-001I: Group-SPAuditDecisions reads the real ISC accessSummary shape" {
+    BeforeEach { Mock Write-SPLog -ModuleName SP.AuditReportCore { } }
+
+    It "populates Access/Type/Source/Date from accessSummary + modified (not the flat mock shape)" {
+        $wrapped = @{
+            CertificationId = 'c'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'i'
+                decision        = 'APPROVE'
+                modified        = '2026-06-08T14:30:00Z'
+                identitySummary = [PSCustomObject]@{ id = 'id-1'; identityId = 'id-1'; name = 'U1' }
+                accessSummary   = [PSCustomObject]@{
+                    access      = [PSCustomObject]@{ id = 'ent-1'; type = 'ENTITLEMENT'; name = 'AD-SG-Finance-1' }
+                    entitlement = [PSCustomObject]@{ id = 'ent-1'; name = 'AD-SG-Finance-1'; sourceName = 'Corporate AD'; sourceId = 'src-ad-001'; privileged = $true }
+                }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.AccessName   | Should -Be 'AD-SG-Finance-1'
+        $d.AccessType   | Should -Be 'ENTITLEMENT'
+        $d.SourceName   | Should -Be 'Corporate AD'
+        $d.SourceId     | Should -Be 'src-ad-001'
+        $d.DecisionDate | Should -Be '2026-06-08T14:30:00Z'
+        $d.Privileged   | Should -Be $true
+    }
+}

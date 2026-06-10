@@ -19,7 +19,7 @@ provide daily CSV exports of your users and their access (roles/groups/permissio
 These files are used to:
 1. **Detect changes** -- who got new access? who was removed? what changed?
 2. **Create certification campaigns** -- managers review their team's access in your app
-3. **Generate audit evidence** -- compliance reports for SOX, SOC2, ISO 27001
+3. **Generate audit evidence** -- compliance and audit reports
 
 The toolkit automatically compares each day's export against the previous snapshot,
 identifies changes, resolves accounts to corporate identities, and creates targeted

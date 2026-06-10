@@ -383,7 +383,7 @@ function Export-SPAttestationEvidenceHtml {
     .SYNOPSIS
         Renders the Attestation Evidence Pack -- the ACTUAL recorded certification decisions
         (decision, reviewer, date, justification, remediation) for a campaign. The audit-grade
-        artifact a SOX/ITGC reviewer samples. Works on partial/active campaigns (the norm).
+        artifact an audit reviewer samples. Works on partial/active campaigns (the norm).
     .PARAMETER CampaignMeta
         Hashtable: Name; Id; Status; StartDate; DueDate; CapturedAt; ReviewersSigned; ReviewersTotal.
     .PARAMETER Decisions

@@ -371,6 +371,36 @@ if ($allItems.Count -eq 0) {
 Write-Host "  Step 4: Grouping decisions..." -ForegroundColor Cyan
 $decisions = Group-SPAuditDecisions -Items $allItems.ToArray()
 
+# Resolve source IDs to friendly display names so the report's Source column reads e.g.
+# "Corporate AD" instead of "src-ad-001". Build the id->name map once from GET /v3/sources.
+$sourceMap = @{}
+try {
+    $srcOff = 0
+    while ($true) {
+        $srcRes = Invoke-SPApiRequest -Method GET -Endpoint '/sources' -QueryParams @{ limit = 250; offset = $srcOff } -CorrelationID $correlationID
+        if (-not $srcRes.Success) { break }
+        $srcPage = @($srcRes.Data)
+        if ($srcPage.Count -eq 0) { break }
+        foreach ($s in $srcPage) {
+            $sid = [string]$s.id
+            if (-not [string]::IsNullOrWhiteSpace($sid) -and -not $sourceMap.ContainsKey($sid)) {
+                $nm = if ($null -ne $s.PSObject.Properties['name']) { [string]$s.name } else { '' }
+                $sourceMap[$sid] = if (-not [string]::IsNullOrWhiteSpace($nm)) { $nm } else { $sid }
+            }
+        }
+        if ($srcPage.Count -lt 250) { break }
+        $srcOff += $srcPage.Count
+    }
+} catch { }
+if ($sourceMap.Count -gt 0) {
+    foreach ($bk in @('Approved', 'Revoked', 'Pending')) {
+        foreach ($d in @($decisions[$bk])) {
+            $sid = [string]$d.SourceId
+            if (-not [string]::IsNullOrWhiteSpace($sid) -and $sourceMap.ContainsKey($sid)) { $d.SourceName = $sourceMap[$sid] }
+        }
+    }
+}
+
 $totalA = @($decisions.Approved).Count
 $totalR = @($decisions.Revoked).Count
 $totalP = @($decisions.Pending).Count

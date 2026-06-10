@@ -7,7 +7,7 @@
 - **CLI Reference: Invoke-SPCampaignAudit.ps1** -- all parameters in categorized tables (filters, data control, output, leadership, auth), exit codes
 - **Leadership Rollup Reports** -- org tree building, level labels (0-5), depth control, executive summary, per-leader reports
 - **Detail Levels** -- Summary/Detailed/Verbose with expandable descriptions
-- **Compliance Features** -- 18 mandatory JSONL fields, anti-rubber-stamping (4 SOX/SOC2 checks), risk indicators (STALE/PRIVILEGED/ORPHAN/TERMINATED/SVC-ACCOUNT)
+- **Compliance Features** -- 18 mandatory JSONL fields, anti-rubber-stamping (4 auditor-red-flag checks), risk indicators (STALE/PRIVILEGED/ORPHAN/TERMINATED/SVC-ACCOUNT)
 - **Campaign Search** -- Invoke-SPCampaignSearch.ps1 with all 6 analysis modes (deadlines, metrics, reviewer workload, identity history, source coverage, comparison)
 - **Report Distribution** -- Invoke-SPReportDistribution.ps1 with preview, band filtering, SMTP delivery
 - **Band Classification** -- A-E bands, three-source priority, org supplement CSV format

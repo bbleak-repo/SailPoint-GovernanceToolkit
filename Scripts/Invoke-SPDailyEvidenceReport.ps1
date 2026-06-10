@@ -6,7 +6,7 @@
 .DESCRIPTION
     Produces a single-page executive dashboard (above the fold) with six governance
     KPIs, a Governance Confidence Score, and a cascading risk "Domino Tracker",
-    plus detailed evidence registers (below the fold) for SOX/IAG compliance.
+    plus detailed evidence registers (below the fold) for audit/IAG compliance.
 
     Designed for daily scheduled execution after the daily orchestrator. Consolidates
     data from multiple toolkit analytics functions into the format required by

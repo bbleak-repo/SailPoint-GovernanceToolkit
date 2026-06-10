@@ -149,7 +149,7 @@ This is where the biggest opportunities lie.
 - The FAQ answers are concise and direct. No padding, no filler.
 
 **Where it slightly misses:**
-- The accountability language in Sections 3, 9, and the warning/important callouts walks a fine line. Phrases like "you are personally attesting," "you may be interviewed about specific approvals," and "your decisions will be flagged" are factually accurate but cumulatively feel heavy. By Section 9, the reader has been warned about audit consequences four or five times. It starts to feel like the document is trying to scare compliance into people rather than enable good decisions. I would keep the strongest version (the Section 9 callout about SOX interviews) and soften the earlier instances.
+- The accountability language in Sections 3, 9, and the warning/important callouts walks a fine line. Phrases like "you are personally attesting," "you may be interviewed about specific approvals," and "your decisions will be flagged" are factually accurate but cumulatively feel heavy. By Section 9, the reader has been warned about audit consequences four or five times. It starts to feel like the document is trying to scare compliance into people rather than enable good decisions. I would keep the strongest version (the Section 9 callout about audit interviews) and soften the earlier instances.
 - The blockquote in Section 4.3 ("What to tell your team") reads naturally and sounds like something a real manager would say. Good job on that.
 
 **Consistency:**
