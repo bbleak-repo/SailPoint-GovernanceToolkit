@@ -948,6 +948,23 @@ function Invoke-SPDeltaCertEscalate {
                 -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
                 -CorrelationID $CorrelationID
 
+            # A signed/complete cert needs no escalation -- there is nothing left to chase. This
+            # matters most in audit mode (-DaysBack), which returns ALL certs (signed included) for
+            # chain validation; without this guard a completed campaign would be reported as fully
+            # "would-escalate". Standard mode already drops signed certs upstream, so this is a no-op
+            # there. (CertSigned absent on older shapes -> treated as not signed.)
+            $certSigned = $false
+            if ($staleCert.PSObject.Properties.Name -contains 'CertSigned') {
+                try { $certSigned = [bool]$staleCert.CertSigned } catch { $certSigned = $false }
+            }
+            if ($certSigned) {
+                Write-SPLog -Message "Cert '$certId' is already signed/complete -- no escalation needed, skipping" `
+                    -Severity INFO -Component 'SP.DeltaCertRunner' -Action 'Invoke-SPDeltaCertEscalate' `
+                    -CorrelationID $CorrelationID
+                $skipped.Add($certId)
+                continue
+            }
+
             # MaxEscalationLevels guard: Reassigned certs have consumed one level
             $levelsConsumed = if ($classification -eq 'Reassigned') { 1 } else { 0 }
             $levelsRemaining = $MaxEscalationLevels - $levelsConsumed
