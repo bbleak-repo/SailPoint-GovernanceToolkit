@@ -161,17 +161,35 @@ function Group-SPAuditDecisions {
             $reviewerEmail = [string]$CertReviewerEmailMap[$certId]
         }
 
-        # Source/Application name + id. ISC items carry the source in a couple of shapes: some
-        # under access.source.{name,id} (entitlement-centric), but most under the ACCOUNT object
-        # (account.source.{name,id} or account.sourceName/account.sourceId). The old code only read
-        # access.source, so account-centric items showed a BLANK source. Read both, name preferred.
+        # Resolve the ACCESS node. Real ISC access-review-items nest it under accessSummary.access
+        # (+ accessSummary.{entitlement|accessProfile|role} which carries the SOURCE); the simplified/
+        # mock shape uses a flat .access. Read whichever is present so Access Item / Type / Source
+        # populate -- the old code read only the flat .access, so real-ISC items came back blank.
+        $accessObj = $null
+        if ($null -ne $rawItem.PSObject.Properties['accessSummary'] -and $null -ne $rawItem.accessSummary -and
+            $null -ne $rawItem.accessSummary.PSObject.Properties['access'] -and $null -ne $rawItem.accessSummary.access) {
+            $accessObj = $rawItem.accessSummary.access
+        }
+        if ($null -eq $accessObj -and $null -ne $rawItem.PSObject.Properties['access'] -and $null -ne $rawItem.access) { $accessObj = $rawItem.access }
+
+        $entObj = $null
+        if ($null -ne $rawItem.PSObject.Properties['accessSummary'] -and $null -ne $rawItem.accessSummary) {
+            foreach ($ak in @('entitlement', 'accessProfile', 'role')) {
+                if ($null -ne $rawItem.accessSummary.PSObject.Properties[$ak] -and $null -ne $rawItem.accessSummary.$ak) { $entObj = $rawItem.accessSummary.$ak; break }
+            }
+        }
+
+        # Source/Application name + id, tried in order: entitlement.sourceName/sourceId (ISC), then
+        # access.source.{name,id}, then the account object (account.source / sourceName / sourceId).
         $sourceName = ''
         $sourceId   = ''
-        if ($null -ne $rawItem.access -and
-            $null -ne $rawItem.access.PSObject.Properties['source'] -and
-            $null -ne $rawItem.access.source) {
-            if ($null -ne $rawItem.access.source.PSObject.Properties['name'] -and $null -ne $rawItem.access.source.name) { $sourceName = [string]$rawItem.access.source.name }
-            if ($null -ne $rawItem.access.source.PSObject.Properties['id']   -and $null -ne $rawItem.access.source.id)   { $sourceId   = [string]$rawItem.access.source.id }
+        if ($null -ne $entObj) {
+            if ($null -ne $entObj.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceName)) { $sourceName = [string]$entObj.sourceName }
+            if ($null -ne $entObj.PSObject.Properties['sourceId']   -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceId))   { $sourceId   = [string]$entObj.sourceId }
+        }
+        if ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['source'] -and $null -ne $accessObj.source) {
+            if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $accessObj.source.PSObject.Properties['name'] -and $null -ne $accessObj.source.name) { $sourceName = [string]$accessObj.source.name }
+            if ([string]::IsNullOrWhiteSpace($sourceId)   -and $null -ne $accessObj.source.PSObject.Properties['id']   -and $null -ne $accessObj.source.id)   { $sourceId   = [string]$accessObj.source.id }
         }
         if ($null -ne $rawItem.PSObject.Properties['account'] -and $null -ne $rawItem.account) {
             $acctSrc = $rawItem.account
@@ -185,13 +203,10 @@ function Group-SPAuditDecisions {
             }
         }
         # If only an id resolved, show it so the column is never blank (a friendly name can be
-        # resolved upstream via Get-SPAuditSourceName when an API session is available).
+        # resolved upstream via Get-SPAuditSourceName / a /v3/sources map when an API session exists).
         if ([string]::IsNullOrWhiteSpace($sourceName) -and -not [string]::IsNullOrWhiteSpace($sourceId)) { $sourceName = $sourceId }
         # Access (entitlement/role/access-profile) id -- stable key component
-        $accessId = ''
-        if ($null -ne $rawItem.access -and $null -ne $rawItem.access.PSObject.Properties['id'] -and $null -ne $rawItem.access.id) {
-            $accessId = [string]$rawItem.access.id
-        }
+        $accessId = if ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['id'] -and $null -ne $accessObj.id) { [string]$accessObj.id } else { '' }
 
         # Campaign metadata fields
         $campaignStartDate      = ''
@@ -251,10 +266,10 @@ function Group-SPAuditDecisions {
             IdentityName           = if ($null -ne $rawItem.identitySummary -and $null -ne $rawItem.identitySummary.name) { $rawItem.identitySummary.name } else { '' }
             AccountName            = $accountName
             AccountIdentifier      = $accountIdentifier
-            AccessName             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
+            AccessName             = if ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['name'] -and $null -ne $accessObj.name) { [string]$accessObj.name } else { '' }
             AccessId               = $accessId
-            AccessType             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
-            Privileged             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.privileged)             { [bool]$rawItem.access.privileged } else { $false }
+            AccessType             = if ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['type'] -and $null -ne $accessObj.type) { [string]$accessObj.type } else { '' }
+            Privileged             = if ($null -ne $entObj -and $null -ne $entObj.PSObject.Properties['privileged'] -and $null -ne $entObj.privileged) { [bool]$entObj.privileged } elseif ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['privileged'] -and $null -ne $accessObj.privileged) { [bool]$accessObj.privileged } else { $false }
             SourceName             = $sourceName
             SourceId               = $sourceId
             ReviewerName           = $reviewerName
@@ -263,7 +278,7 @@ function Group-SPAuditDecisions {
             CertificationId        = $certId
             CertificationName      = $certName
             CampaignName           = $campaignName
-            DecisionDate           = if ($null -ne $rawItem.decisionDate) { $rawItem.decisionDate } else { '' }
+            DecisionDate           = if ($null -ne $rawItem.decisionDate -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.decisionDate)) { [string]$rawItem.decisionDate } elseif (-not [string]::IsNullOrWhiteSpace($systemTimestamp)) { $systemTimestamp } else { '' }   # ISC items often have no decisionDate field; fall back to the item's modified/created timestamp ($systemTimestamp), which IS when the reviewer acted.
             Justification          = $justification
             RemediationStatus      = $remediationStatus
             RemediationDate        = $remediationDate
