@@ -159,27 +159,34 @@ function Compare-SPCampaignSnapshots {
 
         # --- Completion view ---
         $reviewers = [System.Collections.Generic.List[object]]::new()
-        $newlyCompleted = 0; $stalled = 0; $notStarted = 0; $outstanding = 0
+        $newlyCompleted = 0; $stalled = 0; $notStarted = 0; $outstanding = 0; $reassignedCount = 0
         foreach ($k in $curCertMap.Keys) {
             $cc = $curCertMap[$k]
             $pc = if ($prevCertMap.ContainsKey($k)) { $prevCertMap[$k] } else { $null }
             $cMade = [int](Get-SPDiffProp $cc 'DecisionsMade' 0)
             $cTot  = [int](Get-SPDiffProp $cc 'DecisionsTotal' 0)
             $cDone = [bool](Get-SPDiffProp $cc 'Completed' $false)
+            $cSigned = [bool](Get-SPDiffProp $cc 'Signed' $false)
+            $cDecidedAwaiting = [bool](Get-SPDiffProp $cc 'DecidedAwaitingSignoff' $false)
+            $cRevId = [string](Get-SPDiffProp $cc 'ReviewerId' '')
             $pMade = if ($pc) { [int](Get-SPDiffProp $pc 'DecisionsMade' 0) } else { 0 }
             $pDone = if ($pc) { [bool](Get-SPDiffProp $pc 'Completed' $false) } else { $false }
+            $pRevId = if ($pc) { [string](Get-SPDiffProp $pc 'ReviewerId' '') } else { '' }
             $delta = $cMade - $pMade
             $isNew  = $cDone -and -not $pDone
             $isNot  = ($cMade -eq 0)
             $isStall = (-not $cDone) -and ($delta -le 0) -and ($cTot -gt 0)
+            # Reassigned: same cert, different effective reviewer than the prior capture.
+            $isReassigned = ($pc -and $pRevId -and $cRevId -and ($pRevId -ne $cRevId))
             if ($isNew)  { $newlyCompleted++ }
             if (-not $cDone) { $outstanding++ }
             if ($isNot)  { $notStarted++ }
             if ($isStall -and -not $isNot) { $stalled++ }
+            if ($isReassigned) { $reassignedCount++ }
             $pct = if ($cTot -gt 0) { [math]::Round($cMade * 100.0 / $cTot, 1) } else { 0 }
             $reviewers.Add([ordered]@{
                 CertId         = [string](Get-SPDiffProp $cc 'CertId' '')
-                ReviewerId     = [string](Get-SPDiffProp $cc 'ReviewerId' '')
+                ReviewerId     = $cRevId
                 ReviewerName   = [string](Get-SPDiffProp $cc 'ReviewerName' '')
                 PrevMade       = $pMade
                 CurrMade       = $cMade
@@ -187,20 +194,60 @@ function Compare-SPCampaignSnapshots {
                 Total          = $cTot
                 CompletionPct  = $pct
                 Completed      = $cDone
+                Signed         = $cSigned
+                DecidedAwaitingSignoff = $cDecidedAwaiting
                 NewlyCompleted = $isNew
                 NotStarted     = $isNot
                 Stalled        = ($isStall -and -not $isNot)
+                Reassigned     = [bool]$isReassigned
+                PrevReviewerId = $pRevId
                 IsNew          = (-not $pc)
             })
         }
+        # Per-reviewer (person) rollup: one human may hold several certs -- aggregate so
+        # leadership gets a "is this person behind?" answer, not N partial rows.
+        $byReviewer = @{}
+        foreach ($r in $reviewers) {
+            $rid = if ([string]::IsNullOrWhiteSpace($r.ReviewerId)) { '__unknown__' } else { $r.ReviewerId }
+            if (-not $byReviewer.ContainsKey($rid)) {
+                $byReviewer[$rid] = [ordered]@{ ReviewerId = $r.ReviewerId; ReviewerName = $r.ReviewerName; Certs = 0; Made = 0; Total = 0; Signed = 0; Reassigned = $false }
+            }
+            $agg = $byReviewer[$rid]
+            $agg.Certs++; $agg.Made += [int]$r.CurrMade; $agg.Total += [int]$r.Total
+            if ($r.Signed) { $agg.Signed++ }
+            if ($r.Reassigned) { $agg.Reassigned = $true }
+        }
+        $reviewerRollup = [System.Collections.Generic.List[object]]::new()
+        foreach ($rid in $byReviewer.Keys) {
+            $agg = $byReviewer[$rid]
+            $agg.CompletionPct = if ([int]$agg.Total -gt 0) { [math]::Round([int]$agg.Made * 100.0 / [int]$agg.Total, 1) } else { 0 }
+            $reviewerRollup.Add($agg)
+        }
 
         # --- Scope view ---
+        # Source set present in the previous capture -- lets us tell "a whole new SOURCE
+        # onboarded" from "an existing source granted new access" (very different events).
+        $prevSourceSet = @{}
+        foreach ($pi in $prevItems) {
+            $sid = [string](Get-SPDiffProp $pi 'SourceId' '')
+            if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string](Get-SPDiffProp $pi 'SourceName' '') }
+            if (-not [string]::IsNullOrWhiteSpace($sid)) { $prevSourceSet[$sid] = $true }
+        }
+        $newSources = @{}
         $added = [System.Collections.Generic.List[object]]::new()
         $removed = [System.Collections.Generic.List[object]]::new()
         $changed = [System.Collections.Generic.List[object]]::new()
         foreach ($k in $curMap.Keys) {
             $ci = $curMap[$k]
             if (-not $prevMap.ContainsKey($k)) {
+                $sid = [string](Get-SPDiffProp $ci 'SourceId' '')
+                if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string](Get-SPDiffProp $ci 'SourceName' '') }
+                $fromNewSource = $hasPrev -and (-not [string]::IsNullOrWhiteSpace($sid)) -and (-not $prevSourceSet.ContainsKey($sid))
+                if ($fromNewSource) { $newSources[$sid] = [string](Get-SPDiffProp $ci 'SourceName' '') }
+                # annotate the item with its onboarding class (additive; doesn't affect the key)
+                $cls = if ($fromNewSource) { 'NewSource' } else { 'NewGrant' }
+                if ($ci -is [System.Collections.IDictionary]) { $ci['ChangeClass'] = $cls }
+                else { try { $ci | Add-Member -NotePropertyName 'ChangeClass' -NotePropertyValue $cls -Force } catch { } }
                 $added.Add($ci)
             }
             else {
@@ -225,33 +272,54 @@ function Compare-SPCampaignSnapshots {
         }
 
         # --- Compliance summary ---
+        # Baseline run (no previous): suppress delta-shaped advisories so the first capture
+        # doesn't fire "everything is newly-added/newly-approved" alarms at leadership.
         $newPriv = [System.Collections.Generic.List[object]]::new()
-        foreach ($it in $added) { if ([bool](Get-SPDiffProp $it 'Privileged' $false)) { $newPriv.Add($it) } }
+        if ($hasPrev) {
+            foreach ($it in $added) { if ([bool](Get-SPDiffProp $it 'Privileged' $false)) { $newPriv.Add($it) } }
+        }
 
         $stalledReviewers = [System.Collections.Generic.List[object]]::new()
         foreach ($r in $reviewers) { if ($r.NotStarted -or $r.Stalled) { $stalledReviewers.Add($r) } }
 
-        # Overdue undecided: PENDING now AND present+PENDING in the prior capture
-        # (persistently undecided across >= 2 captures). First run -> empty.
+        # True OVERDUE: PENDING now AND the campaign due date has passed (wall-clock, from
+        # snapshot Meta.DueDate). This is the defensible "overdue" -- it references a deadline.
+        $dueDate = $null
+        $dueRaw = [string](Get-SPDiffProp $curMeta 'DueDate' '')
+        if (-not [string]::IsNullOrWhiteSpace($dueRaw)) { try { $dueDate = [datetime]::Parse($dueRaw) } catch { $dueDate = $null } }
+        $nowRef = $null
+        $curCapForOverdue = [string](Get-SPDiffProp $curMeta 'CapturedAt' '')
+        if ($curCapForOverdue) { try { $nowRef = [datetime]::Parse($curCapForOverdue) } catch { } }
         $overdue = [System.Collections.Generic.List[object]]::new()
+        if ($null -ne $dueDate -and $null -ne $nowRef -and $nowRef -gt $dueDate) {
+            foreach ($k in $curMap.Keys) {
+                $ci = $curMap[$k]
+                if ([string](Get-SPDiffProp $ci 'Decision' '') -eq 'PENDING') { $overdue.Add($ci) }
+            }
+        }
+
+        # PERSISTENTLY PENDING: PENDING now AND PENDING in the prior capture (undecided
+        # across >= 2 captures). NOT a deadline breach -- a separate, softer signal.
+        $persistentPending = [System.Collections.Generic.List[object]]::new()
         foreach ($k in $curMap.Keys) {
             $ci = $curMap[$k]
             if ([string](Get-SPDiffProp $ci 'Decision' '') -ne 'PENDING') { continue }
             if ($prevMap.ContainsKey($k) -and [string](Get-SPDiffProp $prevMap[$k] 'Decision' '') -eq 'PENDING') {
-                $overdue.Add($ci)
+                $persistentPending.Add($ci)
             }
         }
 
-        # Privileged approved (advisory): privileged grants whose decision is APPROVE now
-        # and was NOT APPROVE before (newly approved this capture). On the first run, all
-        # currently-approved privileged grants count as "newly seen approved".
+        # Privileged approved (advisory): privileged grants newly set to APPROVE this capture.
+        # Suppressed on the baseline run (everything would look "newly approved").
         $privApproved = [System.Collections.Generic.List[object]]::new()
-        foreach ($k in $curMap.Keys) {
-            $ci = $curMap[$k]
-            if (-not [bool](Get-SPDiffProp $ci 'Privileged' $false)) { continue }
-            if ([string](Get-SPDiffProp $ci 'Decision' '') -ne 'APPROVE') { continue }
-            $wasApprove = $prevMap.ContainsKey($k) -and ([string](Get-SPDiffProp $prevMap[$k] 'Decision' '') -eq 'APPROVE')
-            if (-not $wasApprove) { $privApproved.Add($ci) }
+        if ($hasPrev) {
+            foreach ($k in $curMap.Keys) {
+                $ci = $curMap[$k]
+                if (-not [bool](Get-SPDiffProp $ci 'Privileged' $false)) { continue }
+                if ([string](Get-SPDiffProp $ci 'Decision' '') -ne 'APPROVE') { continue }
+                $wasApprove = $prevMap.ContainsKey($k) -and ([string](Get-SPDiffProp $prevMap[$k] 'Decision' '') -eq 'APPROVE')
+                if (-not $wasApprove) { $privApproved.Add($ci) }
+            }
         }
 
         # --- KPI delta (cheap, from rolled-up Kpi) ---
@@ -286,12 +354,15 @@ function Compare-SPCampaignSnapshots {
             }
             Completion = [ordered]@{
                 Reviewers           = $reviewers.ToArray()
+                ByReviewer          = $reviewerRollup.ToArray()
                 NewlyCompletedCount = $newlyCompleted
                 OutstandingCount    = $outstanding
                 StalledCount        = $stalled
                 NotStartedCount     = $notStarted
+                ReassignedCount     = $reassignedCount
                 PrevCompletionPct   = $kpiDelta.PrevCompletionPct
                 CurrCompletionPct   = $kpiDelta.CurrCompletionPct
+                CurrCompletionPctByReviewer = [double](Get-SPDiffProp $curKpi 'CompletionPctByReviewer' 0)
             }
             Scope = [ordered]@{
                 Added               = $added.ToArray()
@@ -301,11 +372,14 @@ function Compare-SPCampaignSnapshots {
                 RemovedCount        = $removed.Count
                 ChangedCount        = $changed.Count
                 AddedPrivilegedCount = $newPriv.Count
+                NewSources          = @($newSources.Values)
+                NewSourceCount      = $newSources.Count
             }
             Compliance = [ordered]@{
                 NewlyAddedPrivileged = $newPriv.ToArray()
                 StalledReviewers     = $stalledReviewers.ToArray()
-                OverdueUndecided     = $overdue.ToArray()
+                Overdue              = $overdue.ToArray()
+                PersistentlyPending  = $persistentPending.ToArray()
                 PrivilegedApproved   = $privApproved.ToArray()
             }
             KpiDelta = $kpiDelta
@@ -361,25 +435,43 @@ function Export-SPCampaignCompletionDiffHtml {
         [void]$sb.Append("<div class='kpi'><span class='n'>$($comp.OutstandingCount)</span><span class='l'>Still outstanding</span></div>")
         [void]$sb.Append("<div class='kpi'><span class='n'>$($comp.NotStartedCount)</span><span class='l'>Not started</span></div>")
         [void]$sb.Append("<div class='kpi'><span class='n'>$($comp.StalledCount)</span><span class='l'>Stalled (no progress)</span></div>")
+        $rbr = if ($null -ne $comp.PSObject.Properties['CurrCompletionPctByReviewer']) { $comp.CurrCompletionPctByReviewer } else { (Get-SPDiffProp $comp 'CurrCompletionPctByReviewer' 0) }
+        [void]$sb.Append("<div class='kpi'><span class='n'>$rbr%</span><span class='l'>Completion (by reviewer)</span></div>")
         [void]$sb.Append("</div>")
+        [void]$sb.Append("<div class='note'>Two completion measures: by-decision (volume-weighted) and by-reviewer (people-weighted). A high by-decision % with a low by-reviewer % means a few large reviewers are masking a stalled majority.</div>")
 
-        # Reviewer table (sorted: stalled/not-started first, then by completion asc)
-        [void]$sb.Append("<h2>Reviewer progress</h2>")
+        # Per-reviewer (person) rollup -- one human may hold several certs.
+        $rollup = @(Get-SPDiffProp $comp 'ByReviewer' @())
+        if (@($rollup).Count -gt 0) {
+            [void]$sb.Append("<h2>By reviewer (person)</h2>")
+            $rr = $rollup | Sort-Object @{ Expression = { [double](Get-SPDiffProp $_ 'CompletionPct' 0) } }
+            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Certs</th><th>Made</th><th>Total</th><th>Completion</th><th>Reassigned</th></tr>")
+            foreach ($a in $rr) {
+                $nm = [string](Get-SPDiffProp $a 'ReviewerName' ''); if ([string]::IsNullOrWhiteSpace($nm)) { $nm = [string](Get-SPDiffProp $a 'ReviewerId' 'Unknown') }
+                $rf = if ([bool](Get-SPDiffProp $a 'Reassigned' $false)) { "<span class='badge b-chg'>REASSIGNED</span>" } else { '' }
+                [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$(Get-SPDiffProp $a 'Certs' 0)</td><td>$(Get-SPDiffProp $a 'Made' 0)</td><td>$(Get-SPDiffProp $a 'Total' 0)</td><td>$(Get-SPDiffProp $a 'CompletionPct' 0)%</td><td>$rf</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+
+        # Per-cert table (sorted: stalled/not-started first, then by completion asc)
+        [void]$sb.Append("<h2>Certification progress</h2>")
         $rows = @($comp.Reviewers) | Sort-Object @{ Expression = { if ($_.NotStarted) { 0 } elseif ($_.Stalled) { 1 } elseif (-not $_.Completed) { 2 } else { 3 } } }, @{ Expression = { $_.CompletionPct } }
         if (@($rows).Count -eq 0) { [void]$sb.Append("<div class='empty'>No certifications in this capture.</div>") }
         else {
             [void]$sb.Append("<table><tr><th>Reviewer</th><th>Status</th><th>Made</th><th>&Delta; since prev</th><th>Total</th><th>Completion</th></tr>")
             foreach ($r in $rows) {
-                $status = if ($r.Completed) { if ($r.NewlyCompleted) { "<span class='badge b-add'>NEWLY DONE</span>" } else { 'Done' } }
+                $status = if ($r.Completed) { if ($r.Signed) { if ($r.NewlyCompleted) { "<span class='badge b-add'>NEWLY SIGNED</span>" } else { 'Signed' } } elseif ($r.DecidedAwaitingSignoff) { "<span class='badge b-chg'>DECIDED, AWAITING SIGN-OFF</span>" } else { 'Done' } }
                           elseif ($r.NotStarted) { "<span class='badge b-rem'>NOT STARTED</span>" }
                           elseif ($r.Stalled) { "<span class='badge b-chg'>STALLED</span>" }
                           else { 'In progress' }
+                if ($r.Reassigned) { $status += " <span class='badge b-chg'>REASSIGNED</span>" }
                 $nm = if ([string]::IsNullOrWhiteSpace($r.ReviewerName)) { $r.ReviewerId } else { $r.ReviewerName }
                 [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$status</td><td>$($r.CurrMade)</td><td>$(Get-SPDiffDelta ([int]$r.MadeDelta))</td><td>$($r.Total)</td><td>$($r.CompletionPct)%</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
-        [void]$sb.Append("<div class='note'>Read-only progress view. No reassignment or escalation is performed by this report.</div>")
+        [void]$sb.Append("<div class='note'>Read-only progress view. 'Signed' is the audit-authoritative attestation; 'decided, awaiting sign-off' means all decisions were entered but the reviewer has not certified. Stalled may reflect timing/OOO &mdash; not a finding. No reassignment or escalation is performed by this report.</div>")
         [void]$sb.Append("</body></html>")
 
         $file = Resolve-SPDiffOutFile -OutputPath $OutputPath -Default ("completion-diff-{0}.html" -f (Get-SPDiffStamp $meta))
@@ -430,10 +522,13 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append("<h2>Compliance signals</h2>")
         [void]$sb.Append("<table><tr><th>Signal</th><th>Count</th><th>Notes</th></tr>")
         [void]$sb.Append("<tr><td>Newly-added privileged access</td><td>$(@($comp.NewlyAddedPrivileged).Count)</td><td>New privileged grants in scope this capture.</td></tr>")
-        [void]$sb.Append("<tr><td>Stalled / not-started reviewers</td><td>$(@($comp.StalledReviewers).Count)</td><td>No progress between captures or zero decisions made.</td></tr>")
-        [void]$sb.Append("<tr><td>Overdue undecided items</td><td>$(@($comp.OverdueUndecided).Count)</td><td>Still PENDING across at least two captures.</td></tr>")
+        [void]$sb.Append("<tr><td>Stalled / not-started reviewers</td><td>$(@($comp.StalledReviewers).Count)</td><td>No progress between captures or zero decisions made &mdash; context required (timing/OOO), not a finding.</td></tr>")
+        [void]$sb.Append("<tr><td>Overdue (past due date)</td><td>$(@($comp.Overdue).Count)</td><td>PENDING and the campaign due date has passed.</td></tr>")
+        [void]$sb.Append("<tr><td>Persistently pending</td><td>$(@($comp.PersistentlyPending).Count)</td><td>Still PENDING across at least two captures (not necessarily past due).</td></tr>")
         [void]$sb.Append("<tr><td>Privileged approved (advisory)</td><td>$(@($comp.PrivilegedApproved).Count)</td><td>Privileged grants newly set to APPROVE &mdash; a maturity signal, not an accusation.</td></tr>")
         [void]$sb.Append("</table>")
+        if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='note'>Baseline run: delta-based advisories (newly-added privileged, privileged-approved) are suppressed until the next capture.</div>") }
+        if (@($scope.NewSources).Count -gt 0) { [void]$sb.Append("<div class='note'>Sources onboarded this capture: $(Get-SPDiffEnc (@($scope.NewSources) -join ', ')) &mdash; their grants are expected additions, not anomalies.</div>") }
         [void]$sb.Append("<div class='note'>Approving privileged access can be entirely legitimate. This count is a conversation starter for review quality, reviewed respectfully alongside review-velocity context &mdash; never an automatic finding.</div>")
 
         # Added (privileged first)
@@ -535,16 +630,19 @@ function Export-SPCampaignDiffCsv {
                 Total         = $r.Total
                 CompletionPct = $r.CompletionPct
                 Completed     = $r.Completed
+                Signed        = $r.Signed
+                DecidedAwaitingSignoff = $r.DecidedAwaitingSignoff
                 NewlyCompleted= $r.NewlyCompleted
                 NotStarted    = $r.NotStarted
                 Stalled       = $r.Stalled
+                Reassigned    = $r.Reassigned
             }
         }
         $completionCsv = Join-Path $OutputDir "completion-diff-$campSafe-$stamp.csv"
         # Pin an explicit, identical column set/order on every row -- PS 5.1 Export-Csv
         # throws "Argument types do not match" when objects in a List[object] disagree on
         # member ordering. -Property <list> forces a stable projection.
-        $completionCols = @('CampaignId','CampaignName','CapturedAt','ReviewerName','ReviewerId','CertId','PrevMade','CurrMade','MadeDelta','Total','CompletionPct','Completed','NewlyCompleted','NotStarted','Stalled')
+        $completionCols = @('CampaignId','CampaignName','CapturedAt','ReviewerName','ReviewerId','CertId','PrevMade','CurrMade','MadeDelta','Total','CompletionPct','Completed','Signed','DecidedAwaitingSignoff','NewlyCompleted','NotStarted','Stalled','Reassigned')
         @($completionRows) | Select-Object -Property $completionCols | Export-Csv -Path $completionCsv -NoTypeInformation -Encoding UTF8 -WhatIf:$false
 
         $scopeRows = New-Object System.Collections.Generic.List[object]
@@ -556,7 +654,7 @@ function Export-SPCampaignDiffCsv {
             $scopeRows.Add($row)
         }
         $scopeCsv = Join-Path $OutputDir "scope-diff-$campSafe-$stamp.csv"
-        $scopeCols = @('CampaignId','CampaignName','CapturedAt','Change','IdentityName','IdentityId','AccessName','SourceName','Privileged','Decision','PrevDecision','CurrDecision','Key')
+        $scopeCols = @('CampaignId','CampaignName','CapturedAt','Change','ChangeClass','IdentityName','IdentityId','AccessName','SourceName','Privileged','PrivilegedSource','Decision','PrevDecision','CurrDecision','Key')
         # Pipe the List via .ToArray(): wrapping a generic List in @(...) breaks the
         # downstream Select-Object/Export-Csv binding in PS 5.1 ("Argument types do not match").
         $scopeRows.ToArray() | Select-Object -Property $scopeCols | Export-Csv -Path $scopeCsv -NoTypeInformation -Encoding UTF8 -WhatIf:$false
@@ -573,11 +671,13 @@ function New-SPScopeCsvRow {
         CampaignName = $Meta.CampaignName
         CapturedAt   = $Meta.CurrentCapturedAt
         Change       = $Change
+        ChangeClass  = [string](Get-SPDiffProp $Item 'ChangeClass' '')
         IdentityName = [string](Get-SPDiffProp $Item 'IdentityName' '')
         IdentityId   = [string](Get-SPDiffProp $Item 'IdentityId' '')
         AccessName   = [string](Get-SPDiffProp $Item 'AccessName' '')
         SourceName   = [string](Get-SPDiffProp $Item 'SourceName' '')
         Privileged   = [bool](Get-SPDiffProp $Item 'Privileged' $false)
+        PrivilegedSource = [string](Get-SPDiffProp $Item 'PrivilegedSource' '')
         Decision     = [string](Get-SPDiffProp $Item 'Decision' '')
         PrevDecision = ''
         CurrDecision = ''

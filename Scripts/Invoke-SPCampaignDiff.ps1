@@ -197,7 +197,15 @@ if (-not $NoCapture) {
         foreach ($wi in @(if ($cacheResult.Success) { $cacheResult.Data } else { @() })) { $wrapped.Add($wi) }
         $decisions = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$campaign.created; DueDate = ''; CompletionDate = '' }
 
-        $currentSnapshot = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @($certObjs) -Decisions $decisions
+        # Evidence provenance: operator/tenant/version/environment stamped into the snapshot.
+        $prov = @{ CapturedBy = [string]$env:USERNAME }
+        try {
+            if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'ToolkitVersion') { $prov['ToolkitVersion'] = [string]$config.Global.ToolkitVersion }
+            if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'EnvironmentName') { $prov['Environment'] = [string]$config.Global.EnvironmentName }
+            if ($config.PSObject.Properties.Name -contains 'Api' -and $config.Api.PSObject.Properties.Name -contains 'BaseUrl') { $prov['TenantUrl'] = [string]$config.Api.BaseUrl }
+        } catch { }
+
+        $currentSnapshot = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @($certObjs) -Decisions $decisions -Provenance $prov
         $saveResult = Save-SPCampaignSnapshot -Snapshot $currentSnapshot -SnapshotDir $snapshotDir
         if ($saveResult.Success) { Write-Host "  Snapshot captured: $($saveResult.Data)" -ForegroundColor Green }
         else { Write-Host "  WARN: snapshot save failed: $($saveResult.Error)" -ForegroundColor Yellow }
@@ -241,6 +249,19 @@ $cmp = Compare-SPCampaignSnapshots -Current $currentSnapshot -Previous $previous
 if (-not $cmp.Success) { Write-Host "ERROR: comparison failed: $($cmp.Error)" -ForegroundColor Red; exit 1 }
 $diff = $cmp.Data
 
+# Zero-item / mass-removal guard: a capture that returns no items (API hiccup / partial auth)
+# would otherwise report the entire campaign as "removed from scope". Warn loudly.
+$curItemCount = [int](if ($null -ne $currentSnapshot.Meta) { $currentSnapshot.Meta.ItemCount } else { 0 })
+if ($curItemCount -eq 0 -and $diff.Meta.HasPrevious) {
+    Write-Host "  WARNING: current capture has 0 items but a prior capture existed -- possible API/auth issue. Scope 'removed' counts may be spurious; not treating as real removals." -ForegroundColor Yellow
+}
+elseif ($diff.Meta.HasPrevious -and $diff.Scope.RemovedCount -gt 0 -and $curItemCount -gt 0) {
+    $prevItemCount = $curItemCount + $diff.Scope.RemovedCount - $diff.Scope.AddedCount
+    if ($prevItemCount -gt 0 -and ($diff.Scope.RemovedCount / [double]$prevItemCount) -gt 0.5) {
+        Write-Host "  WARNING: >50% of prior scope is reported removed ($($diff.Scope.RemovedCount) items) -- verify this is a real scope reduction and not a data-quality issue." -ForegroundColor Yellow
+    }
+}
+
 $generated = New-Object System.Collections.Generic.List[string]
 $completion = Export-SPCampaignCompletionDiffHtml -Diff $diff -OutputPath $effectiveOutputPath
 if ($completion.Success) { $generated.Add([string]$completion.Data); Write-Host "  completion diff: $($completion.Data)" -ForegroundColor Green }
@@ -272,7 +293,7 @@ if ($OutputMode -in @('Console', 'HTML', 'Both', 'CSV')) {
     Write-Host ''
     Write-Host "  Completion: $($diff.Completion.NewlyCompletedCount) newly done, $($diff.Completion.OutstandingCount) outstanding, $($diff.Completion.NotStartedCount) not started, $($diff.Completion.StalledCount) stalled" -ForegroundColor Cyan
     Write-Host "  Scope: +$($diff.Scope.AddedCount) added ($($diff.Scope.AddedPrivilegedCount) privileged), -$($diff.Scope.RemovedCount) removed, $($diff.Scope.ChangedCount) changed" -ForegroundColor Cyan
-    Write-Host "  Compliance: $(@($diff.Compliance.NewlyAddedPrivileged).Count) new-priv, $(@($diff.Compliance.StalledReviewers).Count) stalled, $(@($diff.Compliance.OverdueUndecided).Count) overdue-undecided, $(@($diff.Compliance.PrivilegedApproved).Count) priv-approved (advisory)" -ForegroundColor Cyan
+    Write-Host "  Compliance: $(@($diff.Compliance.NewlyAddedPrivileged).Count) new-priv, $(@($diff.Compliance.StalledReviewers).Count) stalled, $(@($diff.Compliance.Overdue).Count) overdue(past-due), $(@($diff.Compliance.PersistentlyPending).Count) persistently-pending, $(@($diff.Compliance.PrivilegedApproved).Count) priv-approved (advisory)" -ForegroundColor Cyan
     Write-Host "  Generated $($generated.Count) file(s) in $durationStr -> $effectiveOutputPath" -ForegroundColor Cyan
 }
 if ($OutputMode -in @('JSON', 'Both')) {
@@ -283,7 +304,7 @@ if ($OutputMode -in @('JSON', 'Both')) {
         IntervalHours = $diff.Meta.IntervalHours
         Completion    = [ordered]@{ NewlyCompleted = $diff.Completion.NewlyCompletedCount; Outstanding = $diff.Completion.OutstandingCount; NotStarted = $diff.Completion.NotStartedCount; Stalled = $diff.Completion.StalledCount; CompletionPct = $diff.Completion.CurrCompletionPct }
         Scope         = [ordered]@{ Added = $diff.Scope.AddedCount; AddedPrivileged = $diff.Scope.AddedPrivilegedCount; Removed = $diff.Scope.RemovedCount; Changed = $diff.Scope.ChangedCount }
-        Compliance    = [ordered]@{ NewlyAddedPrivileged = @($diff.Compliance.NewlyAddedPrivileged).Count; StalledReviewers = @($diff.Compliance.StalledReviewers).Count; OverdueUndecided = @($diff.Compliance.OverdueUndecided).Count; PrivilegedApproved = @($diff.Compliance.PrivilegedApproved).Count }
+        Compliance    = [ordered]@{ NewlyAddedPrivileged = @($diff.Compliance.NewlyAddedPrivileged).Count; StalledReviewers = @($diff.Compliance.StalledReviewers).Count; Overdue = @($diff.Compliance.Overdue).Count; PersistentlyPending = @($diff.Compliance.PersistentlyPending).Count; PrivilegedApproved = @($diff.Compliance.PrivilegedApproved).Count }
         Reports       = @($generated)
         OutputPath    = $effectiveOutputPath
         DurationSec   = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)

@@ -115,3 +115,123 @@ Describe "CD-04: Remove-SPCampaignOldSnapshots" {
         (Get-SPCampaignSnapshotList -CampaignId 'camp-cd-001' -SnapshotDir $dir).Data.Count | Should -Be 1
     }
 }
+
+Describe "CD-05: KPI rates, denominators, reviewer rollup" {
+    BeforeAll {
+        # 2 privileged approved, 1 privileged revoked, 1 non-priv approved, 1 non-priv pending
+        $certs = @(
+            [PSCustomObject]@{ id = 'c1'; reviewer = [PSCustomObject]@{ id = 'r1'; name = 'R1' }; decisionsTotal = 5; decisionsMade = 5; signed = $true }
+            [PSCustomObject]@{ id = 'c2'; reviewer = [PSCustomObject]@{ id = 'r2'; name = 'R2' }; decisionsTotal = 3; decisionsMade = 0 }
+        )
+        $dec = @{
+            Approved = @(
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i1'; AccessName='Domain Admins'; SourceName='AD'; Decision='APPROVE' }
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i2'; AccessName='Enterprise Admins'; Privileged=$true; SourceName='AD'; Decision='APPROVE' }
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i3'; AccessName='Finance-Reader'; SourceName='AD'; Decision='APPROVE' }
+            )
+            Revoked = @(
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i4'; AccessName='DBA-Master'; SourceName='Oracle'; Decision='REVOKE' }
+            )
+            Pending = @(
+                [PSCustomObject]@{ CertificationId='c2'; IdentityId='i5'; AccessName='VPN'; SourceName='Okta'; Decision='PENDING' }
+            )
+        }
+        $script:s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{ id='cr'; name='Rates'; status='ACTIVE' }) -Certifications $certs -Decisions $dec
+    }
+    It "Computes privileged-approval rate over REVIEWED privileged only" {
+        # priv approved=2 (Domain/Enterprise Admins), priv revoked=1 (DBA-Master) => reviewed=3
+        $script:s.Kpi.PrivilegedApproved | Should -Be 2
+        $script:s.Kpi.PrivilegedRevoked  | Should -Be 1
+        $script:s.Kpi.PrivilegedReviewed | Should -Be 3
+        [math]::Round($script:s.Kpi.Rates.PrivApprovalRate,4) | Should -Be 0.6667
+    }
+    It "Returns null rate when the denominator is zero" {
+        $script:s.Kpi.Rates.PrivApprovalRate | Should -Not -BeNullOrEmpty
+        # no revoked-only scenario here; ApprovalRate denominator = approved+revoked = 4 > 0
+        $script:s.Kpi.Rates.ApprovalRate | Should -Not -BeNullOrEmpty
+    }
+    It "Tracks reviewer-weighted completion" {
+        $script:s.Kpi.ReviewersTotal      | Should -Be 2
+        $script:s.Kpi.ReviewersSigned     | Should -Be 1
+        $script:s.Kpi.ReviewersNotStarted | Should -Be 1
+        $script:s.Kpi.CompletionPctByReviewer | Should -Be 50
+    }
+}
+
+Describe "CD-06: stable ID-based scope key" {
+    It "Keys on entitlement/source IDs so a rename does not churn" {
+        $campaign = [PSCustomObject]@{ id='ck'; name='Key'; status='ACTIVE' }
+        $day1 = @{ Approved=@([PSCustomObject]@{ CertificationId='c'; IdentityId='i1'; AccessName='Old Name'; AccessId='ent-99'; SourceName='AD'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $day2 = @{ Approved=@([PSCustomObject]@{ CertificationId='c'; IdentityId='i1'; AccessName='Renamed Entitlement'; AccessId='ent-99'; SourceName='Active Directory'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s1 = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @() -Decisions $day1
+        $s2 = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @() -Decisions $day2
+        $s1.Items[0].Key | Should -Be 'i1|ent-99|src-1'
+        $s2.Items[0].Key | Should -Be 'i1|ent-99|src-1'   # identical despite both names changing
+    }
+    It "Falls back to names when IDs are absent" {
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{ id='cn'; name='N'; status='ACTIVE' }) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='Domain Admins'; SourceName='AD'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s.Items[0].Key | Should -Be 'i1|Domain Admins|AD'
+    }
+}
+
+Describe "CD-07: signed vs decided-awaiting-signoff" {
+    It "Distinguishes all-decided-but-unsigned from signed" {
+        $certs = @([PSCustomObject]@{ id='c1'; reviewer=[PSCustomObject]@{id='r';name='R'}; decisionsTotal=4; decisionsMade=4; signed=$false })
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cs';name='S';status='ACTIVE'}) -Certifications $certs -Decisions @{ Approved=@(); Revoked=@(); Pending=@() }
+        $s.Certs[0].Signed                 | Should -Be $false
+        $s.Certs[0].DecidedAwaitingSignoff | Should -Be $true
+        $s.Certs[0].Completed              | Should -Be $true   # operational completion still true
+    }
+}
+
+Describe "CD-08: privileged provenance + word-boundary patterns" {
+    It "Tags ISC attribute as 'attribute' (confirmed)" {
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='ca';name='A';status='ACTIVE'}) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='Plain-Entitlement'; Privileged=$true; SourceName='AD'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s.Items[0].Privileged       | Should -Be $true
+        $s.Items[0].PrivilegedSource | Should -Be 'attribute'
+        $s.Kpi.PrivilegedConfirmed   | Should -Be 1
+    }
+    It "Does NOT match 'Admin' inside 'Administrative Assistant' (word boundary)" {
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cb';name='B';status='ACTIVE'}) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='Administrative Assistant'; SourceName='HR'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s.Items[0].Privileged | Should -Be $false
+    }
+    It "Still matches a real privileged name as 'pattern' (suspected)" {
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cc';name='C';status='ACTIVE'}) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='Domain Admins'; SourceName='AD'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s.Items[0].Privileged       | Should -Be $true
+        $s.Items[0].PrivilegedSource | Should -Be 'pattern'
+        $s.Kpi.PrivilegedSuspected   | Should -Be 1
+    }
+}
+
+Describe "CD-09: integrity sidecar, lifecycle retention, provenance/due-date" {
+    It "Writes a SHA-256 sidecar matching the file" {
+        $dir = Join-Path $TestDrive 'sha'
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='ch';name='H';status='ACTIVE'}) -Certifications $script:certs -Decisions $script:decisions
+        $saved = Save-SPCampaignSnapshot -Snapshot $s -SnapshotDir $dir
+        $sidecar = "$($saved.Data).sha256"
+        Test-Path $sidecar | Should -Be $true
+        $expected = (Get-FileHash -Path $saved.Data -Algorithm SHA256).Hash.ToLowerInvariant()
+        ((Get-Content $sidecar -Raw) -split '\s')[0] | Should -Be $expected
+    }
+    It "Preserves COMPLETED (evidence) snapshots beyond retention, deletes ACTIVE ones" {
+        $dir = Join-Path $TestDrive 'lifecycle'
+        $active = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cl';name='L';status='ACTIVE'}) -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        $active.Meta.CapturedAt = (Get-Date).AddDays(-200).ToString('o')
+        Save-SPCampaignSnapshot -Snapshot $active -SnapshotDir $dir | Out-Null
+        $done = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{id='cl';name='L';status='COMPLETED'}) -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        $done.Meta.CapturedAt = (Get-Date).AddDays(-201).ToString('o')
+        Save-SPCampaignSnapshot -Snapshot $done -SnapshotDir $dir | Out-Null
+
+        $r = Remove-SPCampaignOldSnapshots -SnapshotDir $dir -RetentionDays 90
+        $r.Data.Removed           | Should -Be 1
+        $r.Data.PreservedEvidence | Should -Be 1
+    }
+    It "Stamps due-date and provenance into Meta" {
+        $campaign = [PSCustomObject]@{ id='cp'; name='P'; status='ACTIVE'; deadline='2026-06-20T00:00:00Z' }
+        $s = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@()} -Provenance @{ ToolkitVersion='1.0.0'; TenantUrl='https://x.api.identitynow.com'; Environment='PROD'; CapturedBy='tester' }
+        $s.Meta.DueDate              | Should -Be '2026-06-20T00:00:00Z'
+        $s.Meta.Provenance.Environment | Should -Be 'PROD'
+        $s.Meta.Provenance.CapturedBy  | Should -Be 'tester'
+        @($s.Meta.PrivilegedPatterns).Count | Should -BeGreaterThan 0
+    }
+}

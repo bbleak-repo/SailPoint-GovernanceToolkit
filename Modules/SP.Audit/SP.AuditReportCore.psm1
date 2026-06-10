@@ -161,14 +161,19 @@ function Group-SPAuditDecisions {
             $reviewerEmail = [string]$CertReviewerEmailMap[$certId]
         }
 
-        # Source/Application name
+        # Source/Application name + id
         $sourceName = ''
+        $sourceId   = ''
         if ($null -ne $rawItem.access -and
             $null -ne $rawItem.access.PSObject.Properties['source'] -and
-            $null -ne $rawItem.access.source -and
-            $null -ne $rawItem.access.source.PSObject.Properties['name'] -and
-            $null -ne $rawItem.access.source.name) {
-            $sourceName = [string]$rawItem.access.source.name
+            $null -ne $rawItem.access.source) {
+            if ($null -ne $rawItem.access.source.PSObject.Properties['name'] -and $null -ne $rawItem.access.source.name) { $sourceName = [string]$rawItem.access.source.name }
+            if ($null -ne $rawItem.access.source.PSObject.Properties['id']   -and $null -ne $rawItem.access.source.id)   { $sourceId   = [string]$rawItem.access.source.id }
+        }
+        # Access (entitlement/role/access-profile) id -- stable key component
+        $accessId = ''
+        if ($null -ne $rawItem.access -and $null -ne $rawItem.access.PSObject.Properties['id'] -and $null -ne $rawItem.access.id) {
+            $accessId = [string]$rawItem.access.id
         }
 
         # Campaign metadata fields
@@ -230,9 +235,11 @@ function Group-SPAuditDecisions {
             AccountName            = $accountName
             AccountIdentifier      = $accountIdentifier
             AccessName             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.name)                   { $rawItem.access.name }           else { '' }
+            AccessId               = $accessId
             AccessType             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.type)                   { $rawItem.access.type }           else { '' }
             Privileged             = if ($null -ne $rawItem.access -and $null -ne $rawItem.access.privileged)             { [bool]$rawItem.access.privileged } else { $false }
             SourceName             = $sourceName
+            SourceId               = $sourceId
             ReviewerName           = $reviewerName
             ReviewerEmail          = $reviewerEmail
             Decision               = $decision

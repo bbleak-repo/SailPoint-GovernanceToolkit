@@ -90,9 +90,9 @@ Describe "CDF-03: Compliance summary" {
         @($script:diff.Compliance.NewlyAddedPrivileged).Count | Should -Be 1
         $script:diff.Compliance.NewlyAddedPrivileged[0].AccessName | Should -Be 'Domain Admins'
     }
-    It "Flags overdue undecided (pending in both captures)" {
+    It "Flags persistently-pending (pending in both captures)" {
         # Bob/VPN-Standard and Dave/Legacy-App were pending yesterday and still pending today
-        $keys = @($script:diff.Compliance.OverdueUndecided | ForEach-Object { $_.Key })
+        $keys = @($script:diff.Compliance.PersistentlyPending | ForEach-Object { $_.Key })
         $keys | Should -Contain 'id-2|VPN-Standard|Okta'
         $keys | Should -Contain 'id-4|Legacy-App|AD'
     }
@@ -133,6 +133,45 @@ Describe "CDF-05: Exporters" {
         Test-Path $r.Data.ScopeCsv | Should -Be $true
         $rows = Import-Csv $r.Data.ScopeCsv
         @($rows | Where-Object { $_.Change -eq 'Added' -and $_.AccessName -eq 'Domain Admins' }).Count | Should -Be 1
+    }
+}
+
+Describe "CDF-07: diff enrichment (2b)" {
+    It "Flags a reassigned cert and rolls up per reviewer" {
+        $camp = [PSCustomObject]@{ id='cr1'; name='R'; status='ACTIVE' }
+        $prev = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @([PSCustomObject]@{ id='cx'; reviewer=[PSCustomObject]@{id='r-old';name='Old'}; decisionsTotal=4; decisionsMade=1 }) -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        $cur  = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @([PSCustomObject]@{ id='cx'; reviewer=[PSCustomObject]@{id='r-new';name='New'}; decisionsTotal=4; decisionsMade=2 }) -Decisions @{Approved=@();Revoked=@();Pending=@()}
+        $d = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+        $d.Completion.ReassignedCount | Should -Be 1
+        @($d.Completion.Reviewers | Where-Object { $_.Reassigned }).Count | Should -Be 1
+        @($d.Completion.ByReviewer).Count | Should -Be 1
+        $d.Completion.ByReviewer[0].Certs | Should -Be 1
+    }
+    It "Reports true overdue against the campaign due date" {
+        $campPast = [PSCustomObject]@{ id='cov'; name='O'; status='ACTIVE'; deadline='2020-01-01T00:00:00Z' }
+        $prev = Build-SPCampaignSnapshotData -Campaign $campPast -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@([PSCustomObject]@{IdentityId='i1';AccessName='X';SourceName='AD';Decision='PENDING'})}
+        $cur  = Build-SPCampaignSnapshotData -Campaign $campPast -Certifications @() -Decisions @{Approved=@();Revoked=@();Pending=@([PSCustomObject]@{IdentityId='i1';AccessName='X';SourceName='AD';Decision='PENDING'})}
+        $d = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+        @($d.Compliance.Overdue).Count | Should -BeGreaterThan 0
+    }
+    It "Classifies a newly-onboarded source vs a new grant" {
+        $camp = [PSCustomObject]@{ id='cso'; name='S'; status='ACTIVE' }
+        $prev = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{Approved=@([PSCustomObject]@{IdentityId='i1';AccessName='E1';AccessId='e1';SourceName='AD';SourceId='src-ad';Decision='APPROVE'});Revoked=@();Pending=@()}
+        $cur  = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{Approved=@(
+            [PSCustomObject]@{IdentityId='i1';AccessName='E1';AccessId='e1';SourceName='AD';SourceId='src-ad';Decision='APPROVE'}
+            [PSCustomObject]@{IdentityId='i2';AccessName='E2';AccessId='e2';SourceName='Disconnected CSV';SourceId='src-csv';Decision='APPROVE'}
+        );Revoked=@();Pending=@()}
+        $d = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+        $d.Scope.NewSourceCount | Should -Be 1
+        @($d.Scope.NewSources) | Should -Contain 'Disconnected CSV'
+        ($d.Scope.Added | Where-Object { $_.SourceId -eq 'src-csv' }).ChangeClass | Should -Be 'NewSource'
+    }
+    It "Suppresses delta advisories on the baseline run" {
+        $camp = [PSCustomObject]@{ id='cbl'; name='B'; status='ACTIVE' }
+        $cur = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{Approved=@([PSCustomObject]@{IdentityId='i1';AccessName='Domain Admins';SourceName='AD';Decision='APPROVE'});Revoked=@();Pending=@()}
+        $d = (Compare-SPCampaignSnapshots -Current $cur).Data
+        @($d.Compliance.NewlyAddedPrivileged).Count | Should -Be 0
+        @($d.Compliance.PrivilegedApproved).Count   | Should -Be 0
     }
 }
 
