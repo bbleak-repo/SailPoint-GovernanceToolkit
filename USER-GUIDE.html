@@ -2758,6 +2758,10 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td><strong>Opt-in.</strong> Also write <strong>one HTML report per director</strong> (their team's attestation progress + the access added/removed/changed for their reviewers) + an <code>index.html</code>, under <code>…\per-director\per-director-&lt;stamp&gt;\</code> — each self-contained and suitable to <strong>send to that director individually</strong>. A director = a reviewer's manager (one level up the org tree, <code>-OrgDepth</code> default 3); reviewers with no manager fall into one <code>Unassigned</code> report.</td>
 </tr>
 <tr>
+<td><code>-CrossCampaign</code></td>
+<td><strong>For "new campaign per day" setups.</strong> Compare two DIFFERENT campaigns instead of two captures of the same one. When the name filter matches several (e.g. <code>Daily Attestation Manager Monday</code> / <code>…Tuesday</code>), it diffs the <strong>two most-recently-created</strong> against each other. The <strong>scope diff (access added/removed)</strong> is the meaningful day-over-day view; completion shows each campaign's own state (progress-deltas are suppressed — they're separate review cycles). Needs ≥2 matches and a live capture (not <code>-NoCapture</code>). Pairs well with <code>-PerDirector</code>.</td>
+</tr>
+<tr>
 <td><code>-PruneOldSnapshots</code></td>
 <td>Run the lifecycle-aware retention sweep (never deletes a signed/COMPLETED evidence capture).</td>
 </tr>
@@ -2778,6 +2782,10 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 
 # Day-over-day diff PLUS one HTML per director to send out individually
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation' -PerDirector -IncludeCsv
+
+# Separate per-day campaigns: diff today's against yesterday's (the two newest matches),
+# with per-director reports of what access changed for each director's team
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation Manager' -CrossCampaign -PerDirector
 
 # Week-over-week: compare this week's capture to last week's
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -Cadence Weekly

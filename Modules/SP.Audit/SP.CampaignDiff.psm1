@@ -142,13 +142,21 @@ function Compare-SPCampaignSnapshots {
         [Parameter()][object]$Previous,
         # Display-only cadence label (Adjacent/IntraDay/Daily/Weekly/Monthly) chosen by the
         # caller when it selected $Previous; surfaced in the report headers.
-        [Parameter()][string]$Cadence = 'Adjacent'
+        [Parameter()][string]$Cadence = 'Adjacent',
+        # Cross-campaign: Current and Previous are DIFFERENT campaigns (today's daily attestation
+        # vs yesterday's). The scope view (key = identity|access|source) is campaign-agnostic and
+        # stays meaningful; the completion view is not a progression across two separate review
+        # cycles, so its progress-deltas are suppressed.
+        [Parameter()][switch]$CrossCampaign
     )
     try {
         $curMeta = Get-SPDiffProp $Current 'Meta'
         if ($null -eq $curMeta) { return @{ Success = $false; Data = $null; Error = 'Current snapshot has no Meta' } }
         $hasPrev  = ($null -ne $Previous)
         $prevMeta = if ($hasPrev) { Get-SPDiffProp $Previous 'Meta' } else { $null }
+        # Completion deltas are a real "progression" only when comparing the SAME campaign over
+        # time. On a baseline (no prior) OR in cross-campaign mode they are not meaningful.
+        $completionIsProgress = $hasPrev -and -not $CrossCampaign
 
         $curItems = @(Get-SPDiffProp $Current 'Items' @())
         $prevItems = if ($hasPrev) { @(Get-SPDiffProp $Previous 'Items' @()) } else { @() }
@@ -181,12 +189,12 @@ function Compare-SPCampaignSnapshots {
             $isStall = (-not $cDone) -and ($delta -le 0) -and ($cTot -gt 0)
             # Reassigned: same cert, different effective reviewer than the prior capture.
             $isReassigned = ($pc -and $pRevId -and $cRevId -and ($pRevId -ne $cRevId))
-            # Baseline capture (no prior): there is nothing to measure change against, so the
-            # delta-based signals are NOT meaningful -- a cert that is already signed at first
-            # capture is NOT "newly completed", and progress/stall/reassign are undefined. Suppress
-            # them so the data matches the "baseline -- deltas appear next run" banner. Absolute
-            # state (Completed / CompletionPct / NotStarted / Outstanding) is still reported.
-            if (-not $hasPrev) { $delta = 0; $isNew = $false; $isStall = $false; $isReassigned = $false }
+            # When the completion view is not a progression (baseline with no prior, OR a
+            # cross-campaign comparison of two separate review cycles), the delta-based signals are
+            # NOT meaningful -- an already-signed cert is not "newly completed", and progress/stall/
+            # reassign are undefined. Suppress them; absolute state (Completed / CompletionPct /
+            # NotStarted / Outstanding) is still reported.
+            if (-not $completionIsProgress) { $delta = 0; $isNew = $false; $isStall = $false; $isReassigned = $false }
             if ($isNew)  { $newlyCompleted++ }
             if (-not $cDone) { $outstanding++ }
             if ($isNot)  { $notStarted++ }
@@ -365,6 +373,9 @@ function Compare-SPCampaignSnapshots {
                 HasPrevious       = $hasPrev
                 IntervalHours     = $intervalHours
                 Cadence           = $Cadence
+                CrossCampaign        = [bool]$CrossCampaign
+                PreviousCampaignId   = if ($hasPrev) { [string](Get-SPDiffProp $prevMeta 'CampaignId' '') } else { '' }
+                PreviousCampaignName = if ($hasPrev) { [string](Get-SPDiffProp $prevMeta 'CampaignName' '') } else { '' }
             }
             Completion = [ordered]@{
                 Reviewers           = $reviewers.ToArray()
@@ -440,6 +451,7 @@ function Export-SPCampaignCompletionDiffHtml {
         $cadSuffix = if ($meta.HasPrevious -and $cadLabel) { " | Cadence: $(Get-SPDiffEnc $cadLabel)" } else { '' }
         [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)$cadSuffix<br/>$window</div>")
         if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='first'>No prior snapshot &mdash; this is the baseline capture. Progress deltas appear from the next run onward.</div>") }
+        if (Get-SPDiffProp $meta 'CrossCampaign' $false) { [void]$sb.Append("<div class='first'>Cross-campaign comparison: <b>$(Get-SPDiffEnc (Get-SPDiffProp $meta 'PreviousCampaignName' ''))</b> &rarr; <b>$(Get-SPDiffEnc $meta.CampaignName)</b> &mdash; two SEPARATE campaigns. Completion below is each campaign's own state, NOT progress on one campaign (the prior column is suppressed). The <b>access added/removed</b> in the scope diff is the meaningful day-over-day view.</div>") }
 
         # KPIs
         $cp = $comp.CurrCompletionPct; $pp = $comp.PrevCompletionPct
@@ -527,6 +539,7 @@ function Export-SPCampaignScopeDiffHtml {
         $cadSuffix = if ($meta.HasPrevious -and $cadLabel) { " | Cadence: $(Get-SPDiffEnc $cadLabel)" } else { '' }
         [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)$cadSuffix<br/>$window</div>")
         if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='first'>No prior snapshot &mdash; everything below is reported as the baseline (added). Add/remove deltas become meaningful from the next run.</div>") }
+        if (Get-SPDiffProp $meta 'CrossCampaign' $false) { [void]$sb.Append("<div class='first'>Cross-campaign comparison: <b>$(Get-SPDiffEnc (Get-SPDiffProp $meta 'PreviousCampaignName' ''))</b> &rarr; <b>$(Get-SPDiffEnc $meta.CampaignName)</b>. <b>Added</b> = access in scope today that was not in the prior campaign; <b>Removed</b> = was in the prior campaign, not today. This is the day-over-day access drift across your two daily campaigns.</div>") }
 
         # KPIs
         [void]$sb.Append("<div>")
@@ -853,6 +866,7 @@ function Get-SPDiffDirectorBodyHtml {
     $cad = [string](Get-SPDiffProp $Meta 'Cadence' 'Adjacent')
     [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $Meta.CampaignName) ($(Get-SPDiffEnc $Meta.CampaignId)) | Status $(Get-SPDiffEnc $Meta.Status) | Cadence $(Get-SPDiffEnc $cad)<br/>$Window</div>")
     if (-not $Meta.HasPrevious) { [void]$sb.Append("<div class='first'>First capture &mdash; baseline. Add/remove deltas become meaningful from the next run.</div>") }
+    if (Get-SPDiffProp $Meta 'CrossCampaign' $false) { [void]$sb.Append("<div class='first'>Cross-campaign: <b>$(Get-SPDiffEnc (Get-SPDiffProp $Meta 'PreviousCampaignName' ''))</b> &rarr; <b>$(Get-SPDiffEnc $Meta.CampaignName)</b>. Access added/removed is the day-over-day change; completion reflects today's campaign only.</div>") }
 
     [void]$sb.Append("<div>")
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Reviewers)</span><span class='l'>Reviewers (your team)</span></div>")

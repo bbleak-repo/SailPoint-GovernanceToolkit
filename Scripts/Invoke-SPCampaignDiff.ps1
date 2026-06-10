@@ -61,6 +61,13 @@
     tree); reviewers with no manager in the tree fall into a single 'Unassigned' report.
 .PARAMETER OrgDepth
     Max levels to walk up the manager chain when resolving directors for -PerDirector (default 3).
+.PARAMETER CrossCampaign
+    Compare two DIFFERENT campaigns instead of two captures of the same one. Use when each day is a
+    separate campaign (e.g. 'Daily Attestation Manager Monday' / '...Tuesday'): with a name filter
+    that matches several, this diffs the two most-recently-created against each other (today's vs
+    yesterday's). The SCOPE diff (access added/removed) is the meaningful day-over-day view; the
+    completion view shows each campaign's own state (NOT progress -- they are separate review
+    cycles, so progress-deltas are suppressed and labelled). Requires a live capture (not -NoCapture).
 .PARAMETER OutputPath
     Directory for the generated reports (default {Audit.OutputPath}\diff).
 .PARAMETER OutputMode
@@ -76,6 +83,10 @@
 .EXAMPLE
     # Day-over-day diff PLUS one HTML report per director to send out individually:
     .\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-123' -PerDirector -IncludeCsv
+.EXAMPLE
+    # Separate per-day campaigns: diff today's daily campaign against yesterday's (the two newest
+    # matches), with a per-director report of what access changed for each director's team:
+    .\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation Manager' -CrossCampaign -PerDirector
 .NOTES
     Exit codes: 0 ok | 1 no campaign/data | 2 parameter | 3 auth | 4 config.
     Read-only: CLI-005 (no SupportsShouldProcess).
@@ -106,6 +117,8 @@ param(
 
     [Parameter()][switch]$PerDirector,
     [Parameter()][int]$OrgDepth = 3,
+
+    [Parameter()][switch]$CrossCampaign,
 
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'JSON', 'HTML', 'Both', 'CSV')][string]$OutputMode = 'Console',
@@ -181,55 +194,72 @@ catch {
     Write-Host "ERROR: campaign query failed: $($_.Exception.Message)" -ForegroundColor Red; exit 3
 }
 if ($campaigns.Count -eq 0) { Write-Host '  No campaign matched -- nothing to diff.' -ForegroundColor Yellow; exit 1 }
-if ($campaigns.Count -gt 1) {
-    # A recurring attestation should resolve to one campaign; if several match, take the
-    # most recently created and note the ambiguity.
-    $campaign = @($campaigns | Sort-Object { try { [datetime]$_.created } catch { [datetime]::MinValue } } -Descending)[0]
-    Write-Host "  WARN: $($campaigns.Count) campaigns matched; using most recent: '$($campaign.name)' ($($campaign.id))" -ForegroundColor Yellow
+$sortedCampaigns = @($campaigns | Sort-Object { try { [datetime]$_.created } catch { [datetime]::MinValue } } -Descending)
+$campaign = $sortedCampaigns[0]
+$compareCampaign = $null
+if ($CrossCampaign) {
+    # Cross-campaign: diff the two most-recently-created matches against each other (today's daily
+    # attestation vs yesterday's, which are SEPARATE campaigns with different ids).
+    if ($sortedCampaigns.Count -lt 2) {
+        Write-Host "  ERROR: -CrossCampaign needs >=2 matching campaigns to diff; only $($sortedCampaigns.Count) matched. Widen -DaysBack / -Status or relax the name filter." -ForegroundColor Red; exit 1
+    }
+    $compareCampaign = $sortedCampaigns[1]
+    Write-Host "  Cross-campaign diff (newer vs prior):" -ForegroundColor Cyan
+    Write-Host "    current: $($campaign.name) [$($campaign.id)]"
+    Write-Host "    prior:   $($compareCampaign.name) [$($compareCampaign.id)]"
 }
-else { $campaign = $campaigns[0] }
-Write-Host "  Campaign: $($campaign.name) [$($campaign.id)] status=$($campaign.status)"
+else {
+    if ($sortedCampaigns.Count -gt 1) {
+        Write-Host "  WARN: $($sortedCampaigns.Count) campaigns matched; using most recent: '$($campaign.name)' ($($campaign.id))." -ForegroundColor Yellow
+        Write-Host "        Separate per-day campaigns? Add -CrossCampaign to diff the two newest against each other." -ForegroundColor Yellow
+    }
+    Write-Host "  Campaign: $($campaign.name) [$($campaign.id)] status=$($campaign.status)"
+}
 
 $snapshotDir = $null  # use config default (toolkit-root anchored)
 $currentSnapshot = $null
+$previousSnapshot = $null
+
+# Capture a fresh, saved snapshot of ONE campaign (fetch certs + items, build, persist). Factored
+# so cross-campaign mode can capture both the current and the comparison campaign the same way.
+function Get-SPLiveCampaignSnapshot {
+    param([object]$Campaign)
+    $certResult = Get-SPAuditCertifications -CampaignId ([string]$Campaign.id) -CorrelationID $correlationID
+    $certs = if ($certResult.Success -and $null -ne $certResult.Data) { @($certResult.Data) } else { @() }
+    # Project to the shape Build-SPCampaignSnapshotData expects, using the EFFECTIVE
+    # (reassignment-aware) reviewer so completion tracks who must actually attest.
+    $certObjs = foreach ($c in $certs) {
+        $rev = if ($null -ne $c.PSObject.Properties['EffectiveReviewer'] -and $null -ne $c.EffectiveReviewer) { $c.EffectiveReviewer } elseif ($null -ne $c.PSObject.Properties['reviewer']) { $c.reviewer } else { $null }
+        [PSCustomObject]@{
+            id             = [string]$c.id
+            reviewer       = $rev
+            decisionsTotal = if ($null -ne $c.PSObject.Properties['decisionsTotal']) { $c.decisionsTotal } else { 0 }
+            decisionsMade  = if ($null -ne $c.PSObject.Properties['decisionsMade'])  { $c.decisionsMade }  else { 0 }
+            signed         = if ($null -ne $c.PSObject.Properties['signed'])         { $c.signed }         else { $false }
+            phase          = if ($null -ne $c.PSObject.Properties['phase'])          { $c.phase }          else { '' }
+        }
+    }
+    $wrapped = New-Object System.Collections.Generic.List[object]
+    $cacheResult = Get-SPCachedCampaignItems -Campaign $Campaign -CorrelationID $correlationID
+    foreach ($wi in @(if ($cacheResult.Success) { $cacheResult.Data } else { @() })) { $wrapped.Add($wi) }
+    $decisions = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$Campaign.created; DueDate = ''; CompletionDate = '' }
+    # Evidence provenance: operator/tenant/version/environment stamped into the snapshot.
+    $prov = @{ CapturedBy = [string]$env:USERNAME }
+    try {
+        if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'ToolkitVersion') { $prov['ToolkitVersion'] = [string]$config.Global.ToolkitVersion }
+        if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'EnvironmentName') { $prov['Environment'] = [string]$config.Global.EnvironmentName }
+        if ($config.PSObject.Properties.Name -contains 'Api' -and $config.Api.PSObject.Properties.Name -contains 'BaseUrl') { $prov['TenantUrl'] = [string]$config.Api.BaseUrl }
+    } catch { }
+    $snap = Build-SPCampaignSnapshotData -Campaign $Campaign -Certifications @($certObjs) -Decisions $decisions -Provenance $prov
+    $saveResult = Save-SPCampaignSnapshot -Snapshot $snap -SnapshotDir $snapshotDir
+    if ($saveResult.Success) { Write-Host "  Snapshot captured: $($saveResult.Data)" -ForegroundColor Green }
+    else { Write-Host "  WARN: snapshot save failed: $($saveResult.Error)" -ForegroundColor Yellow }
+    return $snap
+}
 
 # --- Capture a fresh snapshot (unless -NoCapture) ---------------------------
 if (-not $NoCapture) {
-    try {
-        $certResult = Get-SPAuditCertifications -CampaignId ([string]$campaign.id) -CorrelationID $correlationID
-        $certs = if ($certResult.Success -and $null -ne $certResult.Data) { @($certResult.Data) } else { @() }
-        # Project to the shape Build-SPCampaignSnapshotData expects, using the EFFECTIVE
-        # (reassignment-aware) reviewer so completion tracks who must actually attest.
-        $certObjs = foreach ($c in $certs) {
-            $rev = if ($null -ne $c.PSObject.Properties['EffectiveReviewer'] -and $null -ne $c.EffectiveReviewer) { $c.EffectiveReviewer } elseif ($null -ne $c.PSObject.Properties['reviewer']) { $c.reviewer } else { $null }
-            [PSCustomObject]@{
-                id             = [string]$c.id
-                reviewer       = $rev
-                decisionsTotal = if ($null -ne $c.PSObject.Properties['decisionsTotal']) { $c.decisionsTotal } else { 0 }
-                decisionsMade  = if ($null -ne $c.PSObject.Properties['decisionsMade'])  { $c.decisionsMade }  else { 0 }
-                signed         = if ($null -ne $c.PSObject.Properties['signed'])         { $c.signed }         else { $false }
-                phase          = if ($null -ne $c.PSObject.Properties['phase'])          { $c.phase }          else { '' }
-            }
-        }
-
-        $wrapped = New-Object System.Collections.Generic.List[object]
-        $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -CorrelationID $correlationID
-        foreach ($wi in @(if ($cacheResult.Success) { $cacheResult.Data } else { @() })) { $wrapped.Add($wi) }
-        $decisions = Group-SPAuditDecisions -Items $wrapped.ToArray() -CampaignMetadata @{ StartDate = [string]$campaign.created; DueDate = ''; CompletionDate = '' }
-
-        # Evidence provenance: operator/tenant/version/environment stamped into the snapshot.
-        $prov = @{ CapturedBy = [string]$env:USERNAME }
-        try {
-            if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'ToolkitVersion') { $prov['ToolkitVersion'] = [string]$config.Global.ToolkitVersion }
-            if ($config.PSObject.Properties.Name -contains 'Global' -and $config.Global.PSObject.Properties.Name -contains 'EnvironmentName') { $prov['Environment'] = [string]$config.Global.EnvironmentName }
-            if ($config.PSObject.Properties.Name -contains 'Api' -and $config.Api.PSObject.Properties.Name -contains 'BaseUrl') { $prov['TenantUrl'] = [string]$config.Api.BaseUrl }
-        } catch { }
-
-        $currentSnapshot = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @($certObjs) -Decisions $decisions -Provenance $prov
-        $saveResult = Save-SPCampaignSnapshot -Snapshot $currentSnapshot -SnapshotDir $snapshotDir
-        if ($saveResult.Success) { Write-Host "  Snapshot captured: $($saveResult.Data)" -ForegroundColor Green }
-        else { Write-Host "  WARN: snapshot save failed: $($saveResult.Error)" -ForegroundColor Yellow }
-    }
+    try { $currentSnapshot = Get-SPLiveCampaignSnapshot -Campaign $campaign }
     catch {
         if ($_.Exception.Message -match 'token|auth|401|403') { Write-Host "ERROR: authentication failed: $($_.Exception.Message)" -ForegroundColor Red; exit 3 }
         Write-Host "ERROR: snapshot capture failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1
@@ -237,50 +267,58 @@ if (-not $NoCapture) {
 }
 
 # --- Determine current + previous snapshots ---------------------------------
-$cutoff = if ($CompareBefore) { try { [datetime]::Parse($CompareBefore) } catch { Get-Date } } else { $null }
-
-if ($null -eq $currentSnapshot) {
-    # -NoCapture: take the most recent existing snapshot as "current".
-    $listR = Get-SPCampaignSnapshotList -CampaignId ([string]$campaign.id) -SnapshotDir $snapshotDir
-    $existing = if ($listR.Success) { @($listR.Data) } else { @() }
-    if ($existing.Count -eq 0) { Write-Host '  No existing snapshots to compare -- run once without -NoCapture first.' -ForegroundColor Yellow; exit 1 }
-    $curRef = $existing[0]
-    $loadCur = Get-SPCampaignSnapshot -Path $curRef.Path
-    if (-not $loadCur.Success) { Write-Host "  ERROR: could not load current snapshot: $($loadCur.Error)" -ForegroundColor Red; exit 1 }
-    $currentSnapshot = $loadCur.Data
-    if (-not $cutoff) { $cutoff = $curRef.CapturedAt }
-}
-else {
-    if (-not $cutoff) {
-        try { $cutoff = [datetime]::Parse([string]$currentSnapshot.Meta.CapturedAt) } catch { $cutoff = Get-Date }
-        # The just-captured snapshot is filenamed at SECOND precision (Save truncates CapturedAt),
-        # but Meta.CapturedAt carries sub-seconds. The snapshot-list filter compares filename-derived
-        # (second) times with a strict "< cutoff", so a sub-second cutoff lets the current snapshot
-        # (its own filename truncated to the second) slip in as a candidate -> the diff self-compares
-        # and shows 0 changes. Align the cutoff to whole seconds so the current capture is excluded.
-        $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [System.TimeSpan]::TicksPerSecond))
+if ($CrossCampaign) {
+    # Previous = a live capture of the comparison campaign (the prior day's SEPARATE campaign).
+    if ($null -eq $currentSnapshot) { Write-Host '  ERROR: -CrossCampaign requires a live capture; do not combine it with -NoCapture.' -ForegroundColor Red; exit 2 }
+    try { $previousSnapshot = Get-SPLiveCampaignSnapshot -Campaign $compareCampaign }
+    catch {
+        if ($_.Exception.Message -match 'token|auth|401|403') { Write-Host "ERROR: authentication failed: $($_.Exception.Message)" -ForegroundColor Red; exit 3 }
+        Write-Host "ERROR: comparison-campaign capture failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1
     }
 }
-
-# Cadence -> which prior snapshot to diff against.
-$prevArgs = @{ CampaignId = [string]$campaign.id; SnapshotDir = $snapshotDir; Before = $cutoff }
-switch ($Cadence) {
-    'IntraDay' { $prevArgs['IntraDay'] = $true }
-    'Daily'    { $prevArgs['TargetAgoHours'] = 24 }
-    'Weekly'   { $prevArgs['TargetAgoHours'] = 168 }
-    'Monthly'  { $prevArgs['TargetAgoHours'] = 730 }
-    default    { }   # Adjacent
+else {
+    $cutoff = if ($CompareBefore) { try { [datetime]::Parse($CompareBefore) } catch { Get-Date } } else { $null }
+    if ($null -eq $currentSnapshot) {
+        # -NoCapture: take the most recent existing snapshot as "current".
+        $listR = Get-SPCampaignSnapshotList -CampaignId ([string]$campaign.id) -SnapshotDir $snapshotDir
+        $existing = if ($listR.Success) { @($listR.Data) } else { @() }
+        if ($existing.Count -eq 0) { Write-Host '  No existing snapshots to compare -- run once without -NoCapture first.' -ForegroundColor Yellow; exit 1 }
+        $curRef = $existing[0]
+        $loadCur = Get-SPCampaignSnapshot -Path $curRef.Path
+        if (-not $loadCur.Success) { Write-Host "  ERROR: could not load current snapshot: $($loadCur.Error)" -ForegroundColor Red; exit 1 }
+        $currentSnapshot = $loadCur.Data
+        if (-not $cutoff) { $cutoff = $curRef.CapturedAt }
+    }
+    else {
+        if (-not $cutoff) {
+            try { $cutoff = [datetime]::Parse([string]$currentSnapshot.Meta.CapturedAt) } catch { $cutoff = Get-Date }
+            # The just-captured snapshot is filenamed at SECOND precision (Save truncates CapturedAt),
+            # but Meta.CapturedAt carries sub-seconds. The snapshot-list filter compares filename-derived
+            # (second) times with a strict "< cutoff", so a sub-second cutoff lets the current snapshot
+            # (its own filename truncated to the second) slip in as a candidate -> the diff self-compares
+            # and shows 0 changes. Align the cutoff to whole seconds so the current capture is excluded.
+            $cutoff = $cutoff.AddTicks(-($cutoff.Ticks % [System.TimeSpan]::TicksPerSecond))
+        }
+    }
+    # Cadence -> which prior snapshot to diff against.
+    $prevArgs = @{ CampaignId = [string]$campaign.id; SnapshotDir = $snapshotDir; Before = $cutoff }
+    switch ($Cadence) {
+        'IntraDay' { $prevArgs['IntraDay'] = $true }
+        'Daily'    { $prevArgs['TargetAgoHours'] = 24 }
+        'Weekly'   { $prevArgs['TargetAgoHours'] = 168 }
+        'Monthly'  { $prevArgs['TargetAgoHours'] = 730 }
+        default    { }   # Adjacent
+    }
+    $prevRef = Get-SPCampaignPreviousSnapshot @prevArgs
+    if ($prevRef.Success -and $null -ne $prevRef.Data) {
+        $loadPrev = Get-SPCampaignSnapshot -Path $prevRef.Data.Path
+        if ($loadPrev.Success) { $previousSnapshot = $loadPrev.Data; Write-Host "  Previous snapshot ($Cadence): $($prevRef.Data.Path)" }
+    }
+    if ($null -eq $previousSnapshot) { Write-Host '  No prior snapshot -- reporting baseline (first capture).' -ForegroundColor Yellow }
 }
-$prevRef = Get-SPCampaignPreviousSnapshot @prevArgs
-$previousSnapshot = $null
-if ($prevRef.Success -and $null -ne $prevRef.Data) {
-    $loadPrev = Get-SPCampaignSnapshot -Path $prevRef.Data.Path
-    if ($loadPrev.Success) { $previousSnapshot = $loadPrev.Data; Write-Host "  Previous snapshot ($Cadence): $($prevRef.Data.Path)" }
-}
-if ($null -eq $previousSnapshot) { Write-Host '  No prior snapshot -- reporting baseline (first capture).' -ForegroundColor Yellow }
 
 # --- Compare + report -------------------------------------------------------
-$cmp = Compare-SPCampaignSnapshots -Current $currentSnapshot -Previous $previousSnapshot -Cadence $Cadence
+$cmp = Compare-SPCampaignSnapshots -Current $currentSnapshot -Previous $previousSnapshot -Cadence $Cadence -CrossCampaign:$CrossCampaign
 if (-not $cmp.Success) { Write-Host "ERROR: comparison failed: $($cmp.Error)" -ForegroundColor Red; exit 1 }
 $diff = $cmp.Data
 

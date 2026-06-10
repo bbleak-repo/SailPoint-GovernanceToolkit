@@ -289,3 +289,40 @@ Describe "CDF-09: baseline completion is honest (no 'newly completed' without a 
         $xrev.MadeDelta      | Should -Be 0
     }
 }
+
+Describe "CDF-10: cross-campaign comparison (separate daily campaigns)" {
+    BeforeAll {
+        $mon = [PSCustomObject]@{ id = 'camp-mon'; name = 'Daily Attestation Manager Monday';  status = 'ACTIVE' }
+        $tue = [PSCustomObject]@{ id = 'camp-tue'; name = 'Daily Attestation Manager Tuesday'; status = 'ACTIVE' }
+        $monCerts = @([PSCustomObject]@{ id = 'cert-m1'; reviewer = [PSCustomObject]@{ id = 'mgr-1'; name = 'Mgr 1' }; decisionsTotal = 2; decisionsMade = 2; signed = $true })
+        $tueCerts = @([PSCustomObject]@{ id = 'cert-t1'; reviewer = [PSCustomObject]@{ id = 'mgr-1'; name = 'Mgr 1' }; decisionsTotal = 2; decisionsMade = 2; signed = $true })
+        $monDec = @{ Approved = @(
+                [PSCustomObject]@{ CertificationId = 'cert-m1'; IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessType = 'ENTITLEMENT'; SourceName = 'AD'; Decision = 'APPROVE'; DecisionDate = '2026-06-08T09:00:00Z' }
+                [PSCustomObject]@{ CertificationId = 'cert-m1'; IdentityId = 'i2'; IdentityName = 'U2'; AccessName = 'AppB'; AccessType = 'ENTITLEMENT'; SourceName = 'AD'; Decision = 'APPROVE'; DecisionDate = '2026-06-08T09:01:00Z' }
+            ); Revoked = @(); Pending = @() }
+        $tueDec = @{ Approved = @(
+                [PSCustomObject]@{ CertificationId = 'cert-t1'; IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessType = 'ENTITLEMENT'; SourceName = 'AD'; Decision = 'APPROVE'; DecisionDate = '2026-06-09T09:00:00Z' }
+                [PSCustomObject]@{ CertificationId = 'cert-t1'; IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppC'; AccessType = 'ENTITLEMENT'; SourceName = 'AD'; Decision = 'APPROVE'; DecisionDate = '2026-06-09T09:01:00Z' }
+            ); Revoked = @(); Pending = @() }
+        $monSnap = Build-SPCampaignSnapshotData -Campaign $mon -Certifications $monCerts -Decisions $monDec
+        $tueSnap = Build-SPCampaignSnapshotData -Campaign $tue -Certifications $tueCerts -Decisions $tueDec
+        $script:xc = (Compare-SPCampaignSnapshots -Current $tueSnap -Previous $monSnap -CrossCampaign).Data
+    }
+    It "flags cross-campaign and names the prior campaign" {
+        $script:xc.Meta.CrossCampaign        | Should -Be $true
+        $script:xc.Meta.HasPrevious          | Should -Be $true
+        $script:xc.Meta.PreviousCampaignName | Should -Be 'Daily Attestation Manager Monday'
+    }
+    It "shows access added/removed across the two campaigns (day-over-day scope drift)" {
+        $script:xc.Scope.AddedCount   | Should -Be 1
+        $script:xc.Scope.RemovedCount | Should -Be 1
+        @($script:xc.Scope.Added)[0].AccessName   | Should -Be 'AppC'
+        @($script:xc.Scope.Removed)[0].AccessName | Should -Be 'AppB'
+    }
+    It "suppresses completion progress-deltas (separate review cycles, not a continuation)" {
+        # Tuesday's cert is signed/completed; without cross-campaign handling it would be miscounted
+        # as 'newly completed' (no matching prior cert by id).
+        $script:xc.Completion.NewlyCompletedCount | Should -Be 0
+        $script:xc.Completion.ReassignedCount     | Should -Be 0
+    }
+}

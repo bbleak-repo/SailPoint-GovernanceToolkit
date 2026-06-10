@@ -823,6 +823,7 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 | `-IncludeCsv` | Also write flat completion + scope **CSVs** (Excel / leadership). |
 | `-VelocityAdvisory` | **Opt-in.** Also emit the review-velocity advisory (see caveat below). |
 | `-PerDirector` / `-OrgDepth <n>` | **Opt-in.** Also write **one HTML report per director** (their team's attestation progress + the access added/removed/changed for their reviewers) + an `index.html`, under `…\per-director\per-director-<stamp>\` — each self-contained and suitable to **send to that director individually**. A director = a reviewer's manager (one level up the org tree, `-OrgDepth` default 3); reviewers with no manager fall into one `Unassigned` report. |
+| `-CrossCampaign` | **For "new campaign per day" setups.** Compare two DIFFERENT campaigns instead of two captures of the same one. When the name filter matches several (e.g. `Daily Attestation Manager Monday` / `…Tuesday`), it diffs the **two most-recently-created** against each other. The **scope diff (access added/removed)** is the meaningful day-over-day view; completion shows each campaign's own state (progress-deltas are suppressed — they're separate review cycles). Needs ≥2 matches and a live capture (not `-NoCapture`). Pairs well with `-PerDirector`. |
 | `-PruneOldSnapshots` | Run the lifecycle-aware retention sweep (never deletes a signed/COMPLETED evidence capture). |
 | `-OutputPath <dir>` | Output root (default `.\Audit\diff`). |
 | `-OutputMode` | `Console`/`JSON`/`HTML`/`Both`/`CSV` — controls the run summary; the two HTML diffs are always written. |
@@ -836,6 +837,10 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 
 # Day-over-day diff PLUS one HTML per director to send out individually
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation' -PerDirector -IncludeCsv
+
+# Separate per-day campaigns: diff today's against yesterday's (the two newest matches),
+# with per-director reports of what access changed for each director's team
+.\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignNameContains 'Daily Attestation Manager' -CrossCampaign -PerDirector
 
 # Week-over-week: compare this week's capture to last week's
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -Cadence Weekly
