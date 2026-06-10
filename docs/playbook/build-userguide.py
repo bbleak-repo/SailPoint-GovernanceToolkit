@@ -574,8 +574,14 @@ document.addEventListener('DOMContentLoaded', function() {{
 """
 
     OUT.write_text(doc, encoding="utf-8")
+    # Also refresh the repo-root copy. The canonical generator output lives in docs/, but
+    # build-dist.ps1 packages the repo-root USER-GUIDE.html into the user zip -- writing both
+    # here keeps them in sync so the shipped guide never goes stale behind a playbook edit.
+    ROOT_OUT = REPO / "USER-GUIDE.html"
+    ROOT_OUT.write_text(doc, encoding="utf-8")
     kb = OUT.stat().st_size // 1024
     print(f"Wrote: {OUT}")
+    print(f"Wrote: {ROOT_OUT}")
     print(f"Size:  {kb} KB")
     print(f"Sections: {len(all_secs)}  "
           f"(Foundations: {len(found)}, CLI: {len(cli)}, GUI: {len(gui)})")
