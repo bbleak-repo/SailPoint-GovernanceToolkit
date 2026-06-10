@@ -529,3 +529,42 @@ Describe "AR-006: Export-SPAuditJsonl writes a valid JSONL audit trail" {
 }
 
 #endregion
+
+Describe "AR-001S: Group-SPAuditDecisions resolves Source from the account shape" {
+    BeforeEach { Mock Write-SPLog -ModuleName SP.AuditReportCore { } }
+
+    It "reads SourceId/SourceName from account.sourceId when access has no source (was blank)" {
+        $wrapped = @{
+            CertificationId = 'cert-1'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'item-1'
+                decision        = 'APPROVE'
+                decisionDate    = '2026-06-05T00:00:00Z'
+                identitySummary = [PSCustomObject]@{ id = 'id-1'; identityId = 'id-1'; name = 'User One' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'AD-SG-Finance-1' }  # no .source
+                account         = [PSCustomObject]@{ nativeIdentity = 'CN=u1'; sourceId = 'src-ad-001' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.SourceId   | Should -Be 'src-ad-001'
+        $d.SourceName | Should -Be 'src-ad-001'   # id fallback; the friendly name is resolved upstream
+        $d.AccessName | Should -Be 'AD-SG-Finance-1'
+        $d.AccessType | Should -Be 'ENTITLEMENT'
+    }
+
+    It "prefers access.source.name when present" {
+        $wrapped = @{
+            CertificationId = 'cert-2'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'item-2'
+                decision        = 'REVOKE'
+                identitySummary = [PSCustomObject]@{ id = 'id-2'; identityId = 'id-2'; name = 'User Two' }
+                access          = [PSCustomObject]@{ type = 'ENTITLEMENT'; name = 'X'; source = [PSCustomObject]@{ id = 'src-9'; name = 'Friendly Src' } }
+                account         = [PSCustomObject]@{ sourceId = 'src-ad-001' }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Revoked)[0]
+        $d.SourceName | Should -Be 'Friendly Src'
+        $d.SourceId   | Should -Be 'src-9'
+    }
+}

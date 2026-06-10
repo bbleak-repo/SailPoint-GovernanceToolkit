@@ -161,7 +161,10 @@ function Group-SPAuditDecisions {
             $reviewerEmail = [string]$CertReviewerEmailMap[$certId]
         }
 
-        # Source/Application name + id
+        # Source/Application name + id. ISC items carry the source in a couple of shapes: some
+        # under access.source.{name,id} (entitlement-centric), but most under the ACCOUNT object
+        # (account.source.{name,id} or account.sourceName/account.sourceId). The old code only read
+        # access.source, so account-centric items showed a BLANK source. Read both, name preferred.
         $sourceName = ''
         $sourceId   = ''
         if ($null -ne $rawItem.access -and
@@ -170,6 +173,20 @@ function Group-SPAuditDecisions {
             if ($null -ne $rawItem.access.source.PSObject.Properties['name'] -and $null -ne $rawItem.access.source.name) { $sourceName = [string]$rawItem.access.source.name }
             if ($null -ne $rawItem.access.source.PSObject.Properties['id']   -and $null -ne $rawItem.access.source.id)   { $sourceId   = [string]$rawItem.access.source.id }
         }
+        if ($null -ne $rawItem.PSObject.Properties['account'] -and $null -ne $rawItem.account) {
+            $acctSrc = $rawItem.account
+            if ([string]::IsNullOrWhiteSpace($sourceName)) {
+                if ($null -ne $acctSrc.PSObject.Properties['source'] -and $null -ne $acctSrc.source -and $null -ne $acctSrc.source.PSObject.Properties['name'] -and $null -ne $acctSrc.source.name) { $sourceName = [string]$acctSrc.source.name }
+                elseif ($null -ne $acctSrc.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$acctSrc.sourceName)) { $sourceName = [string]$acctSrc.sourceName }
+            }
+            if ([string]::IsNullOrWhiteSpace($sourceId)) {
+                if ($null -ne $acctSrc.PSObject.Properties['source'] -and $null -ne $acctSrc.source -and $null -ne $acctSrc.source.PSObject.Properties['id'] -and $null -ne $acctSrc.source.id) { $sourceId = [string]$acctSrc.source.id }
+                elseif ($null -ne $acctSrc.PSObject.Properties['sourceId'] -and -not [string]::IsNullOrWhiteSpace([string]$acctSrc.sourceId)) { $sourceId = [string]$acctSrc.sourceId }
+            }
+        }
+        # If only an id resolved, show it so the column is never blank (a friendly name can be
+        # resolved upstream via Get-SPAuditSourceName when an API session is available).
+        if ([string]::IsNullOrWhiteSpace($sourceName) -and -not [string]::IsNullOrWhiteSpace($sourceId)) { $sourceName = $sourceId }
         # Access (entitlement/role/access-profile) id -- stable key component
         $accessId = ''
         if ($null -ne $rawItem.access -and $null -ne $rawItem.access.PSObject.Properties['id'] -and $null -ne $rawItem.access.id) {
