@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, weekly digest, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (SOX/IAG)**, weekly digest, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -443,9 +443,10 @@ deliveries.
 
 ### Campaign filtering & the item cache (read this first)
 
-The six report scripts below — `Invoke-SPCampaignAudit`, `Invoke-SPGovernanceReport`,
-`Invoke-SPGovernanceMetrics`, `Invoke-SPWeeklyDigest`, `Invoke-SPAdaptiveReport`,
-`Invoke-SPReportDistribution` — share two behaviours worth understanding before you run them.
+The seven report scripts below — `Invoke-SPCampaignAudit`, `Invoke-SPGovernanceReport`,
+`Invoke-SPGovernanceMetrics`, `Invoke-SPDailyEvidenceReport`, `Invoke-SPWeeklyDigest`,
+`Invoke-SPAdaptiveReport`, `Invoke-SPReportDistribution` — share two behaviours worth
+understanding before you run them.
 
 **Campaign name filters.** Every one accepts the same three optional filters (on top of
 `-Status` / `-DaysBack` / date windows):
@@ -940,7 +941,79 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 ```
 **Related GUI:** Governance tab.
 
-### `Invoke-SPAdaptiveReport.ps1` ⚠️ DEPRECATED
+### `Invoke-SPDailyEvidenceReport.ps1`
+**Purpose:** a daily executive governance dashboard with six KPIs, a Governance Confidence
+Score, a cascading-risk "Domino Tracker", and SOX/IAG evidence registers. Designed to satisfy
+**Step 6: Evidence and Reporting** of the IAM governance program -- a single report that
+answers whether campaigns are completing, attestations are on time, revocations are being
+enforced, remediation is timely, high-risk access is being reviewed, and reviewers are
+performing responsibly.
+
+**When to use:** daily, scheduled after the daily orchestrator. Also useful on-demand with
+`-DaysBack 7` for a weekly evidence summary or `-CampaignNameContains 'Tuesday'` to scope to
+a specific campaign day.
+
+**KPI dashboard (above the fold -- one screen):**
+
+| KPI | What It Measures | Green | Yellow | Red |
+|---|---|---|---|---|
+| Campaign Completion | % of review items decided | 95%+ | 80-94% | <80% |
+| Past-Due Reviews | overdue + at-risk campaigns | 0 | 1-2 | 3+ |
+| Revocations Executed | % provisioned within SLA | 95%+ | 80-94% | <80% or Failed |
+| Remediation Timeliness | SLA compliance + aging buckets | 95%+, none >5d | 80-94% or 5-10d | <80% or >10d |
+| High-Risk Exposure | high-risk identities with pending reviews | 0 | 1-3 | 4+ |
+| Reviewer Health | % of reviewers in good standing | 0 at-risk | 1-2 at-risk | 3+ at-risk |
+
+**Domino Tracker:** the six KPIs are shown as a causal chain
+(Reviewer -> Completion -> Overdue -> Revocations -> Remediation -> Risk). When any KPI
+degrades, downstream indicators are highlighted with a one-sentence narrative explaining
+the cascading impact.
+
+**Evidence sections (below the fold -- for compliance/auditors):**
+
+| Section | Content |
+|---|---|
+| A. Campaign Completion | Per-campaign status, completion %, deadline status |
+| B. Certifier Decisions | Decision register (identity, access, decision, reviewer, date) |
+| C. Remediation Register | Revocation status, aging bucket chart, per-item SLA tracking |
+| D. Past-Due Campaigns | Overdue/at-risk campaigns with bottleneck reviewers |
+| E. High-Risk Pending | High-risk identities with unreviewed access items |
+| F. Reviewer Performance | Reputation scores, tiers, rubber-stamp flags |
+
+| Parameter | Description |
+|---|---|
+| `-DaysBack <n>` | Lookback window (default 1 for daily). Use 7 for weekly catch-up. |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Campaign name filters (see *Campaign filtering & the item cache*). Example: `-CampaignNameContains 'Wednesday'` for all Wednesday campaigns. |
+| `-SlaHours <n>` | Remediation SLA threshold in hours (default 48). |
+| `-HighRiskThreshold <n>` | Identity risk score for "High" classification (default 70). |
+| `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
+
+```powershell
+# Daily evidence report (default 1-day window)
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -Token $token -OutputMode Both
+
+# Scope to a specific day's campaigns
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Tuesday' -DaysBack 7 -Token $token
+
+# Dry run -- see what steps would execute
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf
+```
+
+**Thresholds** are configurable in `settings.json` under the `DailyEvidence.Thresholds` section.
+The script uses sensible defaults if the section is missing. See
+[Foundations](00-foundations.md) for the settings reference.
+
+**Output files:**
+- `daily-evidence-{timestamp}.html` -- self-contained HTML executive dashboard + evidence
+- `daily-evidence-audit.jsonl` -- append-only JSONL evidence trail (written every run for SOX immutability)
+
+*Exit codes:* 0 all KPIs green + confidence A/B | 1 any KPI yellow or confidence C |
+5 any KPI red, confidence D/F, or critical failure | 2/3/4 parameter/auth/config.
+
+**Related GUI:** Governance tab. **Related:** `Invoke-SPGovernanceMetrics` (time-series capture),
+`Invoke-SPWeeklyDigest` (weekly narrative), `Invoke-SPGovernanceReport` (full audit package).
+
+### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
 > EntraID group-enumerator and render an AD "group → members" view (`SamAccountName`, `Enabled`,
 > nested groups) that **drops the ISC certification substance** — the decision, the reviewer, the

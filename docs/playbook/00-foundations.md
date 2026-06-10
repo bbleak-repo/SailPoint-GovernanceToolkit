@@ -164,6 +164,9 @@ Top-level sections and the keys that matter most:
 | | `CorrelationAttribute`, `AccountDeletionThresholdPct`, `RequiredAccountColumns` | Correlation key, delete-safety threshold, CSV schema. |
 | | `ISC.UploadMethod`, `Applications` | How accounts reach ISC; per-app definitions. |
 | **Sdk** | `OutputPath`, `CampaignTemplates.*`, `Approvals.*`, `WorkItems.*`, `Workflows.*` | Defaults for the SDK Features (templates, approvals, work items, workflows incl. OOO fallback). |
+| **DailyEvidence** | `OutputPath`, `DefaultDaysBack`, `DefaultSlaHours`, `HighRiskThreshold` | Daily evidence report output location and defaults. |
+| | `Thresholds.*` | GREEN/YELLOW thresholds for each of the 6 KPIs (completion rate, overdue attestations, revocation execution, remediation SLA, high-risk pending, reviewer health). |
+| | `ConfidenceScoreGrade.*` | Score-to-grade mapping for the Governance Confidence Score (A/B/C/D/F). |
 | **Metrics / Governance / Leadership** | various | KPI persistence, governance report depth, leadership band mapping. |
 | **Retention** | `Enabled`, `ArchiveDays`, `DeleteDays`, `ArchivePath`, `Paths` | Log/report archival + deletion windows. |
 | **Notification** | `Backends`, `Smtp`, `Webhook` | Where notifications go (log, email, webhook). |

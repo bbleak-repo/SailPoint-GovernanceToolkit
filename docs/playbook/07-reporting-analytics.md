@@ -22,6 +22,7 @@ anyone who needs to know "what report do I give to whom?"
 | Governance Report | `Invoke-SPGovernanceReport.ps1` | Auditors, governance leads | Quarterly | Combined audit + leadership + policy + data quality package | HTML, JSONL |
 | Data Quality Report | `Invoke-SPDataQualityReport.ps1` | IAM operations | Weekly | Orphan accounts, identity quality, source health | HTML, JSON |
 | Governance Metrics | `Invoke-SPGovernanceMetrics.ps1` | KPI dashboards, BI tools | Daily (automated) | KPI time-series + trend reports + completion forecasts | HTML, JSON, JSONL |
+| Daily Evidence Report | `Invoke-SPDailyEvidenceReport.ps1` | CISO, VP Security, auditors | Daily | 6-KPI executive dashboard + domino risk tracker + SOX evidence registers | HTML, JSON, JSONL |
 | Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, risk, reviewer performance, remediation | HTML, JSON |
 | Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered reports, optionally emailed via SMTP | HTML |
 | Adaptive Composable | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N bars, drill-down tree, group table | HTML |
