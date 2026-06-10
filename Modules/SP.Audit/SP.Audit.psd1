@@ -232,6 +232,8 @@
         'Export-SPCampaignCompletionDiffHtml'
         'Export-SPCampaignScopeDiffHtml'
         'Export-SPCampaignDiffCsv'
+        'Split-SPCampaignDiffByDirector'
+        'Export-SPCampaignDiffByDirectorHtml'
 
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'

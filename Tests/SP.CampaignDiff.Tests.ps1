@@ -188,3 +188,77 @@ Describe "CDF-06: JSON round-trip shape" {
         @($r.Data.Compliance.NewlyAddedPrivileged).Count | Should -Be 1
     }
 }
+
+Describe "CDF-08: per-director diff split + HTML export" {
+    BeforeAll {
+        # Org tree (.Data shape from Build-SPOrgTree): reviewers rev-1/rev-2 report to dir-A,
+        # rev-3 to dir-B, rev-4 has no manager (-> Unassigned bucket).
+        $script:pdOrg = @{
+            Nodes = @{
+                'rev-1' = @{ Identity = @{ Id='rev-1'; Name='Alice'; ManagerId='dir-A'; ManagerName='Dir Alpha'; Found=$true }; ManagerId='dir-A'; Level=0; Children=@() }
+                'rev-2' = @{ Identity = @{ Id='rev-2'; Name='Bob';   ManagerId='dir-A'; ManagerName='Dir Alpha'; Found=$true }; ManagerId='dir-A'; Level=0; Children=@() }
+                'rev-3' = @{ Identity = @{ Id='rev-3'; Name='Carol'; ManagerId='dir-B'; ManagerName='Dir Beta';  Found=$true }; ManagerId='dir-B'; Level=0; Children=@() }
+                'rev-4' = @{ Identity = @{ Id='rev-4'; Name='Dave';  ManagerId='';      ManagerName='';          Found=$true }; ManagerId='';      Level=0; Children=@() }
+                'dir-A' = @{ Identity = @{ Id='dir-A'; Name='Dir Alpha'; ManagerId='vp-1'; ManagerName='VP One'; Found=$true }; ManagerId='vp-1'; Level=1; Children=@('rev-1','rev-2') }
+                'dir-B' = @{ Identity = @{ Id='dir-B'; Name='Dir Beta';  ManagerId='vp-1'; ManagerName='VP One'; Found=$true }; ManagerId='vp-1'; Level=1; Children=@('rev-3') }
+            }
+            Directors = @('dir-A','dir-B'); Managers = @(); TopLeaders = @('vp-1')
+        }
+        $script:pdDiff = @{
+            Meta = @{ CampaignId='c1'; CampaignName='Test Daily'; Status='ACTIVE'; HasPrevious=$true; Cadence='Adjacent'; CurrentCapturedAt='2026-06-10T10:00:00'; PreviousCapturedAt='2026-06-09T10:00:00' }
+            Completion = @{ Reviewers = @(
+                @{ ReviewerId='rev-1'; ReviewerName='Alice'; CurrMade=4; MadeDelta=3; Total=4; CompletionPct=100; Completed=$true;  Signed=$true;  NewlyCompleted=$true;  Stalled=$false; NotStarted=$false }
+                @{ ReviewerId='rev-2'; ReviewerName='Bob';   CurrMade=0; MadeDelta=0; Total=4; CompletionPct=0;   Completed=$false; Signed=$false; NewlyCompleted=$false; Stalled=$true;  NotStarted=$false }
+                @{ ReviewerId='rev-3'; ReviewerName='Carol'; CurrMade=0; MadeDelta=0; Total=2; CompletionPct=0;   Completed=$false; Signed=$false; NewlyCompleted=$false; Stalled=$false; NotStarted=$true }
+                @{ ReviewerId='rev-4'; ReviewerName='Dave';  CurrMade=1; MadeDelta=1; Total=3; CompletionPct=33;  Completed=$false; Signed=$false; NewlyCompleted=$false; Stalled=$false; NotStarted=$false }
+            ) }
+            Scope = @{
+                Added = @(
+                    @{ ReviewerId='rev-1'; IdentityName='u1'; AccessName='Finance-Reader'; SourceName='AD';   Privileged=$false; Decision='APPROVE' }
+                    @{ ReviewerId='rev-3'; IdentityName='u3'; AccessName='Domain Admins';  SourceName='AD';   Privileged=$true;  Decision='APPROVE' }
+                    @{ ReviewerId='rev-4'; IdentityName='u4'; AccessName='VPN';            SourceName='Okta'; Privileged=$false; Decision='PENDING' }
+                )
+                Removed = @( @{ ReviewerId='rev-2'; IdentityName='u2'; AccessName='Legacy-App'; SourceName='AD'; Privileged=$false; Decision='REVOKE' } )
+                Changed = @( @{ ReviewerId='rev-1'; IdentityName='u1'; AccessName='App-X'; SourceName='AD'; Privileged=$false; PrevDecision='PENDING'; CurrDecision='APPROVE' } )
+            }
+            Compliance = @{ NewlyAddedPrivileged = @( @{ ReviewerId='rev-3'; IdentityName='u3'; AccessName='Domain Admins'; SourceName='AD'; Privileged=$true; Decision='APPROVE' } ) }
+        }
+        $script:pdSplit = Split-SPCampaignDiffByDirector -Diff $script:pdDiff -OrgTree $script:pdOrg
+        $script:pdAlpha = @($script:pdSplit.Directors | Where-Object { $_.DirectorName -eq 'Dir Alpha' })[0]
+        $script:pdBeta  = @($script:pdSplit.Directors | Where-Object { $_.DirectorName -eq 'Dir Beta' })[0]
+    }
+
+    It "groups reviewers under their manager (director) and lists the Unassigned bucket last" {
+        @($script:pdSplit.Directors).Count | Should -Be 3
+        $script:pdSplit.Directors[0].DirectorName | Should -Be 'Dir Alpha'
+        $script:pdSplit.Directors[-1].DirectorId  | Should -Be '__unassigned__'
+    }
+    It "slices completion + scope to each director" {
+        $script:pdAlpha.Counts.Reviewers     | Should -Be 2
+        $script:pdAlpha.Counts.NewlyCompleted | Should -Be 1
+        $script:pdAlpha.Counts.Stalled        | Should -Be 1
+        $script:pdAlpha.Counts.Added          | Should -Be 1
+        $script:pdAlpha.Counts.Removed        | Should -Be 1
+        $script:pdAlpha.Counts.Changed        | Should -Be 1
+    }
+    It "attributes privileged additions to the right director" {
+        $script:pdBeta.Counts.Reviewers       | Should -Be 1
+        $script:pdBeta.Counts.Added           | Should -Be 1
+        $script:pdBeta.Counts.AddedPrivileged | Should -Be 1
+        $script:pdBeta.Counts.NotStarted      | Should -Be 1
+    }
+    It "writes one HTML file per director + an index (no BOM)" {
+        $dir = Join-Path $TestDrive 'pd'
+        $res = Export-SPCampaignDiffByDirectorHtml -Diff $script:pdDiff -OrgTree $script:pdOrg -OutputPath $dir
+        $res.Success | Should -Be $true
+        $res.Data.DirectorCount | Should -Be 3
+        @($res.Data.Files).Count | Should -Be 3
+        Test-Path $res.Data.Index | Should -Be $true
+        $bytes = [System.IO.File]::ReadAllBytes(@($res.Data.Files)[0])
+        ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -Be $false
+        # The Dir Beta file should name the director and the privileged grant.
+        $betaFile = @($res.Data.Files | Where-Object { $_ -like '*Dir_Beta*' })[0]
+        $betaFile | Should -Not -BeNullOrEmpty
+        (Get-Content $betaFile -Raw) | Should -Match 'Domain Admins'
+    }
+}
