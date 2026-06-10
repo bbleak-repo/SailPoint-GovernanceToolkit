@@ -69,6 +69,17 @@
 .PARAMETER CsvPath
     Override the auto-generated CSV path. When specified alongside -Csv, writes the
     CSV to this exact path instead of the auto-generated one in DeltaCert.OutputPath.
+.PARAMETER EmailList
+    When set, writes a plain-text email-queue file to
+    {DeltaCert.OutputPath}\escalation-emails-YYYYMMDD-HHmmss.txt for queueing an email
+    OUTSIDE the tool. It contains two ready-to-paste, semicolon-separated lines:
+      1) the managers behind on their attestation (the stale certs' current reviewers), and
+      2) the skip-level / escalation path (each manager's manager).
+    Each list is de-duplicated and only includes resolvable emails. Like -Csv, it is a
+    read-only reporting artifact and is produced even under -WhatIf. Combine with -Csv to
+    get both the full chain spreadsheet and the copy-paste email lines.
+.PARAMETER EmailListPath
+    Override the auto-generated email-queue path. Implies -EmailList.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -88,6 +99,13 @@
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv
     # Org chart audit + CSV report: all chain data in a reviewable spreadsheet.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailList
+    # Dry-run + email queue: writes the two copy-paste email lines (managers behind,
+    # and the skip-level/escalation path) for sending a nudge from your email client.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList
+    # Full org-chart audit: the chain spreadsheet AND the copy-paste email lines.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -CampaignNamePrefix 'Daily Attestation' -DaysBack 30 -WhatIf -Csv
     # Org chart audit against a peer's campaign name prefix with CSV output.
@@ -141,6 +159,12 @@ param(
 
     [Parameter()]
     [string]$CsvPath,
+
+    [Parameter()]
+    [switch]$EmailList,
+
+    [Parameter()]
+    [string]$EmailListPath,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -364,32 +388,38 @@ if (-not $staleResult.Success) {
 
 $staleCerts = @($staleResult.Data)
 
-#region CSV output (built before runner so -WhatIf and -Csv can co-exist)
+#region CSV + email-queue output (built before runner so -WhatIf and reporting can co-exist)
 
-$effectiveCsvPath = $CsvPath   # hoisted so the JSONL audit block can reference it
+$effectiveCsvPath       = $CsvPath        # hoisted so the JSONL audit block can reference it
+$effectiveEmailListPath = $EmailListPath  # hoisted so the JSONL audit block can reference it
 
-if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $staleCerts.Count -gt 0) {
+$wantCsv   = ($Csv.IsPresent       -or -not [string]::IsNullOrWhiteSpace($CsvPath))
+$wantEmail = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))
 
-    # Resolve output path
-    $effectiveCsvPath = $CsvPath
-    if ([string]::IsNullOrWhiteSpace($effectiveCsvPath)) {
-        $csvOutputDir = '.\DeltaCert'
-        if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
-            $null -ne $config.DeltaCert -and
-            $null -ne $config.DeltaCert.PSObject.Properties['OutputPath'] -and
-            -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
-            $csvOutputDir = [string]$config.DeltaCert.OutputPath
-        }
-        if (-not (Test-Path -LiteralPath $csvOutputDir -PathType Container)) {
-            # -WhatIf:$false: the audit CSV is a read-only reporting artifact and must be
-            # produced even in dry-run mode. Only the ISC reassignment calls are gated by WhatIf.
-            New-Item -Path $csvOutputDir -ItemType Directory -Force -WhatIf:$false | Out-Null
-        }
-        $csvStamp           = (Get-Date -Format 'yyyyMMdd-HHmmss')
-        $effectiveCsvPath   = Join-Path $csvOutputDir "escalation-audit-$csvStamp.csv"
+if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
+
+    # Shared DeltaCert output directory + stamp for any auto-generated artifact path.
+    $reportOutputDir = '.\DeltaCert'
+    if ($null -ne $config.PSObject.Properties['DeltaCert'] -and
+        $null -ne $config.DeltaCert -and
+        $null -ne $config.DeltaCert.PSObject.Properties['OutputPath'] -and
+        -not [string]::IsNullOrWhiteSpace($config.DeltaCert.OutputPath)) {
+        $reportOutputDir = [string]$config.DeltaCert.OutputPath
+    }
+    if (-not (Test-Path -LiteralPath $reportOutputDir -PathType Container)) {
+        # -WhatIf:$false: these are read-only reporting artifacts and must be produced even in
+        # dry-run mode. Only the ISC reassignment calls are gated by WhatIf.
+        New-Item -Path $reportOutputDir -ItemType Directory -Force -WhatIf:$false | Out-Null
+    }
+    $reportStamp = (Get-Date -Format 'yyyyMMdd-HHmmss')
+
+    # CSV path is only auto-generated when CSV output is requested.
+    if ($wantCsv -and [string]::IsNullOrWhiteSpace($effectiveCsvPath)) {
+        $effectiveCsvPath = Join-Path $reportOutputDir "escalation-audit-$reportStamp.csv"
     }
 
-    Write-Host "  Building CSV org chain report..." -ForegroundColor Cyan
+    # Resolve the reviewer -> skip-level chain ONCE; both the CSV and the email queue use it.
+    Write-Host "  Resolving reviewer -> skip-level chain..." -ForegroundColor Cyan
 
     $csvRows = [System.Collections.Generic.List[object]]::new()
 
@@ -467,30 +497,85 @@ if (($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath)) -and $stale
         })
     }
 
-    try {
-        # -WhatIf:$false forces the write even under -WhatIf (Export-Csv supports ShouldProcess
-        # and would otherwise be silently suppressed, yielding a false "CSV written" claim).
-        $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
-        if (Test-Path -LiteralPath $effectiveCsvPath) {
-            Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
-            Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
-                -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
-                -CorrelationID $correlationID
+    if ($wantCsv) {
+        try {
+            # -WhatIf:$false forces the write even under -WhatIf (Export-Csv supports ShouldProcess
+            # and would otherwise be silently suppressed, yielding a false "CSV written" claim).
+            $csvRows | Export-Csv -LiteralPath $effectiveCsvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
+            if (Test-Path -LiteralPath $effectiveCsvPath) {
+                Write-Host "  CSV written: $effectiveCsvPath ($($csvRows.Count) row(s))" -ForegroundColor Green
+                Write-SPLog -Message "Escalation audit CSV written: $effectiveCsvPath ($($csvRows.Count) rows)" `
+                    -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+                    -CorrelationID $correlationID
+            }
+            else {
+                # Defensive: never claim success when no file landed on disk.
+                Write-Host "  WARNING: CSV export reported no error but file is missing: $effectiveCsvPath" -ForegroundColor Yellow
+                Write-SPLog -Message "Escalation audit CSV missing after export: $effectiveCsvPath" `
+                    -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
+                    -CorrelationID $correlationID
+            }
         }
-        else {
-            # Defensive: never claim success when no file landed on disk.
-            Write-Host "  WARNING: CSV export reported no error but file is missing: $effectiveCsvPath" -ForegroundColor Yellow
-            Write-SPLog -Message "Escalation audit CSV missing after export: $effectiveCsvPath" `
+        catch {
+            Write-Host "  WARNING: Failed to write CSV: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-SPLog -Message "Failed to write escalation audit CSV '$effectiveCsvPath': $($_.Exception.Message)" `
                 -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
                 -CorrelationID $correlationID
         }
     }
-    catch {
-        Write-Host "  WARNING: Failed to write CSV: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-SPLog -Message "Failed to write escalation audit CSV '$effectiveCsvPath': $($_.Exception.Message)" `
-            -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'CsvOutput' `
-            -CorrelationID $correlationID
+
+    # --- Email-queue artifact: two ready-to-paste, semicolon-separated email lines for an
+    #     email queued OUTSIDE the tool -- managers behind, and the skip-level/escalation path. ---
+    if ($wantEmail) {
+        if ([string]::IsNullOrWhiteSpace($effectiveEmailListPath)) {
+            $effectiveEmailListPath = Join-Path $reportOutputDir "escalation-emails-$reportStamp.txt"
+        }
+
+        # Managers behind = the stale certs' current reviewers; escalation path = their managers.
+        # De-duplicated (case-insensitive via Sort-Object -Unique), blanks dropped.
+        $mgrEmails  = @($csvRows | ForEach-Object { [string]$_.ReviewerEmail }  | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+        $skipEmails = @($csvRows | ForEach-Object { [string]$_.SkipLevelEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+        $mgrMissing  = @($csvRows | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.ReviewerEmail) }).Count
+        $skipMissing = @($csvRows | Where-Object { $_.SkipLevelResolved -and [string]::IsNullOrWhiteSpace([string]$_.SkipLevelEmail) }).Count
+        $mgrNote  = if ($mgrMissing  -gt 0) { " ($mgrMissing with no email on file)" } else { '' }
+        $skipNote = if ($skipMissing -gt 0) { " ($skipMissing unresolved)" } else { '' }
+        $scopeLabel = if ($DaysBack -gt 0) { "org-chart audit, last $DaysBack day(s)" } else { "stale >= $effectiveStaleHours h" }
+
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.AppendLine('# Delta Cert Escalation -- email queue')
+        [void]$sb.AppendLine("# Generated: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))  |  Prefix: '$effectivePrefix'  |  Scope: $scopeLabel")
+        [void]$sb.AppendLine("# Managers behind: $($mgrEmails.Count)$mgrNote  |  Skip-level contacts: $($skipEmails.Count)$skipNote")
+        [void]$sb.AppendLine("# Copy the email line beneath each heading into your client's To/CC field.")
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('Managers (reviewers who have not completed their attestation):')
+        [void]$sb.AppendLine(($mgrEmails -join '; '))
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('Skip-level / escalation path (each manager''s manager):')
+        [void]$sb.AppendLine(($skipEmails -join '; '))
+
+        try {
+            # WriteAllText is not ShouldProcess-gated, so the queue is produced under -WhatIf too
+            # (it is a read-only reporting artifact, like the CSV). UTF-8 no-BOM per repo convention.
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($effectiveEmailListPath, $sb.ToString(), $utf8NoBom)
+            if (Test-Path -LiteralPath $effectiveEmailListPath) {
+                Write-Host "  Email queue written: $effectiveEmailListPath ($($mgrEmails.Count) manager(s), $($skipEmails.Count) skip-level)" -ForegroundColor Green
+                Write-SPLog -Message "Escalation email queue written: $effectiveEmailListPath (managers=$($mgrEmails.Count) skip=$($skipEmails.Count))" `
+                    -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailQueue' `
+                    -CorrelationID $correlationID
+            }
+            else {
+                Write-Host "  WARNING: email queue reported no error but file is missing: $effectiveEmailListPath" -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "  WARNING: Failed to write email queue: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-SPLog -Message "Failed to write escalation email queue '$effectiveEmailListPath': $($_.Exception.Message)" `
+                -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailQueue' `
+                -CorrelationID $correlationID
+        }
     }
+
     Write-Host ''
 }
 
@@ -577,6 +662,7 @@ try {
         Errors                      = $errorMsgs
         WhatIf                      = ($WhatIfPreference -eq $true)
         CsvPath                     = if (-not [string]::IsNullOrWhiteSpace($effectiveCsvPath)) { $effectiveCsvPath } else { $null }
+        EmailListPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailListPath)) { $effectiveEmailListPath } else { $null }
         DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
