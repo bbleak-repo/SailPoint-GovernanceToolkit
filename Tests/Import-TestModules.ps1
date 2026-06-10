@@ -94,6 +94,7 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.CampaignDiff.psm1')    -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.CampaignTrend.psm1')   -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.CampaignVelocity.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.CertTracker.psm1')      -Force -DisableNameChecking
     }
     if ($Testing) {
         Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.TestLoader.psm1') -Force -DisableNameChecking

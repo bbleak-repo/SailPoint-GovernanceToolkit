@@ -33,6 +33,7 @@
         'SP.CampaignDiff.psm1'
         'SP.CampaignTrend.psm1'
         'SP.CampaignVelocity.psm1'
+        'SP.CertTracker.psm1'
     )
 
     # Public functions exported by this module
@@ -240,6 +241,9 @@
         # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
         'Measure-SPReviewerVelocity'
         'Export-SPReviewerVelocityHtml'
+
+        # SP.CertTracker - Executive certification progress tracker (pace/stage/projection)
+        'Build-SPCertTrackerData'
     )
 
     # Do not export variables or aliases from nested modules

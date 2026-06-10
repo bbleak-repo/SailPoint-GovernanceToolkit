@@ -186,6 +186,7 @@ function Build-SPCampaignSnapshotData {
         PrivilegedTotal = 0; PrivilegedApproved = 0; PrivilegedRevoked = 0; PrivilegedPending = 0
         PrivilegedReviewed = 0
         PrivilegedConfirmed = 0; PrivilegedSuspected = 0
+        RemediationPending = 0
         CompletionPct = 0; BySource = @{}
     }
     $buckets = @(@{ Name = 'APPROVE'; List = @($Decisions.Approved) }, @{ Name = 'REVOKE'; List = @($Decisions.Revoked) }, @{ Name = 'PENDING'; List = @($Decisions.Pending) })
@@ -197,6 +198,7 @@ function Build-SPCampaignSnapshotData {
             $src    = [string]$d.SourceName
             $accId  = if ($null -ne $d.PSObject.Properties['AccessId']) { [string]$d.AccessId } else { '' }
             $srcId  = if ($null -ne $d.PSObject.Properties['SourceId']) { [string]$d.SourceId } else { '' }
+            $remStatus = if ($null -ne $d.PSObject.Properties['RemediationStatus']) { [string]$d.RemediationStatus } else { '' }
             $certId = if ($null -ne $d.PSObject.Properties['CertificationId']) { [string]$d.CertificationId } else { '' }
             $privInfo = Test-SPGrantPrivileged -Decision $d -Patterns $patterns
             $priv     = [bool]$privInfo.Privileged
@@ -217,6 +219,7 @@ function Build-SPCampaignSnapshotData {
                 Privileged      = $priv
                 PrivilegedSource = $privSrc
                 Decision        = $b.Name
+                RemediationStatus = $remStatus
                 CertId          = $certId
                 ReviewerId      = if ($certReviewer.ContainsKey($certId)) { $certReviewer[$certId] } else { '' }
                 DecisionDate    = [string]$d.DecisionDate
@@ -231,6 +234,9 @@ function Build-SPCampaignSnapshotData {
                 $kpi.PrivilegedTotal++
                 if ($privSrc -eq 'attribute') { $kpi.PrivilegedConfirmed++ } else { $kpi.PrivilegedSuspected++ }
             }
+            # Revoked access awaiting de-provisioning (remediation backlog) -- drives the
+            # tracker's Remediation stage and the evidence pack's closure section.
+            if ($b.Name -eq 'REVOKE' -and $remStatus -match 'Pending') { $kpi.RemediationPending++ }
             if (-not [string]::IsNullOrWhiteSpace($src)) {
                 if (-not $kpi.BySource.ContainsKey($src)) { $kpi.BySource[$src] = @{ Total = 0; Approved = 0; Revoked = 0; Pending = 0 } }
                 $kpi.BySource[$src].Total++
