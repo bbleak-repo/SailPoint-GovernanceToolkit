@@ -20,16 +20,27 @@
     # non-standard deployment layouts (caller handles import order).
     RequiredModules   = @()
 
-    # Sub-modules loaded as part of this module
+    # Sub-modules loaded as part of this module. SP.IscReconciliation (the pure model builder +
+    # exporter) loads first; SP.IscReconciliationSource (fetch + non-expiring cache) reuses its
+    # Get-SPReconProp helper, so it must load AFTER.
     NestedModules     = @(
         'SP.IscReconciliation.psm1'
+        'SP.IscReconciliationSource.psm1'
     )
 
     # Public functions exported by this module
     FunctionsToExport = @(
+        # SP.IscReconciliation - pure model builder + exporter
         'Build-SPIscReconciliationModel'
         'Save-SPIscReconciliationExport'
         'Resolve-SPIscJoinKey'
+
+        # SP.IscReconciliationSource - ISC fetch + non-expiring cache
+        'ConvertTo-SPIscIdentityRecord'
+        'Expand-SPIscEntitlementMembers'
+        'Get-SPIscReconciliationData'
+        'Save-SPIscReconCache'
+        'Get-SPIscReconCache'
     )
 
     # Do not export variables or aliases from nested modules

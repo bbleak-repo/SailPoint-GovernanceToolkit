@@ -134,6 +134,7 @@ function Import-SPTestModules {
         Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.SdkBridge.psm1') -Force -DisableNameChecking
     }
     if ($Reconciliation) {
-        Import-Module (Join-Path $modulesRoot 'SP.Reconciliation\SP.IscReconciliation.psm1') -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Reconciliation\SP.IscReconciliation.psm1')       -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Reconciliation\SP.IscReconciliationSource.psm1') -Force -DisableNameChecking
     }
 }
