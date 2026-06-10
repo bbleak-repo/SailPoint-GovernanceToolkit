@@ -1127,6 +1127,21 @@ body {
 <td>Defaults for the SDK Features (templates, approvals, work items, workflows incl. OOO fallback).</td>
 </tr>
 <tr>
+<td><strong>DailyEvidence</strong></td>
+<td><code>OutputPath</code>, <code>DefaultDaysBack</code>, <code>DefaultSlaHours</code>, <code>HighRiskThreshold</code></td>
+<td>Daily evidence report output location and defaults.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.*</code></td>
+<td>GREEN/YELLOW thresholds for each of the 6 KPIs (completion rate, overdue attestations, revocation execution, remediation SLA, high-risk pending, reviewer health).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ConfidenceScoreGrade.*</code></td>
+<td>Score-to-grade mapping for the Governance Confidence Score (A/B/C/D/F).</td>
+</tr>
+<tr>
 <td><strong>Metrics / Governance / Leadership</strong></td>
 <td>various</td>
 <td>KPI persistence, governance report depth, leadership band mapping.</td>
@@ -1751,7 +1766,7 @@ pwsh -NoProfile -File Start-MockServer.ps1
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day)</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, weekly digest, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day)</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (SOX/IAG)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -2213,7 +2228,7 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 <div id="section-cli-governance-reporting" class="report-section" style="display:none">
 <h2>5. Governance &amp; reporting</h2>
 <h3 id="campaign-filtering-the-item-cache-read-this-first">Campaign filtering &amp; the item cache (read this first)</h3>
-<p>The six report scripts below — <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPGovernanceReport</code>, <code>Invoke-SPGovernanceMetrics</code>, <code>Invoke-SPWeeklyDigest</code>, <code>Invoke-SPAdaptiveReport</code>, <code>Invoke-SPReportDistribution</code> — share two behaviours worth understanding before you run them.</p>
+<p>The seven report scripts below — <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPGovernanceReport</code>, <code>Invoke-SPGovernanceMetrics</code>, <code>Invoke-SPDailyEvidenceReport</code>, <code>Invoke-SPWeeklyDigest</code>, <code>Invoke-SPAdaptiveReport</code>, <code>Invoke-SPReportDistribution</code> — share two behaviours worth understanding before you run them.</p>
 <p><strong>Campaign name filters.</strong> Every one accepts the same three optional filters (on top of <code>-Status</code> / <code>-DaysBack</code> / date windows):</p>
 <table>
 <thead><tr>
@@ -2851,7 +2866,142 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tbody></table>
 <pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML</code></pre>
 <p><strong>Related GUI:</strong> Governance tab.</p>
-<h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ⚠️ DEPRECATED</h3>
+<h3 id="invoke-spdailyevidencereport-ps1"><code>Invoke-SPDailyEvidenceReport.ps1</code></h3>
+<p><strong>Purpose:</strong> a daily executive governance dashboard with six KPIs, a Governance Confidence Score, a cascading-risk "Domino Tracker", and SOX/IAG evidence registers. Designed to satisfy <strong>Step 6: Evidence and Reporting</strong> of the IAM governance program -- a single report that answers whether campaigns are completing, attestations are on time, revocations are being enforced, remediation is timely, high-risk access is being reviewed, and reviewers are performing responsibly.</p>
+<p><strong>When to use:</strong> daily, scheduled after the daily orchestrator. Also useful on-demand with <code>-DaysBack 7</code> for a weekly evidence summary or <code>-CampaignNameContains 'Tuesday'</code> to scope to a specific campaign day.</p>
+<p><strong>KPI dashboard (above the fold -- one screen):</strong></p>
+<table>
+<thead><tr>
+<th>KPI</th>
+<th>What It Measures</th>
+<th>Green</th>
+<th>Yellow</th>
+<th>Red</th>
+</tr></thead><tbody>
+<tr>
+<td>Campaign Completion</td>
+<td>% of review items decided</td>
+<td>95%+</td>
+<td>80-94%</td>
+<td>&lt;80%</td>
+</tr>
+<tr>
+<td>Past-Due Reviews</td>
+<td>overdue + at-risk campaigns</td>
+<td>0</td>
+<td>1-2</td>
+<td>3+</td>
+</tr>
+<tr>
+<td>Revocations Executed</td>
+<td>% provisioned within SLA</td>
+<td>95%+</td>
+<td>80-94%</td>
+<td>&lt;80% or Failed</td>
+</tr>
+<tr>
+<td>Remediation Timeliness</td>
+<td>SLA compliance + aging buckets</td>
+<td>95%+, none &gt;5d</td>
+<td>80-94% or 5-10d</td>
+<td>&lt;80% or &gt;10d</td>
+</tr>
+<tr>
+<td>High-Risk Exposure</td>
+<td>high-risk identities with pending reviews</td>
+<td>0</td>
+<td>1-3</td>
+<td>4+</td>
+</tr>
+<tr>
+<td>Reviewer Health</td>
+<td>% of reviewers in good standing</td>
+<td>0 at-risk</td>
+<td>1-2 at-risk</td>
+<td>3+ at-risk</td>
+</tr>
+</tbody></table>
+<p><strong>Domino Tracker:</strong> the six KPIs are shown as a causal chain (Reviewer -&gt; Completion -&gt; Overdue -&gt; Revocations -&gt; Remediation -&gt; Risk). When any KPI degrades, downstream indicators are highlighted with a one-sentence narrative explaining the cascading impact.</p>
+<p><strong>Evidence sections (below the fold -- for compliance/auditors):</strong></p>
+<table>
+<thead><tr>
+<th>Section</th>
+<th>Content</th>
+</tr></thead><tbody>
+<tr>
+<td>A. Campaign Completion</td>
+<td>Per-campaign status, completion %, deadline status</td>
+</tr>
+<tr>
+<td>B. Certifier Decisions</td>
+<td>Decision register (identity, access, decision, reviewer, date)</td>
+</tr>
+<tr>
+<td>C. Remediation Register</td>
+<td>Revocation status, aging bucket chart, per-item SLA tracking</td>
+</tr>
+<tr>
+<td>D. Past-Due Campaigns</td>
+<td>Overdue/at-risk campaigns with bottleneck reviewers</td>
+</tr>
+<tr>
+<td>E. High-Risk Pending</td>
+<td>High-risk identities with unreviewed access items</td>
+</tr>
+<tr>
+<td>F. Reviewer Performance</td>
+<td>Reputation scores, tiers, rubber-stamp flags</td>
+</tr>
+</tbody></table>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Lookback window (default 1 for daily). Use 7 for weekly catch-up.</td>
+</tr>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Campaign name filters (see <em>Campaign filtering &amp; the item cache</em>). Example: <code>-CampaignNameContains 'Wednesday'</code> for all Wednesday campaigns.</td>
+</tr>
+<tr>
+<td><code>-SlaHours &lt;n&gt;</code></td>
+<td>Remediation SLA threshold in hours (default 48).</td>
+</tr>
+<tr>
+<td><code>-HighRiskThreshold &lt;n&gt;</code></td>
+<td>Identity risk score for "High" classification (default 70).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code># Daily evidence report (default 1-day window)
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -Token $token -OutputMode Both
+
+# Scope to a specific day's campaigns
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Tuesday' -DaysBack 7 -Token $token
+
+# Dry run -- see what steps would execute
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf</code></pre>
+<p><strong>Thresholds</strong> are configurable in <code>settings.json</code> under the <code>DailyEvidence.Thresholds</code> section. The script uses sensible defaults if the section is missing. See Foundations for the settings reference.</p>
+<p><strong>Output files:</strong></p>
+<ul><li><code>daily-evidence-{timestamp}.html</code> -- self-contained HTML executive dashboard + evidence</li><li><code>daily-evidence-audit.jsonl</code> -- append-only JSONL evidence trail (written every run for SOX immutability)</li></ul>
+<table>
+<thead><tr>
+<th><em>Exit codes:</em> 0 all KPIs green + confidence A/B</th>
+<th>1 any KPI yellow or confidence C</th>
+</tr></thead><tbody>
+<tr>
+<td>5 any KPI red, confidence D/F, or critical failure</td>
+<td>2/3/4 parameter/auth/config.</td>
+</tr>
+</tbody></table>
+<p><strong>Related GUI:</strong> Governance tab. <strong>Related:</strong> <code>Invoke-SPGovernanceMetrics</code> (time-series capture), <code>Invoke-SPWeeklyDigest</code> (weekly narrative), <code>Invoke-SPGovernanceReport</code> (full audit package).</p>
+<h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ---- DEPRECATED</h3>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. A SOX/IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
 <p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>
 <p><strong>Anchor — what becomes a "group" and its "members":</strong></p>
@@ -2947,6 +3097,53 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 # Same, but actually email (requires Audit.Smtp.Enabled = true)
 .\Scripts\Invoke-SPAdaptiveReport.ps1 -Anchor Campaign -BaselineReport exec-summary -DistributeToLeadership -SendReports</code></pre>
 <p><em>Exit codes:</em> 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config. <strong>Related GUI:</strong> Adaptive Reports tab (see the GUI Playbook). The GUI generates reports only; leadership distribution is CLI-only (<code>-DistributeToLeadership</code>).</p>
+<h3 id="invoke-spiscreconciliation-ps1"><code>Invoke-SPIscReconciliation.ps1</code></h3>
+<p><strong>Purpose:</strong> generate the <strong>ISC-side operand</strong> for the cross-project <strong>AD ↔ ISC ↔ HR reconciliation</strong>. It reads identities + governed access (entitlement membership) from ISC, resolves the <code>employeeID</code> join key and each identity's cert-reviewer (manager) <code>employeeID</code>, and writes a versioned, self-describing <strong>employeeID-keyed export</strong> — UTF-8 no-BOM JSON + a CSV twin + a SHA-256 sidecar — that a future merge joins against the <strong>AD export</strong> (the Group Enumerator) and an <strong>HR export</strong> (SuccessFactors) to surface drift (<code>MGR_MISMATCH</code>, <code>STATUS_MISMATCH</code>, <code>ACCESS_NOT_GOVERNED</code>, …). <strong>Read-only: it never reassigns, escalates, or mutates ISC.</strong> The shared interface both sides coordinate to is <code>docs/AD-Reconciliation-Contract-from-GroupEnumerator.md</code>.</p>
+<p><strong>When to use:</strong> whenever you need the current ISC picture as a merge-ready operand — a governance baseline of <em>who exists, who is active, who reviews whom, and what access each identity holds</em> — keyed so it can be reconciled against AD and HR.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>The non-expiring cache (change detection).</strong> The raw fetched operands (identities + grants) are written to a <strong>cache that never expires</strong> — deliberately separate from the toolkit's 24 h identity-detail cache (<code>Audit.IdentityCacheTtlMinutes</code>), with <strong>no TTL and no age check</strong>. So a generated baseline survives indefinitely: run once to capture a baseline, change the source (a termination, a manager change, a revoked entitlement, a blanked join key…), then re-run with <code>-RefreshCache</code> to see the change reflected. The export's <code>contentHash</code> changes <strong>only when the data does</strong> — without <code>-RefreshCache</code> the baseline is served from cache and reproduces a <strong>byte-identical</strong> export.</p></div>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-JoinKeyAttribute &lt;attr&gt;</code></td>
+<td>ISC <code>attributes.*</code> field holding the SuccessFactors join key (default <code>employeeNumber</code>). Coverage % is computed from whether the key is <strong>populated</strong>, not from the attribute name, so a custom join key can't collapse coverage to 0%.</td>
+</tr>
+<tr>
+<td><code>-RefreshCache</code></td>
+<td>Re-fetch from ISC and overwrite the non-expiring cache (default: serve the cached baseline if present).</td>
+</tr>
+<tr>
+<td><code>-CachePath &lt;dir&gt;</code></td>
+<td>Override the non-expiring cache directory.</td>
+</tr>
+<tr>
+<td><code>-Token</code> / <code>-TokenExpiryMinutes</code></td>
+<td>Optional pre-acquired ISC browser JWT (else the configured client-credentials flow runs).</td>
+</tr>
+<tr>
+<td><code>-OutputPath &lt;dir&gt;</code></td>
+<td>Export root (default <code>.\Audit\Reconciliation</code>).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>JSON</code>/<code>Both</code>/<code>CSV</code> — controls console output; the JSON + CSV + sha256 are always written.</td>
+</tr>
+</tbody></table>
+<pre><code># Baseline: fetch from ISC, write the non-expiring cache + the export
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache
+
+# Re-run WITHOUT a refetch — serve the cached baseline (identical contentHash)
+.\Scripts\Invoke-SPIscReconciliation.ps1
+
+# After the source data changes, regenerate to detect the drift
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache
+
+# Custom join key (e.g. an extension attribute), into a scratch location
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache -JoinKeyAttribute extensionAttribute7 -OutputPath .\Audit\Reconciliation</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>What the export carries (per identity, keyed by <code>employeeID</code>):</strong> the resolved join key + confidence (<code>employeeID</code> &gt; <code>mail</code> &gt; <code>upn</code>; a <code>mail</code>/<code>upn</code> fallback is flagged <code>JoinConfidence=Low</code>), lifecycle/<code>active</code>, the manager/reviewer <code>employeeID</code> (the cert routing target), and the governed entitlements (name / source / privileged) for AD-group matching. The ISC side <strong>pre-stages only the findings it can determine alone</strong> — <code>JOINKEY_MISSING</code> and <code>MAIL_NE_UPN</code>; every <em>cross-source</em> finding (<code>MGR_MISMATCH</code>, <code>STATUS_MISMATCH</code>, <code>ACCESS_NOT_GOVERNED</code>, …) is computed at <strong>merge</strong> time, not invented here. Keep the shared finding-code vocabulary and join-key ladder identical on both sides.</p></div>
+<p><em>Exit codes:</em> 0 ok · 1 no identities · 2 parameter · 3 auth/fetch · 4 config. <strong>Related:</strong> <code>docs/AD-Reconciliation-Contract-from-GroupEnumerator.md</code> (the shared contract); <code>Invoke-SPCampaignDiff.ps1</code> (change detection <em>within</em> an ISC campaign).</p>
 </div>
 <div id="section-cli-sdk-features" class="report-section" style="display:none">
 <h2>6. SDK features</h2>

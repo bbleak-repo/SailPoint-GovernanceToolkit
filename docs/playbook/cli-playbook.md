@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (SOX/IAG)**, weekly digest, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day)**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (SOX/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -1101,6 +1101,66 @@ access; the `diff` component is the read-side view of *both* directions of chang
 *Exit codes:* 0 ok · 1 no campaigns/data · 2 parameter · 3 auth · 4 config.
 **Related GUI:** Adaptive Reports tab (see the GUI Playbook). The GUI generates reports
 only; leadership distribution is CLI-only (`-DistributeToLeadership`).
+
+### `Invoke-SPIscReconciliation.ps1`
+**Purpose:** generate the **ISC-side operand** for the cross-project **AD ↔ ISC ↔ HR
+reconciliation**. It reads identities + governed access (entitlement membership) from ISC,
+resolves the `employeeID` join key and each identity's cert-reviewer (manager) `employeeID`,
+and writes a versioned, self-describing **employeeID-keyed export** — UTF-8 no-BOM JSON + a
+CSV twin + a SHA-256 sidecar — that a future merge joins against the **AD export** (the Group
+Enumerator) and an **HR export** (SuccessFactors) to surface drift (`MGR_MISMATCH`,
+`STATUS_MISMATCH`, `ACCESS_NOT_GOVERNED`, …). **Read-only: it never reassigns, escalates, or
+mutates ISC.** The shared interface both sides coordinate to is
+`docs/AD-Reconciliation-Contract-from-GroupEnumerator.md`.
+
+**When to use:** whenever you need the current ISC picture as a merge-ready operand — a
+governance baseline of *who exists, who is active, who reviews whom, and what access each
+identity holds* — keyed so it can be reconciled against AD and HR.
+
+> **The non-expiring cache (change detection).** The raw fetched operands (identities +
+> grants) are written to a **cache that never expires** — deliberately separate from the
+> toolkit's 24 h identity-detail cache (`Audit.IdentityCacheTtlMinutes`), with **no TTL and no
+> age check**. So a generated baseline survives indefinitely: run once to capture a baseline,
+> change the source (a termination, a manager change, a revoked entitlement, a blanked join
+> key…), then re-run with `-RefreshCache` to see the change reflected. The export's
+> `contentHash` changes **only when the data does** — without `-RefreshCache` the baseline is
+> served from cache and reproduces a **byte-identical** export.
+
+| Parameter | Description |
+|---|---|
+| `-JoinKeyAttribute <attr>` | ISC `attributes.*` field holding the SuccessFactors join key (default `employeeNumber`). Coverage % is computed from whether the key is **populated**, not from the attribute name, so a custom join key can't collapse coverage to 0%. |
+| `-RefreshCache` | Re-fetch from ISC and overwrite the non-expiring cache (default: serve the cached baseline if present). |
+| `-CachePath <dir>` | Override the non-expiring cache directory. |
+| `-Token` / `-TokenExpiryMinutes` | Optional pre-acquired ISC browser JWT (else the configured client-credentials flow runs). |
+| `-OutputPath <dir>` | Export root (default `.\Audit\Reconciliation`). |
+| `-OutputMode` | `Console`/`JSON`/`Both`/`CSV` — controls console output; the JSON + CSV + sha256 are always written. |
+
+```powershell
+# Baseline: fetch from ISC, write the non-expiring cache + the export
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache
+
+# Re-run WITHOUT a refetch — serve the cached baseline (identical contentHash)
+.\Scripts\Invoke-SPIscReconciliation.ps1
+
+# After the source data changes, regenerate to detect the drift
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache
+
+# Custom join key (e.g. an extension attribute), into a scratch location
+.\Scripts\Invoke-SPIscReconciliation.ps1 -RefreshCache -JoinKeyAttribute extensionAttribute7 -OutputPath .\Audit\Reconciliation
+```
+
+> **What the export carries (per identity, keyed by `employeeID`):** the resolved join key +
+> confidence (`employeeID` > `mail` > `upn`; a `mail`/`upn` fallback is flagged
+> `JoinConfidence=Low`), lifecycle/`active`, the manager/reviewer `employeeID` (the cert
+> routing target), and the governed entitlements (name / source / privileged) for AD-group
+> matching. The ISC side **pre-stages only the findings it can determine alone** —
+> `JOINKEY_MISSING` and `MAIL_NE_UPN`; every *cross-source* finding (`MGR_MISMATCH`,
+> `STATUS_MISMATCH`, `ACCESS_NOT_GOVERNED`, …) is computed at **merge** time, not invented
+> here. Keep the shared finding-code vocabulary and join-key ladder identical on both sides.
+
+*Exit codes:* 0 ok · 1 no identities · 2 parameter · 3 auth/fetch · 4 config.
+**Related:** `docs/AD-Reconciliation-Contract-from-GroupEnumerator.md` (the shared contract);
+`Invoke-SPCampaignDiff.ps1` (change detection *within* an ISC campaign).
 
 ---
 
