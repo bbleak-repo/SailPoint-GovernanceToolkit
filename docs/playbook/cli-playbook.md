@@ -807,9 +807,10 @@ reports**:
   between captures), and **not started**.
 - **Scope diff** — *what changed in the campaign.* Grants **added** to scope (the same
   campaign grows as entitlement groups and sources onboard), grants **removed**, and
-  **decision changes** — plus a **compliance summary**: newly-added privileged access,
-  stalled/not-started reviewers, overdue undecided items, and a *privileged-approved*
-  advisory.
+  **decision changes** — a real **APPROVE↔REVOKE** flip on the same grant (access removed or
+  re-granted), *not* a reviewer who simply hasn't re-reviewed yet — plus a **compliance
+  summary**: newly-added privileged access, stalled/not-started reviewers, overdue undecided
+  items, and a *privileged-approved* advisory.
 
 **When to use:** run it on the campaign's cadence (e.g. each morning) so leadership can
 see who is keeping up and what new (especially privileged) access appeared — **without**
@@ -858,6 +859,13 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -NoCapture
 ```
 
+> **What counts as a "decision change".** Only a real flip between *decided* states —
+> **APPROVE↔REVOKE** (access removed or re-granted). Transitions involving PENDING are
+> **excluded**: APPROVE→PENDING just means "not re-reviewed yet" (the escalation chain handles
+> that, it isn't an access change), and PENDING→decided is a first action, not a change from a
+> prior decision. So the table picks up only users who **acted in the prior campaign** and whose
+> access decision then changed. (New grants and removals are in the *added* / *removed* lists.)
+>
 > **Decision dates across campaigns.** The scope diff records *when* each decision was made
 > (the ISC decision timestamp). A **decision change** row shows both sides —
 > e.g. *John Doe · admin_xyz · APPROVE (2026-06-10) → REVOKE (2026-06-11)* — and a **first-time**
