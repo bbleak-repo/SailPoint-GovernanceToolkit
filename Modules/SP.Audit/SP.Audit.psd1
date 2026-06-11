@@ -226,6 +226,7 @@
         'Get-SPCampaignSnapshotList'
         'Get-SPCampaignPreviousSnapshot'
         'Remove-SPCampaignOldSnapshots'
+        'Test-SPCampaignSnapshotIntegrity'
 
         # SP.CampaignDiff - Snapshot comparison + diff reporting (completion/scope/compliance)
         'Compare-SPCampaignSnapshots'
