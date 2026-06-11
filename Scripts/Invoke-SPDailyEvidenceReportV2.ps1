@@ -12,7 +12,7 @@
                                    privileged-access users, managers involved, sources evaluated
       Executive Summary (per campaign)
                                    status badge, reviewers signed-off, items decided, a
-                                   decision-distribution donut, "Revoked Access Removed"
+                                   decision-distribution donut, "Revoked Access — Flagged for Removal"
                                    (de-provisioning), and Key Indicators
       A. Campaign Completion Evidence   cross-campaign table incl. Approved / Revoked / Pending
       B. Reviewer Accountability        collapsible Completed / Pending / Reassigned (per campaign)
@@ -1333,9 +1333,10 @@ foreach ($audit in $campaignAudits) {
     $createdFmt = & $fmtDt ([string]$audit['Created'])
     if ($totRevoked -gt 0) {
         $remBlock = @"
-<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked revoked items removed (de-provisioned)</span></div>
+<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked revoked items flagged for removal</span></div>
 <table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$(100 - $remPct)%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
-<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Removed</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Pending removal</td></tr></table>
+<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Flagged</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Not yet decided</td></tr></table>
+<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Reflects the recorded revoke decision; actual removal at the source (esp. disconnected / manual sources) is fulfilled downstream and not confirmed here.</p>
 "@
     }
     else {
@@ -1373,7 +1374,7 @@ $donutSvg
 </table>
 </td>
 <td style="width:34%;vertical-align:top;padding:0 12px">
-<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Revoked Access Removed</p>
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Revoked Access &mdash; Flagged for Removal</p>
 $remBlock
 </td>
 <td style="width:33%;vertical-align:top;padding-left:12px">
@@ -1381,7 +1382,7 @@ $remBlock
 <table style="width:100%;border-collapse:collapse;font-size:12px">
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$revCompPct%</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$pendColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Pending Items</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$pendColor">$('{0:N0}' -f $pend)</td></tr>
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Revokes Removed</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Revokes Flagged</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
 <tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Reassignments</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$reassignCnt</td></tr>
 </table>
 </td>
@@ -1470,12 +1471,14 @@ foreach ($cat in $cats) {
             $cid = if ($it.PSObject.Properties['CertificationId']) { [string]$it.CertificationId } else { '' }
             $just = 'N/A'
             if ($it.PSObject.Properties['Justification'] -and -not [string]::IsNullOrWhiteSpace($it.Justification)) { $just = [string]$it.Justification }
-            # Remediation: for revokes, fulfilment = de-provisioning -> relabel 'Provisioned' as 'Deprovisioned'.
+            # Remediation: for revokes, the decision being completed means the revoke is RECORDED, not
+            # that the access was actually pulled at the source (disconnected/manual sources are fulfilled
+            # downstream). Label honestly as 'Flagged for removal' rather than claiming de-provisioning.
             $rem = '<span class="s-gray">N/A</span>'
             if ($it.PSObject.Properties['RemediationStatus'] -and -not [string]::IsNullOrWhiteSpace($it.RemediationStatus)) {
                 $rs = [string]$it.RemediationStatus
                 $done = [bool](& $remDone $rs)
-                $rsDisp = if ($isRevoked) { if ($done) { 'Deprovisioned' } else { 'Pending removal' } } else { $rs }
+                $rsDisp = if ($isRevoked) { if ($done) { 'Flagged for removal' } else { 'Not yet decided' } } else { $rs }
                 if ($done) { $rem = '<span class="s-green">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
                 else { $rem = '<span class="s-amber">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
             }

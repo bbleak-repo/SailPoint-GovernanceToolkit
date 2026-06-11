@@ -178,6 +178,20 @@ function Compare-SPCampaignSnapshots {
         $curCertMap  = ConvertTo-SPDiffCertMap -Certs $curCerts
         $prevCertMap = ConvertTo-SPDiffCertMap -Certs $prevCerts
 
+        # reviewerId -> manager name (from the cert records), so the scope lists can show WHO
+        # approved/revoked each grant; and per-reviewer approve/revoke counts (from current items)
+        # for the by-reviewer rollup.
+        $curRevName = @{}; foreach ($ct in $curCerts) { $rid = [string](Get-SPDiffProp $ct 'ReviewerId' ''); if ($rid -and -not $curRevName.ContainsKey($rid)) { $curRevName[$rid] = [string](Get-SPDiffProp $ct 'ReviewerName' '') } }
+        $prevRevName = @{}; foreach ($ct in $prevCerts) { $rid = [string](Get-SPDiffProp $ct 'ReviewerId' ''); if ($rid -and -not $prevRevName.ContainsKey($rid)) { $prevRevName[$rid] = [string](Get-SPDiffProp $ct 'ReviewerName' '') } }
+        $revDec = @{}
+        foreach ($it in $curItems) {
+            $rid = [string](Get-SPDiffProp $it 'ReviewerId' '')
+            if ([string]::IsNullOrWhiteSpace($rid)) { continue }
+            if (-not $revDec.ContainsKey($rid)) { $revDec[$rid] = @{ Approved = 0; Revoked = 0 } }
+            $dv = ([string](Get-SPDiffProp $it 'Decision' '')).ToUpperInvariant()
+            if ($dv -eq 'APPROVE') { $revDec[$rid].Approved++ } elseif ($dv -eq 'REVOKE') { $revDec[$rid].Revoked++ }
+        }
+
         # --- Completion view ---
         $reviewers = [System.Collections.Generic.List[object]]::new()
         $newlyCompleted = 0; $stalled = 0; $notStarted = 0; $outstanding = 0; $reassignedCount = 0
@@ -237,7 +251,7 @@ function Compare-SPCampaignSnapshots {
         foreach ($r in $reviewers) {
             $rid = if ([string]::IsNullOrWhiteSpace($r.ReviewerId)) { '__unknown__' } else { $r.ReviewerId }
             if (-not $byReviewer.ContainsKey($rid)) {
-                $byReviewer[$rid] = [ordered]@{ ReviewerId = $r.ReviewerId; ReviewerName = $r.ReviewerName; Certs = 0; Made = 0; Total = 0; Signed = 0; Reassigned = $false }
+                $byReviewer[$rid] = [ordered]@{ ReviewerId = $r.ReviewerId; ReviewerName = $r.ReviewerName; Certs = 0; Made = 0; Total = 0; Signed = 0; Reassigned = $false; Approved = 0; Revoked = 0 }
             }
             $agg = $byReviewer[$rid]
             $agg.Certs++; $agg.Made += [int]$r.CurrMade; $agg.Total += [int]$r.Total
@@ -248,6 +262,7 @@ function Compare-SPCampaignSnapshots {
         foreach ($rid in $byReviewer.Keys) {
             $agg = $byReviewer[$rid]
             $agg.CompletionPct = if ([int]$agg.Total -gt 0) { [math]::Round([int]$agg.Made * 100.0 / [int]$agg.Total, 1) } else { 0 }
+            if ($revDec.ContainsKey([string]$rid)) { $agg.Approved = $revDec[[string]$rid].Approved; $agg.Revoked = $revDec[[string]$rid].Revoked }
             $reviewerRollup.Add($agg)
         }
 
@@ -275,6 +290,8 @@ function Compare-SPCampaignSnapshots {
                 $cls = if ($fromNewSource) { 'NewSource' } else { 'NewGrant' }
                 if ($ci -is [System.Collections.IDictionary]) { $ci['ChangeClass'] = $cls }
                 else { try { $ci | Add-Member -NotePropertyName 'ChangeClass' -NotePropertyValue $cls -Force } catch { } }
+                $arid = [string](Get-SPDiffProp $ci 'ReviewerId' ''); $arname = if ($arid -and $curRevName.ContainsKey($arid)) { $curRevName[$arid] } else { '' }
+                if ($ci -is [System.Collections.IDictionary]) { $ci['ReviewerName'] = $arname } else { try { $ci | Add-Member -NotePropertyName 'ReviewerName' -NotePropertyValue $arname -Force } catch { } }
                 $added.Add($ci)
             }
             else {
@@ -289,6 +306,8 @@ function Compare-SPCampaignSnapshots {
                 # campaign and whose decision then flipped.
                 $decided = @('APPROVE', 'REVOKE')
                 if ($cd -ne $pd -and ($decided -contains $pd) -and ($decided -contains $cd)) {
+                    $crid = [string](Get-SPDiffProp $ci 'ReviewerId' '')
+                    $crname = if ($crid -and $curRevName.ContainsKey($crid)) { $curRevName[$crid] } else { '' }
                     $changed.Add([ordered]@{
                         Key          = $k
                         IdentityName = [string](Get-SPDiffProp $ci 'IdentityName' '')
@@ -311,13 +330,19 @@ function Compare-SPCampaignSnapshots {
                         CurrDecisionDate = [string](Get-SPDiffProp $ci 'DecisionDate' '')
                         # ReviewerId carried so the per-director split can attribute a decision
                         # change to the reviewer (manager) who owns the cert it belongs to.
-                        ReviewerId   = [string](Get-SPDiffProp $ci 'ReviewerId' '')
+                        ReviewerId   = $crid
+                        ReviewerName = $crname
                     })
                 }
             }
         }
         foreach ($k in $prevMap.Keys) {
-            if (-not $curMap.ContainsKey($k)) { $removed.Add($prevMap[$k]) }
+            if (-not $curMap.ContainsKey($k)) {
+                $ri = $prevMap[$k]
+                $rrid = [string](Get-SPDiffProp $ri 'ReviewerId' ''); $rrname = if ($rrid -and $prevRevName.ContainsKey($rrid)) { $prevRevName[$rrid] } else { '' }
+                if ($ri -is [System.Collections.IDictionary]) { $ri['ReviewerName'] = $rrname } else { try { $ri | Add-Member -NotePropertyName 'ReviewerName' -NotePropertyValue $rrname -Force } catch { } }
+                $removed.Add($ri)
+            }
         }
 
         # --- Compliance summary ---
@@ -505,11 +530,11 @@ function Export-SPCampaignCompletionDiffHtml {
         if (@($rollup).Count -gt 0) {
             [void]$sb.Append("<h2>By reviewer (person)</h2>")
             $rr = $rollup | Sort-Object @{ Expression = { [double](Get-SPDiffProp $_ 'CompletionPct' 0) } }
-            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Certs</th><th>Decided</th><th>Total items</th><th>Completion</th><th>Reassigned</th></tr>")
+            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Certs</th><th>Decided</th><th>Approved</th><th>Revoked</th><th>Total items</th><th>Completion</th><th>Reassigned</th></tr>")
             foreach ($a in $rr) {
                 $nm = [string](Get-SPDiffProp $a 'ReviewerName' ''); if ([string]::IsNullOrWhiteSpace($nm)) { $nm = [string](Get-SPDiffProp $a 'ReviewerId' 'Unknown') }
                 $rf = if ([bool](Get-SPDiffProp $a 'Reassigned' $false)) { "<span class='badge b-chg'>REASSIGNED</span>" } else { '' }
-                [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$(Get-SPDiffProp $a 'Certs' 0)</td><td>$(Get-SPDiffProp $a 'Made' 0)</td><td>$(Get-SPDiffProp $a 'Total' 0)</td><td>$(Get-SPDiffProp $a 'CompletionPct' 0)%</td><td>$rf</td></tr>")
+                [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$(Get-SPDiffProp $a 'Certs' 0)</td><td>$(Get-SPDiffProp $a 'Made' 0)</td><td>$(Get-SPDiffProp $a 'Approved' 0)</td><td class='down'>$(Get-SPDiffProp $a 'Revoked' 0)</td><td>$(Get-SPDiffProp $a 'Total' 0)</td><td>$(Get-SPDiffProp $a 'CompletionPct' 0)%</td><td>$rf</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
@@ -629,11 +654,11 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append("<h2>Decision changed ($($scope.ChangedCount))</h2>")
         if (@($scope.Changed).Count -eq 0) { [void]$sb.Append("<div class='empty'>No decision changes.</div>") }
         else {
-            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
             foreach ($c in @($scope.Changed)) {
                 $cls = if ($c.Privileged) { " class='priv'" } else { '' }
                 $pb = if ($c.Privileged) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
-                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc $c.IdentityName)</td><td>$(Get-SPDiffEnc $c.AccessName)$pb</td><td>$(Get-SPDiffEnc $c.SourceName)</td><td>$(Get-SPDiffEnc $c.PrevDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.PrevDecisionDate))</td><td>$(Get-SPDiffEnc $c.CurrDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.CurrDecisionDate))</td></tr>")
+                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc $c.IdentityName)</td><td>$(Get-SPDiffEnc $c.AccessName)$pb</td><td>$(Get-SPDiffEnc $c.SourceName)</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $c 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc $c.PrevDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.PrevDecisionDate))</td><td>$(Get-SPDiffEnc $c.CurrDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.CurrDecisionDate))</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
@@ -658,7 +683,7 @@ function Append-SPScopeItemTable {
     $items = @($Items)
     if ($items.Count -eq 0) { [void]$Sb.Append("<div class='empty'>None.</div>"); return }
     $decCol = if ($ShowDecision) { '<th>Decision</th><th>Decided</th>' } else { '' }
-    [void]$Sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th>$decCol</tr>")
+    [void]$Sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th>$decCol</tr>")
     # privileged first
     $sorted = $items | Sort-Object @{ Expression = { if ([bool](Get-SPDiffProp $_ 'Privileged' $false)) { 0 } else { 1 } } }, @{ Expression = { [string](Get-SPDiffProp $_ 'AccessName' '') } }
     foreach ($it in $sorted) {
@@ -666,7 +691,7 @@ function Append-SPScopeItemTable {
         $cls = if ($priv) { " class='priv'" } else { '' }
         $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
         $dec = if ($ShowDecision) { "<td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'Decision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $it 'DecisionDate' '')))</td>" } else { '' }
-        [void]$Sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'SourceName' ''))</td>$dec</tr>")
+        [void]$Sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'ReviewerName' ''))</td>$dec</tr>")
     }
     [void]$Sb.Append("</table>")
 }
@@ -980,12 +1005,12 @@ function Get-SPDiffDirectorBodyHtml {
     [void]$sb.Append("<h2>Decision changed ($($c.Changed))</h2>")
     if (@($d.Changed).Count -eq 0) { [void]$sb.Append("<div class='empty'>No decision changes.</div>") }
     else {
-        [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
+        [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
         foreach ($ch in @($d.Changed)) {
             $priv = [bool](Get-SPDiffProp $ch 'Privileged' $false)
             $cls = if ($priv) { " class='priv'" } else { '' }
             $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
-            [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'CurrDecisionDate' '')))</td></tr>")
+            [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'CurrDecisionDate' '')))</td></tr>")
         }
         [void]$sb.Append("</table>")
     }

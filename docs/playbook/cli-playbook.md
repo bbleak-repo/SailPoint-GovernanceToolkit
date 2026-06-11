@@ -802,15 +802,18 @@ recurring attestation campaign. Each run captures an immutable, datetime-stamped
 of the campaign and compares it against the prior snapshot, producing **two read-only
 reports**:
 
-- **Completion diff** — *who is doing their attestations.* Per reviewer: decisions made
-  since the last capture, completion %, **newly completed**, **stalled** (no progress
-  between captures), and **not started**.
-- **Scope diff** — *what changed in the campaign.* Grants **added** to scope (the same
-  campaign grows as entitlement groups and sources onboard), grants **removed**, and
-  **decision changes** — a real **APPROVE↔REVOKE** flip on the same grant (access removed or
-  re-granted), *not* a reviewer who simply hasn't re-reviewed yet — plus a **compliance
-  summary**: newly-added privileged access, stalled/not-started reviewers, overdue undecided
-  items, and a *privileged-approved* advisory.
+- **Completion diff** — *who is doing their attestations.* Per reviewer: decisions
+  **Decided** since the last capture (the count of items the reviewer has acted on — what was
+  previously labelled "made"), **Approved** and **Revoked** sub-counts, completion %, **newly
+  completed**, **stalled** (no progress between captures), and **not started**. Reviewers with
+  no items show `—` rather than a misleading `0 / 0 = 0%`.
+- **Scope diff** — *what changed in the campaign.* Grants added to scope are split into
+  **Newly approved access**, **Newly revoked access**, and **Newly added, not yet decided** (so
+  fresh approvals aren't bundled in with revokes); grants **removed**; and **decision changes**
+  — a real **APPROVE↔REVOKE** flip on the same grant (access removed or re-granted), *not* a
+  reviewer who simply hasn't re-reviewed yet. Every scope list carries the **Reviewer (manager)**
+  who owns the item. Plus a **compliance summary**: newly-added privileged access,
+  stalled/not-started reviewers, overdue undecided items, and a *privileged-approved* advisory.
 
 **When to use:** run it on the campaign's cadence (e.g. each morning) so leadership can
 see who is keeping up and what new (especially privileged) access appeared — **without**
@@ -1165,10 +1168,15 @@ clobbers the v1 output.
 |---|---|
 | Header | Report-generated date, period, aggregate decisions made. **No due date.** |
 | Certification Scope | distinct users reviewed, entitlements tracked, privileged-access users, managers involved, sources evaluated |
-| Executive Summary (per campaign) | status badge, reviewers signed-off, items decided, a decision-distribution **donut**, **Revoked Access Removed** (de-provisioning %), and Key Indicators |
+| Executive Summary (per campaign) | status badge, reviewers signed-off, items decided, a decision-distribution **donut**, **Revoked Access — Flagged for Removal** (% of revokes whose decision is finalised), and Key Indicators |
 | A. Campaign Completion Evidence | cross-campaign table incl. Approved / Revoked / Pending |
 | B. Reviewer Accountability | collapsible **Completed / Pending / Reassigned** per campaign (+ Reassigned From, Proof of Action) |
-| Decision Summary | collapsible **Approved / Revoked (open) / Pending** — Identity, Account, Access (PRIV), **Source**, **Reviewer (manager)**, Decision Date, **Justification**, Remediation ("Deprovisioned" for fulfilled revokes) |
+| Decision Summary | collapsible **Approved / Revoked (open) / Pending** — Identity, Account, Access (PRIV), **Source**, **Reviewer (manager)**, Decision Date, **Justification**, Remediation ("Flagged for removal" for finalised revokes) |
+
+> **Honest remediation wording.** A finalised revoke means the *decision* is recorded, **not**
+> that the access was actually pulled at the source. Disconnected / manual sources are fulfilled
+> downstream and ISC exposes no reliable "removed" signal, so v2 says **"Flagged for removal"**
+> (not "Deprovisioned") and the exec card carries a caveat that actual removal isn't confirmed here.
 
 Day-over-day / scope-change deltas are intentionally **not** here — they live in the campaign-diff
 report (`Invoke-SPCampaignDiff.ps1`).
