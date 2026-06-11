@@ -401,3 +401,60 @@ Describe "CDF-11: decision-change is APPROVE-to-REVOKE only (PENDING transitions
         @($script:d11.Scope.Changed | Where-Object { @('i2', 'i3') -contains $_.IdentityId }).Count | Should -Be 0
     }
 }
+
+Describe "CDF-12: scope items carry the reviewer + per-reviewer approve/revoke counts" {
+    BeforeAll {
+        $camp  = [PSCustomObject]@{ id = 'camp-cdf12'; name = 'Q2 Access Review'; status = 'ACTIVE'; created = '2026-06-08T10:00:00Z' }
+        # One reviewer (Alice) owns cert c1. prev: i1+i2 approved. cur: i1 flips to REVOKE,
+        # i2 stays approved, i3 newly added (approved). So Alice = 2 approved, 1 revoked.
+        $certsP = @([PSCustomObject]@{ id = 'c1'; reviewer = [PSCustomObject]@{ id = 'r1'; name = 'Alice Mgr' }; decisionsTotal = 2; decisionsMade = 2 })
+        $certsC = @([PSCustomObject]@{ id = 'c1'; reviewer = [PSCustomObject]@{ id = 'r1'; name = 'Alice Mgr' }; decisionsTotal = 3; decisionsMade = 3 })
+        $prevDec = @{
+            Approved = @(
+                [PSCustomObject]@{ CertificationId = 'c1'; IdentityId = 'i1'; IdentityName = 'John Doe'; AccessName = 'admin_xyz'; AccessId = 'a1'; SourceName = 'Prod AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-08T10:00:00Z' }
+                [PSCustomObject]@{ CertificationId = 'c1'; IdentityId = 'i2'; IdentityName = 'Jane Roe'; AccessName = 'vpn'; AccessId = 'a2'; SourceName = 'Prod AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-08T10:00:00Z' }
+            )
+            Revoked = @(); Pending = @()
+        }
+        $curDec = @{
+            Approved = @(
+                [PSCustomObject]@{ CertificationId = 'c1'; IdentityId = 'i2'; IdentityName = 'Jane Roe'; AccessName = 'vpn'; AccessId = 'a2'; SourceName = 'Prod AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T10:00:00Z' }
+                [PSCustomObject]@{ CertificationId = 'c1'; IdentityId = 'i3'; IdentityName = 'Bob New'; AccessName = 'dba'; AccessId = 'a3'; SourceName = 'Prod AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T10:00:00Z' }
+            )
+            Revoked = @(
+                [PSCustomObject]@{ CertificationId = 'c1'; IdentityId = 'i1'; IdentityName = 'John Doe'; AccessName = 'admin_xyz'; AccessId = 'a1'; SourceName = 'Prod AD'; SourceId = 's1'; Decision = 'REVOKE'; DecisionDate = '2026-06-11T11:00:00Z' }
+            )
+            Pending = @()
+        }
+        $prev = Build-SPCampaignSnapshotData -Campaign $camp -Certifications $certsP -Decisions $prevDec
+        $cur  = Build-SPCampaignSnapshotData -Campaign $camp -Certifications $certsC -Decisions $curDec
+        $script:d12 = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+    }
+    It "attaches the reviewer name to changed and added scope items (#2)" {
+        @($script:d12.Scope.Changed)[0].ReviewerName | Should -Be 'Alice Mgr'
+        @($script:d12.Scope.Added)[0].ReviewerName   | Should -Be 'Alice Mgr'
+    }
+    It "rolls up per-reviewer Approved/Revoked counts (#3)" {
+        $alice = @($script:d12.Completion.ByReviewer | Where-Object { $_.ReviewerId -eq 'r1' })[0]
+        $alice | Should -Not -BeNullOrEmpty
+        $alice.Approved | Should -Be 2
+        $alice.Revoked  | Should -Be 1
+    }
+    It "renders the Reviewer column in the scope diff HTML" {
+        $out = Join-Path $TestDrive 'cdf12-scope.html'
+        Export-SPCampaignScopeDiffHtml -Diff $script:d12 -OutputPath $out | Out-Null
+        $html = Get-Content $out -Raw
+        $html | Should -Match '<th>Reviewer</th>'
+        $html | Should -Match 'Alice Mgr'
+        $html | Should -Match 'Newly approved'
+        $html | Should -Match 'Newly revoked'
+    }
+    It "renders Approved/Revoked/Decided columns in the completion diff HTML" {
+        $out = Join-Path $TestDrive 'cdf12-comp.html'
+        Export-SPCampaignCompletionDiffHtml -Diff $script:d12 -OutputPath $out | Out-Null
+        $html = Get-Content $out -Raw
+        $html | Should -Match '>Approved<'
+        $html | Should -Match '>Revoked<'
+        $html | Should -Match '>Decided<'
+    }
+}
