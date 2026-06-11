@@ -3177,6 +3177,57 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 </tbody></table>
 <p><strong>Related GUI:</strong> Governance tab. <strong>Related:</strong> <code>Invoke-SPGovernanceMetrics</code> (time-series capture), <code>Invoke-SPWeeklyDigest</code> (weekly narrative), <code>Invoke-SPGovernanceReport</code> (full audit package).</p>
+<h3 id="invoke-spdailyevidencereportv3-ps1"><code>Invoke-SPDailyEvidenceReportV3.ps1</code></h3>
+<p><strong>Purpose:</strong> a <strong>day-over-day DELTA</strong> evidence report — v2's executive layout, but the body answers <em>"what changed since the previous day's campaign?"</em>. It captures today's campaign snapshot and diffs it <strong>cross-campaign</strong> against the most-recent <strong>different</strong> campaign in the same series (the new-campaign-per-day model), reusing the same engine as <code>Invoke-SPCampaignDiff.ps1</code>.</p>
+<p>Use it for recurring daily attestations where <strong>each day is its own campaign</strong>. Run it with a <code>-CampaignName*</code> filter that matches the series (e.g. <code>-CampaignNameContains 'Daily Attestation'</code>) so the prior campaign resolves to yesterday's, not an unrelated one. It captures a snapshot each run (<code>-NoCapture</code> to re-render offline from existing snapshots).</p>
+<table>
+<thead><tr>
+<th>Section</th>
+<th>Content</th>
+</tr></thead><tbody>
+<tr>
+<td>Header</td>
+<td>report-generated date + "vs <code>&lt;prior campaign&gt;</code>"; baseline banner on first run</td>
+</tr>
+<tr>
+<td>Certification Scope + Executive Summary</td>
+<td><em>as v2</em> (today's full context: donut, Removal-Status card, Key Indicators)</td>
+</tr>
+<tr>
+<td>A. Campaign Completion Evidence</td>
+<td><em>as v2</em></td>
+</tr>
+<tr>
+<td><strong>Access Changes Since Last Campaign</strong></td>
+<td><strong>Newly added access</strong> (net-new to SailPoint — the identity was NOT in the entitlement before, approved or pending); <strong>Removed entirely</strong> (disappeared without a formal revoke); <strong>Revoked but still present</strong> (the revoke isn't getting fulfilled — split <strong>Removal failed / connected AD</strong> vs <strong>Queued / disconnected</strong> per the source-aware policy)</td>
+</tr>
+<tr>
+<td>B. Reviewer Accountability</td>
+<td><strong>net-new items only</strong>, grouped by reviewer: Completed (decided) / Pending / Reassigned</td>
+</tr>
+<tr>
+<td>Decision Summary</td>
+<td><strong>net-new items only</strong> — Approved / Revoked / Pending — plus a <strong>Changed</strong> register (APPROVE↔REVOKE flips on <em>existing</em> access)</td>
+</tr>
+<tr>
+<td>Footnote</td>
+<td>entitlements <strong>persistently PENDING across ≥2 campaigns</strong> (separate cycles, not just captures)</td>
+</tr>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><table>
+<thead><tr>
+<th><strong>Net-new</strong> means the stable key `identity\</th>
+<th>access\</th>
+<th>source` was **absent in the prior campaign's</th>
+</tr></thead><tbody>
+</tbody></table>
+<p>snapshot<strong>. The "Revoked but still present" tracker reuses <code>Get-SPRevocationDisposition</code>'s source policy: a still-present revoke on connected </strong>AD** is a <em>removal failure</em> (red — should be gone), while a disconnected/other source is <em>queued</em> (amber — downstream/manual, not confirmed here). The new delta the report adds to the diff engine is <code>Scope.PersistedRevokes</code> (revoked-before, still-present), alongside the existing Added / Removed / Changed.</p></div>
+<pre><code># Day-over-day delta for a recurring daily series (captures today's snapshot, diffs vs yesterday's)
+.\Scripts\Invoke-SPDailyEvidenceReportV3.ps1 -CampaignNameContains 'Daily Attestation' -Token $token -OutputMode HTML
+
+# Re-render offline from snapshots already on disk (no capture, no API mutation)
+.\Scripts\Invoke-SPDailyEvidenceReportV3.ps1 -CampaignNameContains 'Daily Attestation' -NoCapture -Token $token</code></pre>
+<p><strong>Output:</strong> <code>daily-evidence-v3-{timestamp}.html</code> (+ <code>daily-evidence-v3-audit.jsonl</code>). <strong>Related:</strong> <code>Invoke-SPCampaignDiff.ps1</code> (the scope-diff this hybridizes), <code>Invoke-SPDailyEvidenceReportV2.ps1</code> (the current-state sibling — both remain available).</p>
 <h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ---- DEPRECATED</h3>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. An IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
 <p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>

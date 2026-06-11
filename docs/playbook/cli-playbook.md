@@ -1214,6 +1214,46 @@ filters, `-Token`, `-OutputMode`). Threshold/KPI params have no effect on the v2
 **Related GUI:** Governance tab. **Related:** `Invoke-SPGovernanceMetrics` (time-series capture),
 `Invoke-SPWeeklyDigest` (weekly narrative), `Invoke-SPGovernanceReport` (full audit package).
 
+### `Invoke-SPDailyEvidenceReportV3.ps1`
+**Purpose:** a **day-over-day DELTA** evidence report — v2's executive layout, but the body answers
+*"what changed since the previous day's campaign?"*. It captures today's campaign snapshot and diffs
+it **cross-campaign** against the most-recent **different** campaign in the same series (the
+new-campaign-per-day model), reusing the same engine as `Invoke-SPCampaignDiff.ps1`.
+
+Use it for recurring daily attestations where **each day is its own campaign**. Run it with a
+`-CampaignName*` filter that matches the series (e.g. `-CampaignNameContains 'Daily Attestation'`) so
+the prior campaign resolves to yesterday's, not an unrelated one. It captures a snapshot each run
+(`-NoCapture` to re-render offline from existing snapshots).
+
+| Section | Content |
+|---|---|
+| Header | report-generated date + "vs `<prior campaign>`"; baseline banner on first run |
+| Certification Scope + Executive Summary | *as v2* (today's full context: donut, Removal-Status card, Key Indicators) |
+| A. Campaign Completion Evidence | *as v2* |
+| **Access Changes Since Last Campaign** | **Newly added access** (net-new to SailPoint — the identity was NOT in the entitlement before, approved or pending); **Removed entirely** (disappeared without a formal revoke); **Revoked but still present** (the revoke isn't getting fulfilled — split **Removal failed / connected AD** vs **Queued / disconnected** per the source-aware policy) |
+| B. Reviewer Accountability | **net-new items only**, grouped by reviewer: Completed (decided) / Pending / Reassigned |
+| Decision Summary | **net-new items only** — Approved / Revoked / Pending — plus a **Changed** register (APPROVE↔REVOKE flips on *existing* access) |
+| Footnote | entitlements **persistently PENDING across ≥2 campaigns** (separate cycles, not just captures) |
+
+> **Net-new** means the stable key `identity\|access\|source` was **absent in the prior campaign's
+> snapshot**. The "Revoked but still present" tracker reuses `Get-SPRevocationDisposition`'s source
+> policy: a still-present revoke on connected **AD** is a *removal failure* (red — should be gone),
+> while a disconnected/other source is *queued* (amber — downstream/manual, not confirmed here). The
+> new delta the report adds to the diff engine is `Scope.PersistedRevokes` (revoked-before,
+> still-present), alongside the existing Added / Removed / Changed.
+
+```powershell
+# Day-over-day delta for a recurring daily series (captures today's snapshot, diffs vs yesterday's)
+.\Scripts\Invoke-SPDailyEvidenceReportV3.ps1 -CampaignNameContains 'Daily Attestation' -Token $token -OutputMode HTML
+
+# Re-render offline from snapshots already on disk (no capture, no API mutation)
+.\Scripts\Invoke-SPDailyEvidenceReportV3.ps1 -CampaignNameContains 'Daily Attestation' -NoCapture -Token $token
+```
+
+**Output:** `daily-evidence-v3-{timestamp}.html` (+ `daily-evidence-v3-audit.jsonl`). **Related:**
+`Invoke-SPCampaignDiff.ps1` (the scope-diff this hybridizes), `Invoke-SPDailyEvidenceReportV2.ps1`
+(the current-state sibling — both remain available).
+
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
 > EntraID group-enumerator and render an AD "group → members" view (`SamAccountName`, `Enabled`,

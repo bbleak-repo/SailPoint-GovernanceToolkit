@@ -458,3 +458,39 @@ Describe "CDF-12: scope items carry the reviewer + per-reviewer approve/revoke c
         $html | Should -Match '>Decided<'
     }
 }
+
+Describe "CDF-13: PersistedRevokes -- revoked before and still present (split AD vs other)" {
+    BeforeAll {
+        $campP = [PSCustomObject]@{ id = 'cMon'; name = 'Daily Monday'; status = 'ACTIVE'; created = '2026-06-10T08:00:00Z' }
+        $campC = [PSCustomObject]@{ id = 'cTue'; name = 'Daily Tuesday'; status = 'ACTIVE'; created = '2026-06-11T08:00:00Z' }
+        # Prior: i1 admin REVOKE (AD), i2 legacy REVOKE (disconnected), i3 vpn APPROVE (AD).
+        $prevDec = @{ Approved = @([PSCustomObject]@{ IdentityId='i3'; IdentityName='C'; AccessName='vpn'; AccessId='a3'; SourceName='Prod AD'; SourceId='s1'; SourceType='Active Directory - Direct'; Decision='APPROVE'; DecisionDate='2026-06-10T09:00:00Z' }); Pending=@(); Revoked=@(
+            [PSCustomObject]@{ IdentityId='i1'; IdentityName='A'; AccessName='admin'; AccessId='a1'; SourceName='Prod AD'; SourceId='s1'; SourceType='Active Directory - Direct'; Decision='REVOKE'; DecisionDate='2026-06-10T09:00:00Z' }
+            [PSCustomObject]@{ IdentityId='i2'; IdentityName='B'; AccessName='legacy'; AccessId='a2'; SourceName='LegacyApp'; SourceId='s2'; SourceType='Web Services - Disconnected'; Decision='REVOKE'; DecisionDate='2026-06-10T09:00:00Z' }
+        ) }
+        # Today: i1 admin STILL REVOKE (AD removal failed), i2 legacy STILL REVOKE (queued),
+        #        i3 gone (silently removed -- prior APPROVE), i4 new APPROVE.
+        $curDec = @{ Approved = @([PSCustomObject]@{ IdentityId='i4'; IdentityName='D'; AccessName='dba'; AccessId='a4'; SourceName='Prod AD'; SourceId='s1'; SourceType='Active Directory - Direct'; Decision='APPROVE'; DecisionDate='2026-06-11T09:00:00Z' }); Pending=@(); Revoked=@(
+            [PSCustomObject]@{ IdentityId='i1'; IdentityName='A'; AccessName='admin'; AccessId='a1'; SourceName='Prod AD'; SourceId='s1'; SourceType='Active Directory - Direct'; Decision='REVOKE'; DecisionDate='2026-06-10T09:00:00Z' }
+            [PSCustomObject]@{ IdentityId='i2'; IdentityName='B'; AccessName='legacy'; AccessId='a2'; SourceName='LegacyApp'; SourceId='s2'; SourceType='Web Services - Disconnected'; Decision='REVOKE'; DecisionDate='2026-06-10T09:00:00Z' }
+        ) }
+        $prev = Build-SPCampaignSnapshotData -Campaign $campP -Certifications @() -Decisions $prevDec
+        $cur  = Build-SPCampaignSnapshotData -Campaign $campC -Certifications @() -Decisions $curDec
+        $script:d13 = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev -CrossCampaign).Data
+    }
+    It "counts a prior-REVOKE that is still present, split AD vs other" {
+        $script:d13.Scope.PersistedRevokeCount   | Should -Be 2
+        $script:d13.Scope.PersistedRevokeADCount | Should -Be 1
+    }
+    It "flags the AD removal as connected (failed) and the disconnected one as not" {
+        $ad = @($script:d13.Scope.PersistedRevokes | Where-Object { $_.AccessName -eq 'admin' })[0]
+        $ad.IsConnectedAD | Should -Be $true
+        $other = @($script:d13.Scope.PersistedRevokes | Where-Object { $_.AccessName -eq 'legacy' })[0]
+        $other.IsConnectedAD | Should -Be $false
+    }
+    It "does not treat a prior-APPROVE-still-present or a prior-REVOKE-now-gone as persisted" {
+        @($script:d13.Scope.PersistedRevokes | Where-Object { $_.AccessName -eq 'vpn' }).Count | Should -Be 0
+        # i3 (vpn, prior APPROVE) disappeared -> it is a silent removal, not a persisted revoke
+        @($script:d13.Scope.Removed | Where-Object { $_.AccessName -eq 'vpn' -and $_.Decision -ne 'REVOKE' }).Count | Should -Be 1
+    }
+}
