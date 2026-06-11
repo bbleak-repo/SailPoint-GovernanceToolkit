@@ -605,9 +605,18 @@ function Export-SPCampaignScopeDiffHtml {
         if (@($scope.NewSources).Count -gt 0) { [void]$sb.Append("<div class='note'>Sources onboarded this capture: $(Get-SPDiffEnc (@($scope.NewSources) -join ', ')) &mdash; their grants are expected additions, not anomalies.</div>") }
         [void]$sb.Append("<div class='note'>Approving privileged access can be entirely legitimate. This count is a conversation starter for review quality, reviewed respectfully alongside review-velocity context &mdash; never an automatic finding.</div>")
 
-        # Added (privileged first)
-        [void]$sb.Append("<h2>Added to scope ($($scope.AddedCount))</h2>")
-        Append-SPScopeItemTable -Sb $sb -Items @($scope.Added) -ShowDecision
+        # Added -- split by decision so newly-APPROVED access isn't bundled with newly-REVOKED.
+        $addAppr = @($scope.Added | Where-Object { ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant() -eq 'APPROVE' })
+        $addRev  = @($scope.Added | Where-Object { ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant() -eq 'REVOKE' })
+        $addPend = @($scope.Added | Where-Object { $dv = ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant(); $dv -ne 'APPROVE' -and $dv -ne 'REVOKE' })
+        [void]$sb.Append("<h2>Newly approved access ($(@($addAppr).Count))</h2>")
+        Append-SPScopeItemTable -Sb $sb -Items $addAppr -ShowDecision
+        [void]$sb.Append("<h2>Newly revoked access ($(@($addRev).Count))</h2>")
+        Append-SPScopeItemTable -Sb $sb -Items $addRev -ShowDecision
+        if (@($addPend).Count -gt 0) {
+            [void]$sb.Append("<h2>Newly added, not yet decided ($(@($addPend).Count))</h2>")
+            Append-SPScopeItemTable -Sb $sb -Items $addPend -ShowDecision
+        }
         # Newly-added privileged callout
         if (@($comp.NewlyAddedPrivileged).Count -gt 0) {
             [void]$sb.Append("<h2>&#9888; Newly-added privileged access ($(@($comp.NewlyAddedPrivileged).Count))</h2>")
@@ -951,8 +960,17 @@ function Get-SPDiffDirectorBodyHtml {
         [void]$sb.Append("</table>")
     }
 
-    [void]$sb.Append("<h2>Access added to scope ($($c.Added))</h2>")
-    Append-SPScopeItemTable -Sb $sb -Items @($d.Added) -ShowDecision
+    $dAppr = @($d.Added | Where-Object { ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant() -eq 'APPROVE' })
+    $dRev  = @($d.Added | Where-Object { ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant() -eq 'REVOKE' })
+    $dPend = @($d.Added | Where-Object { $dv = ([string](Get-SPDiffProp $_ 'Decision' '')).ToUpperInvariant(); $dv -ne 'APPROVE' -and $dv -ne 'REVOKE' })
+    [void]$sb.Append("<h2>Newly approved access ($(@($dAppr).Count))</h2>")
+    Append-SPScopeItemTable -Sb $sb -Items $dAppr -ShowDecision
+    [void]$sb.Append("<h2>Newly revoked access ($(@($dRev).Count))</h2>")
+    Append-SPScopeItemTable -Sb $sb -Items $dRev -ShowDecision
+    if (@($dPend).Count -gt 0) {
+        [void]$sb.Append("<h2>Newly added, not yet decided ($(@($dPend).Count))</h2>")
+        Append-SPScopeItemTable -Sb $sb -Items $dPend -ShowDecision
+    }
     if (@($d.NewlyAddedPrivileged).Count -gt 0) {
         [void]$sb.Append("<h2>&#9888; Newly-added privileged access ($($c.AddedPrivileged))</h2>")
         Append-SPScopeItemTable -Sb $sb -Items @($d.NewlyAddedPrivileged) -ShowDecision -ForcePriv
