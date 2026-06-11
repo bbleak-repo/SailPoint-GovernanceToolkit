@@ -452,6 +452,111 @@ function Get-SPCampaignPreviousSnapshot {
     return @{ Success = $true; Data = ($candidates | Select-Object -First 1); Error = $null }
 }
 
+function Get-SPCampaignSnapshotSet {
+    <#
+    .SYNOPSIS
+        Resolves an ORDERED set of snapshot objects from disk for multi-snapshot history
+        analysis -- read-only, no API. Two modes:
+          * Cross-campaign (default): the LATEST capture of EACH campaign whose snapshots match
+            a name filter, ordered by campaign start date -- the "one point per daily campaign"
+            timeline (admin_xyz across Mon/Tue/Wed).
+          * -WithinCampaign: EVERY capture of ONE campaign, ordered by capture time -- how that
+            single long-lived campaign's decisions evolved as laggards/reviewers acted.
+    .DESCRIPTION
+        Pure disk walk over {SnapshotDir}\{campaignId}\{stamp}.json. Reuses
+        Get-SPCampaignSnapshotList + Get-SPCampaignSnapshot. Name matching is on each campaign's
+        Meta.CampaignName (precedence: exact -> starts-with -> contains), or pin one with
+        -CampaignId. Feeds Get-SPEntitlementHistory.
+    .PARAMETER SnapshotDir
+        Snapshot root (default: resolved from config, toolkit-root absolute).
+    .PARAMETER CampaignId
+        Resolve a single campaign by id (its sanitized snapshot sub-dir).
+    .PARAMETER CampaignName / -CampaignNameStartsWith / -CampaignNameContains
+        Match campaigns by their snapshot Meta.CampaignName.
+    .PARAMETER WithinCampaign
+        Walk every capture of ONE campaign instead of one-per-campaign. Requires the filters to
+        resolve to exactly one campaign (else an error asking to narrow / use -CampaignId).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@(<ordered snapshot objects>); Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$SnapshotDir,
+        [Parameter()][string]$CampaignId,
+        [Parameter()][string]$CampaignName,
+        [Parameter()][string]$CampaignNameStartsWith,
+        [Parameter()][string]$CampaignNameContains,
+        [Parameter()][switch]$WithinCampaign
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) { $SnapshotDir = Get-SPSnapshotDir }
+        if (-not (Test-Path $SnapshotDir)) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        # --- enumerate the candidate campaign sub-dirs ---
+        $campDirs = @()
+        if (-not [string]::IsNullOrWhiteSpace($CampaignId)) {
+            $safeId = $CampaignId -replace '[^A-Za-z0-9_\-]', '_'
+            $one = Join-Path $SnapshotDir $safeId
+            if (Test-Path $one) { $campDirs = @($safeId) }
+        }
+        else {
+            $campDirs = @(Get-ChildItem -LiteralPath $SnapshotDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+        }
+        if ($campDirs.Count -eq 0) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        # --- for each campaign dir, load its latest snapshot to read identity + apply name filter ---
+        $matched = [System.Collections.Generic.List[object]]::new()
+        foreach ($dirName in $campDirs) {
+            $listR = Get-SPCampaignSnapshotList -CampaignId $dirName -SnapshotDir $SnapshotDir
+            if (-not $listR.Success -or @($listR.Data).Count -eq 0) { continue }
+            $latestRef = @($listR.Data)[0]   # newest first
+            $loadR = Get-SPCampaignSnapshot -Path $latestRef.Path
+            if (-not $loadR.Success) { continue }
+            $latest = $loadR.Data
+            $name = ''
+            if ($null -ne $latest.Meta) {
+                $p = $latest.Meta.PSObject.Properties['CampaignName']
+                if ($null -ne $p -and $null -ne $p.Value) { $name = [string]$p.Value }
+            }
+            # name filter precedence: exact -> starts-with -> contains (skip when none supplied)
+            $keep = $true
+            if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $keep = ($name -ieq $CampaignName) }
+            elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $keep = ($name -like "$CampaignNameStartsWith*") }
+            elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) { $keep = ($name -match [regex]::Escape($CampaignNameContains)) }
+            if (-not $keep) { continue }
+            $startRaw = ''
+            if ($null -ne $latest.Meta) {
+                $sp = $latest.Meta.PSObject.Properties['StartDate']
+                if ($null -ne $sp -and $null -ne $sp.Value) { $startRaw = [string]$sp.Value }
+            }
+            $sortDate = $latestRef.CapturedAt
+            if (-not [string]::IsNullOrWhiteSpace($startRaw)) { try { $sortDate = [datetime]::Parse($startRaw) } catch { } }
+            $matched.Add([PSCustomObject]@{ DirName = $dirName; CampaignName = $name; SortDate = $sortDate; LatestPath = $latestRef.Path; LatestSnapshot = $latest })
+        }
+        if ($matched.Count -eq 0) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        if ($WithinCampaign) {
+            if ($matched.Count -gt 1) {
+                return @{ Success = $false; Data = $null; Error = "-WithinCampaign matched $($matched.Count) campaigns ($(@($matched | ForEach-Object { $_.CampaignName }) -join '; ')) -- narrow the name filter or use -CampaignId." }
+            }
+            $only = $matched[0]
+            $allR = Get-SPCampaignSnapshotList -CampaignId $only.DirName -SnapshotDir $SnapshotDir
+            $ordered = [System.Collections.Generic.List[object]]::new()
+            foreach ($ref in (@($allR.Data) | Sort-Object CapturedAt)) {   # oldest -> newest
+                $lr = Get-SPCampaignSnapshot -Path $ref.Path
+                if ($lr.Success) { $ordered.Add($lr.Data) }
+            }
+            return @{ Success = $true; Data = @($ordered.ToArray()); Error = $null }
+        }
+
+        # Cross-campaign: one (latest) snapshot per matched campaign, ordered by start date.
+        $ordered = @($matched | Sort-Object SortDate | ForEach-Object { $_.LatestSnapshot })
+        return @{ Success = $true; Data = @($ordered); Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPCampaignSnapshotSet failed: $($_.Exception.Message)" } }
+}
+
 function Remove-SPCampaignOldSnapshots {
     <#
     .SYNOPSIS
@@ -690,6 +795,7 @@ Export-ModuleMember -Function @(
     'Get-SPCampaignSnapshot',
     'Get-SPCampaignSnapshotList',
     'Get-SPCampaignPreviousSnapshot',
+    'Get-SPCampaignSnapshotSet',
     'Remove-SPCampaignOldSnapshots',
     'Test-SPCampaignSnapshotIntegrity'
 )

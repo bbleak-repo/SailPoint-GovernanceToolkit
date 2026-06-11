@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -928,6 +928,55 @@ It auto-detects the file kind and flags, with **Error / Warn / Info** severity:
 
 **Related:** `Invoke-SPCampaignDiff.ps1` (produces the snapshots), the item cache (*Campaign
 filtering & the item cache*).
+
+### `Invoke-SPEntitlementHistory.ps1`
+**Purpose:** the **decision timeline** for each identity+entitlement across **many** snapshots —
+the multi-campaign generalization of the diff (which compares two). Answers *"how did
+admin_xyz / John Doe move over time?"* (`APPROVE 6/8 → APPROVE 6/9 → REVOKE 6/11`) and *"who got
+admin_xyz for the first time?"*. **Read-only, no API** — it walks the immutable snapshots already
+on disk.
+
+Two timeline modes:
+- **default (cross-campaign):** one point per campaign whose snapshots match the name filter — the
+  "separate daily campaigns" view.
+- **`-WithinCampaign`:** every capture of **one** long-lived campaign (how it evolved as laggards
+  and reviewers acted). Requires the filter to resolve to a single campaign.
+
+By default it shows only timelines that **changed** (a decision flip, a first-time grant, or a drop
+from scope); `-IncludeUnchanged` shows all. Output is one self-contained HTML report (grouped **by
+entitlement** and/or **by identity** — chips coloured by decision, a red arrow marks each change)
+plus an optional per-observation CSV.
+
+| Parameter | Description |
+|---|---|
+| `-CampaignId` / `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Which campaigns' snapshots to walk (same precedence as elsewhere). |
+| `-WithinCampaign` | Walk every capture of ONE campaign instead of one-per-campaign. |
+| `-AccessName` / `-AccessId` / `-IdentityName` / `-IdentityId` | Focus on one entitlement and/or identity (name = substring, id = exact). |
+| `-GroupBy` | `Entitlement` / `Identity` / `Both` (default `Both`). |
+| `-IncludeUnchanged` | Also show timelines whose decision never changed. |
+| `-MaxTimelines <n>` | Cap the output (most-changed first); prints how many were omitted. `0` = no cap. |
+| `-SnapshotDir` / `-OutputPath` | Snapshot root (default `Audit\snapshots`) / output dir (default `Audit\history`). |
+| `-IncludeCsv` | Also write the flat per-observation CSV. |
+| `-OutputMode` | `Console` / `JSON` / `Both`. |
+
+```powershell
+# admin_xyz's decision timeline across every matching daily campaign, with a CSV
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignNameContains 'Daily Attestation Manager' -AccessName 'admin_xyz' -IncludeCsv
+
+# Everything that changed for one person across the daily campaigns
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignNameContains 'Daily Attestation Manager' -IdentityName 'John Doe'
+
+# How one long-lived campaign's decisions evolved across its own captures
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignId 'camp-7f3a...' -WithinCampaign
+```
+
+> Needs **&ge; 2 snapshots** to show change — capture one per active campaign on a schedule (via
+> `Invoke-SPCampaignDiff.ps1`) so each builds a timeline. The join is the same stable
+> `identity|access|source` key the diff uses (benefits from populated `AccessId`/`SourceId`).
+> Read-only (CLI-005), no API. Exit `0` report written, `2` no matching snapshots, `5` error.
+
+**Related:** `Invoke-SPCampaignDiff.ps1` (two-campaign diff + produces the snapshots),
+`Invoke-SPCacheValidate.ps1` (validate the snapshots first).
 
 ### `Invoke-SPCampaignTrendReport.ps1`
 **Purpose:** the **KPI trend report** for a recurring campaign — how its *rates* move over
