@@ -3140,7 +3140,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 <tr>
 <td>Executive Summary (per campaign)</td>
-<td>status badge, reviewers signed-off, items decided, a decision-distribution <strong>donut</strong>, <strong>Revoked Access — Flagged for Removal</strong> (% of revokes whose decision is finalised), and Key Indicators</td>
+<td>status badge, reviewers signed-off, items decided, a decision-distribution <strong>donut</strong>, <strong>Revoked Access — Removal Status</strong> (Deprovisioned / Queued / Pending), and Key Indicators</td>
 </tr>
 <tr>
 <td>A. Campaign Completion Evidence</td>
@@ -3152,10 +3152,10 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 <tr>
 <td>Decision Summary</td>
-<td>collapsible <strong>Approved / Revoked (open) / Pending</strong> — Identity, Account, Access (PRIV), <strong>Source</strong>, <strong>Reviewer (manager)</strong>, Decision Date, <strong>Justification</strong>, Remediation ("Flagged for removal" for finalised revokes)</td>
+<td>collapsible <strong>Approved / Revoked (open) / Pending</strong> — Identity, Account, Access (PRIV), <strong>Source</strong>, <strong>Reviewer (manager)</strong>, Decision Date, <strong>Justification</strong>, Remediation (<strong>Deprovisioned</strong> / <strong>Queued for removal</strong> / <strong>Pending removal</strong>)</td>
 </tr>
 </tbody></table>
-<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Honest remediation wording.</strong> A finalised revoke means the <em>decision</em> is recorded, <strong>not</strong> that the access was actually pulled at the source. Disconnected / manual sources are fulfilled downstream and ISC exposes no reliable "removed" signal, so v2 says <strong>"Flagged for removal"</strong> (not "Deprovisioned") and the exec card carries a caveat that actual removal isn't confirmed here.</p></div>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Source-aware removal wording (applies to every report that reports removals).</strong> A finalised revoke means the <em>decision</em> is recorded, <strong>not</strong> that the access was always pulled at the source. The toolkit only counts a completed revoke as <strong>Deprovisioned</strong> when it is on a <strong>connected Active Directory</strong> source (where ISC actually performs the removal). A completed revoke on any other source (disconnected apps, manual / other connectors) is <strong>Queued for removal</strong> — recorded but fulfilled downstream and <strong>not confirmed here</strong>; an undecided revoke is <strong>Pending removal</strong>. The classification lives in one place (<code>Get-SPRevocationDisposition</code>) and drives the daily-evidence reports (v1 + v2), the campaign-audit executive summary, and the attestation evidence pack. The AD-vs-other split is keyed off the ISC item's <code>sourceType</code> (e.g. <code>Active Directory - Direct</code>).</p></div>
 <p>Day-over-day / scope-change deltas are intentionally <strong>not</strong> here — they live in the campaign-diff report (<code>Invoke-SPCampaignDiff.ps1</code>).</p>
 <p><strong>Parameters:</strong> same as <code>Invoke-SPDailyEvidenceReport.ps1</code> (<code>-DaysBack</code>, the <code>-CampaignName*</code> filters, <code>-Token</code>, <code>-OutputMode</code>). Threshold/KPI params have no effect on the v2 HTML.</p>
 <pre><code># v2 daily evidence (default 1-day window)

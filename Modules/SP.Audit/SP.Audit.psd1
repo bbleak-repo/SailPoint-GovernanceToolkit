@@ -55,6 +55,8 @@
 
         # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
+        'Test-SPConnectedADSource'
+        'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'

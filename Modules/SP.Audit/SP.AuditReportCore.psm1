@@ -25,6 +25,75 @@
 
 #region Categorization Functions
 
+function Test-SPConnectedADSource {
+    <#
+    .SYNOPSIS
+        True when a source is a connected Active Directory source (the only source we treat
+        as performing a real, confirmed de-provisioning when a REVOKE completes).
+    .DESCRIPTION
+        ISC only actually pulls access on a CONNECTED source. Per program policy the toolkit
+        treats Active Directory as that connected source: a completed REVOKE on AD is reported
+        as "Deprovisioned". Every other source (disconnected apps, manual/queued, other
+        connectors we don't positively confirm) is fulfilled downstream and is reported as
+        "Queued for removal" -- recorded, but removal not confirmed here.
+
+        Detection prefers the ISC item's sourceType (e.g. "Active Directory - Direct"); when
+        sourceType is absent it falls back to the source NAME mentioning Active Directory.
+    .OUTPUTS
+        [bool]
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string]$SourceType,
+        [string]$SourceName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($SourceType) -and $SourceType -match '(?i)active\s*directory') { return $true }
+    # Only trust the name when the type is unavailable (older snapshots / mock shapes).
+    if ([string]::IsNullOrWhiteSpace($SourceType) -and -not [string]::IsNullOrWhiteSpace($SourceName) -and $SourceName -match '(?i)active\s*directory') { return $true }
+    return $false
+}
+
+function Get-SPRevocationDisposition {
+    <#
+    .SYNOPSIS
+        Classifies how far a REVOKE has actually progressed toward removal, honestly.
+    .DESCRIPTION
+        A finalised REVOKE means the DECISION is recorded -- not that the access was pulled at
+        the source. This is the single source of truth every report uses so "removed" is never
+        overclaimed:
+          - REVOKE, completed, connected AD source  -> Disposition 'Removed'  (label "Deprovisioned")
+          - REVOKE, completed, any other source     -> Disposition 'Queued'   (label "Queued for removal")
+          - REVOKE, not completed                   -> Disposition 'Pending'  (label "Pending removal")
+          - not a REVOKE                            -> Disposition 'NA'       (label "N/A")
+    .PARAMETER Completed
+        ISC item.completed (the certification item / decision is finalised). Bool-ish.
+    .OUTPUTS
+        [PSCustomObject] @{ Disposition; Label; IsRemoved; IsQueued; IsPending; IsConnectedAD }
+    #>
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    param(
+        [string]$Decision,
+        [object]$Completed,
+        [string]$SourceType,
+        [string]$SourceName
+    )
+    $dec = if ($null -ne $Decision) { ([string]$Decision).ToUpperInvariant() } else { '' }
+    if ($dec -ne 'REVOKE') {
+        return [PSCustomObject]@{ Disposition = 'NA'; Label = 'N/A'; IsRemoved = $false; IsQueued = $false; IsPending = $false; IsConnectedAD = $false }
+    }
+    $isAD = Test-SPConnectedADSource -SourceType $SourceType -SourceName $SourceName
+    $done = $false; try { $done = [bool]$Completed } catch { $done = $false }
+    if (-not $done) {
+        return [PSCustomObject]@{ Disposition = 'Pending'; Label = 'Pending removal'; IsRemoved = $false; IsQueued = $false; IsPending = $true; IsConnectedAD = $isAD }
+    }
+    if ($isAD) {
+        return [PSCustomObject]@{ Disposition = 'Removed'; Label = 'Deprovisioned'; IsRemoved = $true; IsQueued = $false; IsPending = $false; IsConnectedAD = $true }
+    }
+    return [PSCustomObject]@{ Disposition = 'Queued'; Label = 'Queued for removal'; IsRemoved = $false; IsQueued = $true; IsPending = $false; IsConnectedAD = $false }
+}
+
 function Group-SPAuditDecisions {
     <#
     .SYNOPSIS
@@ -198,9 +267,13 @@ function Group-SPAuditDecisions {
         # access.source.{name,id}, then the account object (account.source / sourceName / sourceId).
         $sourceName = ''
         $sourceId   = ''
+        $sourceType = ''
         # Top-level item.sourceName/sourceId is the most reliable source label and is the one that
         # also surfaces DISCONNECTED-app source names; prefer it, then fall back to the chain below.
-        # (item.sourceType e.g. "Active Directory - Direct" is deliberately ignored.)
+        # item.sourceType (e.g. "Active Directory - Direct") drives the removal disposition: only a
+        # connected AD source is reported as actually de-provisioned (see Get-SPRevocationDisposition).
+        if ($null -ne $rawItem.PSObject.Properties['sourceType'] -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceType)) { $sourceType = [string]$rawItem.sourceType }
+        if ([string]::IsNullOrWhiteSpace($sourceType) -and $null -ne $entObj -and $null -ne $entObj.PSObject.Properties['sourceType'] -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceType)) { $sourceType = [string]$entObj.sourceType }
         if ($null -ne $rawItem.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceName)) { $sourceName = [string]$rawItem.sourceName }
         if ($null -ne $rawItem.PSObject.Properties['sourceId']   -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceId))   { $sourceId   = [string]$rawItem.sourceId }
         if ($null -ne $entObj) {
@@ -264,8 +337,8 @@ function Group-SPAuditDecisions {
         }
         $remediationStatus = 'N/A'
         $remediationDate   = ''
+        $isCompleted       = $false
         if ($decision.ToUpperInvariant() -eq 'REVOKE') {
-            $isCompleted = $false
             if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['completed'] -and
                 $null -ne $rawItem.completed) {
                 try { $isCompleted = [bool]$rawItem.completed } catch { $isCompleted = $false }
@@ -279,6 +352,10 @@ function Group-SPAuditDecisions {
                 $remediationStatus = 'Pending'
             }
         }
+        # Source-aware removal disposition: a completed REVOKE is only "Deprovisioned" on a
+        # connected AD source; on any other source it is "Queued for removal" (recorded, not
+        # confirmed removed). This is what every report renders so removal is never overclaimed.
+        $disp = Get-SPRevocationDisposition -Decision $decision -Completed $isCompleted -SourceType $sourceType -SourceName $sourceName
 
         # Build normalized output object
         $out = [PSCustomObject]@{
@@ -292,6 +369,7 @@ function Group-SPAuditDecisions {
             Privileged             = if ($null -ne $entObj -and $null -ne $entObj.PSObject.Properties['privileged'] -and $null -ne $entObj.privileged) { [bool]$entObj.privileged } elseif ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['privileged'] -and $null -ne $accessObj.privileged) { [bool]$accessObj.privileged } else { $false }
             SourceName             = $sourceName
             SourceId               = $sourceId
+            SourceType             = $sourceType
             ReviewerName           = $reviewerName
             ReviewerEmail          = $reviewerEmail
             Decision               = $decision
@@ -301,6 +379,8 @@ function Group-SPAuditDecisions {
             DecisionDate           = if ($null -ne $rawItem.decisionDate -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.decisionDate)) { [string]$rawItem.decisionDate } elseif (-not [string]::IsNullOrWhiteSpace($systemTimestamp)) { $systemTimestamp } else { '' }   # ISC items often have no decisionDate field; fall back to the item's modified/created timestamp ($systemTimestamp), which IS when the reviewer acted.
             Justification          = $justification
             RemediationStatus      = $remediationStatus
+            RemediationDisposition = $disp.Disposition
+            RemediationLabel       = $disp.Label
             RemediationDate        = $remediationDate
             SystemTimestamp        = $systemTimestamp
             CampaignStartDate      = $campaignStartDate
@@ -642,11 +722,17 @@ function Group-SPAuditRemediationProof {
         $accessName = ''
         $accessType = ''
         $sourceName = ''
+        $sourceType = ''
+        # sourceType (e.g. "Active Directory - Direct") decides whether a completed revoke is
+        # actually de-provisioned (connected AD) or merely queued (everything else).
+        if ($null -ne $rawItem.PSObject.Properties['sourceType'] -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceType)) { $sourceType = [string]$rawItem.sourceType }
+        if ($null -ne $rawItem.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceName)) { $sourceName = [string]$rawItem.sourceName }
         if ($null -ne $rawItem.access) {
             if ($null -ne $rawItem.access.name) { $accessName = [string]$rawItem.access.name }
             if ($null -ne $rawItem.access.type) { $accessType = [string]$rawItem.access.type }
             # Source name: may be nested under access.source.name
-            if ($null -ne $rawItem.access.PSObject.Properties['source'] -and
+            if ([string]::IsNullOrWhiteSpace($sourceName) -and
+                $null -ne $rawItem.access.PSObject.Properties['source'] -and
                 $null -ne $rawItem.access.source -and
                 $null -ne $rawItem.access.source.PSObject.Properties['name'] -and
                 $null -ne $rawItem.access.source.name) {
@@ -667,15 +753,19 @@ function Group-SPAuditRemediationProof {
             try { $remediationComplete = [bool]$rawItem.completed } catch { $remediationComplete = $false }
         }
 
+        $disp = Get-SPRevocationDisposition -Decision 'REVOKE' -Completed $remediationComplete -SourceType $sourceType -SourceName $sourceName
         $revokedItems.Add([PSCustomObject]@{
             IdentityName          = $identityName
             AccountIdentifier     = $accountIdentifier
             AccessName            = $accessName
             AccessType            = $accessType
             SourceName            = $sourceName
+            SourceType            = $sourceType
             ReviewerName          = $reviewerName
             DecisionDate          = $decisionDate
             RemediationComplete   = $remediationComplete
+            RemediationDisposition = $disp.Disposition
+            RemediationLabel      = $disp.Label
             CertificationName     = $certName
             CampaignName          = $campaignName
         })
@@ -739,6 +829,10 @@ function Group-SPAuditRemediationProof {
     $totalRevoked   = $revokedItems.Count
     $completeCount  = @($revokedItems | Where-Object { $_.RemediationComplete -eq $true }).Count
     $pendingCount   = $totalRevoked - $completeCount
+    # Source-aware split of the COMPLETED revokes: only connected-AD removals are confirmed
+    # de-provisioned; the rest are recorded but queued for downstream/manual fulfilment.
+    $removedCount   = @($revokedItems | Where-Object { $_.RemediationDisposition -eq 'Removed' }).Count
+    $queuedCount    = @($revokedItems | Where-Object { $_.RemediationDisposition -eq 'Queued' }).Count
 
     return @{
         RevokedItems             = $revokedItems.ToArray()
@@ -746,6 +840,8 @@ function Group-SPAuditRemediationProof {
         TotalRevoked             = $totalRevoked
         RemediationCompleteCount = $completeCount
         RemediationPendingCount  = $pendingCount
+        RemediationRemovedCount  = $removedCount
+        RemediationQueuedCount   = $queuedCount
     }
 }
 
@@ -2461,6 +2557,8 @@ function Build-SPLeadershipHierarchy {
 
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
+    'Test-SPConnectedADSource',
+    'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',

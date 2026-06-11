@@ -12,7 +12,8 @@
                                    privileged-access users, managers involved, sources evaluated
       Executive Summary (per campaign)
                                    status badge, reviewers signed-off, items decided, a
-                                   decision-distribution donut, "Revoked Access — Flagged for Removal"
+                                   decision-distribution donut, "Revoked Access — Removal Status"
+                                   (Deprovisioned on connected AD vs Queued elsewhere vs Pending)
                                    (de-provisioning), and Key Indicators
       A. Campaign Completion Evidence   cross-campaign table incl. Approved / Revoked / Pending
       B. Reviewer Accountability        collapsible Completed / Pending / Reassigned (per campaign)
@@ -1322,9 +1323,16 @@ foreach ($audit in $campaignAudits) {
     $reassignCnt = @($reassigned).Count
     $revItems = @($d['Revoked'])
     $totRevoked = $revItems.Count
-    $removed = @($revItems | Where-Object { (& $remDone $(if ($_.PSObject.Properties['RemediationStatus']) { $_.RemediationStatus } else { $null })) }).Count
-    $remPend = $totRevoked - $removed
+    # Source-aware split: 'Removed' = revoke completed on a connected AD source (truly de-provisioned);
+    # 'Queued' = revoke completed on a disconnected/other source (recorded, removal not confirmed);
+    # remainder = pending. The deprovision rate counts ONLY confirmed AD removals.
+    $removed = @($revItems | Where-Object { ([string]$_.RemediationDisposition) -eq 'Removed' }).Count
+    $queued  = @($revItems | Where-Object { ([string]$_.RemediationDisposition) -eq 'Queued' }).Count
+    $remPend = $totRevoked - $removed - $queued
+    if ($remPend -lt 0) { $remPend = 0 }
     $remPct = if ($totRevoked -gt 0) { [math]::Round($removed / $totRevoked * 100, 0) } else { 0 }
+    $qPct   = if ($totRevoked -gt 0) { [math]::Round($queued / $totRevoked * 100, 0) } else { 0 }
+    $pPct   = 100 - $remPct - $qPct; if ($pPct -lt 0) { $pPct = 0 }
     $stColor = switch ($cStatusRaw) { 'COMPLETED' { '#339933' } 'COMPLETING' { '#339933' } default { '#336699' } }
     $revCompColor = if ($revCompPct -ge 100) { '#339933' } elseif ($revCompPct -ge 50) { '#FF9900' } else { '#CC3333' }
     $pendColor = if ($pend -eq 0) { '#339933' } else { '#FF9900' }
@@ -1333,10 +1341,10 @@ foreach ($audit in $campaignAudits) {
     $createdFmt = & $fmtDt ([string]$audit['Created'])
     if ($totRevoked -gt 0) {
         $remBlock = @"
-<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked revoked items flagged for removal</span></div>
-<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$(100 - $remPct)%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
-<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Flagged</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Not yet decided</td></tr></table>
-<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Reflects the recorded revoke decision; actual removal at the source (esp. disconnected / manual sources) is fulfilled downstream and not confirmed here.</p>
+<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked deprovisioned (connected AD)</span></div>
+<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$qPct%;background:#336699;height:18px"></td><td style="width:$pPct%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
+<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Deprovisioned</td><td style="color:#264d73;font-weight:bold;text-align:center;padding:2px 0">$queued Queued</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Pending</td></tr></table>
+<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Deprovisioned = revoke completed on a connected Active Directory source. Queued = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.</p>
 "@
     }
     else {
@@ -1374,7 +1382,7 @@ $donutSvg
 </table>
 </td>
 <td style="width:34%;vertical-align:top;padding:0 12px">
-<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Revoked Access &mdash; Flagged for Removal</p>
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Revoked Access &mdash; Removal Status</p>
 $remBlock
 </td>
 <td style="width:33%;vertical-align:top;padding-left:12px">
@@ -1382,7 +1390,7 @@ $remBlock
 <table style="width:100%;border-collapse:collapse;font-size:12px">
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$revCompPct%</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$pendColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Pending Items</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$pendColor">$('{0:N0}' -f $pend)</td></tr>
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Revokes Flagged</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Deprovisioned (AD)</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
 <tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Reassignments</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$reassignCnt</td></tr>
 </table>
 </td>
@@ -1471,16 +1479,19 @@ foreach ($cat in $cats) {
             $cid = if ($it.PSObject.Properties['CertificationId']) { [string]$it.CertificationId } else { '' }
             $just = 'N/A'
             if ($it.PSObject.Properties['Justification'] -and -not [string]::IsNullOrWhiteSpace($it.Justification)) { $just = [string]$it.Justification }
-            # Remediation: for revokes, the decision being completed means the revoke is RECORDED, not
-            # that the access was actually pulled at the source (disconnected/manual sources are fulfilled
-            # downstream). Label honestly as 'Flagged for removal' rather than claiming de-provisioning.
+            # Remediation: a completed revoke is only "Deprovisioned" on a connected Active Directory
+            # source; on any other (disconnected/manual) source it is "Queued for removal" -- recorded
+            # but fulfilled downstream and not confirmed here. The source-aware disposition is computed
+            # once in Group-SPAuditDecisions (RemediationDisposition/RemediationLabel).
             $rem = '<span class="s-gray">N/A</span>'
-            if ($it.PSObject.Properties['RemediationStatus'] -and -not [string]::IsNullOrWhiteSpace($it.RemediationStatus)) {
-                $rs = [string]$it.RemediationStatus
-                $done = [bool](& $remDone $rs)
-                $rsDisp = if ($isRevoked) { if ($done) { 'Flagged for removal' } else { 'Not yet decided' } } else { $rs }
-                if ($done) { $rem = '<span class="s-green">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
-                else { $rem = '<span class="s-amber">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
+            $disp = if ($it.PSObject.Properties['RemediationDisposition']) { [string]$it.RemediationDisposition } else { '' }
+            if ($isRevoked -and -not [string]::IsNullOrWhiteSpace($disp) -and $disp -ne 'NA') {
+                $rsDisp = if ($it.PSObject.Properties['RemediationLabel'] -and -not [string]::IsNullOrWhiteSpace([string]$it.RemediationLabel)) { [string]$it.RemediationLabel } else { $disp }
+                $cls = switch ($disp) { 'Removed' { 's-green' } 'Queued' { 's-amber' } 'Pending' { 's-amber' } default { 's-gray' } }
+                $rem = '<span class="' + $cls + '">' + (ConvertTo-SafeHtml $rsDisp) + '</span>'
+            }
+            elseif (-not $isRevoked -and $it.PSObject.Properties['RemediationStatus'] -and -not [string]::IsNullOrWhiteSpace($it.RemediationStatus) -and ([string]$it.RemediationStatus) -ne 'N/A') {
+                $rem = '<span class="s-gray">' + (ConvertTo-SafeHtml ([string]$it.RemediationStatus)) + '</span>'
             }
             # PRIV badge is item-driven (the entitlement's privileged attribute) -> kept, so it stays
             # adaptive for quarterly mixed campaigns where only some access is privileged.

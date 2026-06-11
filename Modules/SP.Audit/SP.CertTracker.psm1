@@ -61,6 +61,8 @@ function Get-CTSnapshotStats {
     $revSigned = [int](Get-CTProp $kpi 'ReviewersSigned' 0)
     $revNotStarted = [int](Get-CTProp $kpi 'ReviewersNotStarted' 0)
     $remPending = [int](Get-CTProp $kpi 'RemediationPending' 0)
+    $remRemoved = [int](Get-CTProp $kpi 'RemediationRemoved' 0)
+    $remQueued  = [int](Get-CTProp $kpi 'RemediationQueued' 0)
     $complByDecision = [double](Get-CTProp $kpi 'CompletionPct' 0)
     $complByReviewer = [double](Get-CTProp $kpi 'CompletionPctByReviewer' 0)
 
@@ -79,7 +81,7 @@ function Get-CTSnapshotStats {
         Status = $status
         Total = $total; Approved = $approved; Revoked = $revoked; Pending = $pending; Decided = $decided
         ReviewersTotal = $revTotal; ReviewersSigned = $revSigned; ReviewersNotStarted = $revNotStarted
-        RemediationPending = $remPending
+        RemediationPending = $remPending; RemediationRemoved = $remRemoved; RemediationQueued = $remQueued
         CompletionByDecision = $complByDecision; CompletionByReviewer = $complByReviewer
         Stage = $stage; StageIndex = $idx
         CapturedAt = ConvertTo-CTDate ([string](Get-CTProp $meta 'CapturedAt' ''))
@@ -418,6 +420,9 @@ function Export-SPAttestationEvidenceHtml {
                     DecisionDate = [string](Get-CTProp $it 'DecisionDate' '')
                     Justification = [string](Get-CTProp $it 'Justification' '')
                     RemediationStatus = [string](Get-CTProp $it 'RemediationStatus' '')
+                    RemediationDisposition = [string](Get-CTProp $it 'RemediationDisposition' '')
+                    RemediationLabel  = [string](Get-CTProp $it 'RemediationLabel' '')
+                    SourceType        = [string](Get-CTProp $it 'SourceType' '')
                     RemediationDate   = [string](Get-CTProp $it 'RemediationDate' '')
                 })
             }
@@ -429,8 +434,18 @@ function Export-SPAttestationEvidenceHtml {
         $decided = $approved + $revoked
         $complPct = if ($total -gt 0) { [math]::Round($decided * 100.0 / $total, 1) } else { 0 }
         $revRows = @($rows | Where-Object { $_.Decision -eq 'Revoked' })
-        $remProvisioned = @($revRows | Where-Object { $_.RemediationStatus -match 'Provision' }).Count
-        $remPending = @($revRows | Where-Object { $_.RemediationStatus -match 'Pending' }).Count
+        # Source-aware removal disposition: a completed revoke is only "Deprovisioned" on a connected
+        # AD source; elsewhere it is "Queued for removal" (recorded, not confirmed). Fall back to the
+        # classifier when an upstream caller didn't already stamp the disposition.
+        foreach ($r in $revRows) {
+            if ([string]::IsNullOrWhiteSpace([string]$r.RemediationDisposition)) {
+                $completed = ([string]$r.RemediationStatus -match 'Provision')
+                $r.RemediationDisposition = (Get-SPRevocationDisposition -Decision 'REVOKE' -Completed $completed -SourceType ([string]$r.SourceType) -SourceName ([string]$r.SourceName)).Disposition
+            }
+        }
+        $remRemoved = @($revRows | Where-Object { $_.RemediationDisposition -eq 'Removed' }).Count
+        $remQueued  = @($revRows | Where-Object { $_.RemediationDisposition -eq 'Queued' }).Count
+        $remPending = @($revRows | Where-Object { $_.RemediationDisposition -eq 'Pending' }).Count
 
         $css = @'
 body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;}
@@ -478,23 +493,24 @@ tr:nth-child(even) td{background:#f6f9fc;}
                 $pb = if ($r.Privileged) { " <span class='badge'>PRIV</span>" } else { '' }
                 $dc = switch ($r.Decision) { 'Approved' {"<span class='d-app'>Approve</span>"} 'Revoked' {"<span class='d-rev'>Revoke</span>"} default {"<span class='d-pen'>Pending</span>"} }
                 $dt = if ($r.DecisionDate) { try { ([datetime]::Parse($r.DecisionDate)).ToString('yyyy-MM-dd') } catch { $r.DecisionDate } } else { '&mdash;' }
-                $rem = if ($r.Decision -eq 'Revoked') { if ($r.RemediationStatus) { Get-CTEnc $r.RemediationStatus } else { 'Pending' } } else { '' }
+                $rem = if ($r.Decision -eq 'Revoked') { if ($r.RemediationLabel) { Get-CTEnc $r.RemediationLabel } elseif ($r.RemediationDisposition) { Get-CTEnc $r.RemediationDisposition } else { 'Pending removal' } } else { '' }
                 [void]$sb.Append("<tr$cls><td>$(Get-CTEnc $r.IdentityName)</td><td>$(Get-CTEnc $r.AccessName)$pb</td><td>$(Get-CTEnc $r.SourceName)</td><td>$dc</td><td>$(Get-CTEnc $r.Reviewer)</td><td>$dt</td><td>$(Get-CTEnc $r.Justification)</td><td>$rem</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
 
         # Revocation closure
-        [void]$sb.Append("<h2>Revocation closure ($revoked revoked &mdash; $remProvisioned removed, $remPending pending)</h2>")
+        [void]$sb.Append("<h2>Revocation closure ($revoked revoked &mdash; $remRemoved deprovisioned, $remQueued queued, $remPending pending)</h2>")
         if ($revoked -eq 0) { [void]$sb.Append("<div class='note'>No revocations in this capture.</div>") }
         else {
             [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Removal status</th><th>Removed date</th></tr>")
-            foreach ($r in @($revRows | Sort-Object @{ Expression = { if ($_.RemediationStatus -match 'Pending') { 0 } else { 1 } } })) {
-                $st = if ($r.RemediationStatus -match 'Provision') { "<span class='d-app'>Removed</span>" } else { "<span class='d-pen'>Pending removal</span>" }
+            foreach ($r in @($revRows | Sort-Object @{ Expression = { switch ($_.RemediationDisposition) { 'Pending' {0} 'Queued' {1} default {2} } } })) {
+                $st = switch ($r.RemediationDisposition) { 'Removed' { "<span class='d-app'>Deprovisioned</span>" } 'Queued' { "<span class='d-pen'>Queued for removal</span>" } default { "<span class='d-pen'>Pending removal</span>" } }
                 $rd = if ($r.RemediationDate) { try { ([datetime]::Parse($r.RemediationDate)).ToString('yyyy-MM-dd') } catch { $r.RemediationDate } } else { '&mdash;' }
                 [void]$sb.Append("<tr><td>$(Get-CTEnc $r.IdentityName)</td><td>$(Get-CTEnc $r.AccessName)</td><td>$(Get-CTEnc $r.SourceName)</td><td>$(Get-CTEnc $r.Reviewer)</td><td>$st</td><td>$rd</td></tr>")
             }
             [void]$sb.Append("</table>")
+            [void]$sb.Append("<div class='note'>Deprovisioned = revoke completed on a connected Active Directory source. Queued for removal = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.</div>")
         }
         [void]$sb.Append("<div class='note'>Read-only evidence. No reassignment or escalation is performed by this report.</div>")
         [void]$sb.Append("</body></html>")
