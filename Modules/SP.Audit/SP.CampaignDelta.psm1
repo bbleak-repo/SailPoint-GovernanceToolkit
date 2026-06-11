@@ -452,6 +452,111 @@ function Get-SPCampaignPreviousSnapshot {
     return @{ Success = $true; Data = ($candidates | Select-Object -First 1); Error = $null }
 }
 
+function Get-SPCampaignSnapshotSet {
+    <#
+    .SYNOPSIS
+        Resolves an ORDERED set of snapshot objects from disk for multi-snapshot history
+        analysis -- read-only, no API. Two modes:
+          * Cross-campaign (default): the LATEST capture of EACH campaign whose snapshots match
+            a name filter, ordered by campaign start date -- the "one point per daily campaign"
+            timeline (admin_xyz across Mon/Tue/Wed).
+          * -WithinCampaign: EVERY capture of ONE campaign, ordered by capture time -- how that
+            single long-lived campaign's decisions evolved as laggards/reviewers acted.
+    .DESCRIPTION
+        Pure disk walk over {SnapshotDir}\{campaignId}\{stamp}.json. Reuses
+        Get-SPCampaignSnapshotList + Get-SPCampaignSnapshot. Name matching is on each campaign's
+        Meta.CampaignName (precedence: exact -> starts-with -> contains), or pin one with
+        -CampaignId. Feeds Get-SPEntitlementHistory.
+    .PARAMETER SnapshotDir
+        Snapshot root (default: resolved from config, toolkit-root absolute).
+    .PARAMETER CampaignId
+        Resolve a single campaign by id (its sanitized snapshot sub-dir).
+    .PARAMETER CampaignName / -CampaignNameStartsWith / -CampaignNameContains
+        Match campaigns by their snapshot Meta.CampaignName.
+    .PARAMETER WithinCampaign
+        Walk every capture of ONE campaign instead of one-per-campaign. Requires the filters to
+        resolve to exactly one campaign (else an error asking to narrow / use -CampaignId).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@(<ordered snapshot objects>); Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][string]$SnapshotDir,
+        [Parameter()][string]$CampaignId,
+        [Parameter()][string]$CampaignName,
+        [Parameter()][string]$CampaignNameStartsWith,
+        [Parameter()][string]$CampaignNameContains,
+        [Parameter()][switch]$WithinCampaign
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($SnapshotDir)) { $SnapshotDir = Get-SPSnapshotDir }
+        if (-not (Test-Path $SnapshotDir)) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        # --- enumerate the candidate campaign sub-dirs ---
+        $campDirs = @()
+        if (-not [string]::IsNullOrWhiteSpace($CampaignId)) {
+            $safeId = $CampaignId -replace '[^A-Za-z0-9_\-]', '_'
+            $one = Join-Path $SnapshotDir $safeId
+            if (Test-Path $one) { $campDirs = @($safeId) }
+        }
+        else {
+            $campDirs = @(Get-ChildItem -LiteralPath $SnapshotDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+        }
+        if ($campDirs.Count -eq 0) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        # --- for each campaign dir, load its latest snapshot to read identity + apply name filter ---
+        $matched = [System.Collections.Generic.List[object]]::new()
+        foreach ($dirName in $campDirs) {
+            $listR = Get-SPCampaignSnapshotList -CampaignId $dirName -SnapshotDir $SnapshotDir
+            if (-not $listR.Success -or @($listR.Data).Count -eq 0) { continue }
+            $latestRef = @($listR.Data)[0]   # newest first
+            $loadR = Get-SPCampaignSnapshot -Path $latestRef.Path
+            if (-not $loadR.Success) { continue }
+            $latest = $loadR.Data
+            $name = ''
+            if ($null -ne $latest.Meta) {
+                $p = $latest.Meta.PSObject.Properties['CampaignName']
+                if ($null -ne $p -and $null -ne $p.Value) { $name = [string]$p.Value }
+            }
+            # name filter precedence: exact -> starts-with -> contains (skip when none supplied)
+            $keep = $true
+            if (-not [string]::IsNullOrWhiteSpace($CampaignName)) { $keep = ($name -ieq $CampaignName) }
+            elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $keep = ($name -like "$CampaignNameStartsWith*") }
+            elseif (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) { $keep = ($name -match [regex]::Escape($CampaignNameContains)) }
+            if (-not $keep) { continue }
+            $startRaw = ''
+            if ($null -ne $latest.Meta) {
+                $sp = $latest.Meta.PSObject.Properties['StartDate']
+                if ($null -ne $sp -and $null -ne $sp.Value) { $startRaw = [string]$sp.Value }
+            }
+            $sortDate = $latestRef.CapturedAt
+            if (-not [string]::IsNullOrWhiteSpace($startRaw)) { try { $sortDate = [datetime]::Parse($startRaw) } catch { } }
+            $matched.Add([PSCustomObject]@{ DirName = $dirName; CampaignName = $name; SortDate = $sortDate; LatestPath = $latestRef.Path; LatestSnapshot = $latest })
+        }
+        if ($matched.Count -eq 0) { return @{ Success = $true; Data = @(); Error = $null } }
+
+        if ($WithinCampaign) {
+            if ($matched.Count -gt 1) {
+                return @{ Success = $false; Data = $null; Error = "-WithinCampaign matched $($matched.Count) campaigns ($(@($matched | ForEach-Object { $_.CampaignName }) -join '; ')) -- narrow the name filter or use -CampaignId." }
+            }
+            $only = $matched[0]
+            $allR = Get-SPCampaignSnapshotList -CampaignId $only.DirName -SnapshotDir $SnapshotDir
+            $ordered = [System.Collections.Generic.List[object]]::new()
+            foreach ($ref in (@($allR.Data) | Sort-Object CapturedAt)) {   # oldest -> newest
+                $lr = Get-SPCampaignSnapshot -Path $ref.Path
+                if ($lr.Success) { $ordered.Add($lr.Data) }
+            }
+            return @{ Success = $true; Data = @($ordered.ToArray()); Error = $null }
+        }
+
+        # Cross-campaign: one (latest) snapshot per matched campaign, ordered by start date.
+        $ordered = @($matched | Sort-Object SortDate | ForEach-Object { $_.LatestSnapshot })
+        return @{ Success = $true; Data = @($ordered); Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPCampaignSnapshotSet failed: $($_.Exception.Message)" } }
+}
+
 function Remove-SPCampaignOldSnapshots {
     <#
     .SYNOPSIS
@@ -507,6 +612,181 @@ function Remove-SPCampaignOldSnapshots {
     catch { return @{ Success = $false; Data = $null; Error = "Remove-SPCampaignOldSnapshots failed: $($_.Exception.Message)" } }
 }
 
+function Test-SPCampaignSnapshotIntegrity {
+    <#
+    .SYNOPSIS
+        Validates a campaign snapshot JSON (or a raw items-cache .jsonl) for data
+        completeness and internal consistency -- no HTML, no API. Surfaces the data-quality
+        problems that silently produce bad diffs/reports.
+    .DESCRIPTION
+        Read-only. Auto-detects the file kind and runs the relevant checks:
+
+          Snapshot (Build-SPCampaignSnapshotData object: Meta/Items/Kpi)
+            * Field coverage  -- IdentityId/AccessName/SourceName/Decision/DecisionDate
+              populated on >= -FieldCoverageWarnPct of items (this is the "approve with no
+              date / blank source" class of bug).
+            * Decision validity -- every Decision in APPROVE/REVOKE/PENDING.
+            * Decided-with-no-date -- APPROVE/REVOKE items missing a DecisionDate.
+            * KPI consistency -- Kpi.Total and Approved+Revoked+Pending vs item count;
+              Meta.ItemCount vs item count.
+            * Key integrity -- blank or duplicate identity|access|source keys.
+            * Date sanity -- decision dates after the capture time.
+            * Empty capture -- 0 items (API hiccup / partial auth = a "bad run").
+
+          ItemsCache (items-{id}.jsonl + sibling .meta.json)
+            * Every line parses as JSON.
+            * .meta.json present -- a MISSING meta = an interrupted/partial fetch (meta is
+              written only on completion); the next run resumes it.
+            * meta.ItemCount vs the actual line count on disk.
+
+        Returns a findings list (Severity Error/Warn/Info) plus a summary; Ok = no Error.
+    .PARAMETER Path
+        A snapshot .json, an items-*.jsonl, or a directory (newest *.json snapshot is used).
+    .PARAMETER FieldCoverageWarnPct
+        Warn when a key field is populated on fewer than this percent of items. Default 90.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Kind; File; Ok; Findings; Summary }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter()][double]$FieldCoverageWarnPct = 90
+    )
+    try {
+        # Local safe property reader -- nested sibling modules do NOT share Get-SPDiffProp,
+        # and the file always round-trips through JSON to a PSCustomObject (or IDictionary
+        # when a freshly-built snapshot is piped in by a test).
+        function _prop($o, $n, $d = '') {
+            if ($null -eq $o) { return $d }
+            if ($o -is [System.Collections.IDictionary]) { if ($o.Contains($n) -and $null -ne $o[$n]) { return $o[$n] }; return $d }
+            $p = $o.PSObject.Properties[$n]
+            if ($null -ne $p -and $null -ne $p.Value) { return $p.Value }
+            return $d
+        }
+        $findings = [System.Collections.Generic.List[object]]::new()
+        function _add($sev, $code, $msg, $count) { $findings.Add([ordered]@{ Severity = $sev; Code = $code; Message = $msg; Count = [int]$count }) }
+
+        # Resolve a directory to its newest snapshot json (recursive, excluding .meta.json).
+        $target = $Path
+        if (Test-Path -LiteralPath $Path -PathType Container) {
+            $newest = Get-ChildItem -LiteralPath $Path -Recurse -File -Filter '*.json' -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -notlike '*.meta.json' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($null -eq $newest) { return @{ Success = $false; Data = $null; Error = "No *.json snapshot found under directory: $Path" } }
+            $target = $newest.FullName
+        }
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { return @{ Success = $false; Data = $null; Error = "File not found: $target" } }
+
+        $isJsonl = ($target -match '\.jsonl$')
+        $rawFirst = ''
+        try { $rawFirst = (Get-Content -LiteralPath $target -TotalCount 1 -ErrorAction Stop) -join '' } catch { }
+
+        # ----- ItemsCache (.jsonl) -----
+        if ($isJsonl -or ($rawFirst -match '"CertificationId"' -and $rawFirst -match '"Item"')) {
+            $lines = @(Get-Content -LiteralPath $target | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $parsed = 0; $bad = 0
+            foreach ($ln in $lines) { try { [void]($ln | ConvertFrom-Json); $parsed++ } catch { $bad++ } }
+            if ($bad -gt 0)    { _add 'Error' 'CACHE_PARSE' "$bad cache line(s) are not valid JSON (truncated/corrupt)." $bad }
+            if ($parsed -eq 0) { _add 'Error' 'CACHE_EMPTY' 'Items cache has no parseable items.' 0 }
+
+            $metaPath = ''
+            $cand1 = [regex]::Replace($target, '\.jsonl$', '.meta.json')
+            if (Test-Path -LiteralPath $cand1) { $metaPath = $cand1 }
+            if (-not $metaPath) {
+                _add 'Warn' 'CACHE_PARTIAL' 'No .meta.json sidecar -- PARTIAL/interrupted fetch (meta is written only on completion). The next run resumes it.' 0
+            }
+            else {
+                try {
+                    $m = Get-Content -LiteralPath $metaPath -Raw | ConvertFrom-Json
+                    $metaCount = [int](_prop $m 'ItemCount' 0)
+                    if ($metaCount -ne $parsed) { _add 'Warn' 'CACHE_COUNT' "meta.ItemCount ($metaCount) != items on disk ($parsed)." ([math]::Abs($metaCount - $parsed)) }
+                } catch { _add 'Warn' 'CACHE_META' 'meta.json present but unreadable.' 0 }
+            }
+            $summary = [ordered]@{ Kind = 'ItemsCache'; CampaignName = ''; ItemCount = $parsed; BadLines = $bad; HasMeta = [bool]$metaPath }
+            $ok = (@($findings | Where-Object { $_.Severity -eq 'Error' }).Count -eq 0)
+            return @{ Success = $true; Data = @{ Kind = 'ItemsCache'; File = $target; Ok = [bool]$ok; Findings = $findings.ToArray(); Summary = $summary }; Error = $null }
+        }
+
+        # ----- Snapshot (.json) -----
+        $snap = $null
+        try { $snap = Get-Content -LiteralPath $target -Raw | ConvertFrom-Json }
+        catch { return @{ Success = $false; Data = $null; Error = "Snapshot is not valid JSON: $($_.Exception.Message)" } }
+
+        $meta = _prop $snap 'Meta' $null
+        if ($null -eq $meta) { _add 'Error' 'NO_META' 'Snapshot has no Meta block.' 0 }
+        $items = @(); $rawItems = _prop $snap 'Items' $null
+        if ($null -ne $rawItems) { $items = @($rawItems) }
+        $itemCount = $items.Count
+        if ($itemCount -eq 0) { _add 'Error' 'EMPTY' 'Snapshot has 0 items -- likely a bad/empty capture (API hiccup or partial auth).' 0 }
+
+        # Field coverage.
+        foreach ($f in @('IdentityId', 'AccessName', 'SourceName', 'Decision', 'DecisionDate')) {
+            if ($itemCount -eq 0) { break }
+            $blank = 0
+            foreach ($it in $items) { if ([string]::IsNullOrWhiteSpace([string](_prop $it $f ''))) { $blank++ } }
+            if ($blank -gt 0) {
+                $pct = [math]::Round((($itemCount - $blank) * 100.0 / $itemCount), 1)
+                if ($pct -lt $FieldCoverageWarnPct) {
+                    $sev = if ($f -eq 'IdentityId' -or $f -eq 'Decision') { 'Error' } else { 'Warn' }
+                    _add $sev "BLANK_$($f.ToUpperInvariant())" "$f blank on $blank/$itemCount items ($pct% populated)." $blank
+                }
+            }
+        }
+        # AccessId/SourceId blanks weaken the cross-campaign join (it falls back to names) -- info only.
+        foreach ($f in @('AccessId', 'SourceId')) {
+            if ($itemCount -eq 0) { break }
+            $blank = 0
+            foreach ($it in $items) { if ([string]::IsNullOrWhiteSpace([string](_prop $it $f ''))) { $blank++ } }
+            if ($blank -gt 0) { _add 'Info' "BLANK_$($f.ToUpperInvariant())" "$f blank on $blank/$itemCount items -- cross-campaign join falls back to names (churns on rename)." $blank }
+        }
+
+        # KPI / count consistency.
+        $kpi = _prop $snap 'Kpi' $null
+        if ($null -ne $kpi -and $itemCount -gt 0) {
+            $kTotal = [int](_prop $kpi 'Total' 0)
+            $kSum = [int](_prop $kpi 'Approved' 0) + [int](_prop $kpi 'Revoked' 0) + [int](_prop $kpi 'Pending' 0)
+            if ($kTotal -ne $itemCount) { _add 'Warn' 'KPI_TOTAL' "Kpi.Total ($kTotal) != item count ($itemCount)." ([math]::Abs($kTotal - $itemCount)) }
+            if ($kSum -ne $itemCount)   { _add 'Warn' 'KPI_SUM' "Approved+Revoked+Pending ($kSum) != item count ($itemCount)." ([math]::Abs($kSum - $itemCount)) }
+        }
+        $metaItemCount = [int](_prop $meta 'ItemCount' -1)
+        if ($metaItemCount -ge 0 -and $metaItemCount -ne $itemCount) { _add 'Warn' 'META_COUNT' "Meta.ItemCount ($metaItemCount) != actual items ($itemCount)." ([math]::Abs($metaItemCount - $itemCount)) }
+
+        # Decision validity, decided-with-no-date, key integrity, date sanity (single pass).
+        $cap = $null
+        $capRaw = [string](_prop $meta 'CapturedAt' '')
+        if ($capRaw) { try { $cap = [datetime]::Parse($capRaw) } catch { } }
+        $badDec = 0; $decidedNoDate = 0; $dupKeys = 0; $blankKey = 0; $futureDate = 0
+        $seen = @{}
+        foreach ($it in $items) {
+            $dec = ([string](_prop $it 'Decision' '')).ToUpperInvariant()
+            if ($dec -and @('APPROVE', 'REVOKE', 'PENDING') -notcontains $dec) { $badDec++ }
+            $dd = [string](_prop $it 'DecisionDate' '')
+            if (($dec -eq 'APPROVE' -or $dec -eq 'REVOKE') -and [string]::IsNullOrWhiteSpace($dd)) { $decidedNoDate++ }
+            elseif ($dd -and $null -ne $cap) { try { if (([datetime]::Parse($dd)) -gt $cap.AddMinutes(5)) { $futureDate++ } } catch { } }
+            $k = [string](_prop $it 'Key' '')
+            if ([string]::IsNullOrWhiteSpace($k)) { $blankKey++ }
+            elseif ($seen.ContainsKey($k)) { $dupKeys++ } else { $seen[$k] = $true }
+        }
+        if ($badDec -gt 0)        { _add 'Error' 'DECISION_INVALID' "$badDec item(s) have a Decision outside APPROVE/REVOKE/PENDING." $badDec }
+        if ($decidedNoDate -gt 0) { _add 'Warn'  'DECIDED_NO_DATE' "$decidedNoDate decided (APPROVE/REVOKE) item(s) have no DecisionDate -- 'when' can't be shown." $decidedNoDate }
+        if ($blankKey -gt 0)      { _add 'Error' 'BLANK_KEY' "$blankKey item(s) have a blank join Key (identity|access|source) -- they cannot be diffed." $blankKey }
+        if ($dupKeys -gt 0)       { _add 'Warn'  'DUP_KEY' "$dupKeys duplicate identity|access|source key(s) -- a grant is represented more than once." $dupKeys }
+        if ($futureDate -gt 0)    { _add 'Warn'  'FUTURE_DATE' "$futureDate decision date(s) are after the capture time." $futureDate }
+
+        $summary = [ordered]@{
+            Kind         = 'Snapshot'
+            CampaignName = [string](_prop $meta 'CampaignName' '')
+            CampaignId   = [string](_prop $meta 'CampaignId' '')
+            Status       = [string](_prop $meta 'Status' '')
+            CapturedAt   = $capRaw
+            ItemCount    = $itemCount
+        }
+        $ok = (@($findings | Where-Object { $_.Severity -eq 'Error' }).Count -eq 0)
+        return @{ Success = $true; Data = @{ Kind = 'Snapshot'; File = $target; Ok = [bool]$ok; Findings = $findings.ToArray(); Summary = $summary }; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Test-SPCampaignSnapshotIntegrity failed: $($_.Exception.Message)" } }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -515,5 +795,7 @@ Export-ModuleMember -Function @(
     'Get-SPCampaignSnapshot',
     'Get-SPCampaignSnapshotList',
     'Get-SPCampaignPreviousSnapshot',
-    'Remove-SPCampaignOldSnapshots'
+    'Get-SPCampaignSnapshotSet',
+    'Remove-SPCampaignOldSnapshots',
+    'Test-SPCampaignSnapshotIntegrity'
 )

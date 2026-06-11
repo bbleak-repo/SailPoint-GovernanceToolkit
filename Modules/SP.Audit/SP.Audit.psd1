@@ -225,7 +225,9 @@
         'Get-SPCampaignSnapshot'
         'Get-SPCampaignSnapshotList'
         'Get-SPCampaignPreviousSnapshot'
+        'Get-SPCampaignSnapshotSet'
         'Remove-SPCampaignOldSnapshots'
+        'Test-SPCampaignSnapshotIntegrity'
 
         # SP.CampaignDiff - Snapshot comparison + diff reporting (completion/scope/compliance)
         'Compare-SPCampaignSnapshots'
@@ -234,6 +236,11 @@
         'Export-SPCampaignDiffCsv'
         'Split-SPCampaignDiffByDirector'
         'Export-SPCampaignDiffByDirectorHtml'
+
+        # SP.CampaignDiff - Per-entitlement decision history (N snapshots)
+        'Get-SPEntitlementHistory'
+        'Export-SPEntitlementHistoryHtml'
+        'Export-SPEntitlementHistoryCsv'
 
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'

@@ -119,6 +119,16 @@ function Get-SPDiffDelta {
     return "<span class='flat'>0</span>"
 }
 
+function Get-SPDiffShortDate {
+    # A parseable timestamp -> 'yyyy-MM-dd HH:mm'; falls back to the raw string when
+    # unparseable, '' when empty. Display-only -- used for the per-item decision dates
+    # ("approved on 6/10, revoked on 6/11") surfaced in the scope/change tables.
+    param([object]$Value)
+    $s = if ($null -eq $Value) { '' } else { [string]$Value }
+    if ([string]::IsNullOrWhiteSpace($s)) { return '' }
+    try { return ([datetime]::Parse($s)).ToString('yyyy-MM-dd HH:mm') } catch { return $s }
+}
+
 #endregion
 
 #region Public: compare
@@ -275,12 +285,23 @@ function Compare-SPCampaignSnapshots {
                     $changed.Add([ordered]@{
                         Key          = $k
                         IdentityName = [string](Get-SPDiffProp $ci 'IdentityName' '')
+                        IdentityId   = [string](Get-SPDiffProp $ci 'IdentityId' '')
                         AccessName   = [string](Get-SPDiffProp $ci 'AccessName' '')
+                        AccessId     = [string](Get-SPDiffProp $ci 'AccessId' '')
                         AccessType   = [string](Get-SPDiffProp $ci 'AccessType' '')
                         SourceName   = [string](Get-SPDiffProp $ci 'SourceName' '')
+                        SourceId     = [string](Get-SPDiffProp $ci 'SourceId' '')
                         Privileged   = [bool](Get-SPDiffProp $ci 'Privileged' $false)
                         PrevDecision = $pd
                         CurrDecision = $cd
+                        # Normalized transition label (e.g. APPROVE->REVOKE) so the report/CSV can
+                        # filter to the meaningful flips the user cares about across campaigns.
+                        Transition   = "$pd->$cd"
+                        # Per-item decision timestamps from EACH campaign's snapshot item -- this is
+                        # what makes "approved on 6/10, revoked on 6/11" expressible. The dates are the
+                        # real ISC 'modified' decision times, not the (live, ~identical) capture times.
+                        PrevDecisionDate = [string](Get-SPDiffProp $pi 'DecisionDate' '')
+                        CurrDecisionDate = [string](Get-SPDiffProp $ci 'DecisionDate' '')
                         # ReviewerId carried so the per-director split can attribute a decision
                         # change to the reviewer (manager) who owns the cert it belongs to.
                         ReviewerId   = [string](Get-SPDiffProp $ci 'ReviewerId' '')
@@ -376,6 +397,10 @@ function Compare-SPCampaignSnapshots {
                 CrossCampaign        = [bool]$CrossCampaign
                 PreviousCampaignId   = if ($hasPrev) { [string](Get-SPDiffProp $prevMeta 'CampaignId' '') } else { '' }
                 PreviousCampaignName = if ($hasPrev) { [string](Get-SPDiffProp $prevMeta 'CampaignName' '') } else { '' }
+                # Each campaign's own start date (Campaign.created) -- the meaningful per-campaign
+                # date label for cross-campaign diffs, where CapturedAt is ~now for both snapshots.
+                CurrentCampaignStartDate  = [string](Get-SPDiffProp $curMeta 'StartDate' '')
+                PreviousCampaignStartDate = if ($hasPrev) { [string](Get-SPDiffProp $prevMeta 'StartDate' '') } else { '' }
             }
             Completion = [ordered]@{
                 Reviewers           = $reviewers.ToArray()
@@ -534,7 +559,12 @@ function Export-SPCampaignScopeDiffHtml {
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.Append((Get-SPDiffHtmlHead -Title $title))
         [void]$sb.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
-        $window = if ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
+        $window = if ([bool](Get-SPDiffProp $meta 'CrossCampaign' $false)) {
+                      # Cross-campaign: label by each campaign's name + start date (CapturedAt is ~now for both).
+                      $pPrev = Get-SPDiffShortDate (Get-SPDiffProp $meta 'PreviousCampaignStartDate' '')
+                      $pCurr = Get-SPDiffShortDate (Get-SPDiffProp $meta 'CurrentCampaignStartDate' '')
+                      "$(Get-SPDiffEnc (Get-SPDiffProp $meta 'PreviousCampaignName' ''))$(if ($pPrev) { " ($pPrev)" }) &rarr; $(Get-SPDiffEnc (Get-SPDiffProp $meta 'CampaignName' ''))$(if ($pCurr) { " ($pCurr)" })"
+                  } elseif ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
         $cadLabel = [string](Get-SPDiffProp $meta 'Cadence' 'Adjacent')
         $cadSuffix = if ($meta.HasPrevious -and $cadLabel) { " | Cadence: $(Get-SPDiffEnc $cadLabel)" } else { '' }
         [void]$sb.Append("<div class='meta'>Campaign $(Get-SPDiffEnc $meta.CampaignId) | Status $(Get-SPDiffEnc $meta.Status)$cadSuffix<br/>$window</div>")
@@ -577,11 +607,11 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append("<h2>Decision changed ($($scope.ChangedCount))</h2>")
         if (@($scope.Changed).Count -eq 0) { [void]$sb.Append("<div class='empty'>No decision changes.</div>") }
         else {
-            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Now</th></tr>")
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
             foreach ($c in @($scope.Changed)) {
                 $cls = if ($c.Privileged) { " class='priv'" } else { '' }
                 $pb = if ($c.Privileged) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
-                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc $c.IdentityName)</td><td>$(Get-SPDiffEnc $c.AccessName)$pb</td><td>$(Get-SPDiffEnc $c.SourceName)</td><td>$(Get-SPDiffEnc $c.PrevDecision)</td><td>$(Get-SPDiffEnc $c.CurrDecision)</td></tr>")
+                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc $c.IdentityName)</td><td>$(Get-SPDiffEnc $c.AccessName)$pb</td><td>$(Get-SPDiffEnc $c.SourceName)</td><td>$(Get-SPDiffEnc $c.PrevDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.PrevDecisionDate))</td><td>$(Get-SPDiffEnc $c.CurrDecision)</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate $c.CurrDecisionDate))</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
@@ -605,7 +635,7 @@ function Append-SPScopeItemTable {
     )
     $items = @($Items)
     if ($items.Count -eq 0) { [void]$Sb.Append("<div class='empty'>None.</div>"); return }
-    $decCol = if ($ShowDecision) { '<th>Decision</th>' } else { '' }
+    $decCol = if ($ShowDecision) { '<th>Decision</th><th>Decided</th>' } else { '' }
     [void]$Sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th>$decCol</tr>")
     # privileged first
     $sorted = $items | Sort-Object @{ Expression = { if ([bool](Get-SPDiffProp $_ 'Privileged' $false)) { 0 } else { 1 } } }, @{ Expression = { [string](Get-SPDiffProp $_ 'AccessName' '') } }
@@ -613,7 +643,7 @@ function Append-SPScopeItemTable {
         $priv = $ForcePriv -or [bool](Get-SPDiffProp $it 'Privileged' $false)
         $cls = if ($priv) { " class='priv'" } else { '' }
         $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
-        $dec = if ($ShowDecision) { "<td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'Decision' ''))</td>" } else { '' }
+        $dec = if ($ShowDecision) { "<td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'Decision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $it 'DecisionDate' '')))</td>" } else { '' }
         [void]$Sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $it 'SourceName' ''))</td>$dec</tr>")
     }
     [void]$Sb.Append("</table>")
@@ -682,10 +712,13 @@ function Export-SPCampaignDiffCsv {
         foreach ($c in @($Diff.Scope.Changed)) {
             $row = New-SPScopeCsvRow -Meta $meta -Item $c -Change 'Changed'
             $row.PrevDecision = $c.PrevDecision; $row.CurrDecision = $c.CurrDecision
+            $row.Transition = [string](Get-SPDiffProp $c 'Transition' '')
+            $row.PrevDecisionDate = [string](Get-SPDiffProp $c 'PrevDecisionDate' '')
+            $row.CurrDecisionDate = [string](Get-SPDiffProp $c 'CurrDecisionDate' '')
             $scopeRows.Add($row)
         }
         $scopeCsv = Join-Path $OutputDir "scope-diff-$campSafe-$stamp.csv"
-        $scopeCols = @('CampaignId','CampaignName','CapturedAt','Change','ChangeClass','IdentityName','IdentityId','AccessName','SourceName','Privileged','PrivilegedSource','Decision','PrevDecision','CurrDecision','Key')
+        $scopeCols = @('CampaignId','CampaignName','CapturedAt','Change','ChangeClass','IdentityName','IdentityId','AccessName','AccessId','SourceName','SourceId','Privileged','PrivilegedSource','Decision','DecisionDate','PrevDecision','CurrDecision','Transition','PrevDecisionDate','CurrDecisionDate','Key')
         # Pipe the List via .ToArray(): wrapping a generic List in @(...) breaks the
         # downstream Select-Object/Export-Csv binding in PS 5.1 ("Argument types do not match").
         $scopeRows.ToArray() | Select-Object -Property $scopeCols | Export-Csv -Path $scopeCsv -NoTypeInformation -Encoding UTF8 -WhatIf:$false
@@ -706,12 +739,20 @@ function New-SPScopeCsvRow {
         IdentityName = [string](Get-SPDiffProp $Item 'IdentityName' '')
         IdentityId   = [string](Get-SPDiffProp $Item 'IdentityId' '')
         AccessName   = [string](Get-SPDiffProp $Item 'AccessName' '')
+        AccessId     = [string](Get-SPDiffProp $Item 'AccessId' '')
         SourceName   = [string](Get-SPDiffProp $Item 'SourceName' '')
+        SourceId     = [string](Get-SPDiffProp $Item 'SourceId' '')
         Privileged   = [bool](Get-SPDiffProp $Item 'Privileged' $false)
         PrivilegedSource = [string](Get-SPDiffProp $Item 'PrivilegedSource' '')
         Decision     = [string](Get-SPDiffProp $Item 'Decision' '')
+        # For Added/Removed rows this is the item's own decision date; for Changed rows it
+        # stays blank and PrevDecisionDate/CurrDecisionDate carry the two campaign timestamps.
+        DecisionDate = [string](Get-SPDiffProp $Item 'DecisionDate' '')
         PrevDecision = ''
         CurrDecision = ''
+        Transition   = ''
+        PrevDecisionDate = ''
+        CurrDecisionDate = ''
         Key          = [string](Get-SPDiffProp $Item 'Key' '')
     }
 }
@@ -908,12 +949,12 @@ function Get-SPDiffDirectorBodyHtml {
     [void]$sb.Append("<h2>Decision changed ($($c.Changed))</h2>")
     if (@($d.Changed).Count -eq 0) { [void]$sb.Append("<div class='empty'>No decision changes.</div>") }
     else {
-        [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Now</th></tr>")
+        [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Was</th><th>Prev date</th><th>Now</th><th>Curr date</th></tr>")
         foreach ($ch in @($d.Changed)) {
             $priv = [bool](Get-SPDiffProp $ch 'Privileged' $false)
             $cls = if ($priv) { " class='priv'" } else { '' }
             $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
-            [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td></tr>")
+            [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'CurrDecisionDate' '')))</td></tr>")
         }
         [void]$sb.Append("</table>")
     }
@@ -951,7 +992,12 @@ function Export-SPCampaignDiffByDirectorHtml {
         $runDir = Join-Path $OutputPath ("per-director-" + $stamp)
         if (-not (Test-Path $runDir)) { New-Item -Path $runDir -ItemType Directory -Force -WhatIf:$false | Out-Null }
 
-        $window = if ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
+        $window = if ([bool](Get-SPDiffProp $meta 'CrossCampaign' $false)) {
+                      # Cross-campaign: label by each campaign's name + start date (CapturedAt is ~now for both).
+                      $pPrev = Get-SPDiffShortDate (Get-SPDiffProp $meta 'PreviousCampaignStartDate' '')
+                      $pCurr = Get-SPDiffShortDate (Get-SPDiffProp $meta 'CurrentCampaignStartDate' '')
+                      "$(Get-SPDiffEnc (Get-SPDiffProp $meta 'PreviousCampaignName' ''))$(if ($pPrev) { " ($pPrev)" }) &rarr; $(Get-SPDiffEnc (Get-SPDiffProp $meta 'CampaignName' ''))$(if ($pCurr) { " ($pCurr)" })"
+                  } elseif ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
         $utf8 = New-Object System.Text.UTF8Encoding($false)
         $files = [System.Collections.Generic.List[string]]::new()
 
@@ -991,11 +1037,335 @@ function Export-SPCampaignDiffByDirectorHtml {
 
 #endregion
 
+#region Public: per-entitlement history (N snapshots)
+
+function Get-SPEntitlementHistory {
+    <#
+    .SYNOPSIS
+        Builds per-(identity|access|source) decision TIMELINES across an ordered set of snapshots
+        -- the multi-snapshot generalization of Compare-SPCampaignSnapshots (which compares two).
+        Answers "admin_xyz / John Doe: APPROVE 6/8 -> APPROVE 6/9 -> REVOKE 6/11" and "who got
+        admin_xyz for the first time."
+    .DESCRIPTION
+        Pure (decoupled from disk, like Build-SPCampaignSnapshotData). Each snapshot contributes
+        one point in time (its campaign StartDate, falling back to CapturedAt); items are joined on
+        the same stable Key the diff uses. For each Key it produces an ordered observation list with
+        a per-step change classification and a summary (first/last decision, change count, appeared/
+        dropped flags). By default only timelines with a change are returned (-IncludeUnchanged
+        returns all).
+    .PARAMETER Snapshots
+        Array of snapshot objects (from Get-SPCampaignSnapshotSet / Get-SPCampaignSnapshot). Order
+        is recomputed from each campaign's date, so any order in is fine.
+    .PARAMETER AccessName / -AccessId / -IdentityName / -IdentityId
+        Optional filters. Name filters are case-insensitive substring; id filters are exact.
+    .PARAMETER IncludeUnchanged
+        Also return timelines whose decision never changed (and that span the whole window).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ Timelines; Meta }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object[]]$Snapshots,
+        [Parameter()][string]$AccessName,
+        [Parameter()][string]$AccessId,
+        [Parameter()][string]$IdentityName,
+        [Parameter()][string]$IdentityId,
+        [Parameter()][switch]$IncludeUnchanged
+    )
+    try {
+        # --- order the snapshots into time points ---
+        $points = [System.Collections.Generic.List[object]]::new()
+        foreach ($s in @($Snapshots)) {
+            if ($null -eq $s) { continue }
+            $meta = Get-SPDiffProp $s 'Meta'
+            $startRaw = [string](Get-SPDiffProp $meta 'StartDate' '')
+            $capRaw   = [string](Get-SPDiffProp $meta 'CapturedAt' '')
+            $sortRaw  = if (-not [string]::IsNullOrWhiteSpace($startRaw)) { $startRaw } else { $capRaw }
+            $sortDt = [datetime]::MinValue
+            if ($sortRaw) { try { $sortDt = [datetime]::Parse($sortRaw) } catch { } }
+            # CapturedAt is the tiebreaker: within ONE campaign every capture shares the same
+            # StartDate, and PS 5.1 Sort-Object is NOT stable -- without this, within-campaign
+            # captures would order arbitrarily.
+            $capDt = [datetime]::MinValue
+            if ($capRaw) { try { $capDt = [datetime]::Parse($capRaw) } catch { } }
+            $points.Add([PSCustomObject]@{
+                Snapshot     = $s
+                CampaignId   = [string](Get-SPDiffProp $meta 'CampaignId' '')
+                CampaignName = [string](Get-SPDiffProp $meta 'CampaignName' '')
+                PointDate    = $sortRaw
+                SortDt       = $sortDt
+                CapDt        = $capDt
+            })
+        }
+        $ordered = @($points | Sort-Object SortDt, CapDt)
+        $snapCount = $ordered.Count
+
+        # --- collect observations per Key ---
+        $timelines = @{}
+        for ($i = 0; $i -lt $snapCount; $i++) {
+            $pt = $ordered[$i]
+            foreach ($it in @(Get-SPDiffProp $pt.Snapshot 'Items' @())) {
+                $aName = [string](Get-SPDiffProp $it 'AccessName' '')
+                $aId   = [string](Get-SPDiffProp $it 'AccessId' '')
+                $iName = [string](Get-SPDiffProp $it 'IdentityName' '')
+                $iId   = [string](Get-SPDiffProp $it 'IdentityId' '')
+                if ($AccessName   -and ($aName -notmatch [regex]::Escape($AccessName))) { continue }
+                if ($IdentityName -and ($iName -notmatch [regex]::Escape($IdentityName))) { continue }
+                if ($AccessId     -and ($aId -ne $AccessId)) { continue }
+                if ($IdentityId   -and ($iId -ne $IdentityId)) { continue }
+                $k = [string](Get-SPDiffProp $it 'Key' '')
+                if ([string]::IsNullOrWhiteSpace($k)) { continue }
+                if (-not $timelines.ContainsKey($k)) { $timelines[$k] = [System.Collections.Generic.List[object]]::new() }
+                $timelines[$k].Add([PSCustomObject]@{
+                    Index        = $i
+                    CampaignId   = $pt.CampaignId
+                    CampaignName = $pt.CampaignName
+                    PointDate    = $pt.PointDate
+                    Decision     = ([string](Get-SPDiffProp $it 'Decision' '')).ToUpperInvariant()
+                    DecisionDate = [string](Get-SPDiffProp $it 'DecisionDate' '')
+                    ReviewerId   = [string](Get-SPDiffProp $it 'ReviewerId' '')
+                    Privileged   = [bool](Get-SPDiffProp $it 'Privileged' $false)
+                    IdentityId   = $iId
+                    IdentityName = $iName
+                    AccessName   = $aName
+                    AccessId     = $aId
+                    AccessType   = [string](Get-SPDiffProp $it 'AccessType' '')
+                    SourceName   = [string](Get-SPDiffProp $it 'SourceName' '')
+                    SourceId     = [string](Get-SPDiffProp $it 'SourceId' '')
+                })
+            }
+        }
+
+        # --- classify each timeline ---
+        $out = [System.Collections.Generic.List[object]]::new()
+        foreach ($k in $timelines.Keys) {
+            $obs = @($timelines[$k] | Sort-Object Index)
+            $changeCount = 0
+            $prev = $null
+            foreach ($o in $obs) {
+                if ($null -eq $prev) { $o | Add-Member -NotePropertyName ChangeFromPrev -NotePropertyValue 'FIRST_SEEN' -Force }
+                elseif ($o.Decision -eq $prev.Decision) { $o | Add-Member -NotePropertyName ChangeFromPrev -NotePropertyValue 'UNCHANGED' -Force }
+                else { $o | Add-Member -NotePropertyName ChangeFromPrev -NotePropertyValue ("{0}->{1}" -f $prev.Decision, $o.Decision) -Force; $changeCount++ }
+                $prev = $o
+            }
+            $first = $obs[0]; $last = $obs[$obs.Count - 1]
+            $appearedAfterFirst = ($first.Index -gt 0)
+            $droppedBeforeLast  = ($last.Index -lt ($snapCount - 1))
+            $hasChange = ($changeCount -gt 0) -or $appearedAfterFirst -or $droppedBeforeLast
+            if (-not $IncludeUnchanged -and -not $hasChange) { continue }
+            $out.Add([PSCustomObject]@{
+                Key                = $k
+                IdentityId         = $last.IdentityId
+                IdentityName       = $last.IdentityName
+                AccessName         = $last.AccessName
+                AccessId           = $last.AccessId
+                AccessType         = $last.AccessType
+                SourceName         = $last.SourceName
+                SourceId           = $last.SourceId
+                Privileged         = $last.Privileged
+                FirstDecision      = $first.Decision
+                FirstDate          = $first.PointDate
+                LastDecision       = $last.Decision
+                LastDate           = $last.PointDate
+                ObservationCount   = $obs.Count
+                ChangeCount        = $changeCount
+                AppearedAfterFirst = $appearedAfterFirst
+                DroppedBeforeLast  = $droppedBeforeLast
+                HasChange          = $hasChange
+                Observations       = $obs
+            })
+        }
+
+        $meta = [ordered]@{
+            SnapshotCount = $snapCount
+            CampaignNames = @($ordered | ForEach-Object { $_.CampaignName })
+            PointDates    = @($ordered | ForEach-Object { $_.PointDate })
+            TimelineCount = $out.Count
+        }
+        return @{ Success = $true; Data = @{ Timelines = $out.ToArray(); Meta = $meta }; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPEntitlementHistory failed: $($_.Exception.Message)" } }
+}
+
+function Get-SPHistObsDate {
+    # The real decision date if present, else the campaign point date; short-formatted.
+    param([object]$Obs)
+    $dd = [string](Get-SPDiffProp $Obs 'DecisionDate' '')
+    if ([string]::IsNullOrWhiteSpace($dd)) { $dd = [string](Get-SPDiffProp $Obs 'PointDate' '') }
+    return (Get-SPDiffShortDate $dd)
+}
+
+function Get-SPHistTimelineHtml {
+    # Renders one timeline's observations as a row of coloured, dated decision chips.
+    param([object[]]$Observations)
+    $sb = New-Object System.Text.StringBuilder
+    $first = $true
+    foreach ($o in @($Observations)) {
+        $dec = [string](Get-SPDiffProp $o 'Decision' '')
+        $style = switch ($dec) {
+            'APPROVE' { 'background:#e6f4ea;color:#0a7d2c;border:1px solid #0a7d2c;' }
+            'REVOKE'  { 'background:#fdecec;color:#b00020;border:1px solid #b00020;' }
+            default   { 'background:#fff7e6;color:#9a6700;border:1px solid #ffd97a;' }
+        }
+        if (-not $first) {
+            $chg = [string](Get-SPDiffProp $o 'ChangeFromPrev' '')
+            if ($chg -eq 'UNCHANGED' -or $chg -eq 'FIRST_SEEN') { [void]$sb.Append(" <span style='color:#999;'>&rarr;</span> ") }
+            else { [void]$sb.Append(" <b style='color:#b00020;'>&rarr;</b> ") }
+        }
+        $when = Get-SPDiffEnc (Get-SPHistObsDate $o)
+        [void]$sb.Append("<span style='display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;margin:1px 0;$style'>$(Get-SPDiffEnc $dec)<br><span style='font-size:10px;opacity:.85;'>$when</span></span>")
+        $first = $false
+    }
+    return $sb.ToString()
+}
+
+function Export-SPEntitlementHistoryHtml {
+    <#
+    .SYNOPSIS
+        Renders the per-entitlement decision history as a self-contained HTML report (Word-
+        compatible). GroupBy Entitlement | Identity | Both (default Both writes both sections).
+    .PARAMETER History
+        .Data from Get-SPEntitlementHistory.
+    .PARAMETER OutputPath
+        Target .html file or a directory (a filename is generated).
+    .PARAMETER GroupBy
+        Entitlement (who held each access, who flipped), Identity (what each person's access did),
+        or Both.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=<path>; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$History,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter()][ValidateSet('Entitlement', 'Identity', 'Both')][string]$GroupBy = 'Both'
+    )
+    try {
+        Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+        $meta = Get-SPDiffProp $History 'Meta'
+        $timelines = @(Get-SPDiffProp $History 'Timelines' @())
+        $title = 'Entitlement Decision History'
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append((Get-SPDiffHtmlHead -Title $title))
+        [void]$sb.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
+        $names = @(Get-SPDiffProp $meta 'CampaignNames' @())
+        [void]$sb.Append("<div class='meta'>$([int](Get-SPDiffProp $meta 'SnapshotCount' 0)) snapshot(s) &middot; $($timelines.Count) timeline(s) &middot; window: $(Get-SPDiffEnc (@($names) -join ' &rarr; '))</div>")
+
+        if ($timelines.Count -eq 0) { [void]$sb.Append("<div class='empty'>No timelines matched (try -IncludeUnchanged or widen the filters).</div>") }
+
+        # Entitlement-grouped section
+        if (($GroupBy -eq 'Entitlement' -or $GroupBy -eq 'Both') -and $timelines.Count -gt 0) {
+            [void]$sb.Append("<h1>By entitlement</h1>")
+            $byAccess = $timelines | Group-Object { [string](Get-SPDiffProp $_ 'AccessName' '') }
+            foreach ($g in ($byAccess | Sort-Object Name)) {
+                $anyPriv = @($g.Group | Where-Object { [bool](Get-SPDiffProp $_ 'Privileged' $false) }).Count -gt 0
+                $pb = if ($anyPriv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                [void]$sb.Append("<h2>$(Get-SPDiffEnc $g.Name)$pb <span style='font-weight:400;color:#888;font-size:12px;'>($($g.Group.Count))</span></h2>")
+                [void]$sb.Append("<table><tr><th>Identity</th><th>Source</th><th>Timeline</th><th>Changes</th></tr>")
+                foreach ($t in ($g.Group | Sort-Object { [string](Get-SPDiffProp $_ 'IdentityName' '') })) {
+                    [void]$sb.Append("<tr><td>$(Get-SPDiffEnc (Get-SPDiffProp $t 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $t 'SourceName' ''))</td><td>$(Get-SPHistTimelineHtml (Get-SPDiffProp $t 'Observations' @()))</td><td>$([int](Get-SPDiffProp $t 'ChangeCount' 0))</td></tr>")
+                }
+                [void]$sb.Append("</table>")
+            }
+        }
+
+        # Identity-grouped section
+        if (($GroupBy -eq 'Identity' -or $GroupBy -eq 'Both') -and $timelines.Count -gt 0) {
+            [void]$sb.Append("<h1>By identity</h1>")
+            $byId = $timelines | Group-Object { [string](Get-SPDiffProp $_ 'IdentityName' '') }
+            foreach ($g in ($byId | Sort-Object Name)) {
+                [void]$sb.Append("<h2>$(Get-SPDiffEnc $g.Name) <span style='font-weight:400;color:#888;font-size:12px;'>($($g.Group.Count))</span></h2>")
+                [void]$sb.Append("<table><tr><th>Access</th><th>Source</th><th>Timeline</th><th>Changes</th></tr>")
+                foreach ($t in ($g.Group | Sort-Object { [string](Get-SPDiffProp $_ 'AccessName' '') })) {
+                    $priv = [bool](Get-SPDiffProp $t 'Privileged' $false)
+                    $pb = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                    $cls = if ($priv) { " class='priv'" } else { '' }
+                    [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $t 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $t 'SourceName' ''))</td><td>$(Get-SPHistTimelineHtml (Get-SPDiffProp $t 'Observations' @()))</td><td>$([int](Get-SPDiffProp $t 'ChangeCount' 0))</td></tr>")
+                }
+                [void]$sb.Append("</table>")
+            }
+        }
+
+        [void]$sb.Append("<div class='note'>Read-only history over immutable snapshots. A chip shows the decision and its date in each campaign; a red arrow marks a decision change.</div>")
+        [void]$sb.Append("</body></html>")
+
+        $file = Resolve-SPDiffOutFile -OutputPath $OutputPath -Default 'entitlement-history.html'
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($file, $sb.ToString(), $utf8)
+        return @{ Success = $true; Data = $file; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPEntitlementHistoryHtml failed: $($_.Exception.Message)" } }
+}
+
+function Export-SPEntitlementHistoryCsv {
+    <#
+    .SYNOPSIS
+        Writes a flat CSV -- one row per OBSERVATION -- so the full history can be pivoted in Excel.
+    .PARAMETER History
+        .Data from Get-SPEntitlementHistory.
+    .PARAMETER OutputPath
+        Target .csv file or a directory (a filename is generated).
+    .OUTPUTS
+        [hashtable] @{ Success; Data=<path>; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][object]$History,
+        [Parameter(Mandatory)][string]$OutputPath
+    )
+    try {
+        $rows = New-Object System.Collections.Generic.List[object]
+        foreach ($t in @(Get-SPDiffProp $History 'Timelines' @())) {
+            foreach ($o in @(Get-SPDiffProp $t 'Observations' @())) {
+                $rows.Add([PSCustomObject]@{
+                    Key          = [string](Get-SPDiffProp $t 'Key' '')
+                    IdentityId   = [string](Get-SPDiffProp $o 'IdentityId' '')
+                    IdentityName = [string](Get-SPDiffProp $o 'IdentityName' '')
+                    AccessId     = [string](Get-SPDiffProp $o 'AccessId' '')
+                    AccessName   = [string](Get-SPDiffProp $o 'AccessName' '')
+                    AccessType   = [string](Get-SPDiffProp $o 'AccessType' '')
+                    SourceId     = [string](Get-SPDiffProp $o 'SourceId' '')
+                    SourceName   = [string](Get-SPDiffProp $o 'SourceName' '')
+                    Privileged   = [bool](Get-SPDiffProp $o 'Privileged' $false)
+                    CampaignId   = [string](Get-SPDiffProp $o 'CampaignId' '')
+                    CampaignName = [string](Get-SPDiffProp $o 'CampaignName' '')
+                    PointDate    = [string](Get-SPDiffProp $o 'PointDate' '')
+                    Decision     = [string](Get-SPDiffProp $o 'Decision' '')
+                    DecisionDate = [string](Get-SPDiffProp $o 'DecisionDate' '')
+                    ChangeFromPrev = [string](Get-SPDiffProp $o 'ChangeFromPrev' '')
+                })
+            }
+        }
+        # Resolve-SPDiffOutFile is HTML-only; handle the .csv path here.
+        if ($OutputPath -match '\.csv$') {
+            $dir = Split-Path -Parent $OutputPath
+            if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false | Out-Null }
+            $file = $OutputPath
+        }
+        else {
+            if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
+            $file = Join-Path $OutputPath 'entitlement-history.csv'
+        }
+        $cols = @('Key', 'IdentityId', 'IdentityName', 'AccessId', 'AccessName', 'AccessType', 'SourceId', 'SourceName', 'Privileged', 'CampaignId', 'CampaignName', 'PointDate', 'Decision', 'DecisionDate', 'ChangeFromPrev')
+        $rows.ToArray() | Select-Object -Property $cols | Export-Csv -Path $file -NoTypeInformation -Encoding UTF8 -WhatIf:$false
+        return @{ Success = $true; Data = $file; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Export-SPEntitlementHistoryCsv failed: $($_.Exception.Message)" } }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Compare-SPCampaignSnapshots',
     'Export-SPCampaignCompletionDiffHtml',
     'Export-SPCampaignScopeDiffHtml',
     'Export-SPCampaignDiffCsv',
     'Split-SPCampaignDiffByDirector',
-    'Export-SPCampaignDiffByDirectorHtml'
+    'Export-SPCampaignDiffByDirectorHtml',
+    'Get-SPEntitlementHistory',
+    'Export-SPEntitlementHistoryHtml',
+    'Export-SPEntitlementHistoryCsv'
 )

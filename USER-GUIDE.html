@@ -1766,7 +1766,7 @@ pwsh -NoProfile -File Start-MockServer.ps1
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day)</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (audit/IAG)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day + cross-campaign decision dates)</strong>, <strong>cache/snapshot validator</strong>, <strong>per-entitlement decision history</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (audit/IAG)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -2291,6 +2291,7 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 Clear-SPAuditItemCache                       # all campaigns
 Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <p>Cache location and the active-campaign TTL are configurable via <code>Audit.CachePath</code> and <code>Audit.CacheActiveTtlMinutes</code> in <code>settings.json</code>. A relative <code>CachePath</code> is anchored to the <strong>toolkit root</strong>, so the cache lands in the same place no matter which directory you launch the script from (running from <code>Scripts\</code> no longer scatters it to <code>Scripts\Audit\.cache</code>).</p>
+<div class="callout callout-info"><div class="callout-label">Source of Truth</div><p><strong>Cache vs. source of truth.</strong> The item cache is a <strong>disposable mirror of ISC</strong> — deleting it only forces a re-fetch; it is <em>not</em> a system of record. The immutable <strong>snapshots</strong> written by <code>Invoke-SPCampaignDiff.ps1</code> (<code>Audit\snapshots\&lt;id&gt;\&lt;stamp&gt;.json</code>, append-only, SHA-256-sealed) are the historical <strong>source of truth</strong> for diffs and trends. For campaigns that stay ACTIVE for a long time (laggards finishing days later), capture <strong>one snapshot per active campaign on a schedule</strong> so each builds its own timeline — then day-over-day (same campaign) and cross-campaign diffs both work. Validate either with <code>Invoke-SPCacheValidate.ps1</code>.</p></div>
 <p><strong>Three things that make long runs survivable.</strong> A big campaign (thousands of items / identities) can take many minutes, so the report scripts now:</p>
 <ul><li><strong>Show progress during the quiet phases.</strong> Account resolution and the revoked-identity event lookups print a periodic heartbeat (<code>...1200 / 3500 (34%) [cache: 800, fetched: 400]</code>) so you can see it is still working, not hung. If the heartbeat slows, you are being rate-limited by ISC (the log shows the <code>Rate limit … Waiting</code> waits) — it will still finish.</li><li><strong>Cache identity→account resolution to disk.</strong> Resolving each identity's sAMAccountName / UPN / email is a per-identity API call and was the slow, silent phase that re-ran on <em>every</em> report. It is now cached to <code>Audit\.cache\accounts.jsonl</code> with a TTL (<code>Audit.AccountCacheTtlMinutes</code>, default 1440 = 24h), so the <strong>second report onward reuses it</strong>. Force a refresh with <code>Clear-SPAuditAccountCache</code> (<code>-CampaignId</code> not needed — accounts are campaign-independent).</li><li><strong>Resume an interrupted item fetch.</strong> The item cache is now written <em>per certification as it is fetched</em>. If a long first-time pull is killed mid-way, the next run <strong>resumes from the last completed certification</strong> instead of restarting (<code>[Cache] Resuming partial fetch: …</code>).</li></ul>
 <h3 id="invoke-spgovernancehealthcheck-ps1"><code>Invoke-SPGovernanceHealthCheck.ps1</code></h3>
@@ -2788,9 +2789,109 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 
 # Re-render this morning's vs yesterday's capture WITHOUT calling ISC
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -NoCapture</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Decision dates across campaigns.</strong> The scope diff records <em>when</em> each decision was made (the ISC decision timestamp). A <strong>decision change</strong> row shows both sides — e.g. <em>John Doe · admin_xyz · APPROVE (2026-06-10) → REVOKE (2026-06-11)</em> — and a <strong>first-time</strong> grant shows the date it was decided. The same <code>Prev date</code> / <code>Curr date</code> / <code>Transition</code> (<code>APPROVE-&gt;REVOKE</code>) columns are in the scope <strong>CSV</strong>. In <code>-CrossCampaign</code> mode the report header labels each side by <strong>campaign name + start date</strong> (both snapshots are captured <em>now</em>, so the capture time is not a useful per-campaign date).</p>
+<p><strong>Freshness for long-lived ACTIVE campaigns.</strong> The capture reuses the item cache (default 3 h TTL for ACTIVE campaigns). When laggards keep completing a campaign that stays open for days and you want an <em>authoritative</em> capture, force a fresh pull first (<code>Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'</code>) or lower <code>Audit.CacheActiveTtlMinutes</code>. Then <strong>validate the capture</strong> with <code>Invoke-SPCacheValidate.ps1</code> (below) before trusting the diff.</p></div>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong><code>-VelocityAdvisory</code> — read before using.</strong> This emits a separate, HTML-only <code>velocity-advisory-*.html</code> measuring per-reviewer decision <em>pace</em> (time-to-start, active span, decisions/minute, approval ratio) — the classic rubber-stamp shape is a fast, all-approve burst across many items. It is <strong>opt-in</strong>, <strong>never written to CSV</strong>, and every figure carries a mandatory caveat: <strong>review pace is gameable and a fast pace is not proof of an improper review.</strong> Use it only as a prompt for a <em>respectful conversation</em> about review quality — never as evidence of misconduct or an individual performance score. It needs ISC decision timestamps (usually present only on <strong>signed/completed</strong> campaigns); it degrades to "insufficient-timing-data" rather than guessing.</p></div>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>On the <em>privileged-approved</em> signal:</strong> approving privileged access is often entirely legitimate. The count is a <em>conversation starter</em> for review quality — reviewed respectfully alongside review-velocity context — <strong>never</strong> an automatic finding. Snapshots live under <code>Audit.SnapshotPath</code> (toolkit-root anchored) and feed the KPI trend separately.</p></div>
-<p><strong>Related:</strong> <code>Invoke-SPCampaignTrendReport.ps1</code> (the rate trend over time), <code>Invoke-SPWeeklyDigest.ps1</code> (week-over-week roll-up), the item cache (<em>Campaign filtering &amp; the item cache</em>).</p>
+<p><strong>Related:</strong> <code>Invoke-SPCampaignTrendReport.ps1</code> (the rate trend over time), <code>Invoke-SPWeeklyDigest.ps1</code> (week-over-week roll-up), the item cache (<em>Campaign filtering &amp; the item cache</em>), <code>Invoke-SPCacheValidate.ps1</code> (validate a capture before trusting the diff).</p>
+<h3 id="invoke-spcachevalidate-ps1"><code>Invoke-SPCacheValidate.ps1</code></h3>
+<p><strong>Purpose:</strong> a fast, <strong>HTML-free, read-only data-quality check</strong> over a campaign <strong>snapshot</strong> JSON (the diff/trend source of truth) or a raw <strong>items cache</strong> (<code>items-&lt;id&gt;.jsonl</code>). Use it to answer <em>"did this run capture good data?"</em> before trusting a diff or report — it catches the bad/partial runs that otherwise quietly feed a misleading report.</p>
+<p>It auto-detects the file kind and flags, with <strong>Error / Warn / Info</strong> severity:</p>
+<ul><li>blank <strong>Decision / Source / Identity / Access</strong> fields (the "approve with no date / blank source" class of bug), with the % populated;</li><li><strong>decided-with-no-date</strong> items (an APPROVE/REVOKE carrying no decision timestamp);</li><li><strong>KPI vs item-count</strong> mismatches and a <code>Meta.ItemCount</code> that disagrees with the items;</li><li><strong>blank or duplicate</strong> join keys (<code>identity|access|source</code>);</li><li>an <strong>empty capture</strong> (0 items — an API hiccup / partial auth);</li><li>a <strong>partial item cache</strong> (an <code>items-*.jsonl</code> with no <code>.meta.json</code> sidecar = an interrupted fetch).</li></ul>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td>`-Path &lt;file\</td>
+<td>dir&gt;`</td>
+<td>A snapshot <code>.json</code>, an <code>items-*.jsonl</code>, or a <strong>directory</strong> (every snapshot + items cache beneath it is checked). Defaults to <code>Audit\snapshots</code>.</td>
+</tr>
+<tr>
+<td><code>-FieldCoverageWarnPct &lt;n&gt;</code></td>
+<td>Warn when a key field is populated on fewer than this % of items (default 90).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code> (default) / <code>JSON</code> / <code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code># Validate one snapshot
+.\Scripts\Invoke-SPCacheValidate.ps1 -Path '.\Audit\snapshots\camp-7f3a...\20260611-080000.json'
+
+# Sweep every snapshot + items cache under a directory and flag any bad runs
+.\Scripts\Invoke-SPCacheValidate.ps1 -Path '.\Audit\snapshots'
+
+# Machine-readable, for a scheduled health gate (exit 1 if any ERROR-severity finding)
+.\Scripts\Invoke-SPCacheValidate.ps1 -Path '.\Audit\snapshots' -OutputMode JSON</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Exit codes:</strong> <code>0</code> all files OK (warnings are still reported), <code>1</code> one or more files have an ERROR-severity finding, <code>2</code> path/parameter error. Read-only (CLI-005) — never writes or mutates.</p></div>
+<p><strong>Related:</strong> <code>Invoke-SPCampaignDiff.ps1</code> (produces the snapshots), the item cache (<em>Campaign filtering &amp; the item cache</em>).</p>
+<h3 id="invoke-spentitlementhistory-ps1"><code>Invoke-SPEntitlementHistory.ps1</code></h3>
+<p><strong>Purpose:</strong> the <strong>decision timeline</strong> for each identity+entitlement across <strong>many</strong> snapshots — the multi-campaign generalization of the diff (which compares two). Answers <em>"how did admin_xyz / John Doe move over time?"</em> (<code>APPROVE 6/8 → APPROVE 6/9 → REVOKE 6/11</code>) and <em>"who got admin_xyz for the first time?"</em>. <strong>Read-only, no API</strong> — it walks the immutable snapshots already on disk.</p>
+<p>Two timeline modes:</p>
+<ul><li><strong>default (cross-campaign):</strong> one point per campaign whose snapshots match the name filter — the "separate daily campaigns" view.</li><li><strong><code>-WithinCampaign</code>:</strong> every capture of <strong>one</strong> long-lived campaign (how it evolved as laggards and reviewers acted). Requires the filter to resolve to a single campaign.</li></ul>
+<p>By default it shows only timelines that <strong>changed</strong> (a decision flip, a first-time grant, or a drop from scope); <code>-IncludeUnchanged</code> shows all. Output is one self-contained HTML report (grouped <strong>by entitlement</strong> and/or <strong>by identity</strong> — chips coloured by decision, a red arrow marks each change) plus an optional per-observation CSV.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignId</code> / <code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Which campaigns' snapshots to walk (same precedence as elsewhere).</td>
+</tr>
+<tr>
+<td><code>-WithinCampaign</code></td>
+<td>Walk every capture of ONE campaign instead of one-per-campaign.</td>
+</tr>
+<tr>
+<td><code>-AccessName</code> / <code>-AccessId</code> / <code>-IdentityName</code> / <code>-IdentityId</code></td>
+<td>Focus on one entitlement and/or identity (name = substring, id = exact).</td>
+</tr>
+<tr>
+<td><code>-GroupBy</code></td>
+<td><code>Entitlement</code> / <code>Identity</code> / <code>Both</code> (default <code>Both</code>).</td>
+</tr>
+<tr>
+<td><code>-IncludeUnchanged</code></td>
+<td>Also show timelines whose decision never changed.</td>
+</tr>
+<tr>
+<td><code>-MaxTimelines &lt;n&gt;</code></td>
+<td>Cap the output (most-changed first); prints how many were omitted. <code>0</code> = no cap.</td>
+</tr>
+<tr>
+<td><code>-SnapshotDir</code> / <code>-OutputPath</code></td>
+<td>Snapshot root (default <code>Audit\snapshots</code>) / output dir (default <code>Audit\history</code>).</td>
+</tr>
+<tr>
+<td><code>-IncludeCsv</code></td>
+<td>Also write the flat per-observation CSV.</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code> / <code>JSON</code> / <code>Both</code>.</td>
+</tr>
+</tbody></table>
+<pre><code># admin_xyz's decision timeline across every matching daily campaign, with a CSV
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignNameContains 'Daily Attestation Manager' -AccessName 'admin_xyz' -IncludeCsv
+
+# Everything that changed for one person across the daily campaigns
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignNameContains 'Daily Attestation Manager' -IdentityName 'John Doe'
+
+# How one long-lived campaign's decisions evolved across its own captures
+.\Scripts\Invoke-SPEntitlementHistory.ps1 -CampaignId 'camp-7f3a...' -WithinCampaign</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p>Needs <strong>&amp;ge; 2 snapshots</strong> to show change — capture one per active campaign on a schedule (via <code>Invoke-SPCampaignDiff.ps1</code>) so each builds a timeline. The join is the same stable</p>
+<table>
+<thead><tr>
+<th>`identity</th>
+<th>access</th>
+<th>source<code> key the diff uses (benefits from populated </code>AccessId<code>/</code>SourceId`).</th>
+</tr></thead><tbody>
+</tbody></table>
+<p>Read-only (CLI-005), no API. Exit <code>0</code> report written, <code>2</code> no matching snapshots, <code>5</code> error.</p></div>
+<p><strong>Related:</strong> <code>Invoke-SPCampaignDiff.ps1</code> (two-campaign diff + produces the snapshots), <code>Invoke-SPCacheValidate.ps1</code> (validate the snapshots first).</p>
 <h3 id="invoke-spcampaigntrendreport-ps1"><code>Invoke-SPCampaignTrendReport.ps1</code></h3>
 <p><strong>Purpose:</strong> the <strong>KPI trend report</strong> for a recurring campaign — how its <em>rates</em> move over <strong>days / weeks / months</strong>, answering <em>"is privileged access trending in a direction?"</em> Each <code>Invoke-SPCampaignDiff</code> run appends one rate row to a per-campaign series; this script rolls that series up and renders it. <strong>When to use:</strong> after a few days/weeks of diff runs, to show leadership the direction of travel (charts/tables) for privileged-approval rate, revoke rate, privileged share of scope, and completion velocity.</p>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Why rates, not counts.</strong> Raw "privileged approved" counts rise just because scope grows as entitlements/sources onboard. The trend tracks <strong>privileged approval rate</strong> = approved ÷ (approved + revoked) <em>among privileged</em> — robust to scope growth. A rising rate is a <strong>discussion prompt, not a finding</strong> (direction-neutral ▲/▼). The trend is a <em>management/maturity view</em>, <strong>not</strong> certification evidence (the immutable snapshots are).</p></div>

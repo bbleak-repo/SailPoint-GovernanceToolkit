@@ -326,3 +326,42 @@ Describe "CDF-10: cross-campaign comparison (separate daily campaigns)" {
         $script:xc.Completion.ReassignedCount     | Should -Be 0
     }
 }
+
+Describe "CDF-07: cross-campaign decision dates + transition labels" {
+    BeforeAll {
+        $mon = [PSCustomObject]@{ id = 'camp-mon2'; name = 'Daily Attestation Manager Monday'; status = 'ACTIVE'; created = '2026-06-10T00:00:00Z' }
+        $tue = [PSCustomObject]@{ id = 'camp-tue2'; name = 'Daily Attestation Manager Tuesday'; status = 'ACTIVE'; created = '2026-06-11T00:00:00Z' }
+        # John approved admin_xyz on the 10th...
+        $monDec = @{ Approved = @(
+                [PSCustomObject]@{ CertificationId = 'cm'; IdentityId = 'john'; IdentityName = 'John Doe'; AccessName = 'admin_xyz'; AccessId = 'ent-9'; AccessType = 'ENTITLEMENT'; SourceName = 'Corporate AD'; SourceId = 'src-ad'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T14:30:00Z' }
+            ); Revoked = @(); Pending = @() }
+        # ...and revoked it on the 11th; Alice gets admin_xyz approved for the FIRST time.
+        $tueDec = @{ Approved = @(
+                [PSCustomObject]@{ CertificationId = 'ct'; IdentityId = 'alice'; IdentityName = 'Alice Noname'; AccessName = 'admin_xyz'; AccessId = 'ent-9'; AccessType = 'ENTITLEMENT'; SourceName = 'Corporate AD'; SourceId = 'src-ad'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T10:05:00Z' }
+            ); Revoked = @(
+                [PSCustomObject]@{ CertificationId = 'ct'; IdentityId = 'john'; IdentityName = 'John Doe'; AccessName = 'admin_xyz'; AccessId = 'ent-9'; AccessType = 'ENTITLEMENT'; SourceName = 'Corporate AD'; SourceId = 'src-ad'; Decision = 'REVOKE'; DecisionDate = '2026-06-11T11:00:00Z' }
+            ); Pending = @() }
+        $monSnap = Build-SPCampaignSnapshotData -Campaign $mon -Certifications @() -Decisions $monDec
+        $tueSnap = Build-SPCampaignSnapshotData -Campaign $tue -Certifications @() -Decisions $tueDec
+        $script:d7 = (Compare-SPCampaignSnapshots -Current $tueSnap -Previous $monSnap -CrossCampaign).Data
+    }
+    It "carries each campaign's start date into Meta" {
+        $script:d7.Meta.CurrentCampaignStartDate  | Should -Be '2026-06-11T00:00:00Z'
+        $script:d7.Meta.PreviousCampaignStartDate | Should -Be '2026-06-10T00:00:00Z'
+    }
+    It "records the APPROVE->REVOKE flip with both decision dates" {
+        $chg = @($script:d7.Scope.Changed | Where-Object { $_.IdentityId -eq 'john' })
+        $chg.Count                | Should -Be 1
+        $chg[0].PrevDecision      | Should -Be 'APPROVE'
+        $chg[0].CurrDecision      | Should -Be 'REVOKE'
+        $chg[0].Transition        | Should -Be 'APPROVE->REVOKE'
+        $chg[0].PrevDecisionDate  | Should -Be '2026-06-10T14:30:00Z'
+        $chg[0].CurrDecisionDate  | Should -Be '2026-06-11T11:00:00Z'
+    }
+    It "surfaces the first-time grant with its decision date" {
+        $add = @($script:d7.Scope.Added | Where-Object { $_.IdentityId -eq 'alice' })
+        $add.Count               | Should -Be 1
+        $add[0].Decision         | Should -Be 'APPROVE'
+        $add[0].DecisionDate     | Should -Be '2026-06-11T10:05:00Z'
+    }
+}
