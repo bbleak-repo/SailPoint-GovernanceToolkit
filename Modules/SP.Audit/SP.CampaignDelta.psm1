@@ -186,7 +186,7 @@ function Build-SPCampaignSnapshotData {
         PrivilegedTotal = 0; PrivilegedApproved = 0; PrivilegedRevoked = 0; PrivilegedPending = 0
         PrivilegedReviewed = 0
         PrivilegedConfirmed = 0; PrivilegedSuspected = 0
-        RemediationPending = 0
+        RemediationPending = 0; RemediationRemoved = 0; RemediationQueued = 0
         CompletionPct = 0; BySource = @{}
     }
     $buckets = @(@{ Name = 'APPROVE'; List = @($Decisions.Approved) }, @{ Name = 'REVOKE'; List = @($Decisions.Revoked) }, @{ Name = 'PENDING'; List = @($Decisions.Pending) })
@@ -198,6 +198,7 @@ function Build-SPCampaignSnapshotData {
             $src    = [string]$d.SourceName
             $accId  = if ($null -ne $d.PSObject.Properties['AccessId']) { [string]$d.AccessId } else { '' }
             $srcId  = if ($null -ne $d.PSObject.Properties['SourceId']) { [string]$d.SourceId } else { '' }
+            $srcType = if ($null -ne $d.PSObject.Properties['SourceType']) { [string]$d.SourceType } else { '' }
             $remStatus = if ($null -ne $d.PSObject.Properties['RemediationStatus']) { [string]$d.RemediationStatus } else { '' }
             $certId = if ($null -ne $d.PSObject.Properties['CertificationId']) { [string]$d.CertificationId } else { '' }
             $privInfo = Test-SPGrantPrivileged -Decision $d -Patterns $patterns
@@ -216,6 +217,7 @@ function Build-SPCampaignSnapshotData {
                 AccessType      = [string]$d.AccessType
                 SourceName      = $src
                 SourceId        = $srcId
+                SourceType      = $srcType
                 Privileged      = $priv
                 PrivilegedSource = $privSrc
                 Decision        = $b.Name
@@ -237,6 +239,12 @@ function Build-SPCampaignSnapshotData {
             # Revoked access awaiting de-provisioning (remediation backlog) -- drives the
             # tracker's Remediation stage and the evidence pack's closure section.
             if ($b.Name -eq 'REVOKE' -and $remStatus -match 'Pending') { $kpi.RemediationPending++ }
+            # Source-aware split of COMPLETED revokes: only connected-AD removals are confirmed
+            # de-provisioned; everything else is queued for downstream/manual fulfilment.
+            if ($b.Name -eq 'REVOKE' -and $remStatus -match 'Provision') {
+                $disp = Get-SPRevocationDisposition -Decision 'REVOKE' -Completed $true -SourceType $srcType -SourceName $src
+                if ($disp.IsRemoved) { $kpi.RemediationRemoved++ } else { $kpi.RemediationQueued++ }
+            }
             if (-not [string]::IsNullOrWhiteSpace($src)) {
                 if (-not $kpi.BySource.ContainsKey($src)) { $kpi.BySource[$src] = @{ Total = 0; Approved = 0; Revoked = 0; Pending = 0 } }
                 $kpi.BySource[$src].Total++

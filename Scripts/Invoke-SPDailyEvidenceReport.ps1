@@ -430,6 +430,7 @@ $atRiskCount             = 0
 $kpi2Status              = 'Green'
 $revocationTotal         = 0
 $revocationProvisioned   = 0
+$revocationQueued        = 0
 $revocationExecutionRate = 0
 $kpi3Status              = 'Green'
 $slaComplianceRate       = 0
@@ -723,9 +724,12 @@ Write-Host '  Step 4: KPI 3 - Revocations Executed' -ForegroundColor Cyan
 $stepStart = Get-Date
 
 try {
-    # Build remediation proof from cached review items (no additional API calls)
+    # Build remediation proof from cached review items (no additional API calls).
+    # "Provisioned" here means confirmed de-provisioned -- ONLY connected-AD removals count; a
+    # completed revoke on a disconnected/other source is queued (recorded, removal not confirmed).
     $totalRevoked = 0
     $totalRemediated = 0
+    $totalRemediationQueued = 0
     $totalRemediationPending = 0
 
     foreach ($audit in $campaignAudits) {
@@ -736,7 +740,8 @@ try {
         $proof = Group-SPAuditRemediationProof -Items $items -Certifications $certs
         if ($null -ne $proof) {
             $totalRevoked += $proof.TotalRevoked
-            $totalRemediated += $proof.RemediationCompleteCount
+            $totalRemediated += $(if ($proof.ContainsKey('RemediationRemovedCount')) { $proof.RemediationRemovedCount } else { $proof.RemediationCompleteCount })
+            $totalRemediationQueued += $(if ($proof.ContainsKey('RemediationQueuedCount')) { $proof.RemediationQueuedCount } else { 0 })
             $totalRemediationPending += $proof.RemediationPendingCount
             foreach ($ri in $proof.RevokedItems) { $allRemediationProof.Add($ri) }
         }
@@ -744,6 +749,7 @@ try {
 
     $revocationTotal = $totalRevoked
     $revocationProvisioned = $totalRemediated
+    $revocationQueued = $totalRemediationQueued
     $revocationExecutionRate = if ($totalRevoked -gt 0) {
         [math]::Round(($totalRemediated / $totalRevoked) * 100, 0)
     } else { 100 }
@@ -753,7 +759,7 @@ try {
         -YellowThreshold $thresholds.RevocationExecution.Yellow
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $detail = "$revocationProvisioned of $revocationTotal remediated ($revocationExecutionRate%)"
+    $detail = "$revocationProvisioned of $revocationTotal deprovisioned on AD ($revocationExecutionRate%); $revocationQueued queued elsewhere"
     $stepResults['Revocations'] = @{ Status = 'Success'; Detail = $detail; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "  Step 4: $detail [$kpi3Status]" -ForegroundColor $(if ($kpi3Status -eq 'Green') { 'Green' } elseif ($kpi3Status -eq 'Yellow') { 'Yellow' } else { 'Red' })
 }
@@ -1030,7 +1036,7 @@ $kpiSummary = @(
     }
     @{
         Name = 'Revocations Executed'; Value = $revExecDisplay; Status = $kpi3Status
-        Detail = "$revocationProvisioned of $revocationTotal provisioned"
+        Detail = "$revocationProvisioned of $revocationTotal deprovisioned on AD ($revocationQueued queued elsewhere)"
         TrendMetric = ''
     }
     @{
@@ -1514,8 +1520,14 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         $remItems = @($allRemediationProof | Select-Object -First $evidenceDetailLimit)
         [void]$sb.AppendLine('<table><thead><tr><th>Identity</th><th>Access</th><th>Decision Date</th><th>Status</th><th>Days Since Decision</th><th>Source</th></tr></thead><tbody>')
         foreach ($item in $remItems) {
-            $remLabel = if ($item.RemediationComplete) { 'Remediated' } else { 'Pending' }
-            $remStatusClass = if ($item.RemediationComplete) { 'status-green' } else { 'status-yellow' }
+            $remDisp = if ($item.PSObject.Properties['RemediationDisposition']) { [string]$item.RemediationDisposition } else { '' }
+            $remLabel = switch ($remDisp) {
+                'Removed' { 'Deprovisioned' }
+                'Queued'  { 'Queued for removal' }
+                'Pending' { 'Pending removal' }
+                default   { if ($item.RemediationComplete) { 'Deprovisioned' } else { 'Pending removal' } }
+            }
+            $remStatusClass = switch ($remDisp) { 'Removed' { 'status-green' } 'Queued' { 'status-yellow' } 'Pending' { 'status-yellow' } default { if ($item.RemediationComplete) { 'status-green' } else { 'status-yellow' } } }
             $daysToRemediate = ''
             if ($null -ne $item.DecisionDate -and -not [string]::IsNullOrWhiteSpace($item.DecisionDate)) {
                 try {
@@ -1644,7 +1656,7 @@ if ($OutputMode -eq 'JSON') {
         KPIs              = [ordered]@{
             CampaignCompletion   = [ordered]@{ Value = $avgCompletionRate; Status = $kpi1Status; Detail = "$totalDecided of $totalItems decided" }
             PastDueReviews       = [ordered]@{ Value = $totalOverdueAtRisk; Status = $kpi2Status; Detail = "$overdueCount overdue, $atRiskCount at-risk" }
-            RevocationsExecuted  = [ordered]@{ Value = $revocationExecutionRate; Status = $kpi3Status; Detail = "$revocationProvisioned of $revocationTotal provisioned" }
+            RevocationsExecuted  = [ordered]@{ Value = $revocationExecutionRate; Status = $kpi3Status; Detail = "$revocationProvisioned of $revocationTotal deprovisioned on AD ($revocationQueued queued elsewhere)" }
             RemediationTimeliness = [ordered]@{ Value = $slaComplianceRate; Status = $kpi4Status; Detail = "$($agingDetails.Count) pending" }
             HighRiskExposure     = [ordered]@{ Value = $highRiskPendingCount; Status = $kpi5Status; Detail = "$($highRiskPending.Count) items" }
             ReviewerHealth       = [ordered]@{ Value = $reviewerHealthPct; Status = $kpi6Status; Detail = "$reviewerAtRiskCount at-risk of $reviewerTotalCount" }

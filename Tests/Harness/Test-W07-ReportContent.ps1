@@ -90,8 +90,8 @@ Assert-Match 'WR-07-01' '(?s)background:\s*#339933[^>]*>\s*<span[^>]*>\s*COMPLET
 $rx02 = '(?s)Approved:\s*16\s*\(64%\).*?Revoked:\s*4\s*\(16%\).*?Pending:\s*5\s*\(20%\)'
 Assert-Match 'WR-07-02' $rx02 'Donut legend Approved/Revoked/Pending counts + percentages' | Out-Null
 
-# ----- WR-07-03: Remediation Completion bar -- 0% (4 pending, mock has no provisioning events)
-Assert-Match 'WR-07-03' 'Remediation Completion.*?0%' 'Remediation Completion bar at 0%' | Out-Null
+# ----- WR-07-03: Removal Status bar -- 0% deprovisioned (4 pending, mock has no provisioning events)
+Assert-Match 'WR-07-03' 'Removal Status.*?0%' 'Removal Status bar at 0% deprovisioned' | Out-Null
 
 # ----- WR-07-04: Risk Indicators -- Pending Items count matches
 $rx04 = '(?s)Risk Indicators.*?Pending Items.*?<(?:td|span)[^>]*>\s*5\s*<'

@@ -356,63 +356,53 @@ function Build-ExecutiveSummaryHtml {
     $remediationHtml = ''
     if ($null -ne $remediationProof) {
         $totalRevoked     = [int]$remediationProof['TotalRevoked']
-        $remCompleteCount = [int]$remediationProof['RemediationCompleteCount']
         $remPendingCount  = [int]$remediationProof['RemediationPendingCount']
-
-        $remPct = if ($totalRevoked -gt 0) { [Math]::Round($remCompleteCount / $totalRevoked * 100, 1) } else { 0 }
-        $remPendPct = [Math]::Round(100 - $remPct, 1)
-        if ($remPendPct -lt 0) { $remPendPct = 0 }
-
-        $remBigColor  = if ($remPct -ge 100) { '#339933' } else { '#FF8800' }
-        $remBarColor  = $remBigColor
-        $remPendColor = '#FF8800'
-
-        # Progress bar: two cells. If 100% only one cell; if 0% only one cell.
-        if ($remPct -ge 100) {
-            $remBarHtml = @"
-    <table style="width:100%; border-collapse:collapse; height:18px; margin-bottom:6px;">
-    <tr>
-        <td style="width:100%; background:#339933; height:18px; border-radius:4px;"></td>
-    </tr>
-    </table>
-"@
-        }
-        elseif ($remPct -le 0) {
-            $remBarHtml = @"
-    <table style="width:100%; border-collapse:collapse; height:18px; margin-bottom:6px;">
-    <tr>
-        <td style="width:100%; background:#FF8800; height:18px; border-radius:4px;"></td>
-    </tr>
-    </table>
-"@
+        # Source-aware split: only connected-AD removals are confirmed de-provisioned; everything
+        # else is queued for downstream/manual fulfilment. Fall back to the legacy "complete" count
+        # (all completed treated as removed) when an older proof object lacks the split.
+        if ($remediationProof.ContainsKey('RemediationRemovedCount')) {
+            $remRemoved = [int]$remediationProof['RemediationRemovedCount']
+            $remQueued  = [int]$remediationProof['RemediationQueuedCount']
         }
         else {
-            $remBarHtml = @"
+            $remRemoved = [int]$remediationProof['RemediationCompleteCount']
+            $remQueued  = 0
+        }
+
+        $remPct  = if ($totalRevoked -gt 0) { [Math]::Round($remRemoved / $totalRevoked * 100, 1) } else { 0 }
+        $remQPct = if ($totalRevoked -gt 0) { [Math]::Round($remQueued / $totalRevoked * 100, 1) } else { 0 }
+        $remPPct = [Math]::Round(100 - $remPct - $remQPct, 1)
+        if ($remPPct -lt 0) { $remPPct = 0 }
+
+        $remBigColor = if ($totalRevoked -eq 0) { '#777777' } elseif ($remPct -ge 100) { '#339933' } elseif ($remPct -ge 50) { '#FF9900' } else { '#CC3333' }
+
+        $remBarHtml = @"
     <table style="width:100%; border-collapse:collapse; height:18px; margin-bottom:6px;">
     <tr>
         <td style="width:$($remPct)%; background:#339933; height:18px; border-radius:4px 0 0 4px;"></td>
-        <td style="width:$($remPendPct)%; background:#FF8800; height:18px; border-radius:0 4px 4px 0;"></td>
+        <td style="width:$($remQPct)%; background:#336699; height:18px;"></td>
+        <td style="width:$($remPPct)%; background:#FF8800; height:18px; border-radius:0 4px 4px 0;"></td>
     </tr>
     </table>
 "@
-        }
 
         $remediationHtml = @"
-    <p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:0 0 8px 0;">Remediation Completion</p>
+    <p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:12px; color:#555; margin:0 0 8px 0;">Revoked Access &mdash; Removal Status</p>
     <div style="text-align:center; margin-bottom:10px;">
         <span style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:36px; font-weight:bold; color:$remBigColor;">$($remPct)%</span>
         <br/>
-        <span style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">$remCompleteCount of $totalRevoked revoked items remediated</span>
+        <span style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:12px; color:#777;">$remRemoved of $totalRevoked deprovisioned (connected AD)</span>
     </div>
     $remBarHtml
     <table style="width:100%; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; border-collapse:collapse;">
     <tr>
-        <td style="color:#339933; font-weight:bold; padding:2px 0;">$remCompleteCount Complete</td>
+        <td style="color:#339933; font-weight:bold; padding:2px 0;">$remRemoved Deprovisioned</td>
+        <td style="color:#264d73; font-weight:bold; text-align:center; padding:2px 0;">$remQueued Queued</td>
         <td style="color:#FF8800; font-weight:bold; text-align:right; padding:2px 0;">$remPendingCount Pending</td>
     </tr>
     </table>
-    <div style="margin-top:12px; padding:6px 8px; background:#fff3cd; border-radius:4px; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; color:#856404;">
-        Target: 100% remediation for compliance
+    <div style="margin-top:12px; padding:6px 8px; background:#eef3f8; border-radius:4px; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; color:#555;">
+        Deprovisioned = revoke completed on a connected Active Directory source. Queued = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.
     </div>
 "@
     }
@@ -432,10 +422,11 @@ function Build-ExecutiveSummaryHtml {
     # Pending items
     $pendingItemsColor = if ($pendingCount -eq 0) { '#339933' } else { '#FF8800' }
 
-    # Remediation rate
+    # Deprovision rate: confirmed connected-AD removals over total revoked (queued/pending excluded).
     $remRatePct   = if ($null -ne $remediationProof) {
         $tr = [int]$remediationProof['TotalRevoked']
-        if ($tr -gt 0) { [Math]::Round([int]$remediationProof['RemediationCompleteCount'] / $tr * 100, 1) } else { 0 }
+        $rr = if ($remediationProof.ContainsKey('RemediationRemovedCount')) { [int]$remediationProof['RemediationRemovedCount'] } else { [int]$remediationProof['RemediationCompleteCount'] }
+        if ($tr -gt 0) { [Math]::Round($rr / $tr * 100, 1) } else { 0 }
     } else { $null }
     $remRateText  = if ($null -ne $remRatePct) { "$($remRatePct)%" } else { 'N/A' }
     $remRateColor = if ($null -eq $remRatePct) { '#777777' } elseif ($remRatePct -ge 100) { '#339933' } else { '#FF8800' }
@@ -491,7 +482,7 @@ function Build-ExecutiveSummaryHtml {
     </tr>
     <tr>
         <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0;"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remRateColor"/></svg></td>
-        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Remediation Rate</td>
+        <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; color:#555;">Deprovision Rate (AD)</td>
         <td style="padding:5px 4px; border-bottom:1px solid #e0e0e0; font-weight:bold; text-align:right; color:$remRateColor;">$remRateText</td>
     </tr>
     <tr>
@@ -1095,19 +1086,29 @@ function Build-SingleCampaignHtml {
     if ($null -ne $remediationProof) {
         # Sub-section A: Remediation Summary (always shown - it IS the summary)
         $totalRevoked     = [int]$remediationProof['TotalRevoked']
-        $completeCount    = [int]$remediationProof['RemediationCompleteCount']
         $pendingCount     = [int]$remediationProof['RemediationPendingCount']
-        $completeColor    = '#339933'
+        if ($remediationProof.ContainsKey('RemediationRemovedCount')) {
+            $removedCount = [int]$remediationProof['RemediationRemovedCount']
+            $queuedCount  = [int]$remediationProof['RemediationQueuedCount']
+        }
+        else {
+            $removedCount = [int]$remediationProof['RemediationCompleteCount']
+            $queuedCount  = 0
+        }
+        $removedColor     = '#339933'
+        $queuedColor      = '#264d73'
         $pendingColor     = if ($pendingCount -gt 0) { '#FF8800' } else { '#339933' }
 
-        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">Remediation Summary</p>`n"
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px;"">Revocation Removal Status</p>`n"
         $html += "<table $tableStyle>`n"
         $html += "    <tbody>`n"
         $html += "        <tr><td $summaryTdLabel>Total Revoked Items</td><td $summaryTdValue>$totalRevoked</td></tr>`n"
-        $html += "        <tr><td $summaryTdLabel>Remediation Complete</td><td $summaryTdValue><span style=""color:$completeColor; font-weight:bold;"">$completeCount</span></td></tr>`n"
-        $html += "        <tr><td $summaryTdLabel>Remediation Pending</td><td $summaryTdValue><span style=""color:$pendingColor; font-weight:bold;"">$pendingCount</span></td></tr>`n"
+        $html += "        <tr><td $summaryTdLabel>Deprovisioned (connected AD)</td><td $summaryTdValue><span style=""color:$removedColor; font-weight:bold;"">$removedCount</span></td></tr>`n"
+        $html += "        <tr><td $summaryTdLabel>Queued for removal (other sources)</td><td $summaryTdValue><span style=""color:$queuedColor; font-weight:bold;"">$queuedCount</span></td></tr>`n"
+        $html += "        <tr><td $summaryTdLabel>Pending removal</td><td $summaryTdValue><span style=""color:$pendingColor; font-weight:bold;"">$pendingCount</span></td></tr>`n"
         $html += "    </tbody>`n"
         $html += "</table>`n"
+        $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; color:#777; margin:4px 0 0;"">Deprovisioned = revoke completed on a connected Active Directory source. Queued = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.</p>`n"
 
         if ($DetailLevel -ne 'Summary') {
             # Sub-section B: Revoked Items - Remediation Status (wrapped in <details>)
@@ -1125,11 +1126,11 @@ function Build-SingleCampaignHtml {
             else {
                 $rowIdx = 0
                 foreach ($ri in $revokedRows) {
-                    $remLabel = if ($ri.RemediationComplete) {
-                        '<span style="color:#339933; font-weight:bold;">Complete</span>'
-                    }
-                    else {
-                        '<span style="color:#FF8800; font-weight:bold;">Pending</span>'
+                    $remLabel = switch ([string]$ri.RemediationDisposition) {
+                        'Removed' { '<span style="color:#339933; font-weight:bold;">Deprovisioned</span>' }
+                        'Queued'  { '<span style="color:#264d73; font-weight:bold;">Queued for removal</span>' }
+                        'Pending' { '<span style="color:#FF8800; font-weight:bold;">Pending removal</span>' }
+                        default   { if ($ri.RemediationComplete) { '<span style="color:#339933; font-weight:bold;">Deprovisioned</span>' } else { '<span style="color:#FF8800; font-weight:bold;">Pending removal</span>' } }
                     }
                     $cells = @(
                         (ConvertTo-SafeHtml $ri.IdentityName),

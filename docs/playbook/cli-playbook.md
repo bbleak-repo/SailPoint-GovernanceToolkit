@@ -1168,15 +1168,20 @@ clobbers the v1 output.
 |---|---|
 | Header | Report-generated date, period, aggregate decisions made. **No due date.** |
 | Certification Scope | distinct users reviewed, entitlements tracked, privileged-access users, managers involved, sources evaluated |
-| Executive Summary (per campaign) | status badge, reviewers signed-off, items decided, a decision-distribution **donut**, **Revoked Access — Flagged for Removal** (% of revokes whose decision is finalised), and Key Indicators |
+| Executive Summary (per campaign) | status badge, reviewers signed-off, items decided, a decision-distribution **donut**, **Revoked Access — Removal Status** (Deprovisioned / Queued / Pending), and Key Indicators |
 | A. Campaign Completion Evidence | cross-campaign table incl. Approved / Revoked / Pending |
 | B. Reviewer Accountability | collapsible **Completed / Pending / Reassigned** per campaign (+ Reassigned From, Proof of Action) |
-| Decision Summary | collapsible **Approved / Revoked (open) / Pending** — Identity, Account, Access (PRIV), **Source**, **Reviewer (manager)**, Decision Date, **Justification**, Remediation ("Flagged for removal" for finalised revokes) |
+| Decision Summary | collapsible **Approved / Revoked (open) / Pending** — Identity, Account, Access (PRIV), **Source**, **Reviewer (manager)**, Decision Date, **Justification**, Remediation (**Deprovisioned** / **Queued for removal** / **Pending removal**) |
 
-> **Honest remediation wording.** A finalised revoke means the *decision* is recorded, **not**
-> that the access was actually pulled at the source. Disconnected / manual sources are fulfilled
-> downstream and ISC exposes no reliable "removed" signal, so v2 says **"Flagged for removal"**
-> (not "Deprovisioned") and the exec card carries a caveat that actual removal isn't confirmed here.
+> **Source-aware removal wording (applies to every report that reports removals).** A finalised
+> revoke means the *decision* is recorded, **not** that the access was always pulled at the source.
+> The toolkit only counts a completed revoke as **Deprovisioned** when it is on a **connected
+> Active Directory** source (where ISC actually performs the removal). A completed revoke on any
+> other source (disconnected apps, manual / other connectors) is **Queued for removal** — recorded
+> but fulfilled downstream and **not confirmed here**; an undecided revoke is **Pending removal**.
+> The classification lives in one place (`Get-SPRevocationDisposition`) and drives the daily-evidence
+> reports (v1 + v2), the campaign-audit executive summary, and the attestation evidence pack. The
+> AD-vs-other split is keyed off the ISC item's `sourceType` (e.g. `Active Directory - Direct`).
 
 Day-over-day / scope-change deltas are intentionally **not** here — they live in the campaign-diff
 report (`Invoke-SPCampaignDiff.ps1`).
