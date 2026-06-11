@@ -505,7 +505,7 @@ function Export-SPCampaignCompletionDiffHtml {
         if (@($rollup).Count -gt 0) {
             [void]$sb.Append("<h2>By reviewer (person)</h2>")
             $rr = $rollup | Sort-Object @{ Expression = { [double](Get-SPDiffProp $_ 'CompletionPct' 0) } }
-            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Certs</th><th>Made</th><th>Total</th><th>Completion</th><th>Reassigned</th></tr>")
+            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Certs</th><th>Decided</th><th>Total items</th><th>Completion</th><th>Reassigned</th></tr>")
             foreach ($a in $rr) {
                 $nm = [string](Get-SPDiffProp $a 'ReviewerName' ''); if ([string]::IsNullOrWhiteSpace($nm)) { $nm = [string](Get-SPDiffProp $a 'ReviewerId' 'Unknown') }
                 $rf = if ([bool](Get-SPDiffProp $a 'Reassigned' $false)) { "<span class='badge b-chg'>REASSIGNED</span>" } else { '' }
@@ -519,15 +519,21 @@ function Export-SPCampaignCompletionDiffHtml {
         $rows = @($comp.Reviewers) | Sort-Object @{ Expression = { if ($_.NotStarted) { 0 } elseif ($_.Stalled) { 1 } elseif (-not $_.Completed) { 2 } else { 3 } } }, @{ Expression = { $_.CompletionPct } }
         if (@($rows).Count -eq 0) { [void]$sb.Append("<div class='empty'>No certifications in this capture.</div>") }
         else {
-            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Status</th><th>Made</th><th>&Delta; since prev</th><th>Total</th><th>Completion</th></tr>")
+            [void]$sb.Append("<table><tr><th>Reviewer</th><th>Status</th><th>Decided</th><th>&Delta; since prev</th><th>Total items</th><th>Completion</th></tr>")
             foreach ($r in $rows) {
-                $status = if ($r.Completed) { if ($r.Signed) { if ($r.NewlyCompleted) { "<span class='badge b-add'>NEWLY SIGNED</span>" } else { 'Signed' } } elseif ($r.DecidedAwaitingSignoff) { "<span class='badge b-chg'>DECIDED, AWAITING SIGN-OFF</span>" } else { 'Done' } }
+                $tEmpty = ([int]$r.Total -le 0)
+                $status = if ($tEmpty -and $r.Signed) { 'Signed (no items)' }
+                          elseif ($r.Completed) { if ($r.Signed) { if ($r.NewlyCompleted) { "<span class='badge b-add'>NEWLY SIGNED</span>" } else { 'Signed' } } elseif ($r.DecidedAwaitingSignoff) { "<span class='badge b-chg'>DECIDED, AWAITING SIGN-OFF</span>" } else { 'Done' } }
                           elseif ($r.NotStarted) { "<span class='badge b-rem'>NOT STARTED</span>" }
                           elseif ($r.Stalled) { "<span class='badge b-chg'>STALLED</span>" }
                           else { 'In progress' }
                 if ($r.Reassigned) { $status += " <span class='badge b-chg'>REASSIGNED</span>" }
                 $nm = if ([string]::IsNullOrWhiteSpace($r.ReviewerName)) { $r.ReviewerId } else { $r.ReviewerName }
-                [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$status</td><td>$($r.CurrMade)</td><td>$(Get-SPDiffDelta ([int]$r.MadeDelta))</td><td>$($r.Total)</td><td>$($r.CompletionPct)%</td></tr>")
+                # An empty cert (0 items assigned) shows '--' rather than a misleading '0 / 0 / 0%'.
+                $madeC = if ($tEmpty) { '&mdash;' } else { "$($r.CurrMade)" }
+                $totC  = if ($tEmpty) { '&mdash;' } else { "$($r.Total)" }
+                $pctC  = if ($tEmpty) { '&mdash;' } else { "$($r.CompletionPct)%" }
+                [void]$sb.Append("<tr><td>$(Get-SPDiffEnc $nm)</td><td>$status</td><td>$madeC</td><td>$(Get-SPDiffDelta ([int]$r.MadeDelta))</td><td>$totC</td><td>$pctC</td></tr>")
             }
             [void]$sb.Append("</table>")
         }
