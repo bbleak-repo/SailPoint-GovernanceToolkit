@@ -281,7 +281,14 @@ function Compare-SPCampaignSnapshots {
                 $pi = $prevMap[$k]
                 $cd = [string](Get-SPDiffProp $ci 'Decision' '')
                 $pd = [string](Get-SPDiffProp $pi 'Decision' '')
-                if ($cd -ne $pd) {
+                # A "decision change" is a real flip between two DECIDED states (APPROVE <-> REVOKE) --
+                # the access/privilege decision actually changed. Transitions involving PENDING are
+                # EXCLUDED on purpose: APPROVE->PENDING just means "not re-reviewed yet" (that's the
+                # escalation chain's job, not an access change), and PENDING->decided is a first action,
+                # not a change from a prior decision. So we pick up only users who ACTED in the prior
+                # campaign and whose decision then flipped.
+                $decided = @('APPROVE', 'REVOKE')
+                if ($cd -ne $pd -and ($decided -contains $pd) -and ($decided -contains $cd)) {
                     $changed.Add([ordered]@{
                         Key          = $k
                         IdentityName = [string](Get-SPDiffProp $ci 'IdentityName' '')
