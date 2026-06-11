@@ -383,6 +383,45 @@ function Compare-SPCampaignSnapshots {
             }
         }
 
+        # PERSISTED REVOKES: the manager REVOKED this grant in the prior capture and it is STILL
+        # present now -- i.e. the revoke is not getting fulfilled. Split by source so the report can
+        # tell a connected-AD removal that FAILED (should be gone) from a disconnected/other source
+        # that is merely QUEUED for downstream/manual de-provisioning. (See Get-SPRevocationDisposition.)
+        $persistedRevokes = [System.Collections.Generic.List[object]]::new()
+        $persistedRevokeAD = 0
+        if ($hasPrev) {
+            foreach ($k in $curMap.Keys) {
+                if (-not $prevMap.ContainsKey($k)) { continue }
+                $pi = $prevMap[$k]
+                if ([string](Get-SPDiffProp $pi 'Decision' '') -ne 'REVOKE') { continue }
+                $ci = $curMap[$k]
+                $stype = [string](Get-SPDiffProp $ci 'SourceType' '')
+                $sname = [string](Get-SPDiffProp $ci 'SourceName' '')
+                $isAD  = [bool](Test-SPConnectedADSource -SourceType $stype -SourceName $sname)
+                if ($isAD) { $persistedRevokeAD++ }
+                $prid = [string](Get-SPDiffProp $ci 'ReviewerId' '')
+                $prname = if ($prid -and $curRevName.ContainsKey($prid)) { $curRevName[$prid] } else { '' }
+                $persistedRevokes.Add([ordered]@{
+                    Key          = $k
+                    IdentityName = [string](Get-SPDiffProp $ci 'IdentityName' '')
+                    IdentityId   = [string](Get-SPDiffProp $ci 'IdentityId' '')
+                    AccessName   = [string](Get-SPDiffProp $ci 'AccessName' '')
+                    AccessId     = [string](Get-SPDiffProp $ci 'AccessId' '')
+                    SourceName   = $sname
+                    SourceId     = [string](Get-SPDiffProp $ci 'SourceId' '')
+                    SourceType   = $stype
+                    IsConnectedAD = $isAD
+                    Privileged   = [bool](Get-SPDiffProp $ci 'Privileged' $false)
+                    PrevDecision = 'REVOKE'
+                    CurrDecision = [string](Get-SPDiffProp $ci 'Decision' '')
+                    PrevDecisionDate = [string](Get-SPDiffProp $pi 'DecisionDate' '')
+                    CurrDecisionDate = [string](Get-SPDiffProp $ci 'DecisionDate' '')
+                    ReviewerId   = $prid
+                    ReviewerName = $prname
+                })
+            }
+        }
+
         # Privileged approved (advisory): privileged grants newly set to APPROVE this capture.
         # Suppressed on the baseline run (everything would look "newly approved").
         $privApproved = [System.Collections.Generic.List[object]]::new()
@@ -456,6 +495,9 @@ function Compare-SPCampaignSnapshots {
                 AddedPrivilegedCount = $newPriv.Count
                 NewSources          = @($newSources.Values)
                 NewSourceCount      = $newSources.Count
+                PersistedRevokes      = $persistedRevokes.ToArray()
+                PersistedRevokeCount  = $persistedRevokes.Count
+                PersistedRevokeADCount = $persistedRevokeAD
             }
             Compliance = [ordered]@{
                 NewlyAddedPrivileged = $newPriv.ToArray()
