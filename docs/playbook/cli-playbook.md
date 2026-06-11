@@ -27,7 +27,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
-5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
+5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG; + lean v2)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
 6. [SDK features](#6-sdk-features) — `Invoke-SPSdkCampaignTemplates`, `Invoke-SPSdkWorkItems`, `Invoke-SPSdkWorkflows`
 7. [Operations & scheduling](#7-operations--scheduling) — `Invoke-SPDailyOrchestrator`, `Invoke-SPScheduledCampaign`, `Invoke-SPRetention`
 
@@ -807,9 +807,10 @@ reports**:
   between captures), and **not started**.
 - **Scope diff** — *what changed in the campaign.* Grants **added** to scope (the same
   campaign grows as entitlement groups and sources onboard), grants **removed**, and
-  **decision changes** — plus a **compliance summary**: newly-added privileged access,
-  stalled/not-started reviewers, overdue undecided items, and a *privileged-approved*
-  advisory.
+  **decision changes** — a real **APPROVE↔REVOKE** flip on the same grant (access removed or
+  re-granted), *not* a reviewer who simply hasn't re-reviewed yet — plus a **compliance
+  summary**: newly-added privileged access, stalled/not-started reviewers, overdue undecided
+  items, and a *privileged-approved* advisory.
 
 **When to use:** run it on the campaign's cadence (e.g. each morning) so leadership can
 see who is keeping up and what new (especially privileged) access appeared — **without**
@@ -858,6 +859,13 @@ today", "before noon vs now", and "this week vs last" all reduce to *which two s
 .\Scripts\Invoke-SPCampaignDiff.ps1 -CampaignId 'camp-7f3a...' -NoCapture
 ```
 
+> **What counts as a "decision change".** Only a real flip between *decided* states —
+> **APPROVE↔REVOKE** (access removed or re-granted). Transitions involving PENDING are
+> **excluded**: APPROVE→PENDING just means "not re-reviewed yet" (the escalation chain handles
+> that, it isn't an access change), and PENDING→decided is a first action, not a change from a
+> prior decision. So the table picks up only users who **acted in the prior campaign** and whose
+> access decision then changed. (New grants and removals are in the *added* / *removed* lists.)
+>
 > **Decision dates across campaigns.** The scope diff records *when* each decision was made
 > (the ISC decision timestamp). A **decision change** row shows both sides —
 > e.g. *John Doe · admin_xyz · APPROVE (2026-06-10) → REVOKE (2026-06-11)* — and a **first-time**
@@ -1085,6 +1093,10 @@ answers whether campaigns are completing, attestations are on time, revocations 
 enforced, remediation is timely, high-risk access is being reviewed, and reviewers are
 performing responsibly.
 
+> **A leaner v2 exists** — `Invoke-SPDailyEvidenceReportV2.ps1` (below) drops the KPI dashboard,
+> Confidence Score, Domino Tracker, and the Past-Due / High-Risk / Reviewer-Performance registers,
+> keeping only audit-grade evidence. Both scripts coexist; run whichever you prefer.
+
 **When to use:** daily, scheduled after the daily orchestrator. Also useful on-demand with
 `-DaysBack 7` for a weekly evidence summary or `-CampaignNameContains 'Tuesday'` to scope to
 a specific campaign day.
@@ -1138,6 +1150,46 @@ the cascading impact.
 **Thresholds** are configurable in `settings.json` under the `DailyEvidence.Thresholds` section.
 The script uses sensible defaults if the section is missing. See
 [Foundations](00-foundations.md) for the settings reference.
+
+### `Invoke-SPDailyEvidenceReportV2.ps1`
+**Purpose:** the **v2** daily certification evidence report — a leaner, leadership-grade rewrite of
+the report above. It **drops** the six-KPI dashboard, the Governance Confidence Score, the Domino
+Tracker, and the Past-Due / High-Risk / Reviewer-Performance registers, and presents only the
+evidence that holds up in an audit. The original `Invoke-SPDailyEvidenceReport.ps1` is unchanged —
+**run either**. Output: `daily-evidence-v2-*.html` (+ `daily-evidence-v2-audit.jsonl`), so it never
+clobbers the v1 output.
+
+**Layout (top to bottom):**
+
+| Section | Content |
+|---|---|
+| Header | Report-generated date, period, aggregate decisions made. **No due date.** |
+| Certification Scope | distinct users reviewed, entitlements tracked, privileged-access users, managers involved, sources evaluated |
+| Executive Summary (per campaign) | status badge, reviewers signed-off, items decided, a decision-distribution **donut**, **Revoked Access Removed** (de-provisioning %), and Key Indicators |
+| A. Campaign Completion Evidence | cross-campaign table incl. Approved / Revoked / Pending |
+| B. Reviewer Accountability | collapsible **Completed / Pending / Reassigned** per campaign (+ Reassigned From, Proof of Action) |
+| Decision Summary | collapsible **Approved / Revoked (open) / Pending** — Identity, Account, Access (PRIV), **Source**, **Reviewer (manager)**, Decision Date, **Justification**, Remediation ("Deprovisioned" for fulfilled revokes) |
+
+Day-over-day / scope-change deltas are intentionally **not** here — they live in the campaign-diff
+report (`Invoke-SPCampaignDiff.ps1`).
+
+**Parameters:** same as `Invoke-SPDailyEvidenceReport.ps1` (`-DaysBack`, the `-CampaignName*`
+filters, `-Token`, `-OutputMode`). Threshold/KPI params have no effect on the v2 HTML.
+
+```powershell
+# v2 daily evidence (default 1-day window)
+.\Scripts\Invoke-SPDailyEvidenceReportV2.ps1 -Token $token -OutputMode HTML
+
+# Scope to one campaign day
+.\Scripts\Invoke-SPDailyEvidenceReportV2.ps1 -CampaignNameContains 'Thursday' -Token $token -OutputMode Both
+```
+
+> The Decision Summary's **Source / Reviewer / Justification** come straight from the ISC item:
+> `sourceName` (incl. disconnected-app sources), the certification's reviewer (= the manager), and
+> the item's `comments`. The `PRIV` badge is driven by the entitlement's privileged attribute, so it
+> stays **adaptive** for quarterly mixed campaigns. Note: internally v2 still runs the legacy
+> data-gathering steps, so `-OutputMode JSON`/console still emit the old KPI structure — a
+> leaner-runtime trim is a planned follow-up.
 
 **Output files:**
 - `daily-evidence-{timestamp}.html` -- self-contained HTML executive dashboard + evidence

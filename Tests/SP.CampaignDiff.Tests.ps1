@@ -219,7 +219,7 @@ Describe "CDF-08: per-director diff split + HTML export" {
                     @{ ReviewerId='rev-4'; IdentityName='u4'; AccessName='VPN';            SourceName='Okta'; Privileged=$false; Decision='PENDING' }
                 )
                 Removed = @( @{ ReviewerId='rev-2'; IdentityName='u2'; AccessName='Legacy-App'; SourceName='AD'; Privileged=$false; Decision='REVOKE' } )
-                Changed = @( @{ ReviewerId='rev-1'; IdentityName='u1'; AccessName='App-X'; SourceName='AD'; Privileged=$false; PrevDecision='PENDING'; CurrDecision='APPROVE' } )
+                Changed = @( @{ ReviewerId='rev-1'; IdentityName='u1'; AccessName='App-X'; SourceName='AD'; Privileged=$false; PrevDecision='APPROVE'; CurrDecision='REVOKE' } )
             }
             Compliance = @{ NewlyAddedPrivileged = @( @{ ReviewerId='rev-3'; IdentityName='u3'; AccessName='Domain Admins'; SourceName='AD'; Privileged=$true; Decision='APPROVE' } ) }
         }
@@ -363,5 +363,41 @@ Describe "CDF-07: cross-campaign decision dates + transition labels" {
         $add.Count               | Should -Be 1
         $add[0].Decision         | Should -Be 'APPROVE'
         $add[0].DecisionDate     | Should -Be '2026-06-11T10:05:00Z'
+    }
+}
+
+Describe "CDF-11: decision-change is APPROVE-to-REVOKE only (PENDING transitions excluded)" {
+    BeforeAll {
+        $camp = [PSCustomObject]@{ id = 'camp-cdf11'; name = 'Daily'; status = 'ACTIVE' }
+        # i1 APPROVE->REVOKE (a real flip, included); i2 APPROVE->PENDING (not re-reviewed, excluded);
+        # i3 PENDING->APPROVE (first action, excluded); i4 APPROVE->APPROVE (unchanged).
+        $prevDec = @{
+            Approved = @(
+                [PSCustomObject]@{ IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessId = 'eA'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T09:00:00Z' }
+                [PSCustomObject]@{ IdentityId = 'i2'; IdentityName = 'U2'; AccessName = 'AppB'; AccessId = 'eB'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T09:01:00Z' }
+                [PSCustomObject]@{ IdentityId = 'i4'; IdentityName = 'U4'; AccessName = 'AppD'; AccessId = 'eD'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T09:03:00Z' }
+            )
+            Revoked  = @()
+            Pending  = @( [PSCustomObject]@{ IdentityId = 'i3'; IdentityName = 'U3'; AccessName = 'AppC'; AccessId = 'eC'; SourceName = 'AD'; SourceId = 's1'; Decision = 'PENDING'; DecisionDate = '' } )
+        }
+        $curDec = @{
+            Approved = @(
+                [PSCustomObject]@{ IdentityId = 'i3'; IdentityName = 'U3'; AccessName = 'AppC'; AccessId = 'eC'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T09:00:00Z' }
+                [PSCustomObject]@{ IdentityId = 'i4'; IdentityName = 'U4'; AccessName = 'AppD'; AccessId = 'eD'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T09:03:00Z' }
+            )
+            Revoked  = @( [PSCustomObject]@{ IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessId = 'eA'; SourceName = 'AD'; SourceId = 's1'; Decision = 'REVOKE'; DecisionDate = '2026-06-11T11:00:00Z' } )
+            Pending  = @( [PSCustomObject]@{ IdentityId = 'i2'; IdentityName = 'U2'; AccessName = 'AppB'; AccessId = 'eB'; SourceName = 'AD'; SourceId = 's1'; Decision = 'PENDING'; DecisionDate = '' } )
+        }
+        $prev = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions $prevDec
+        $cur  = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions $curDec
+        $script:d11 = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+    }
+    It "flags only the APPROVE-to-REVOKE flip" {
+        $script:d11.Scope.ChangedCount | Should -Be 1
+        @($script:d11.Scope.Changed)[0].IdentityId | Should -Be 'i1'
+        @($script:d11.Scope.Changed)[0].Transition | Should -Be 'APPROVE->REVOKE'
+    }
+    It "excludes APPROVE-to-PENDING and PENDING-to-APPROVE" {
+        @($script:d11.Scope.Changed | Where-Object { @('i2', 'i3') -contains $_.IdentityId }).Count | Should -Be 0
     }
 }

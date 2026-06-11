@@ -1197,6 +1197,10 @@ $donut = {
 
 # ---- aggregate scope + decision rollups ----
 $usersSet = @{}; $entSet = @{}; $privUserSet = @{}; $mgrSet = @{}; $srcSet = @{}
+# CertificationId -> { Name (the manager/certifier), SignOff (signed/completed date) }. The
+# per-item reviewedBy/decisionDate are often empty on real ISC items; the reviewer + a
+# signoff-date fallback live on the certification, so resolve them here for the Decision Summary.
+$certReviewerMap = @{}
 $allApproved = [System.Collections.Generic.List[object]]::new()
 $allRevoked = [System.Collections.Generic.List[object]]::new()
 $allPending = [System.Collections.Generic.List[object]]::new()
@@ -1225,6 +1229,17 @@ foreach ($audit in $campaignAudits) {
                 if ($mk) { $mgrSet[$mk] = $true }
             }
         }
+    }
+    foreach ($cert in @($audit['Certifications'])) {
+        if ($null -eq $cert) { continue }
+        $cid = if ($cert.PSObject.Properties['id'] -and $cert.id) { [string]$cert.id } else { '' }
+        if (-not $cid -or $certReviewerMap.ContainsKey($cid)) { continue }
+        $rn = ''
+        if ($cert.PSObject.Properties['reviewer'] -and $null -ne $cert.reviewer -and $cert.reviewer.PSObject.Properties['name'] -and $cert.reviewer.name) { $rn = [string]$cert.reviewer.name }
+        $sd = ''
+        if ($cert.PSObject.Properties['signed'] -and -not [string]::IsNullOrWhiteSpace([string]$cert.signed)) { $sd = [string]$cert.signed }
+        elseif ($cert.PSObject.Properties['completed'] -and -not [string]::IsNullOrWhiteSpace([string]$cert.completed)) { $sd = [string]$cert.completed }
+        $certReviewerMap[$cid] = @{ Name = $rn; SignOff = $sd }
     }
 }
 $aggAppr = $allApproved.Count; $aggRev = $allRevoked.Count; $aggPend = $allPending.Count
@@ -1447,24 +1462,38 @@ foreach ($cat in $cats) {
     $items = @($cat.Items); $cnt = $items.Count
     $oa = if ($cat.Open) { ' open' } else { '' }
     [void]$sb.AppendLine("<details$oa><summary class='$($cat.Cls)' style='font-size:13px;margin:12px 0 6px'>$($cat.Label) ($cnt items)</summary>")
-    [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Account</th><th>Access Name</th><th>Type</th><th>Reviewer</th><th>Decision Date</th><th>Justification</th><th>Remediation</th></tr></thead><tbody>')
+    [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Account</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Justification</th><th>Remediation</th></tr></thead><tbody>')
     if ($cnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="8" style="color:#777;font-style:italic">None.</td></tr>') }
     else {
+        $isRevoked = ($cat.Label -eq 'Revoked')
         foreach ($it in $items) {
+            $cid = if ($it.PSObject.Properties['CertificationId']) { [string]$it.CertificationId } else { '' }
             $just = 'N/A'
             if ($it.PSObject.Properties['Justification'] -and -not [string]::IsNullOrWhiteSpace($it.Justification)) { $just = [string]$it.Justification }
+            # Remediation: for revokes, fulfilment = de-provisioning -> relabel 'Provisioned' as 'Deprovisioned'.
             $rem = '<span class="s-gray">N/A</span>'
             if ($it.PSObject.Properties['RemediationStatus'] -and -not [string]::IsNullOrWhiteSpace($it.RemediationStatus)) {
                 $rs = [string]$it.RemediationStatus
-                if (& $remDone $rs) { $rem = '<span class="s-green">' + (ConvertTo-SafeHtml $rs) + '</span>' }
-                else { $rem = '<span class="s-amber">' + (ConvertTo-SafeHtml $rs) + '</span>' }
+                $done = [bool](& $remDone $rs)
+                $rsDisp = if ($isRevoked) { if ($done) { 'Deprovisioned' } else { 'Pending removal' } } else { $rs }
+                if ($done) { $rem = '<span class="s-green">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
+                else { $rem = '<span class="s-amber">' + (ConvertTo-SafeHtml $rsDisp) + '</span>' }
             }
+            # PRIV badge is item-driven (the entitlement's privileged attribute) -> kept, so it stays
+            # adaptive for quarterly mixed campaigns where only some access is privileged.
             $priv = $false; try { $priv = [bool]$it.Privileged } catch { }
             $pb = if ($priv) { ' <span class="badge badge-priv">PRIV</span>' } else { '' }
             $acct = if ($it.PSObject.Properties['AccountIdentifier']) { ConvertTo-SafeHtml $it.AccountIdentifier } else { '' }
-            $rvw = if ($it.PSObject.Properties['ReviewerName']) { ConvertTo-SafeHtml $it.ReviewerName } else { '' }
-            $dd = & $fmtDt ([string]$it.DecisionDate)
-            [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $it.IdentityName) + '</td><td>' + $acct + '</td><td>' + (ConvertTo-SafeHtml $it.AccessName) + $pb + '</td><td>' + (ConvertTo-SafeHtml $it.AccessType) + '</td><td>' + $rvw + '</td><td>' + (ConvertTo-SafeHtml $dd) + '</td><td>' + (ConvertTo-SafeHtml $just) + '</td><td>' + $rem + '</td></tr>')
+            # Reviewer (the manager): item-level reviewedBy is usually empty -> fall back to the cert's reviewer.
+            $rvwName = ''
+            if ($it.PSObject.Properties['ReviewerName'] -and -not [string]::IsNullOrWhiteSpace([string]$it.ReviewerName) -and ([string]$it.ReviewerName) -ne 'N/A') { $rvwName = [string]$it.ReviewerName }
+            elseif ($cid -and $certReviewerMap.ContainsKey($cid)) { $rvwName = [string]$certReviewerMap[$cid].Name }
+            $rvw = ConvertTo-SafeHtml $rvwName
+            # Decision date: item DecisionDate, else the cert's signoff/completed date.
+            $ddRaw = [string]$it.DecisionDate
+            if ([string]::IsNullOrWhiteSpace($ddRaw) -and $cid -and $certReviewerMap.ContainsKey($cid)) { $ddRaw = [string]$certReviewerMap[$cid].SignOff }
+            $dd = & $fmtDt $ddRaw
+            [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $it.IdentityName) + '</td><td>' + $acct + '</td><td>' + (ConvertTo-SafeHtml $it.AccessName) + $pb + '</td><td>' + (ConvertTo-SafeHtml $it.SourceName) + '</td><td>' + $rvw + '</td><td>' + (ConvertTo-SafeHtml $dd) + '</td><td>' + (ConvertTo-SafeHtml $just) + '</td><td>' + $rem + '</td></tr>')
         }
     }
     [void]$sb.AppendLine('</tbody></table></details>')

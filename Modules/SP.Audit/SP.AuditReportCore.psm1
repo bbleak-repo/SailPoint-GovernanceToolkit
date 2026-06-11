@@ -132,11 +132,26 @@ function Group-SPAuditDecisions {
                                  else { '' }
         }
 
-        # Extract compliance fields
+        # Extract compliance fields. Real ISC items carry the reviewer's note under 'comments'
+        # (a string, sometimes an array of comment objects), NOT the singular 'comment'; read both.
         $justification = ''
         if ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['comment'] -and
             $null -ne $rawItem.comment -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.comment)) {
             $justification = [string]$rawItem.comment
+        }
+        elseif ($null -ne $rawItem.PSObject -and $null -ne $rawItem.PSObject.Properties['comments'] -and $null -ne $rawItem.comments) {
+            $cm = $rawItem.comments
+            if ($cm -is [string]) { $justification = $cm }
+            elseif ($cm -is [System.Collections.IEnumerable]) {
+                $parts = @()
+                foreach ($c in $cm) {
+                    if ($null -eq $c) { continue }
+                    if ($c -is [string]) { $parts += $c }
+                    elseif ($null -ne $c.PSObject.Properties['comment'] -and -not [string]::IsNullOrWhiteSpace([string]$c.comment)) { $parts += [string]$c.comment }
+                    elseif ($null -ne $c.PSObject.Properties['text'] -and -not [string]::IsNullOrWhiteSpace([string]$c.text)) { $parts += [string]$c.text }
+                }
+                $justification = ($parts -join '; ')
+            }
         }
 
         $systemTimestamp = ''
@@ -183,9 +198,14 @@ function Group-SPAuditDecisions {
         # access.source.{name,id}, then the account object (account.source / sourceName / sourceId).
         $sourceName = ''
         $sourceId   = ''
+        # Top-level item.sourceName/sourceId is the most reliable source label and is the one that
+        # also surfaces DISCONNECTED-app source names; prefer it, then fall back to the chain below.
+        # (item.sourceType e.g. "Active Directory - Direct" is deliberately ignored.)
+        if ($null -ne $rawItem.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceName)) { $sourceName = [string]$rawItem.sourceName }
+        if ($null -ne $rawItem.PSObject.Properties['sourceId']   -and -not [string]::IsNullOrWhiteSpace([string]$rawItem.sourceId))   { $sourceId   = [string]$rawItem.sourceId }
         if ($null -ne $entObj) {
-            if ($null -ne $entObj.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceName)) { $sourceName = [string]$entObj.sourceName }
-            if ($null -ne $entObj.PSObject.Properties['sourceId']   -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceId))   { $sourceId   = [string]$entObj.sourceId }
+            if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $entObj.PSObject.Properties['sourceName'] -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceName)) { $sourceName = [string]$entObj.sourceName }
+            if ([string]::IsNullOrWhiteSpace($sourceId)   -and $null -ne $entObj.PSObject.Properties['sourceId']   -and -not [string]::IsNullOrWhiteSpace([string]$entObj.sourceId))   { $sourceId   = [string]$entObj.sourceId }
         }
         if ($null -ne $accessObj -and $null -ne $accessObj.PSObject.Properties['source'] -and $null -ne $accessObj.source) {
             if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $accessObj.source.PSObject.Properties['name'] -and $null -ne $accessObj.source.name) { $sourceName = [string]$accessObj.source.name }
