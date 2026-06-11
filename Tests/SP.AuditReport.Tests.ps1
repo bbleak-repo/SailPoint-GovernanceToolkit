@@ -631,3 +631,44 @@ Describe "AR-001I: Group-SPAuditDecisions reads the real ISC accessSummary shape
         $d.Privileged   | Should -Be $true
     }
 }
+
+Describe "AR-001J: Group-SPAuditDecisions reads real-ISC item.sourceName + comments" {
+    BeforeEach { Mock Write-SPLog -ModuleName SP.AuditReportCore { } }
+
+    It "uses top-level sourceName (incl. disconnected) and the 'comments' justification" {
+        $wrapped = @{
+            CertificationId = 'c'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id              = 'i'
+                decision        = 'REVOKE'
+                modified        = '2026-06-10T14:30:00.123Z'
+                comments        = 'Ok to revoke.'
+                sourceName      = 'Comp Prod Active Directory'
+                sourceType      = 'Active Directory - Direct'
+                identitySummary = [PSCustomObject]@{ id = 'id-1'; identityId = 'id-1'; name = 'U1' }
+                accessSummary   = [PSCustomObject]@{
+                    access      = [PSCustomObject]@{ id = 'ent-1'; type = 'ENTITLEMENT'; name = 'AD-DomainAdmins' }
+                    entitlement = [PSCustomObject]@{ id = 'ent-1'; name = 'AD-DomainAdmins'; sourceName = 'Should-Be-Overridden' }
+                }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Revoked)[0]
+        $d.SourceName   | Should -Be 'Comp Prod Active Directory'   # top-level wins over entitlement.sourceName
+        $d.Justification | Should -Be 'Ok to revoke.'
+        $d.DecisionDate | Should -Be '2026-06-10T14:30:00.123Z'
+    }
+
+    It "supports a comments array of {comment} objects" {
+        $wrapped = @{
+            CertificationId = 'c'; CertificationName = 'C'; CampaignName = 'Camp'
+            Item = [PSCustomObject]@{
+                id = 'i2'; decision = 'APPROVE'; modified = '2026-06-10T10:00:00Z'
+                comments = @([PSCustomObject]@{ comment = 'Keep for now' }, [PSCustomObject]@{ comment = 'Owner confirmed' })
+                identitySummary = [PSCustomObject]@{ identityId = 'id-2'; name = 'U2' }
+                accessSummary = [PSCustomObject]@{ access = [PSCustomObject]@{ id = 'e2'; type = 'ENTITLEMENT'; name = 'VPN' } }
+            }
+        }
+        $d = @((Group-SPAuditDecisions -Items @($wrapped)).Approved)[0]
+        $d.Justification | Should -Be 'Keep for now; Owner confirmed'
+    }
+}
