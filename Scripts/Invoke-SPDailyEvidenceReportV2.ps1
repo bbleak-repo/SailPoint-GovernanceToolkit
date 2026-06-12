@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    [SUPERSEDED by V3] Generates the daily certification evidence report (v2) -- a focused, leadership-grade
+    Generates the daily certification evidence report (v2) -- a focused, leadership-grade
     attestation evidence artifact (output: daily-evidence-v2-*.html).
 .DESCRIPTION
     The v2 layout strips the earlier KPI dashboard / confidence score / domino tracker and
@@ -23,10 +23,10 @@
     intentionally NOT here -- they live in the campaign-diff report. This is a CLONE of
     Invoke-SPDailyEvidenceReport.ps1; the original remains available unchanged.
 
-    NOTE: This is the v2 (superseded) daily evidence report. For production daily use,
-    prefer Invoke-SPDailyEvidenceReportV3.ps1 which adds day-over-day delta tracking,
-    access change detection, and source-aware remediation. V1 is retained for
-    backward compatibility and standalone KPI dashboard use.
+    V2 focuses on lean per-campaign evidence without the KPI dashboard. Use V1
+    (Invoke-SPDailyEvidenceReport.ps1) for the standalone KPI dashboard view, or V3
+    (Invoke-SPDailyEvidenceReportV3.ps1) for day-over-day delta tracking. All three
+    are complementary and produce separate output files.
 
     Designed for daily scheduled execution after the daily orchestrator. Consolidates
     data from multiple toolkit analytics functions into the format required by

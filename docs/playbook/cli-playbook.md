@@ -1090,19 +1090,17 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 
 ### `Invoke-SPDailyEvidenceReport.ps1`
 
-> **Which version?** Three versions of the Daily Evidence Report exist. All three coexist
-> and produce separate output files, so you can run any combination.
+> **Three complementary versions** -- all coexist, produce separate output files, and
+> can run in any combination. They are NOT sequential replacements.
 >
-> - **V3 (recommended)** -- `Invoke-SPDailyEvidenceReportV3.ps1` -- full day-over-day
->   evidence with KPI dashboard, domino tracker, reviewer timeliness aging, high-risk
->   exposure, and access change tracking (added/removed/changed). Best for daily
->   scheduled production use.
-> - **V2** -- `Invoke-SPDailyEvidenceReportV2.ps1` -- lean per-campaign executive summary
->   with donut chart, scope, completion, and reviewer accountability. Best for focused
->   single-campaign evidence.
-> - **V1** -- `Invoke-SPDailyEvidenceReport.ps1` -- original 6-KPI dashboard with domino
->   tracker. Best for standalone daily KPI overview when you do not need day-over-day
->   comparison.
+> | Version | Script | Best for | Key feature |
+> |---|---|---|---|
+> | **V1** | `Invoke-SPDailyEvidenceReport.ps1` | Standalone daily compliance dashboard | 6-KPI tiles, Domino Tracker, Governance Confidence Score, evidence registers. Works for any campaign on any schedule. |
+> | **V2** | `Invoke-SPDailyEvidenceReportV2.ps1` | Lean per-campaign audit evidence | Donut chart, source-aware remediation (Deprovisioned/Queued/Pending), decision register with justification. No KPI dashboard. |
+> | **V3** | `Invoke-SPDailyEvidenceReportV3.ps1` | Day-over-day delta tracking | Everything V2 has + KPI dashboard + access change tracking (added/removed/changed) + reviewer timeliness aging. Requires recurring daily campaign model. |
+>
+> **Quick decision:** Use V1 for "what is governance posture today?" Use V3 for "what
+> changed since yesterday?" Use V2 for a clean audit artifact without KPI overhead.
 
 **Purpose:** a daily executive governance dashboard with six KPIs, a Governance Confidence
 Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy
@@ -1151,19 +1149,39 @@ the cascading impact.
 | `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
 
 ```powershell
-# Daily evidence report (default 1-day window)
+# Daily compliance dashboard (default 1-day window, console + HTML)
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -Token $token -OutputMode Both
 
 # Scope to a specific day's campaigns
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Tuesday' -DaysBack 7 -Token $token
 
-# Dry run -- see what steps would execute
+# Full campaign name match with custom thresholds
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignName 'Daily Attestation Manager Campaign - Wednesday, June 11 2026' -SlaHours 24 -HighRiskThreshold 80 -Token $token -OutputMode Both
+
+# Weekly evidence catch-up (last 7 days, all campaigns)
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -DaysBack 7 -Token $token -OutputMode HTML
+
+# Prefix match for a campaign series
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameStartsWith 'Daily Attestation' -Token $token -OutputMode Both
+
+# Dry run -- see what steps would execute without API calls
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf
+
+# JSON output for pipeline/automation consumption
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Wednesday' -Token $token -OutputMode JSON
 ```
 
 **Thresholds** are configurable in `settings.json` under the `DailyEvidence.Thresholds` section.
 The script uses sensible defaults if the section is missing. See
 [Foundations](00-foundations.md) for the settings reference.
+
+**Output files:**
+- `Audit\daily-evidence\daily-evidence-{timestamp}.html` -- self-contained HTML dashboard + evidence
+- `Audit\daily-evidence\daily-evidence-audit.jsonl` -- append-only JSONL evidence trail (every run)
+
+*Exit codes:* 0 all KPIs green + confidence A/B | 1 any KPI yellow or confidence C | 5 any KPI red, confidence D/F, or critical failure | 2/3/4 parameter/auth/config.
+
+**Also available via GUI:** Governance tab > "Daily Evidence" button.
 
 ### `Invoke-SPDailyEvidenceReportV2.ps1`
 **Purpose:** the **v2** daily certification evidence report — a leaner, leadership-grade rewrite of
