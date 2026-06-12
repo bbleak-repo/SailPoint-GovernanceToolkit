@@ -743,25 +743,34 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             $groupRows = $skipGroups[$groupKey]
             [void]$sb.AppendLine('========================================')
             if ($groupKey -eq '__UNRESOLVED__') {
-                [void]$sb.AppendLine('Manager: Unresolved Manager Chain')
+                [void]$sb.AppendLine('Manager: Unresolved')
             }
             else {
-                # Find the display name from the first row in the group
                 $dispName = [string]($groupRows[0].SkipLevelName)
                 if ([string]::IsNullOrWhiteSpace($dispName)) { $dispName = '(unknown)' }
-                [void]$sb.AppendLine("Manager: $dispName ($groupKey)")
+                [void]$sb.AppendLine("Manager: $dispName")
             }
             [void]$sb.AppendLine("Reviewers still outstanding: $($groupRows.Count)")
+
+            # Ready-to-paste email line: manager email; reviewer1 email; reviewer2 email; ...
+            $groupEmailParts = [System.Collections.Generic.List[string]]::new()
+            if ($groupKey -ne '__UNRESOLVED__' -and -not [string]::IsNullOrWhiteSpace($groupKey)) {
+                $groupEmailParts.Add($groupKey)
+            }
+            foreach ($r in $groupRows) {
+                $rEmail = [string]$r.ReviewerEmail
+                if (-not [string]::IsNullOrWhiteSpace($rEmail) -and -not $groupEmailParts.Contains($rEmail.Trim())) {
+                    $groupEmailParts.Add($rEmail.Trim())
+                }
+            }
+            [void]$sb.AppendLine("To: $($groupEmailParts -join '; ')")
             [void]$sb.AppendLine('')
 
-            # Column headers + separator
+            # Reviewer detail table (name + campaign only)
             $colReviewer  = 'Reviewer'
             $colCampaign  = 'Campaign'
-
-            # Calculate column widths from data
             $wReviewer = [Math]::Max($colReviewer.Length, ($groupRows | ForEach-Object { ([string]$_.ReviewerName).Length } | Measure-Object -Maximum).Maximum)
             $wCampaign = [Math]::Max($colCampaign.Length, ($groupRows | ForEach-Object { ([string]$_.CampaignName).Length } | Measure-Object -Maximum).Maximum)
-            # Cap campaign column at 60 to keep the table readable
             if ($wCampaign -gt 60) { $wCampaign = 60 }
 
             $fmtHeader = "  {0,-$wReviewer}  {1,-$wCampaign}"
@@ -769,7 +778,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             [void]$sb.AppendLine(($fmtHeader -f $colReviewer, $colCampaign))
             [void]$sb.AppendLine(($fmtSep -f ('-' * $wReviewer), ('-' * $wCampaign)))
 
-            foreach ($r in ($groupRows | Sort-Object { [double]$_.HoursOpen } -Descending)) {
+            foreach ($r in ($groupRows | Sort-Object { [string]$_.ReviewerName })) {
                 $rName = [string]$r.ReviewerName
                 if ($rName.Length -gt $wReviewer) { $rName = $rName.Substring(0, $wReviewer) }
                 $cName = [string]$r.CampaignName
@@ -1541,34 +1550,57 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
                             $rCount += $rMgr.Subordinates[$sKey].Reviewers.Count
                         }
                     }
+                    # Collect reviewer emails for this manager
+                    $rEmails = [System.Collections.Generic.List[string]]::new()
+                    if ($lvlNum -eq 2) {
+                        foreach ($dr in $rMgr.DirectReviewers) {
+                            $e = [string]$dr.ReviewerEmail
+                            if (-not [string]::IsNullOrWhiteSpace($e) -and -not $rEmails.Contains($e.Trim())) { $rEmails.Add($e.Trim()) }
+                        }
+                    }
+                    else {
+                        foreach ($sKey in $rMgr.Subordinates.Keys) {
+                            foreach ($sr in $rMgr.Subordinates[$sKey].Reviewers) {
+                                $e = [string]$sr.ReviewerEmail
+                                if (-not [string]::IsNullOrWhiteSpace($e) -and -not $rEmails.Contains($e.Trim())) { $rEmails.Add($e.Trim()) }
+                            }
+                        }
+                    }
                     $routingRows.Add([PSCustomObject]@{
-                        Level         = $lvlNum
-                        ManagerName   = [string]$rMgr.DisplayName
-                        ManagerEmail  = [string]$rMgr.Email
-                        HtmlFile      = $rRelPath
-                        ReviewerCount = $rCount
+                        Level          = $lvlNum
+                        ManagerEmail   = [string]$rMgr.Email
+                        ManagerName    = [string]$rMgr.DisplayName
+                        HtmlFile       = $rRelPath
+                        ReviewerCount  = $rCount
+                        ReviewerEmails = ($rEmails -join '; ')
                     })
                 }
             }
 
+            # Collect all reviewer emails for the all-outstanding row
+            $allRevEmails = @($lateRows | ForEach-Object { [string]$_.ReviewerEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+
             # Add all-outstanding row
             $routingRows.Add([PSCustomObject]@{
-                Level         = 'all'
-                ManagerName   = 'All Recipients'
-                ManagerEmail  = ''
-                HtmlFile      = 'all-outstanding.html'
-                ReviewerCount = $lateRows.Count
+                Level          = 'all'
+                ManagerEmail   = ''
+                ManagerName    = 'All Recipients'
+                HtmlFile       = 'all-outstanding.html'
+                ReviewerCount  = $lateRows.Count
+                ReviewerEmails = ($allRevEmails -join '; ')
             })
 
             # Add no-manager row if applicable
             if ($noMgrItems.Count -gt 0 -or $brokenGrouped.Count -gt 0) {
                 $noMgrTotal = $noMgrItems.Count + ($brokenGrouped.Values | ForEach-Object { $_.Rows.Count } | Measure-Object -Sum).Sum
+                $noMgrEmails = @($noMgrItems | ForEach-Object { [string]$_.ReviewerEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
                 $routingRows.Add([PSCustomObject]@{
-                    Level         = 'no-manager'
-                    ManagerName   = ''
-                    ManagerEmail  = ''
-                    HtmlFile      = 'no-manager/unresolved-chains.html'
-                    ReviewerCount = $noMgrTotal
+                    Level          = 'no-manager'
+                    ManagerEmail   = ''
+                    ManagerName    = ''
+                    HtmlFile       = 'no-manager/unresolved-chains.html'
+                    ReviewerCount  = $noMgrTotal
+                    ReviewerEmails = ($noMgrEmails -join '; ')
                 })
             }
 
