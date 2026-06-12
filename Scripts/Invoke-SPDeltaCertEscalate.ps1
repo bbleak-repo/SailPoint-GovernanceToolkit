@@ -1212,6 +1212,9 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         # $targetLevel = the level of the report recipient (determines heading depth),
         # $sb = StringBuilder. For the recipient's direct subordinates, uses <h2>; for
         # deeper nesting uses <h3>, <h4>, etc.
+        # Render a subordinate manager and their reviewers recursively.
+        # Uses the subordinate data from the PARENT node (not the global $levelData)
+        # to ensure only reviewers that roll up through THIS specific path are shown.
         $renderSubTree = {
             param(
                 [System.Text.StringBuilder]$sb,
@@ -1219,7 +1222,6 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
                 [int]$mgrLevel,
                 [int]$targetLevel
             )
-            # Heading tag depth: h2 for one level below target, h3 for two levels, etc.
             $hDepth = $targetLevel - $mgrLevel + 1
             if ($hDepth -lt 2) { $hDepth = 2 }
             if ($hDepth -gt 6) { $hDepth = 6 }
@@ -1235,6 +1237,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             if ($mgrLevel -eq 2) {
                 # Leaf level: render the reviewer table directly
                 $directRows = @($mgrNode.DirectReviewers)
+                if ($directRows.Count -eq 0) { return 0 }
                 $totalReviewers = $directRows.Count
                 $subName = [string]$mgrNode.DisplayName
                 if ([string]::IsNullOrWhiteSpace($subName)) { $subName = '(unknown)' }
@@ -1244,14 +1247,22 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
                 [void]$sb.AppendLine('')
             }
             else {
-                # Intermediate level: iterate subordinates at (mgrLevel - 1) and recurse
-                $subName = [string]$mgrNode.DisplayName
-                if ([string]::IsNullOrWhiteSpace($subName)) { $subName = '(unknown)' }
-                [void]$sb.AppendLine("<$hTag style=`"$subHeadStyle`"><strong>$(ConvertTo-EscHtml $subName)</strong></$hTag>")
-
+                # Intermediate level: only render if subordinates have actual reviewers
+                # First pass: collect children that have content
+                $childContent = New-Object System.Text.StringBuilder
+                $childTotal = 0
                 foreach ($subId in $mgrNode.Subordinates.Keys) {
-                    $childCount = & $renderSubTree $sb $subId ($mgrLevel - 1) $targetLevel
-                    $totalReviewers += $childCount
+                    $childCount = & $renderSubTree $childContent $subId ($mgrLevel - 1) $targetLevel
+                    $childTotal += $childCount
+                }
+
+                # Only render this manager heading if children had reviewers
+                if ($childTotal -gt 0) {
+                    $subName = [string]$mgrNode.DisplayName
+                    if ([string]::IsNullOrWhiteSpace($subName)) { $subName = '(unknown)' }
+                    [void]$sb.AppendLine("<$hTag style=`"$subHeadStyle`"><strong>$(ConvertTo-EscHtml $subName)</strong> -- $childTotal outstanding</$hTag>")
+                    [void]$sb.Append($childContent.ToString())
+                    $totalReviewers = $childTotal
                 }
             }
 
@@ -1499,12 +1510,6 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
                     [void]$allHtml.AppendLine("<h2 style=`"color:#264d73;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px`">$(ConvertTo-EscHtml $l2Name) (Manager)</h2>")
                     & $renderReviewerTable $allHtml @($l2Mgr.DirectReviewers)
                 }
-            }
-
-            # Reviewers with no manager
-            if ($noManagerReviewers.Count -gt 0) {
-                [void]$allHtml.AppendLine("<h2 style=`"color:#264d73;margin-top:24px;border-bottom:1px solid #ddd;padding-bottom:4px`">No Manager Assigned</h2>")
-                & $renderReviewerTable $allHtml $noManagerReviewers.ToArray()
             }
 
             [void]$allHtml.AppendLine('')
