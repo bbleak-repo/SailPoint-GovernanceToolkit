@@ -3503,6 +3503,296 @@ function Invoke-SPGuiDailyEvidence {
 
 #endregion Daily Evidence Bridge
 
+#region Entitlement History Bridge
+
+function Invoke-SPGuiEntitlementHistory {
+    <#
+    .SYNOPSIS
+        Run the Entitlement History report from the GUI and return the HTML report path.
+    .DESCRIPTION
+        Bridge function for the [Entitlement History] button on the Governance tab.
+        Invokes Scripts/Invoke-SPEntitlementHistory.ps1 with the supplied campaign
+        name filter and DaysBack, and returns the path to the generated HTML report.
+    .PARAMETER CampaignNameContains
+        Campaign name substring filter (optional).
+    .PARAMETER DaysBack
+        How many days back to search for campaign snapshots. Default: 30.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{HtmlPath; DurationSeconds}; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiEntitlementHistory -CampaignNameContains 'Daily Attestation'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPEntitlementHistory.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            $sw.Stop()
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Entitlement History script not found: $scriptPath"
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiEntitlementHistory started: DaysBack=$DaysBack, NameContains='$CampaignNameContains'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiEntitlementHistory' -CorrelationID $CorrelationID
+
+        # Resolve output path from config or default
+        $effectiveOutputPath = $null
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                $null -ne $cfg.Audit -and
+                $null -ne $cfg.Audit.PSObject.Properties['OutputPath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $ap = [string]$cfg.Audit.OutputPath
+                if (-not [System.IO.Path]::IsPathRooted($ap)) { $ap = Join-Path $toolkitRoot $ap }
+                $effectiveOutputPath = Join-Path $ap 'history'
+            }
+        }
+        catch { }
+
+        if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+            $effectiveOutputPath = Join-Path $toolkitRoot 'Audit\history'
+        }
+        if (-not (Test-Path $effectiveOutputPath)) {
+            New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null
+        }
+
+        # Build script arguments
+        $scriptArgs = @{
+            OutputMode = 'Console'
+            OutputPath = $effectiveOutputPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $scriptArgs['CampaignNameContains'] = $CampaignNameContains
+        }
+
+        # Snapshot HTML files before run to detect the new one
+        $htmlBefore = @()
+        if (Test-Path $effectiveOutputPath) {
+            $htmlBefore = @(Get-ChildItem -Path $effectiveOutputPath -Filter '*.html' -File |
+                Select-Object -ExpandProperty FullName)
+        }
+
+        # Execute the script
+        & $scriptPath @scriptArgs
+
+        # Find the newly created HTML file
+        $htmlAfter = @(Get-ChildItem -Path $effectiveOutputPath -Filter '*.html' -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -ExpandProperty FullName)
+
+        $newHtml = $null
+        foreach ($f in $htmlAfter) {
+            if ($f -notin $htmlBefore) {
+                $newHtml = $f
+                break
+            }
+        }
+        # Fallback: most recent file
+        if ([string]::IsNullOrWhiteSpace($newHtml) -and $htmlAfter.Count -gt 0) {
+            $newHtml = $htmlAfter[0]
+        }
+
+        $sw.Stop()
+
+        if ([string]::IsNullOrWhiteSpace($newHtml)) {
+            Write-SPLog -Message "Invoke-SPGuiEntitlementHistory completed but no HTML report found in '$effectiveOutputPath'" `
+                -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiEntitlementHistory' -CorrelationID $CorrelationID
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Entitlement History script completed but no HTML report was generated."
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiEntitlementHistory complete: HtmlPath='$newHtml' Duration=$([math]::Round($sw.Elapsed.TotalSeconds, 1))s" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiEntitlementHistory' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                HtmlPath        = $newHtml
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiEntitlementHistory failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiEntitlementHistory' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiEntitlementHistory failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion Entitlement History Bridge
+
+#region Cache Validate Bridge
+
+function Invoke-SPGuiCacheValidate {
+    <#
+    .SYNOPSIS
+        Run the snapshot/cache validation diagnostic from the GUI.
+    .DESCRIPTION
+        Bridge function for the [Validate Cache] button on the Governance tab.
+        Invokes Scripts/Invoke-SPCacheValidate.ps1 with -OutputMode JSON, parses
+        the findings, and returns a summary result. This is a diagnostic -- no HTML
+        report is produced.
+    .PARAMETER Path
+        Path to validate (snapshot file, items cache, or directory). When omitted
+        the script defaults to the toolkit snapshot directory.
+    .PARAMETER FieldCoverageWarnPct
+        Warn threshold for field coverage percentage. Default: 90.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{FilesChecked; ErrorCount; WarnCount; Summary; DurationSeconds}; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiCacheValidate
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$Path,
+
+        [Parameter()]
+        [double]$FieldCoverageWarnPct = 90,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPCacheValidate.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            $sw.Stop()
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Cache Validate script not found: $scriptPath"
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiCacheValidate started: Path='$Path'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCacheValidate' -CorrelationID $CorrelationID
+
+        # Build script arguments -- use JSON mode so we can parse results
+        $scriptArgs = @{
+            OutputMode          = 'JSON'
+            FieldCoverageWarnPct = $FieldCoverageWarnPct
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Path)) {
+            $scriptArgs['Path'] = $Path
+        }
+
+        # Execute and capture output
+        $jsonOutput = & $scriptPath @scriptArgs
+
+        # Parse the JSON findings
+        $filesChecked = 0
+        $errorCount   = 0
+        $warnCount    = 0
+        $summaryLines = @()
+
+        if ($null -ne $jsonOutput) {
+            $jsonText = if ($jsonOutput -is [array]) { $jsonOutput -join "`n" } else { [string]$jsonOutput }
+            try {
+                $findings = $jsonText | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($null -ne $findings) {
+                    $findingsArray = if ($findings -is [array]) { $findings } else { @($findings) }
+                    $filesChecked = $findingsArray.Count
+                    foreach ($f in $findingsArray) {
+                        if ($null -ne $f.PSObject.Properties['Severity']) {
+                            if ($f.Severity -eq 'ERROR') { $errorCount++ }
+                            elseif ($f.Severity -eq 'WARN') { $warnCount++ }
+                        }
+                        if ($null -ne $f.PSObject.Properties['File'] -and $null -ne $f.PSObject.Properties['Message']) {
+                            $summaryLines += "$($f.Severity): $(Split-Path $f.File -Leaf) - $($f.Message)"
+                        }
+                    }
+                }
+            }
+            catch {
+                # JSON parse failed; treat raw output as summary
+                $summaryLines += $jsonText
+            }
+        }
+
+        $sw.Stop()
+
+        $summaryText = if ($errorCount -eq 0 -and $warnCount -eq 0) {
+            "All files OK ($filesChecked checked, no issues)."
+        } else {
+            "$filesChecked checked: $errorCount error(s), $warnCount warning(s)."
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiCacheValidate complete: $summaryText Duration=$([math]::Round($sw.Elapsed.TotalSeconds, 1))s" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCacheValidate' -CorrelationID $CorrelationID
+
+        return @{
+            Success = ($errorCount -eq 0)
+            Data    = @{
+                FilesChecked    = $filesChecked
+                ErrorCount      = $errorCount
+                WarnCount       = $warnCount
+                Summary         = $summaryText
+                Details         = $summaryLines
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiCacheValidate failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCacheValidate' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiCacheValidate failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion Cache Validate Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -3526,5 +3816,7 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiHierarchicalReport',
     'Invoke-SPGuiCampaignDiff',
     'Invoke-SPGuiCertTracker',
-    'Invoke-SPGuiDailyEvidence'
+    'Invoke-SPGuiDailyEvidence',
+    'Invoke-SPGuiEntitlementHistory',
+    'Invoke-SPGuiCacheValidate'
 )

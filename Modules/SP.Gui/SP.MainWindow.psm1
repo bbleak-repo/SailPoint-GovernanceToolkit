@@ -3709,6 +3709,8 @@ function Initialize-GovernanceTab {
     $btnOpenFolder    = Find-Control -Parent $TabContent -Name 'BtnOpenGovFolder'
     $btnRefresh       = Find-Control -Parent $TabContent -Name 'BtnRefreshGovReports'
     $govReportList    = Find-Control -Parent $TabContent -Name 'GovReportList'
+    $btnEntitlementHist   = Find-Control -Parent $TabContent -Name 'BtnEntitlementHistory'
+    $btnCacheValidate     = Find-Control -Parent $TabContent -Name 'BtnCacheValidate'
 
     if ($btnHealthCheck) {
         $btnHealthCheck.Add_Click({
@@ -3771,6 +3773,24 @@ function Initialize-GovernanceTab {
                 [System.IO.Directory]::CreateDirectory($outputPath) | Out-Null
             }
             Start-Process 'explorer.exe' -ArgumentList "`"$outputPath`""
+        }.GetNewClosure())
+    }
+
+    if ($btnEntitlementHist) {
+        $btnEntitlementHist.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiEntitlementHistory -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnCacheValidate) {
+        $btnCacheValidate.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiCacheValidate -TabContent $tc
+            } $TabContent
         }.GetNewClosure())
     }
 
@@ -4817,6 +4837,7 @@ function Invoke-GuiCertTracker {
     if ($null -ne $progressBar)    {
         $progressBar.Value      = 0
         $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
         $progressBar.Visibility = [System.Windows.Visibility]::Visible
     }
     if ($null -ne $progressPct)    { $progressPct.Text = '0%' }
@@ -4829,7 +4850,6 @@ function Invoke-GuiCertTracker {
     $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
     $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
     $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
-    $runspace.SessionStateProxy.SetVariable('GovernanceTabContent', $TabContent)
     $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
     $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPct)
     $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
@@ -4904,6 +4924,8 @@ function Invoke-GuiCertTracker {
             $t.Stop()
 
             try {
+                try { $ps.EndInvoke($async) } catch { }
+
                 if ($ps.HadErrors) {
                     $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
                     Set-StatusMessage -Message "Cert Tracker failed: $errMsg" -IsError
@@ -4913,7 +4935,10 @@ function Invoke-GuiCertTracker {
                 }
 
                 if ($null -ne $btn)  { $btn.IsEnabled = $true }
-                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
                 if ($null -ne $pct)  { $pct.Text = '' }
 
                 try {
@@ -4975,6 +5000,7 @@ function Invoke-GuiDailyEvidence {
     if ($null -ne $progressBar) {
         $progressBar.Value      = 0
         $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
         $progressBar.Visibility = [System.Windows.Visibility]::Visible
     }
     if ($null -ne $progressPct) { $progressPct.Text = '0%' }
@@ -5086,7 +5112,334 @@ function Invoke-GuiDailyEvidence {
                 }
 
                 if ($null -ne $btn)  { $btn.IsEnabled = $true }
-                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+#endregion
+
+#region Entitlement History + Cache Validate Handlers
+
+function Invoke-GuiEntitlementHistory {
+    <#
+    .SYNOPSIS
+        Runs the Entitlement History report in a background runspace and opens
+        the generated HTML report on completion.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar   = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct   = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnHistory    = Find-Control -Parent $TabContent -Name 'BtnEntitlementHistory'
+
+    # Read campaign filter from the Hierarchical controls if present
+    $campaignFilter = ''
+    $txtFilter = Find-Control -Parent $TabContent -Name 'TxtHierCampaignContains'
+    if ($null -ne $txtFilter -and -not [string]::IsNullOrWhiteSpace($txtFilter.Text)) {
+        $campaignFilter = [string]$txtFilter.Text
+    }
+
+    # Read DaysBack from the Hierarchical controls if present
+    $daysBack = 30
+    $txtDays = Find-Control -Parent $TabContent -Name 'TxtHierDaysBack'
+    if ($null -ne $txtDays) { [int]::TryParse([string]$txtDays.Text, [ref]$daysBack) | Out-Null }
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running Entitlement History. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running Entitlement History...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '' }
+    if ($null -ne $btnHistory) { $btnHistory.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CampaignFilter',  $campaignFilter)
+    $runspace.SessionStateProxy.SetVariable('DaysBack',        $daysBack)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',   $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',     $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',      $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',     $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPct',     $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',     $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $histParams = @{
+            DaysBack      = $DaysBack
+            CorrelationID = $CorrelationID
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignFilter)) {
+            $histParams['CampaignNameContains'] = $CampaignFilter
+        }
+
+        $histResult = Invoke-SPGuiEntitlementHistory @histParams
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $histResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPct
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) {
+                $capturedProgressBar.IsIndeterminate = $false
+                $capturedProgressBar.Value = 100
+            }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $capturedResult.Success) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "Entitlement History complete ($($d.DurationSeconds)s)"
+                }
+                elseif ($null -ne $capturedResult) {
+                    $capturedLabel.Text = "Entitlement History failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $histResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnHistory
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Entitlement History failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Entitlement History report generated.'
+                    Load-GovernanceReports -TabContent $tab
+
+                    # Open the HTML report automatically
+                    try {
+                        $output = $ps.EndInvoke($async)
+                        if ($null -ne $output -and $output.Count -gt 0) {
+                            $result = $output[0]
+                            if ($null -ne $result -and $result.Success -and
+                                -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
+                                (Test-Path $result.Data.HtmlPath)) {
+                                Start-Process $result.Data.HtmlPath
+                            }
+                        }
+                    } catch { }
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiCacheValidate {
+    <#
+    .SYNOPSIS
+        Runs the snapshot/cache validation diagnostic in a background runspace
+        and displays the results summary in the Governance status label.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel    = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar    = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct    = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnValidate    = Find-Control -Parent $TabContent -Name 'BtnCacheValidate'
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running Cache Validation. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running cache validation...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '' }
+    if ($null -ne $btnValidate) { $btnValidate.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',   $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',     $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',      $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',     $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPct',     $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',     $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $validateResult = Invoke-SPGuiCacheValidate -CorrelationID $CorrelationID
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $validateResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPct
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) {
+                $capturedProgressBar.IsIndeterminate = $false
+                $capturedProgressBar.Value = 100
+            }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $null -ne $capturedResult.Data) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "Cache validation: $($d.Summary) ($($d.DurationSeconds)s)"
+                }
+                elseif ($null -ne $capturedResult -and $null -ne $capturedResult.Error) {
+                    $capturedLabel.Text = "Cache validation failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $validateResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnValidate
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $validateOutput = $null
+                try { $validateOutput = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Cache validation failed: $errMsg" -IsError
+                } else {
+                    # Build a status message from the result
+                    $msg = 'Cache validation complete.'
+                    if ($null -ne $validateOutput -and $null -ne $validateOutput.Data) {
+                        $msg = "Cache validation: $($validateOutput.Data.Summary)"
+                    }
+                    Set-StatusMessage -Message $msg
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
                 if ($null -ne $pct)  { $pct.Text = '' }
 
                 try {

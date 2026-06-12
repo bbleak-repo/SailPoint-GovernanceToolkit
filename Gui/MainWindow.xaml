@@ -1025,6 +1025,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
@@ -1198,8 +1199,28 @@
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>
 
-                    <!-- Row 3: Progress bar + status label -->
+                    <!-- Row 3: Utility Buttons (Diagnostics / History) -->
                     <Grid Grid.Row="3" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" x:Name="BtnEntitlementHistory"
+                                Content="Entitlement History"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"
+                                ToolTip="Build a per-entitlement decision timeline across campaign snapshots and open the HTML report"/>
+
+                        <Button Grid.Column="1" x:Name="BtnCacheValidate"
+                                Content="Validate Cache"
+                                Style="{StaticResource SecondaryButton}"
+                                ToolTip="Run snapshot/cache integrity checks and report data-quality findings"/>
+                    </Grid>
+
+                    <!-- Row 4: Progress bar + status label -->
+                    <Grid Grid.Row="4" Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
@@ -1221,8 +1242,8 @@
                                    FontSize="12" Margin="8,0,0,0"/>
                     </Grid>
 
-                    <!-- Row 4: Leadership Report Distribution -->
-                    <Border Grid.Row="4" Background="#252538" CornerRadius="6"
+                    <!-- Row 5: Leadership Report Distribution -->
+                    <Border Grid.Row="5" Background="#252538" CornerRadius="6"
                             BorderBrush="#3D3D5C" BorderThickness="1"
                             Padding="12,10" Margin="0,0,0,8">
                         <Grid>
@@ -1259,8 +1280,8 @@
                         </Grid>
                     </Border>
 
-                    <!-- Row 5: Hierarchical Leadership Report -->
-                    <Border Grid.Row="5" Background="#252538" CornerRadius="6"
+                    <!-- Row 6: Hierarchical Leadership Report -->
+                    <Border Grid.Row="6" Background="#252538" CornerRadius="6"
                             BorderBrush="#3D3D5C" BorderThickness="1"
                             Padding="12,10" Margin="0,0,0,8">
                         <Grid>
@@ -1337,8 +1358,8 @@
                         </Grid>
                     </Border>
 
-                    <!-- Row 6: Recent Governance Reports -->
-                    <Grid Grid.Row="6">
+                    <!-- Row 7: Recent Governance Reports -->
+                    <Grid Grid.Row="7">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
