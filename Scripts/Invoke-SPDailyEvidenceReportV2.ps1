@@ -9,7 +9,7 @@
 
       Header                       report-generated date, period, aggregate decisions made
       Certification Scope          distinct users reviewed, entitlements tracked,
-                                   privileged-access users, managers involved, sources evaluated
+                                   privileged-access users, reviewers involved, sources evaluated
       Executive Summary (per campaign)
                                    status badge, reviewers signed-off, items decided, a
                                    decision-distribution donut, "Revoked Access — Removal Status"
@@ -1233,15 +1233,17 @@ foreach ($audit in $campaignAudits) {
             switch ($grp) { 'Approved' { $allApproved.Add($it) } 'Revoked' { $allRevoked.Add($it) } default { $allPending.Add($it) } }
         }
     }
-    $ra = $audit['ReviewerActions']
-    if ($null -ne $ra) {
-        foreach ($rk in @('Primary', 'Reassigned')) {
-            foreach ($r in @($ra[$rk])) {
-                if ($null -eq $r) { continue }
-                $mk = if ($r.Email) { [string]$r.Email } elseif ($r.Name) { [string]$r.Name } else { '' }
-                if ($mk) { $mgrSet[$mk] = $true }
-            }
+    # Build unique reviewer set from certifications (keyed by reviewer identity ID
+    # to avoid double-counting when a reviewer is both primary AND reassigned).
+    foreach ($cert in @($audit['Certifications'])) {
+        if ($null -eq $cert -or $null -eq $cert.reviewer) { continue }
+        $rvId = ''
+        if ($cert.reviewer.PSObject.Properties['id'] -and -not [string]::IsNullOrWhiteSpace($cert.reviewer.id)) {
+            $rvId = [string]$cert.reviewer.id
+        } elseif ($cert.reviewer.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace($cert.reviewer.name)) {
+            $rvId = [string]$cert.reviewer.name
         }
+        if ($rvId) { $mgrSet[$rvId] = $true }
     }
     foreach ($cert in @($audit['Certifications'])) {
         if ($null -eq $cert) { continue }
@@ -1308,7 +1310,7 @@ summary{cursor:pointer}
 [void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $usersSet.Count) + '</span><span class="t">distinct users reviewed</span></div>')
 [void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $entSet.Count) + '</span><span class="t">entitlements tracked</span></div>')
 [void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $privUserSet.Count) + '</span><span class="t">privileged-access users</span></div>')
-[void]$sb.AppendLine('<div><span class="n">' + $mgrSet.Count + '</span><span class="t">managers involved</span></div>')
+[void]$sb.AppendLine('<div><span class="n">' + $mgrSet.Count + '</span><span class="t">reviewers involved</span></div>')
 [void]$sb.AppendLine('<div><span class="n">' + $srcSet.Count + '</span><span class="t">sources evaluated</span></div>')
 [void]$sb.AppendLine('</div></div>')
 
