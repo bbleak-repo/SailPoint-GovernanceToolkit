@@ -99,6 +99,10 @@ param(
     [string]$CampaignNameContains,
 
     [Parameter()]
+    [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+    [string[]]$Status,
+
+    [Parameter()]
     [string]$ConfigPath,
 
     [Parameter()]
@@ -471,6 +475,7 @@ try {
     if ($CampaignName)           { $campaignParams['CampaignName']           = $CampaignName }
     if ($CampaignNameStartsWith) { $campaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
     if ($CampaignNameContains)   { $campaignParams['CampaignNameContains']   = $CampaignNameContains }
+    if ($Status)                 { $campaignParams['Status']                 = $Status }
     $campaignResult = Get-SPAuditCampaigns @campaignParams
     if ($campaignResult.Success -and $null -ne $campaignResult.Data) {
         $currentCampaigns = @($campaignResult.Data)
