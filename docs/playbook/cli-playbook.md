@@ -315,24 +315,39 @@ to keep reviews moving.
 | `-MaxEscalationLevels <n>` | Max hops up the org tree from the original reviewer (default 2). |
 | `-DaysBack <n>` *(+ `-WhatIf`)* | **Org-chart audit mode:** check every cert in campaigns from the last N days and resolve each reviewer→skip-level chain — validates ISC manager chains without writing. |
 | `-Csv` / `-CsvPath <p>` | Write the full reviewer→skip-level chain to a CSV (read-only; produced even under `-WhatIf`). |
-| `-EmailList` / `-EmailListPath <p>` | Write a copy-paste **email-queue** text file for nudging people *outside the tool*: two `;`-separated lines — (1) the **managers behind** on their attestation, (2) the **skip-level / escalation path** (each manager's manager). De-duplicated, resolvable emails only; produced even under `-WhatIf`. |
+| `-EmailList` / `-EmailListPath <p>` | Write a copy-paste **email-queue** text file with: (1) global `;`-separated email lines (managers behind + skip-level path), and (2) **per-skip-level-manager breakdown tables** showing which reviewers under each manager still need to act. Produced even under `-WhatIf`. |
+| `-EmailHtml` / `-EmailHtmlPath <p>` | Write a **self-contained HTML escalation report** grouping late reviewers by skip-level manager with clean tables (reviewer, email, campaign, hours open, reason, status). Includes an "Email Quick-Copy" footer with the `;`-separated lines. Professional styling, suitable for email attachment or SharePoint. |
 
 ```powershell
 # Live escalation
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt
 
-# Dry-run + the copy-paste email queue (managers behind + escalation path)
+# Dry-run + the copy-paste email queue (managers behind + skip-level breakdown)
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailList
+
+# Dry-run + HTML escalation report (grouped by skip-level manager)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailHtml
+
+# Full package: CSV chain + text email queue + HTML report
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList -EmailHtml
+
+# Scope to Wednesday campaigns only
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Wednesday' -DaysBack 1 -WhatIf -Csv -EmailList -EmailHtml
 
 # Full org-chart audit: the chain spreadsheet AND the email lines
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList
 ```
 
-> **`-EmailList` — the email queue.** Writes `escalation-emails-*.txt` to `DeltaCert.OutputPath`:
-> a labelled header plus **two ready-to-paste lines** — the managers behind on their attestation,
-> and the skip-level/escalation path — each a `;`-separated list for pasting into an email client's
-> To/CC. Pair with `-Csv` for the full per-cert chain. Both are read-only reporting artifacts (no
-> ISC writes), so they're safe to generate under `-WhatIf`.
+> **`-EmailList` — the email queue + skip-level breakdown.** Writes `escalation-emails-*.txt` to
+> `DeltaCert.OutputPath`: labelled header, two global `;`-separated email lines (managers behind +
+> escalation path), then a **per-skip-level-manager section** with text tables showing each
+> manager's outstanding reviewers, their campaigns, hours open, and escalation reason.
+>
+> **`-EmailHtml` — the HTML alternative.** Writes `escalation-report-*.html` to `DeltaCert.OutputPath`:
+> a clean, self-contained HTML report grouping late reviewers by skip-level manager. Each group
+> shows the manager's name/email, count of outstanding reviewers, and a color-coded table. Includes
+> an "Email Quick-Copy" footer with the `;`-separated lines for To/CC. Both artifacts are read-only
+> (no ISC writes) and safe under `-WhatIf`.
 
 **Related GUI:** Delta Cert tab → Escalate.
 

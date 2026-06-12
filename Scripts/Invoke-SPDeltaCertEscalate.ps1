@@ -93,6 +93,13 @@
     get both the full chain spreadsheet (all rows + Outcome) and the late-only email lines.
 .PARAMETER EmailListPath
     Override the auto-generated email-queue path. Implies -EmailList.
+.PARAMETER EmailHtml
+    When set, produces a self-contained HTML escalation report alongside the text file.
+    Groups late reviewers by skip-level manager with formatted tables and color-coded
+    status indicators. Designed for attaching to or embedding in an escalation email.
+    Output: {DeltaCert.OutputPath}\escalation-report-YYYYMMDD-HHmmss.html
+.PARAMETER EmailHtmlPath
+    Override the auto-generated HTML report path. Implies -EmailHtml.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -126,6 +133,13 @@
     # Find the campaign whose name CONTAINS 'Wednesday' (weekday mid-name), created in the last
     # day, and produce the chain CSV + copy-paste email queue. No write calls (WhatIf).
     # Org chart audit against a peer's campaign name prefix with CSV output.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailHtml
+    # Dry-run + HTML escalation report: a self-contained HTML file grouped by skip-level
+    # manager, suitable for embedding in or attaching to an escalation email.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 7 -WhatIf -Csv -EmailList -EmailHtml
+    # Full audit: CSV spreadsheet + copy-paste email lines + HTML report, all in one run.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
     # Live escalation with CSV evidence log of what was processed.
@@ -191,6 +205,12 @@ param(
 
     [Parameter()]
     [string]$EmailListPath,
+
+    [Parameter()]
+    [switch]$EmailHtml,
+
+    [Parameter()]
+    [string]$EmailHtmlPath,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -431,11 +451,13 @@ $staleCerts = @($staleResult.Data)
 
 $effectiveCsvPath       = $CsvPath        # hoisted so the JSONL audit block can reference it
 $effectiveEmailListPath = $EmailListPath  # hoisted so the JSONL audit block can reference it
+$effectiveEmailHtmlPath = $EmailHtmlPath  # hoisted so the JSONL audit block can reference it
 
-$wantCsv   = ($Csv.IsPresent       -or -not [string]::IsNullOrWhiteSpace($CsvPath))
-$wantEmail = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))
+$wantCsv       = ($Csv.IsPresent       -or -not [string]::IsNullOrWhiteSpace($CsvPath))
+$wantEmail     = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))
+$wantEmailHtml = ($EmailHtml.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlPath))
 
-if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
+if (($wantCsv -or $wantEmail -or $wantEmailHtml) -and $staleCerts.Count -gt 0) {
 
     # Shared DeltaCert output directory + stamp for any auto-generated artifact path.
     $reportOutputDir = '.\DeltaCert'
@@ -567,23 +589,24 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
         }
     }
 
-    # --- Email-queue artifact: two ready-to-paste, semicolon-separated email lines for an
-    #     email queued OUTSIDE the tool -- managers behind, and the skip-level/escalation path. ---
-    if ($wantEmail) {
-        if ([string]::IsNullOrWhiteSpace($effectiveEmailListPath)) {
-            $effectiveEmailListPath = Join-Path $reportOutputDir "escalation-emails-$reportStamp.txt"
-        }
+    # --- Shared late-row filtering: used by both -EmailList and -EmailHtml. ---
+    # The email outputs are NUDGE lists -- they must contain ONLY the reviewers who are actually
+    # behind (a signed/complete cert needs no email). In audit mode (-DaysBack) $csvRows
+    # includes completed certs too, so without this filter the queue would list everyone. The
+    # CSV deliberately keeps all rows (it has the Outcome column); the email views are late-only.
+    $lateRows = $null
+    $mgrEmails   = @()
+    $skipEmails  = @()
+    $scopeLabel  = ''
+    $lvlLabel    = ''
 
-        # The email queue is a NUDGE list -- it must contain ONLY the reviewers who are actually
-        # behind (a signed/complete cert needs no email). In audit mode (-DaysBack) $csvRows
-        # includes completed certs too, so without this filter the queue would list everyone. The
-        # CSV deliberately keeps all rows (it has the Outcome column); the txt is the late-only view.
+    if ($wantEmail -or $wantEmailHtml) {
         $lateRows = @($csvRows | Where-Object { -not [bool]$_.CertSigned })
 
-        # Line 1: the late reviewers themselves (managers who have not completed their attestation).
+        # Late reviewers themselves (managers who have not completed their attestation).
         $mgrEmails = @($lateRows | ForEach-Object { [string]$_.ReviewerEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
 
-        # Line 2: the escalation path -- walk each late reviewer's manager chain UP TO
+        # Escalation path -- walk each late reviewer's manager chain UP TO
         # MaxEscalationLevels levels (1 = direct manager, 2-3 = higher per config). De-duplicated.
         $skipSet = [ordered]@{}
         foreach ($row in $lateRows) {
@@ -601,12 +624,20 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
         }
         $skipEmails = @($skipSet.Keys | Sort-Object -Unique)
 
+        $scopeLabel = if ($DaysBack -gt 0) { "org-chart audit, last $DaysBack day(s)" } else { "stale >= $effectiveStaleHours h" }
+        $lvlLabel   = if ($effectiveMaxLevels -le 1) { 'direct manager' } else { "up to $effectiveMaxLevels levels" }
+    }
+
+    # --- Email-queue text artifact: semicolon-separated email lines + per-skip-level breakdown. ---
+    if ($wantEmail) {
+        if ([string]::IsNullOrWhiteSpace($effectiveEmailListPath)) {
+            $effectiveEmailListPath = Join-Path $reportOutputDir "escalation-emails-$reportStamp.txt"
+        }
+
         $mgrMissing  = @($lateRows | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.ReviewerEmail) }).Count
         $skipMissing = @($lateRows | Where-Object { -not $_.SkipLevelResolved }).Count
         $mgrNote  = if ($mgrMissing  -gt 0) { " ($mgrMissing with no email on file)" } else { '' }
         $skipNote = if ($skipMissing -gt 0) { " ($skipMissing with no manager in ISC)" } else { '' }
-        $scopeLabel = if ($DaysBack -gt 0) { "org-chart audit, last $DaysBack day(s)" } else { "stale >= $effectiveStaleHours h" }
-        $lvlLabel   = if ($effectiveMaxLevels -le 1) { 'direct manager' } else { "up to $effectiveMaxLevels levels" }
 
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.AppendLine('# Delta Cert Escalation -- email queue')
@@ -619,6 +650,77 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine("Skip-level / escalation path ($lvlLabel):")
         [void]$sb.AppendLine(($skipEmails -join '; '))
+
+        # --- Per-skip-level manager breakdown ---
+        # Group late reviewers by their skip-level manager so each escalation contact can see
+        # exactly which of their direct reports is behind.
+        [void]$sb.AppendLine('')
+
+        # Build groups: key = SkipLevelEmail (or sentinel for unresolved), value = list of rows
+        $skipGroups = [ordered]@{}
+        foreach ($row in $lateRows) {
+            $groupKey = if ($row.SkipLevelResolved -and -not [string]::IsNullOrWhiteSpace([string]$row.SkipLevelEmail)) {
+                [string]$row.SkipLevelEmail
+            } else {
+                '__UNRESOLVED__'
+            }
+            if (-not $skipGroups.Contains($groupKey)) {
+                $skipGroups[$groupKey] = [System.Collections.Generic.List[object]]::new()
+            }
+            $skipGroups[$groupKey].Add($row)
+        }
+
+        foreach ($groupKey in $skipGroups.Keys) {
+            $groupRows = $skipGroups[$groupKey]
+            [void]$sb.AppendLine('========================================')
+            if ($groupKey -eq '__UNRESOLVED__') {
+                [void]$sb.AppendLine('Skip-Level Manager: Unresolved Manager Chain')
+            }
+            else {
+                # Find the display name from the first row in the group
+                $dispName = [string]($groupRows[0].SkipLevelName)
+                if ([string]::IsNullOrWhiteSpace($dispName)) { $dispName = '(unknown)' }
+                [void]$sb.AppendLine("Skip-Level Manager: $dispName ($groupKey)")
+            }
+            [void]$sb.AppendLine("Reviewers still outstanding: $($groupRows.Count)")
+            [void]$sb.AppendLine('')
+
+            # Column headers + separator
+            $colReviewer  = 'Reviewer'
+            $colCampaign  = 'Campaign'
+            $colHours     = 'Hours Open'
+            $colItems     = 'Items'
+            $colReason    = 'Reason'
+
+            # Calculate column widths from data
+            $wReviewer = [Math]::Max($colReviewer.Length, ($groupRows | ForEach-Object { ([string]$_.ReviewerName).Length } | Measure-Object -Maximum).Maximum)
+            $wCampaign = [Math]::Max($colCampaign.Length, ($groupRows | ForEach-Object { ([string]$_.CampaignName).Length } | Measure-Object -Maximum).Maximum)
+            # Cap campaign column at 42 to keep the table readable
+            if ($wCampaign -gt 42) { $wCampaign = 42 }
+            $wHours    = $colHours.Length   # 10
+            $wItems    = $colItems.Length   # 5
+            $wReason   = 20
+
+            $fmtHeader = "  {0,-$wReviewer}  {1,-$wCampaign}  {2,$wHours}  {3,$wItems}  {4,-$wReason}"
+            $fmtSep    = "  {0}  {1}  {2}  {3}  {4}"
+            [void]$sb.AppendLine(($fmtHeader -f $colReviewer, $colCampaign, $colHours, $colItems, $colReason))
+            [void]$sb.AppendLine(($fmtSep -f ('-' * $wReviewer), ('-' * $wCampaign), ('-' * $wHours), ('-' * $wItems), ('-' * $wReason)))
+
+            foreach ($r in ($groupRows | Sort-Object { [double]$_.HoursOpen } -Descending)) {
+                $rName = [string]$r.ReviewerName
+                if ($rName.Length -gt $wReviewer) { $rName = $rName.Substring(0, $wReviewer) }
+                $cName = [string]$r.CampaignName
+                if ($cName.Length -gt $wCampaign) { $cName = $cName.Substring(0, $wCampaign - 3) + '...' }
+                $hOpen = '{0:N1}h' -f [double]$r.HoursOpen
+                $items = 'N/A'
+                $reason = [string]$r.EscalationReason
+                if ([string]::IsNullOrWhiteSpace($reason)) { $reason = '-' }
+
+                [void]$sb.AppendLine(($fmtHeader -f $rName, $cName, $hOpen, $items, $reason))
+            }
+            [void]$sb.AppendLine('')
+        }
+        [void]$sb.AppendLine('========================================')
 
         try {
             # WriteAllText is not ShouldProcess-gated, so the queue is produced under -WhatIf too
@@ -639,6 +741,155 @@ if (($wantCsv -or $wantEmail) -and $staleCerts.Count -gt 0) {
             Write-Host "  WARNING: Failed to write email queue: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-SPLog -Message "Failed to write escalation email queue '$effectiveEmailListPath': $($_.Exception.Message)" `
                 -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailQueue' `
+                -CorrelationID $correlationID
+        }
+    }
+
+    # --- HTML escalation report: self-contained, email-friendly HTML with per-skip-level tables. ---
+    if ($wantEmailHtml) {
+        if ([string]::IsNullOrWhiteSpace($effectiveEmailHtmlPath)) {
+            $effectiveEmailHtmlPath = Join-Path $reportOutputDir "escalation-report-$reportStamp.html"
+        }
+
+        # Count distinct campaigns among late rows
+        $lateCampaigns = @($lateRows | ForEach-Object { [string]$_.CampaignName } | Sort-Object -Unique)
+
+        $html = New-Object System.Text.StringBuilder
+        [void]$html.AppendLine('<!DOCTYPE html>')
+        [void]$html.AppendLine('<html lang="en"><head><meta charset="utf-8">')
+        [void]$html.AppendLine('<meta name="viewport" content="width=device-width, initial-scale=1">')
+        [void]$html.AppendLine('<title>Escalation Summary</title>')
+        [void]$html.AppendLine('<style>')
+        [void]$html.AppendLine('body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:20px;background:#f5f5f5;color:#333}')
+        [void]$html.AppendLine('.wrap{max-width:900px;margin:0 auto;background:#fff;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,.12);padding:28px 32px}')
+        [void]$html.AppendLine('h1{font-size:22px;color:#264d73;margin:0 0 6px;border-bottom:2px solid #264d73;padding-bottom:8px}')
+        [void]$html.AppendLine('h2{font-size:17px;color:#264d73;margin:24px 0 6px;border-bottom:1px solid #ddd;padding-bottom:4px}')
+        [void]$html.AppendLine('h2 small{font-size:13px;color:#777;font-weight:normal}')
+        [void]$html.AppendLine('.meta{font-size:13px;color:#555;margin:4px 0 16px}')
+        [void]$html.AppendLine('.summary{font-size:14px;margin:0 0 20px}')
+        [void]$html.AppendLine('table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:13px}')
+        [void]$html.AppendLine('th{background:#264d73;color:#fff;text-align:left;padding:7px 10px;font-weight:600;white-space:nowrap}')
+        [void]$html.AppendLine('td{padding:6px 10px;border-bottom:1px solid #e8e8e8;vertical-align:top}')
+        [void]$html.AppendLine('tr:nth-child(even) td{background:#fafafa}')
+        [void]$html.AppendLine('tr:hover td{background:#f0f4f8}')
+        [void]$html.AppendLine('.s-red{color:#CC3333;font-weight:600}')
+        [void]$html.AppendLine('.s-amber{color:#9a6700;font-weight:600}')
+        [void]$html.AppendLine('.s-green{color:#339933;font-weight:600}')
+        [void]$html.AppendLine('.s-gray{color:#777}')
+        [void]$html.AppendLine('.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600}')
+        [void]$html.AppendLine('.badge-red{background:#fdecea;color:#CC3333}')
+        [void]$html.AppendLine('.badge-amber{background:#fff8e1;color:#9a6700}')
+        [void]$html.AppendLine('.badge-green{background:#e8f5e9;color:#339933}')
+        [void]$html.AppendLine('code{background:#f0f0f0;padding:3px 8px;border-radius:3px;font-size:12px;word-break:break-all}')
+        [void]$html.AppendLine('.copy-section{background:#f8f9fa;border:1px solid #e0e0e0;border-radius:4px;padding:14px 18px;margin:16px 0}')
+        [void]$html.AppendLine('.copy-section p{margin:6px 0}')
+        [void]$html.AppendLine('@media print{body{background:#fff;padding:0}.wrap{box-shadow:none;padding:0}th{background:#264d73 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}')
+        [void]$html.AppendLine('</style></head><body><div class="wrap">')
+
+        # Header
+        $genDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
+        [void]$html.AppendLine('<h1>Escalation Summary</h1>')
+        [void]$html.AppendLine("<p class='meta'>Generated: $genDate | Campaign prefix: <strong>$([System.Net.WebUtility]::HtmlEncode($effectivePrefix))</strong> | Scope: $([System.Net.WebUtility]::HtmlEncode($scopeLabel))</p>")
+        [void]$html.AppendLine("<p class='summary'><strong>$($lateRows.Count) reviewer(s)</strong> have not completed their attestation across <strong>$($lateCampaigns.Count) campaign(s)</strong>.</p>")
+
+        # Helper: HTML-encode with null safety
+        $enc = { param($s) if ([string]::IsNullOrWhiteSpace($s)) { '' } else { [System.Net.WebUtility]::HtmlEncode([string]$s) } }
+
+        # Helper: determine status badge based on outcome
+        $statusBadge = {
+            param($row)
+            $o = [string]$row.Outcome
+            switch -Wildcard ($o) {
+                'WouldEscalate' { "<span class='badge badge-amber'>Would Escalate</span>" }
+                'Escalated'     { "<span class='badge badge-red'>Escalated</span>" }
+                'Skip-*'        { "<span class='badge badge-green'>$(&$enc $o)</span>" }
+                default         { "<span class='s-gray'>$(&$enc $o)</span>" }
+            }
+        }
+
+        # Helper: reason display
+        $reasonText = {
+            param($row)
+            $r = [string]$row.EscalationReason
+            if ([string]::IsNullOrWhiteSpace($r)) { '-' }
+            elseif ($r -match 'Stale')    { "<span class='s-red'>$(&$enc $r)</span>" }
+            elseif ($r -match 'Deadline') { "<span class='s-amber'>$(&$enc $r)</span>" }
+            else { &$enc $r }
+        }
+
+        # Build skip-level groups (reuse pattern from text section)
+        $htmlSkipGroups = [ordered]@{}
+        foreach ($row in $lateRows) {
+            $gKey = if ($row.SkipLevelResolved -and -not [string]::IsNullOrWhiteSpace([string]$row.SkipLevelEmail)) {
+                [string]$row.SkipLevelEmail
+            } else {
+                '__UNRESOLVED__'
+            }
+            if (-not $htmlSkipGroups.Contains($gKey)) {
+                $htmlSkipGroups[$gKey] = [System.Collections.Generic.List[object]]::new()
+            }
+            $htmlSkipGroups[$gKey].Add($row)
+        }
+
+        # Render resolved groups first, unresolved last
+        $sortedKeys = @($htmlSkipGroups.Keys | Where-Object { $_ -ne '__UNRESOLVED__' } | Sort-Object)
+        if ($htmlSkipGroups.Contains('__UNRESOLVED__')) { $sortedKeys += '__UNRESOLVED__' }
+
+        foreach ($gKey in $sortedKeys) {
+            $gRows = $htmlSkipGroups[$gKey]
+            if ($gKey -eq '__UNRESOLVED__') {
+                [void]$html.AppendLine('<h2>Unresolved Manager Chain</h2>')
+                [void]$html.AppendLine('<p>These reviewers have no manager resolved in ISC:</p>')
+            }
+            else {
+                $gName = [string]($gRows[0].SkipLevelName)
+                if ([string]::IsNullOrWhiteSpace($gName)) { $gName = '(unknown)' }
+                [void]$html.AppendLine("<h2>$(&$enc $gName) <small>($(&$enc $gKey))</small></h2>")
+                [void]$html.AppendLine("<p>$($gRows.Count) reviewer(s) outstanding</p>")
+            }
+
+            [void]$html.AppendLine('<table>')
+            [void]$html.AppendLine('<tr><th>Reviewer</th><th>Email</th><th>Campaign</th><th>Hours Open</th><th>Reason</th><th>Status</th></tr>')
+
+            foreach ($r in ($gRows | Sort-Object { [double]$_.HoursOpen } -Descending)) {
+                $rName   = &$enc $r.ReviewerName
+                $rEmail  = &$enc $r.ReviewerEmail
+                $cName   = &$enc $r.CampaignName
+                $hrsOpen = '{0:N1}' -f [double]$r.HoursOpen
+                $reason  = &$reasonText $r
+                $badge   = &$statusBadge $r
+
+                [void]$html.AppendLine("<tr><td>$rName</td><td>$rEmail</td><td>$cName</td><td>$hrsOpen</td><td>$reason</td><td>$badge</td></tr>")
+            }
+            [void]$html.AppendLine('</table>')
+        }
+
+        # Footer: email quick-copy section
+        [void]$html.AppendLine('<h2>Email Quick-Copy</h2>')
+        [void]$html.AppendLine('<div class="copy-section">')
+        [void]$html.AppendLine("<p><strong>Managers behind:</strong> <code>$([System.Net.WebUtility]::HtmlEncode(($mgrEmails -join '; ')))</code></p>")
+        [void]$html.AppendLine("<p><strong>Skip-level contacts:</strong> <code>$([System.Net.WebUtility]::HtmlEncode(($skipEmails -join '; ')))</code></p>")
+        [void]$html.AppendLine('</div>')
+
+        [void]$html.AppendLine('</div></body></html>')
+
+        try {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($effectiveEmailHtmlPath, $html.ToString(), $utf8NoBom)
+            if (Test-Path -LiteralPath $effectiveEmailHtmlPath) {
+                Write-Host "  HTML report written: $effectiveEmailHtmlPath ($($lateRows.Count) reviewer(s), $($htmlSkipGroups.Count) group(s))" -ForegroundColor Green
+                Write-SPLog -Message "Escalation HTML report written: $effectiveEmailHtmlPath (reviewers=$($lateRows.Count) groups=$($htmlSkipGroups.Count))" `
+                    -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtml' `
+                    -CorrelationID $correlationID
+            }
+            else {
+                Write-Host "  WARNING: HTML report reported no error but file is missing: $effectiveEmailHtmlPath" -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "  WARNING: Failed to write HTML report: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-SPLog -Message "Failed to write escalation HTML report '$effectiveEmailHtmlPath': $($_.Exception.Message)" `
+                -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtml' `
                 -CorrelationID $correlationID
         }
     }
@@ -730,6 +981,7 @@ try {
         WhatIf                      = ($WhatIfPreference -eq $true)
         CsvPath                     = if (-not [string]::IsNullOrWhiteSpace($effectiveCsvPath)) { $effectiveCsvPath } else { $null }
         EmailListPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailListPath)) { $effectiveEmailListPath } else { $null }
+        EmailHtmlPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlPath)) { $effectiveEmailHtmlPath } else { $null }
         DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
