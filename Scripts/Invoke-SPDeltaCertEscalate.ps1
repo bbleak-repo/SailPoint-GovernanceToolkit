@@ -490,6 +490,18 @@ $wantEmail       = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($
 $wantEmailHtml   = ($EmailHtml.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlPath))
 $wantManagerHtml = ($EmailHtmlManagers.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlManagersPath))
 
+# HTML-encode helper that works on both PS 5.1 (Desktop) and PS 7 (Core).
+# System.Net.WebUtility may not be loaded on Windows PS 5.1.
+function ConvertTo-EscHtml {
+    param([Parameter()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    try { return [System.Net.WebUtility]::HtmlEncode($Value) }
+    catch {
+        # Fallback: manual replacement covers the critical characters.
+        return $Value.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')
+    }
+}
+
 if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $staleCerts.Count -gt 0) {
 
     # Shared DeltaCert output directory + stamp for any auto-generated artifact path.
@@ -822,11 +834,11 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         # Header
         $genDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
         [void]$html.AppendLine('<h1>Escalation Summary</h1>')
-        [void]$html.AppendLine("<p class='meta'>Generated: $genDate | Campaign prefix: <strong>$([System.Net.WebUtility]::HtmlEncode($effectivePrefix))</strong> | Scope: $([System.Net.WebUtility]::HtmlEncode($scopeLabel))</p>")
+        [void]$html.AppendLine("<p class='meta'>Generated: $genDate | Campaign prefix: <strong>$(ConvertTo-EscHtml $effectivePrefix)</strong> | Scope: $(ConvertTo-EscHtml $scopeLabel)</p>")
         [void]$html.AppendLine("<p class='summary'><strong>$($lateRows.Count) reviewer(s)</strong> have not completed their attestation across <strong>$($lateCampaigns.Count) campaign(s)</strong>.</p>")
 
         # Helper: HTML-encode with null safety
-        $enc = { param($s) if ([string]::IsNullOrWhiteSpace($s)) { '' } else { [System.Net.WebUtility]::HtmlEncode([string]$s) } }
+        $enc = { param($s) ConvertTo-EscHtml ([string]$s) }
 
         # Helper: determine status badge based on outcome
         $statusBadge = {
@@ -900,8 +912,8 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         # Footer: email quick-copy section
         [void]$html.AppendLine('<h2>Email Quick-Copy</h2>')
         [void]$html.AppendLine('<div class="copy-section">')
-        [void]$html.AppendLine("<p><strong>Managers behind:</strong> <code>$([System.Net.WebUtility]::HtmlEncode(($mgrEmails -join '; ')))</code></p>")
-        [void]$html.AppendLine("<p><strong>Skip-level contacts:</strong> <code>$([System.Net.WebUtility]::HtmlEncode(($skipEmails -join '; ')))</code></p>")
+        [void]$html.AppendLine("<p><strong>Managers behind:</strong> <code>$(ConvertTo-EscHtml ($mgrEmails -join '; '))</code></p>")
+        [void]$html.AppendLine("<p><strong>Skip-level contacts:</strong> <code>$(ConvertTo-EscHtml ($skipEmails -join '; '))</code></p>")
         [void]$html.AppendLine('</div>')
 
         [void]$html.AppendLine('</div></body></html>')
@@ -1010,11 +1022,11 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             [void]$mgrHtml.AppendLine('</head>')
             [void]$mgrHtml.AppendLine("<body style=`"font-family:'Segoe UI',Arial,sans-serif;color:#333;max-width:700px;margin:0 auto;padding:20px`">")
             [void]$mgrHtml.AppendLine('')
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:15px`">Hi $([System.Net.WebUtility]::HtmlEncode($firstName)),</p>")
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:15px`">Hi $(ConvertTo-EscHtml $firstName),</p>")
             [void]$mgrHtml.AppendLine('')
             [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
             [void]$mgrHtml.AppendLine("You have direct reports who have not completed today's daily attestation for the campaign")
-            [void]$mgrHtml.AppendLine("<strong>$([System.Net.WebUtility]::HtmlEncode($campaignDisplayName))</strong>.")
+            [void]$mgrHtml.AppendLine("<strong>$(ConvertTo-EscHtml $campaignDisplayName)</strong>.")
             [void]$mgrHtml.AppendLine('</p>')
             [void]$mgrHtml.AppendLine('')
             [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
@@ -1037,8 +1049,8 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             $rowIdx = 0
             foreach ($r in ($mgrRows | Sort-Object { [string]$_.ReviewerName })) {
                 $rowBg = if ($rowIdx % 2 -eq 1) { "background:#f8f9fa;" } else { '' }
-                $rName = [System.Net.WebUtility]::HtmlEncode([string]$r.ReviewerName)
-                $cName = [System.Net.WebUtility]::HtmlEncode([string]$r.CampaignName)
+                $rName = ConvertTo-EscHtml ([string]$r.ReviewerName)
+                $cName = ConvertTo-EscHtml ([string]$r.CampaignName)
 
                 # Pending items: use HoursOpen as a proxy indicator; show "Pending" as we lack
                 # item-level counts at the certification level in the current data model.
@@ -1068,7 +1080,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             [void]$mgrHtml.AppendLine("<hr style=`"border:none;border-top:1px solid #e0e0e0;margin:24px 0`">")
             [void]$mgrHtml.AppendLine("<p style=`"font-size:11px;color:#999`">")
             [void]$mgrHtml.AppendLine("This report was generated by the SailPoint ISC Governance Toolkit on $genDateUtc.")
-            [void]$mgrHtml.AppendLine("Campaign scope: $([System.Net.WebUtility]::HtmlEncode($nameFilterDesc)). This is an automated notification.")
+            [void]$mgrHtml.AppendLine("Campaign scope: $(ConvertTo-EscHtml $nameFilterDesc). This is an automated notification.")
             [void]$mgrHtml.AppendLine('</p>')
             [void]$mgrHtml.AppendLine('')
             [void]$mgrHtml.AppendLine('</body></html>')
