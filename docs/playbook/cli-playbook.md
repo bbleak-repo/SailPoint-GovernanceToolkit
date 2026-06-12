@@ -317,6 +317,7 @@ to keep reviews moving.
 | `-Csv` / `-CsvPath <p>` | Write the full reviewer→skip-level chain to a CSV (read-only; produced even under `-WhatIf`). |
 | `-EmailList` / `-EmailListPath <p>` | Write a copy-paste **email-queue** text file with: (1) global `;`-separated email lines (managers behind + skip-level path), and (2) **per-skip-level-manager breakdown tables** showing which reviewers under each manager still need to act. Produced even under `-WhatIf`. |
 | `-EmailHtml` / `-EmailHtmlPath <p>` | Write a **self-contained HTML escalation report** grouping late reviewers by skip-level manager with clean tables (reviewer, email, campaign, hours open, reason, status). Includes an "Email Quick-Copy" footer with the `;`-separated lines. Professional styling, suitable for email attachment or SharePoint. |
+| `-EmailHtmlManagers` / `-EmailHtmlManagersPath <dir>` | Generate **individual HTML email templates per skip-level manager** -- one personalized file per manager ("Hi Jane, you have direct reports who have not completed...") with a clean table (Reviewer, Campaign, Pending Items). Output: `escalation-managers\{name}.html` + `_manifest.json` for future SMTP automation. |
 
 ```powershell
 # Live escalation
@@ -336,6 +337,12 @@ to keep reviews moving.
 
 # Full org-chart audit: the chain spreadsheet AND the email lines
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList
+
+# Generate individual per-manager email templates (for SMTP automation)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Thursday' -DaysBack 1 -WhatIf -EmailHtmlManagers
+
+# Everything: CSV + text queue + consolidated HTML + per-manager templates
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Daily Attestation' -DaysBack 1 -WhatIf -Csv -EmailList -EmailHtml -EmailHtmlManagers
 ```
 
 > **`-EmailList` — the email queue + skip-level breakdown.** Writes `escalation-emails-*.txt` to
@@ -348,6 +355,13 @@ to keep reviews moving.
 > shows the manager's name/email, count of outstanding reviewers, and a color-coded table. Includes
 > an "Email Quick-Copy" footer with the `;`-separated lines for To/CC. Both artifacts are read-only
 > (no ISC writes) and safe under `-WhatIf`.
+>
+> **`-EmailHtmlManagers` -- per-manager SMTP templates.** Writes one HTML file per skip-level
+> manager to `escalation-managers\` with a personalized greeting, their outstanding reviewers
+> table (Reviewer, Campaign, Pending Items), and totals. Plus `_manifest.json` listing every
+> generated file with recipient email, identity ID, and counts -- the SMTP automation hook.
+> A future send script reads the manifest and delivers each file to its recipient without
+> reassigning in ISC. Read-only, safe under `-WhatIf`.
 
 **Related GUI:** Delta Cert tab → Escalate.
 

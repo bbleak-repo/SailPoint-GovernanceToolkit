@@ -100,6 +100,14 @@
     Output: {DeltaCert.OutputPath}\escalation-report-YYYYMMDD-HHmmss.html
 .PARAMETER EmailHtmlPath
     Override the auto-generated HTML report path. Implies -EmailHtml.
+.PARAMETER EmailHtmlManagers
+    When set, generates one self-contained HTML email template per skip-level manager.
+    Each file contains a personalized escalation email for that manager listing only their
+    direct reports who have not completed their attestation, suitable for SMTP automation.
+    Output directory: {DeltaCert.OutputPath}\escalation-managers\ (or -EmailHtmlManagersPath).
+    Also produces a _manifest.json with recipient info for automated sending.
+.PARAMETER EmailHtmlManagersPath
+    Override the auto-generated per-manager HTML output directory. Implies -EmailHtmlManagers.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -140,6 +148,15 @@
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 7 -WhatIf -Csv -EmailList -EmailHtml
     # Full audit: CSV spreadsheet + copy-paste email lines + HTML report, all in one run.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailHtmlManagers
+    # Dry-run + per-manager HTML emails: one self-contained HTML file per skip-level
+    # manager, each listing only their direct reports who are behind on attestation.
+    # Also produces a _manifest.json for SMTP automation.
+.EXAMPLE
+    .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 7 -WhatIf -Csv -EmailHtml -EmailHtmlManagers
+    # Full audit: CSV spreadsheet + consolidated HTML report + individual per-manager
+    # HTML email templates, all in one run. The manifest enables automated sending.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
     # Live escalation with CSV evidence log of what was processed.
@@ -211,6 +228,12 @@ param(
 
     [Parameter()]
     [string]$EmailHtmlPath,
+
+    [Parameter()]
+    [switch]$EmailHtmlManagers,
+
+    [Parameter()]
+    [string]$EmailHtmlManagersPath,
 
     [Parameter()]
     [ValidateSet('Console', 'JSON', 'Both')]
@@ -408,6 +431,14 @@ if (($WhatIfPreference -eq $true)) {
         Write-Host "    DaysBack:                    $DaysBack  (all campaign statuses)"
     }
     Write-Host "    MaxEscalationLevels:         $effectiveMaxLevels"
+    $outputArtifacts = @()
+    if ($Csv.IsPresent -or -not [string]::IsNullOrWhiteSpace($CsvPath))                               { $outputArtifacts += 'CSV' }
+    if ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))                    { $outputArtifacts += 'EmailList' }
+    if ($EmailHtml.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlPath))                    { $outputArtifacts += 'EmailHtml' }
+    if ($EmailHtmlManagers.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlManagersPath))    { $outputArtifacts += 'EmailHtmlManagers' }
+    if ($outputArtifacts.Count -gt 0) {
+        Write-Host "    Output artifacts:            $($outputArtifacts -join ', ')"
+    }
     Write-Host ''
 }
 
@@ -449,15 +480,17 @@ $staleCerts = @($staleResult.Data)
 
 #region CSV + email-queue output (built before runner so -WhatIf and reporting can co-exist)
 
-$effectiveCsvPath       = $CsvPath        # hoisted so the JSONL audit block can reference it
-$effectiveEmailListPath = $EmailListPath  # hoisted so the JSONL audit block can reference it
-$effectiveEmailHtmlPath = $EmailHtmlPath  # hoisted so the JSONL audit block can reference it
+$effectiveCsvPath              = $CsvPath              # hoisted so the JSONL audit block can reference it
+$effectiveEmailListPath        = $EmailListPath        # hoisted so the JSONL audit block can reference it
+$effectiveEmailHtmlPath        = $EmailHtmlPath        # hoisted so the JSONL audit block can reference it
+$effectiveEmailHtmlManagersPath = $EmailHtmlManagersPath # hoisted so the JSONL audit block can reference it
 
-$wantCsv       = ($Csv.IsPresent       -or -not [string]::IsNullOrWhiteSpace($CsvPath))
-$wantEmail     = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))
-$wantEmailHtml = ($EmailHtml.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlPath))
+$wantCsv         = ($Csv.IsPresent       -or -not [string]::IsNullOrWhiteSpace($CsvPath))
+$wantEmail       = ($EmailList.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailListPath))
+$wantEmailHtml   = ($EmailHtml.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlPath))
+$wantManagerHtml = ($EmailHtmlManagers.IsPresent -or -not [string]::IsNullOrWhiteSpace($EmailHtmlManagersPath))
 
-if (($wantCsv -or $wantEmail -or $wantEmailHtml) -and $staleCerts.Count -gt 0) {
+if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $staleCerts.Count -gt 0) {
 
     # Shared DeltaCert output directory + stamp for any auto-generated artifact path.
     $reportOutputDir = '.\DeltaCert'
@@ -589,7 +622,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml) -and $staleCerts.Count -gt 0) {
         }
     }
 
-    # --- Shared late-row filtering: used by both -EmailList and -EmailHtml. ---
+    # --- Shared late-row filtering: used by -EmailList, -EmailHtml, and -EmailHtmlManagers. ---
     # The email outputs are NUDGE lists -- they must contain ONLY the reviewers who are actually
     # behind (a signed/complete cert needs no email). In audit mode (-DaysBack) $csvRows
     # includes completed certs too, so without this filter the queue would list everyone. The
@@ -600,7 +633,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml) -and $staleCerts.Count -gt 0) {
     $scopeLabel  = ''
     $lvlLabel    = ''
 
-    if ($wantEmail -or $wantEmailHtml) {
+    if ($wantEmail -or $wantEmailHtml -or $wantManagerHtml) {
         $lateRows = @($csvRows | Where-Object { -not [bool]$_.CertSigned })
 
         # Late reviewers themselves (managers who have not completed their attestation).
@@ -894,6 +927,206 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml) -and $staleCerts.Count -gt 0) {
         }
     }
 
+    # --- Per-manager HTML email templates: one file per skip-level manager for SMTP automation. ---
+    if ($wantManagerHtml -and $null -ne $lateRows -and $lateRows.Count -gt 0) {
+        # Determine output directory
+        $mgrHtmlDir = $effectiveEmailHtmlManagersPath
+        if ([string]::IsNullOrWhiteSpace($mgrHtmlDir)) {
+            $mgrHtmlDir = Join-Path $reportOutputDir 'escalation-managers'
+        }
+        $effectiveEmailHtmlManagersPath = $mgrHtmlDir
+
+        if (-not (Test-Path -LiteralPath $mgrHtmlDir -PathType Container)) {
+            New-Item -Path $mgrHtmlDir -ItemType Directory -Force -WhatIf:$false | Out-Null
+        }
+
+        # Group late rows by FIRST skip-level (direct manager of the reviewer).
+        # Reviewers with no resolved manager are skipped (they appear in the consolidated report).
+        $mgrGroups = [ordered]@{}
+        foreach ($row in $lateRows) {
+            if (-not $row.SkipLevelResolved) { continue }
+            $mgrKey = [string]$row.SkipLevelIdentityId
+            if ([string]::IsNullOrWhiteSpace($mgrKey)) { continue }
+            if (-not $mgrGroups.Contains($mgrKey)) {
+                $mgrGroups[$mgrKey] = [System.Collections.Generic.List[object]]::new()
+            }
+            $mgrGroups[$mgrKey].Add($row)
+        }
+
+        # Helper: extract first name from a display name
+        $getFirstName = {
+            param([string]$fullName)
+            if ([string]::IsNullOrWhiteSpace($fullName)) { return $fullName }
+            $trimmed = $fullName.Trim()
+            if ($trimmed -match ',') {
+                # "Last, First" format
+                $parts = $trimmed -split ',\s*'
+                if ($parts.Count -ge 2 -and -not [string]::IsNullOrWhiteSpace($parts[1])) {
+                    return ($parts[1] -split '\s+')[0]
+                }
+            }
+            # "First Last" format or single word
+            $parts = $trimmed -split '\s+'
+            return $parts[0]
+        }
+
+        # Helper: sanitize name to filename
+        $sanitizeFilename = {
+            param([string]$name)
+            $safe = $name -replace '[\\/:*?"<>|\s,.]', '-'
+            $safe = $safe -replace '-{2,}', '-'
+            $safe = $safe.Trim('-').ToLower()
+            return $safe
+        }
+
+        $manifest = [System.Collections.Generic.List[object]]::new()
+        $mgrFilesWritten = 0
+        $genDateUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
+
+        # Collect distinct campaign names for the subject line
+        $allLateCampaignNames = @($lateRows | ForEach-Object { [string]$_.CampaignName } | Sort-Object -Unique)
+        $campaignDisplayName = if ($allLateCampaignNames.Count -eq 1) {
+            $allLateCampaignNames[0]
+        } else {
+            ($allLateCampaignNames -join ', ')
+        }
+
+        foreach ($mgrKey in $mgrGroups.Keys) {
+            $mgrRows = $mgrGroups[$mgrKey]
+            $mgrName  = [string]($mgrRows[0].SkipLevelName)
+            $mgrEmail = [string]($mgrRows[0].SkipLevelEmail)
+            if ([string]::IsNullOrWhiteSpace($mgrName)) { $mgrName = '(unknown)' }
+
+            $firstName = & $getFirstName $mgrName
+            $safeFile  = "$(& $sanitizeFilename $mgrName).html"
+
+            $reviewerCount = $mgrRows.Count
+
+            $mgrHtml = New-Object System.Text.StringBuilder
+            [void]$mgrHtml.AppendLine('<!DOCTYPE html>')
+            [void]$mgrHtml.AppendLine('<html><head>')
+            [void]$mgrHtml.AppendLine('<meta charset="utf-8">')
+            [void]$mgrHtml.AppendLine('<title>Attestation Action Required</title>')
+            [void]$mgrHtml.AppendLine('</head>')
+            [void]$mgrHtml.AppendLine("<body style=`"font-family:'Segoe UI',Arial,sans-serif;color:#333;max-width:700px;margin:0 auto;padding:20px`">")
+            [void]$mgrHtml.AppendLine('')
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:15px`">Hi $([System.Net.WebUtility]::HtmlEncode($firstName)),</p>")
+            [void]$mgrHtml.AppendLine('')
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+            [void]$mgrHtml.AppendLine("You have direct reports who have not completed today's daily attestation for the campaign")
+            [void]$mgrHtml.AppendLine("<strong>$([System.Net.WebUtility]::HtmlEncode($campaignDisplayName))</strong>.")
+            [void]$mgrHtml.AppendLine('</p>')
+            [void]$mgrHtml.AppendLine('')
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+            [void]$mgrHtml.AppendLine('The following reviewers under your organization still have pending certification items')
+            [void]$mgrHtml.AppendLine('that require action:')
+            [void]$mgrHtml.AppendLine('</p>')
+            [void]$mgrHtml.AppendLine('')
+
+            # Table header
+            [void]$mgrHtml.AppendLine("<table style=`"border-collapse:collapse;width:100%;margin:16px 0;font-size:13px`">")
+            [void]$mgrHtml.AppendLine('<thead>')
+            [void]$mgrHtml.AppendLine("<tr style=`"background:#264d73;color:#fff`">")
+            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:left`">Reviewer</th>")
+            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:left`">Campaign</th>")
+            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:center`">Pending Items</th>")
+            [void]$mgrHtml.AppendLine('</tr>')
+            [void]$mgrHtml.AppendLine('</thead>')
+            [void]$mgrHtml.AppendLine('<tbody>')
+
+            $rowIdx = 0
+            foreach ($r in ($mgrRows | Sort-Object { [string]$_.ReviewerName })) {
+                $rowBg = if ($rowIdx % 2 -eq 1) { "background:#f8f9fa;" } else { '' }
+                $rName = [System.Net.WebUtility]::HtmlEncode([string]$r.ReviewerName)
+                $cName = [System.Net.WebUtility]::HtmlEncode([string]$r.CampaignName)
+
+                # Pending items: use HoursOpen as a proxy indicator; show "Pending" as we lack
+                # item-level counts at the certification level in the current data model.
+                $pendingDisplay = 'Pending'
+
+                [void]$mgrHtml.AppendLine("<tr style=`"border-bottom:1px solid #e0e0e0;${rowBg}`">")
+                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px`">$rName</td>")
+                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px`">$cName</td>")
+                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px;text-align:center;font-weight:bold;color:#CC3333`">$pendingDisplay</td>")
+                [void]$mgrHtml.AppendLine('</tr>')
+                $rowIdx++
+            }
+
+            [void]$mgrHtml.AppendLine('</tbody>')
+            [void]$mgrHtml.AppendLine('</table>')
+            [void]$mgrHtml.AppendLine('')
+
+            # Summary line
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+            $reviewerWord = if ($reviewerCount -eq 1) { 'reviewer' } else { 'reviewers' }
+            [void]$mgrHtml.AppendLine("<strong>$reviewerCount $reviewerWord</strong> with pending items require completion.")
+            [void]$mgrHtml.AppendLine('Please follow up with your team to ensure timely attestation.')
+            [void]$mgrHtml.AppendLine('</p>')
+            [void]$mgrHtml.AppendLine('')
+
+            # Footer
+            [void]$mgrHtml.AppendLine("<hr style=`"border:none;border-top:1px solid #e0e0e0;margin:24px 0`">")
+            [void]$mgrHtml.AppendLine("<p style=`"font-size:11px;color:#999`">")
+            [void]$mgrHtml.AppendLine("This report was generated by the SailPoint ISC Governance Toolkit on $genDateUtc.")
+            [void]$mgrHtml.AppendLine("Campaign scope: $([System.Net.WebUtility]::HtmlEncode($nameFilterDesc)). This is an automated notification.")
+            [void]$mgrHtml.AppendLine('</p>')
+            [void]$mgrHtml.AppendLine('')
+            [void]$mgrHtml.AppendLine('</body></html>')
+
+            # Write the file
+            $mgrFilePath = Join-Path $mgrHtmlDir $safeFile
+            try {
+                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                [System.IO.File]::WriteAllText($mgrFilePath, $mgrHtml.ToString(), $utf8NoBom)
+                $mgrFilesWritten++
+            }
+            catch {
+                Write-Host "  WARNING: Failed to write manager HTML for '$mgrName': $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-SPLog -Message "Failed to write manager HTML '$mgrFilePath': $($_.Exception.Message)" `
+                    -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
+                    -CorrelationID $correlationID
+            }
+
+            # Add to manifest
+            $manifest.Add([PSCustomObject]@{
+                ManagerName         = $mgrName
+                ManagerEmail        = $mgrEmail
+                ManagerIdentityId   = $mgrKey
+                File                = $safeFile
+                PendingReviewerCount = $reviewerCount
+                PendingItemCount    = $reviewerCount   # One cert per reviewer row
+            })
+        }
+
+        # Write manifest
+        $manifestPath = Join-Path $mgrHtmlDir '_manifest.json'
+        try {
+            $manifestJson = $manifest | ConvertTo-Json -Depth 5
+            # ConvertTo-Json returns a bare object (not array) when there is exactly one item
+            if ($manifest.Count -eq 1 -and $manifestJson -notmatch '^\s*\[') {
+                $manifestJson = "[$manifestJson]"
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
+        }
+        catch {
+            Write-Host "  WARNING: Failed to write manager manifest: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-SPLog -Message "Failed to write manager manifest '$manifestPath': $($_.Exception.Message)" `
+                -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
+                -CorrelationID $correlationID
+        }
+
+        if ($mgrFilesWritten -gt 0) {
+            Write-Host "  Manager HTML emails written: $mgrHtmlDir ($mgrFilesWritten file(s), $($manifest.Count) manager(s))" -ForegroundColor Green
+            Write-SPLog -Message "Per-manager HTML emails written: $mgrHtmlDir (files=$mgrFilesWritten managers=$($manifest.Count))" `
+                -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
+                -CorrelationID $correlationID
+        }
+        else {
+            Write-Host "  No manager HTML emails generated (all reviewers may have unresolved managers)." -ForegroundColor Yellow
+        }
+    }
+
     Write-Host ''
 }
 
@@ -982,6 +1215,8 @@ try {
         CsvPath                     = if (-not [string]::IsNullOrWhiteSpace($effectiveCsvPath)) { $effectiveCsvPath } else { $null }
         EmailListPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailListPath)) { $effectiveEmailListPath } else { $null }
         EmailHtmlPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlPath)) { $effectiveEmailHtmlPath } else { $null }
+        EmailHtmlManagersPath       = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { $effectiveEmailHtmlManagersPath } else { $null }
+        EmailHtmlManagersFileCount  = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { @(Get-ChildItem -LiteralPath $effectiveEmailHtmlManagersPath -Filter '*.html' -File -ErrorAction SilentlyContinue).Count } else { 0 }
         DurationSeconds             = [math]::Round($runDuration, 2)
     }
 
