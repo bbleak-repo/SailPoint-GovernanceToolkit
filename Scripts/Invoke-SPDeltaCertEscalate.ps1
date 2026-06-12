@@ -1028,10 +1028,19 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         # chain[0] = reviewer, chain[1] = reviewer's manager (level 2), chain[2] = level 3, etc.
         $reviewerChains = [System.Collections.Generic.List[object]]::new()
 
+        # Track reviewers that fall out of the chain (no manager in ISC)
+        $noManagerReviewers = [System.Collections.Generic.List[object]]::new()
+
         foreach ($row in $lateRows) {
             $reviewerId = [string]$row.ReviewerIdentityId
-            if ([string]::IsNullOrWhiteSpace($reviewerId)) { continue }
-            if (-not $row.SkipLevelResolved) { continue }
+            if ([string]::IsNullOrWhiteSpace($reviewerId)) {
+                $noManagerReviewers.Add($row)
+                continue
+            }
+            if (-not $row.SkipLevelResolved) {
+                $noManagerReviewers.Add($row)
+                continue
+            }
 
             $chain = [System.Collections.Generic.List[object]]::new()
 
@@ -1066,6 +1075,24 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             }
 
             $reviewerChains.Add($chain)
+        }
+
+        # Track level 2 managers whose chain broke before reaching higher levels.
+        # These managers have no manager in ISC and won't appear in level 3+ folders.
+        $brokenChainManagers = [System.Collections.Generic.List[object]]::new()
+        foreach ($chain in $reviewerChains) {
+            # chain[0] = reviewer, chain[1] = level 2, chain[2] = level 3, etc.
+            # If chain length is < effectiveMaxLevels + 1, it broke early
+            if ($chain.Count -ge 2 -and $chain.Count -lt ($effectiveMaxLevels + 1)) {
+                $topMgr = $chain[$chain.Count - 1]
+                $brokenChainManagers.Add(@{
+                    ManagerName = [string]$topMgr.DisplayName
+                    ManagerEmail = [string]$topMgr.Email
+                    ManagerId = [string]$topMgr.IdentityId
+                    ChainDepth = $chain.Count - 1
+                    ReviewerRow = $chain[0].Row
+                })
+            }
         }
 
         # --- Step 2: Build per-level aggregations ---
@@ -1327,6 +1354,85 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             }
 
             $manifestLevels[$levelLabel] = $levelManifest
+        }
+
+        # --- Generate no-manager bucket for reviewers/managers with broken chains ---
+        $noMgrItems = [System.Collections.Generic.List[object]]::new()
+        # Add reviewers with no skip-level at all
+        foreach ($r in $noManagerReviewers) { $noMgrItems.Add($r) }
+        # Add reviewers under level 2 managers whose chain broke before the max level
+        # (group by the top manager who has no manager above them)
+        $brokenGrouped = @{}
+        foreach ($bc in $brokenChainManagers) {
+            $key = [string]$bc.ManagerId
+            if (-not $brokenGrouped.ContainsKey($key)) {
+                $brokenGrouped[$key] = @{
+                    ManagerName  = $bc.ManagerName
+                    ManagerEmail = $bc.ManagerEmail
+                    ManagerId    = $bc.ManagerId
+                    ChainDepth   = $bc.ChainDepth
+                    Rows         = [System.Collections.Generic.List[object]]::new()
+                }
+            }
+            $brokenGrouped[$key].Rows.Add($bc.ReviewerRow)
+        }
+
+        if ($noMgrItems.Count -gt 0 -or $brokenGrouped.Count -gt 0) {
+            $noMgrDir = Join-Path $mgrHtmlDir 'no-manager'
+            if (-not (Test-Path -LiteralPath $noMgrDir -PathType Container)) {
+                New-Item -Path $noMgrDir -ItemType Directory -Force -WhatIf:$false | Out-Null
+            }
+
+            $noMgrHtml = New-Object System.Text.StringBuilder
+            [void]$noMgrHtml.AppendLine('<!DOCTYPE html>')
+            [void]$noMgrHtml.AppendLine('<html><head><meta charset="utf-8"><title>Unresolved Manager Chain</title></head>')
+            [void]$noMgrHtml.AppendLine("<body style=`"$bodyStyle`">")
+            [void]$noMgrHtml.AppendLine("<h1 style=`"color:#264d73;border-bottom:2px solid #264d73;padding-bottom:8px`">Unresolved Manager Chain</h1>")
+            [void]$noMgrHtml.AppendLine("<p style=`"font-size:14px;color:#555`">The following reviewers or their managers do not have a complete manager chain in ISC. These individuals cannot be automatically escalated to higher levels and require manual follow-up.</p>")
+
+            # Section 1: Reviewers with no skip-level at all
+            if ($noMgrItems.Count -gt 0) {
+                [void]$noMgrHtml.AppendLine("<h2 style=`"color:#264d73;margin-top:20px`">Reviewers with No Manager in ISC <span style=`"font-size:12px;background:#e8eef5;padding:2px 8px;border-radius:10px;color:#555`">$($noMgrItems.Count)</span></h2>")
+                [void]$noMgrHtml.AppendLine("<p style=`"font-size:13px;color:#777`">These reviewers have no resolvable manager -- they cannot be escalated at any level.</p>")
+                & $renderReviewerTable $noMgrHtml $noMgrItems.ToArray()
+            }
+
+            # Section 2: Managers whose chain broke (have a level 2 but no level 3+)
+            if ($brokenGrouped.Count -gt 0) {
+                [void]$noMgrHtml.AppendLine("<h2 style=`"color:#264d73;margin-top:20px`">Managers with Incomplete Chain <span style=`"font-size:12px;background:#e8eef5;padding:2px 8px;border-radius:10px;color:#555`">$($brokenGrouped.Count) manager(s)</span></h2>")
+                [void]$noMgrHtml.AppendLine("<p style=`"font-size:13px;color:#777`">These managers appear at level 2 (or below) but have no manager above them in ISC. Their outstanding reviewers will not appear in higher-level reports.</p>")
+
+                foreach ($mgr in ($brokenGrouped.Values | Sort-Object { $_.ManagerName })) {
+                    $mName = ConvertTo-EscHtml $mgr.ManagerName
+                    $mEmail = ConvertTo-EscHtml $mgr.ManagerEmail
+                    [void]$noMgrHtml.AppendLine("<div style=`"$subHeadStyle`"><strong>$mName</strong> ($mEmail) -- chain stops at level $($mgr.ChainDepth), $($mgr.Rows.Count) outstanding reviewer(s)</div>")
+                    & $renderReviewerTable $noMgrHtml $mgr.Rows.ToArray()
+                }
+            }
+
+            [void]$noMgrHtml.AppendLine("<hr style=`"$hrStyle`">")
+            [void]$noMgrHtml.AppendLine("<p style=`"$footerStyle`">Generated by SailPoint ISC Governance Toolkit on $genDateUtc. These entries require manual review of the ISC manager chain.</p>")
+            [void]$noMgrHtml.AppendLine('</body></html>')
+
+            $noMgrFilePath = Join-Path $noMgrDir 'unresolved-chains.html'
+            try {
+                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                [System.IO.File]::WriteAllText($noMgrFilePath, $noMgrHtml.ToString(), $utf8NoBom)
+                $mgrFilesWritten++
+            }
+            catch {
+                Write-Host "  WARNING: Failed to write no-manager HTML: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
+            # Add to manifest
+            $manifestLevels['no-manager'] = @(
+                [ordered]@{
+                    File                   = 'no-manager/unresolved-chains.html'
+                    ReviewersNoSkipLevel   = $noMgrItems.Count
+                    ManagersBrokenChain    = $brokenGrouped.Count
+                    TotalAffectedReviewers = $noMgrItems.Count + ($brokenGrouped.Values | ForEach-Object { $_.Rows.Count } | Measure-Object -Sum).Sum
+                }
+            )
         }
 
         # De-duplicate totalReviewersPending: the same reviewer may appear at multiple levels.
