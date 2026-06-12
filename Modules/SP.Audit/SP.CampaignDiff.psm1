@@ -102,6 +102,9 @@ tr:nth-child(even) td{background:#f6f9fc;}
 .note{font-size:11px;color:#777;margin-top:4px;}
 .first{background:#fff7e6;border:1px solid #ffd97a;border-radius:6px;padding:10px 14px;margin:10px 0;color:#7a5a00;}
 .explain{background:#eef3fa;border:1px solid #b8cfe6;border-radius:6px;padding:8px 14px;margin:6px 0 10px 0;color:#2a4a6e;font-size:12px;}
+.scope-section{margin:18px 0;padding:12px 16px;border:1px solid #d4dce6;border-radius:6px;background:#fafbfd;}
+.section-hdr{font-size:16px;color:#7a0014;margin:0 0 6px 0;border-bottom:1px solid #d4dce6;padding-bottom:4px;}
+.cnt-badge{display:inline-block;background:#1f3a5f;color:#fff;font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;}
 '@
     return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>$([System.Web.HttpUtility]::HtmlEncode($Title))</title><style>$css</style></head><body>"
 }
@@ -666,7 +669,7 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append("<tr><td>Newly-added privileged access</td><td>$(@($comp.NewlyAddedPrivileged).Count)</td><td>New privileged grants in scope this capture.</td></tr>")
         [void]$sb.Append("<tr><td>Stalled / not-started reviewers</td><td>$(@($comp.StalledReviewers).Count)</td><td>No progress between captures or zero decisions made &mdash; context required (timing/OOO), not a finding.</td></tr>")
         [void]$sb.Append("<tr><td>Overdue (past due date)</td><td>$(@($comp.Overdue).Count)</td><td>PENDING and the campaign due date has passed.</td></tr>")
-        [void]$sb.Append("<tr><td>Persistently pending</td><td>$(@($comp.PersistentlyPending).Count)</td><td>Still PENDING across at least two captures (not necessarily past due).</td></tr>")
+        [void]$sb.Append("<tr><td>Persistently pending</td><td>$(@($comp.PersistentlyPending).Count)</td><td>Items pending across 2+ campaigns -- reviewers listed in the Escalation section below.</td></tr>")
         [void]$sb.Append("<tr><td>Privileged approved (advisory)</td><td>$(@($comp.PrivilegedApproved).Count)</td><td>Privileged grants newly set to APPROVE &mdash; a maturity signal, not an accusation.</td></tr>")
         [void]$sb.Append("</table>")
         if (-not $meta.HasPrevious) { [void]$sb.Append("<div class='note'>Baseline run: delta-based advisories (newly-added privileged, privileged-approved) are suppressed until the next capture.</div>") }
@@ -735,6 +738,37 @@ function Export-SPCampaignScopeDiffHtml {
                 }
                 [void]$sb.Append("</table>")
             }
+        }
+        # Reviewer Escalation: Persistently Pending -- grouped by reviewer
+        $ppItems = @($comp.PersistentlyPending)
+        if ($ppItems.Count -gt 0) {
+            $ppByReviewer = @{}
+            foreach ($pp in $ppItems) {
+                $rid = [string](Get-SPDiffProp $pp 'ReviewerId' '')
+                $rname = [string](Get-SPDiffProp $pp 'ReviewerName' '')
+                if ([string]::IsNullOrWhiteSpace($rname)) { $rname = if ([string]::IsNullOrWhiteSpace($rid)) { 'Unknown' } else { $rid } }
+                if (-not $ppByReviewer.ContainsKey($rid)) { $ppByReviewer[$rid] = @{ Name = $rname; Items = [System.Collections.Generic.List[object]]::new() } }
+                $ppByReviewer[$rid].Items.Add($pp)
+            }
+            $ppSorted = @($ppByReviewer.GetEnumerator() | Sort-Object @{ Expression = { $_.Value.Items.Count } } -Descending)
+            $ppRevCount = $ppSorted.Count
+            [void]$sb.Append("<div class='scope-section'>")
+            [void]$sb.Append("<h3 class='section-hdr'>Reviewer Escalation: Persistently Pending <span class='cnt-badge'>$($ppItems.Count) items across $ppRevCount reviewers</span></h3>")
+            [void]$sb.Append("<div class='explain'>These reviewers have items pending across two or more consecutive campaign cycles without a decision. Follow up with these reviewers or escalate to their managers.</div>")
+            foreach ($entry in $ppSorted) {
+                $revName = Get-SPDiffEnc $entry.Value.Name
+                $revItems = @($entry.Value.Items)
+                [void]$sb.Append("<h4 style='color:#264d73;margin:16px 0 4px'>$revName <span class='cnt-badge'>$($revItems.Count) items</span></h4>")
+                [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Privileged</th></tr>")
+                foreach ($ri in ($revItems | Sort-Object @{ Expression = { if ([bool](Get-SPDiffProp $_ 'Privileged' $false)) { 0 } else { 1 } } }, @{ Expression = { [string](Get-SPDiffProp $_ 'AccessName' '') } })) {
+                    $priv = [bool](Get-SPDiffProp $ri 'Privileged' $false)
+                    $cls = if ($priv) { " class='priv'" } else { '' }
+                    $pb  = if ($priv) { "<span class='badge b-priv'>PRIV</span>" } else { '' }
+                    [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'AccessName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'SourceName' ''))</td><td>$pb</td></tr>")
+                }
+                [void]$sb.Append("</table>")
+            }
+            [void]$sb.Append("</div>")
         }
         [void]$sb.Append("<div class='note'>Read-only scope view. No reassignment or escalation is performed by this report.</div>")
         [void]$sb.Append("</body></html>")
@@ -937,7 +971,7 @@ function Split-SPCampaignDiffByDirector {
     .PARAMETER OrgTree
         .Data from Build-SPOrgTree, built on the diff's reviewer identity ids.
     .OUTPUTS
-        [hashtable] @{ Meta; Directors=@(@{DirectorId;DirectorName;Reviewers;Added;Removed;Changed;NewlyAddedPrivileged;PersistedRevokes;Counts}) }
+        [hashtable] @{ Meta; Directors=@(@{DirectorId;DirectorName;Reviewers;Added;Removed;Changed;NewlyAddedPrivileged;PersistedRevokes;PersistentlyPending;Counts}) }
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -958,6 +992,7 @@ function Split-SPCampaignDiffByDirector {
     foreach ($sk in @('Added', 'Removed', 'Changed')) { foreach ($it in @(Get-SPDiffProp $scope $sk @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) } }
     foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
     foreach ($it in @(Get-SPDiffProp $scope 'PersistedRevokes' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
+    foreach ($it in @(Get-SPDiffProp $comp 'PersistentlyPending' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
 
     # Pass B: resolve each reviewer -> director and create an (ordered) bucket per director.
     $dirOf   = @{}
@@ -975,6 +1010,7 @@ function Split-SPCampaignDiffByDirector {
                 Changed              = [System.Collections.Generic.List[object]]::new()
                 NewlyAddedPrivileged = [System.Collections.Generic.List[object]]::new()
                 PersistedRevokes     = [System.Collections.Generic.List[object]]::new()
+                PersistentlyPending  = [System.Collections.Generic.List[object]]::new()
             }
         }
     }
@@ -986,6 +1022,7 @@ function Split-SPCampaignDiffByDirector {
     foreach ($it in @(Get-SPDiffProp $scope 'Changed' @()))  { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Changed.Add($it) }
     foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].NewlyAddedPrivileged.Add($it) }
     foreach ($it in @(Get-SPDiffProp $scope 'PersistedRevokes' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].PersistedRevokes.Add($it) }
+    foreach ($it in @(Get-SPDiffProp $comp 'PersistentlyPending' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].PersistentlyPending.Add($it) }
 
     # Finalize: arrays + per-director counts; sort by name with the unassigned bucket last.
     $dirs = [System.Collections.Generic.List[object]]::new()
@@ -1001,6 +1038,7 @@ function Split-SPCampaignDiffByDirector {
             Changed              = @($b.Changed)
             NewlyAddedPrivileged = @($b.NewlyAddedPrivileged)
             PersistedRevokes     = @($b.PersistedRevokes)
+            PersistentlyPending  = @($b.PersistentlyPending)
             Counts = [ordered]@{
                 Reviewers          = $revs.Count
                 Added              = @($b.Added).Count
@@ -1008,6 +1046,7 @@ function Split-SPCampaignDiffByDirector {
                 Changed            = @($b.Changed).Count
                 AddedPrivileged    = @($b.NewlyAddedPrivileged).Count
                 PersistedRevokeCount = @($b.PersistedRevokes).Count
+                PersistentlyPendingCount = @($b.PersistentlyPending).Count
                 NewlyCompleted     = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NewlyCompleted' $false) }).Count
                 Stalled            = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'Stalled' $false) }).Count
                 NotStarted         = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NotStarted' $false) }).Count
@@ -1043,6 +1082,7 @@ function Get-SPDiffDirectorBodyHtml {
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Removed)</span><span class='l'>Access removed</span></div>")
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.AddedPrivileged)</span><span class='l'>New privileged</span></div>")
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.PersistedRevokeCount)</span><span class='l'>Persisted revokes</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.PersistentlyPendingCount)</span><span class='l'>Persistently pending</span></div>")
     [void]$sb.Append("</div>")
 
     [void]$sb.Append("<h2>Reviewer progress ($($c.Reviewers))</h2>")
@@ -1125,6 +1165,37 @@ function Get-SPDiffDirectorBodyHtml {
             [void]$sb.Append("</table>")
         }
     }
+    # Reviewer Escalation: Persistently Pending -- grouped by reviewer (director subset)
+    $dppItems = @($d.PersistentlyPending)
+    if ($dppItems.Count -gt 0) {
+        $dppByReviewer = @{}
+        foreach ($pp in $dppItems) {
+            $rid = [string](Get-SPDiffProp $pp 'ReviewerId' '')
+            $rname = [string](Get-SPDiffProp $pp 'ReviewerName' '')
+            if ([string]::IsNullOrWhiteSpace($rname)) { $rname = if ([string]::IsNullOrWhiteSpace($rid)) { 'Unknown' } else { $rid } }
+            if (-not $dppByReviewer.ContainsKey($rid)) { $dppByReviewer[$rid] = @{ Name = $rname; Items = [System.Collections.Generic.List[object]]::new() } }
+            $dppByReviewer[$rid].Items.Add($pp)
+        }
+        $dppSorted = @($dppByReviewer.GetEnumerator() | Sort-Object @{ Expression = { $_.Value.Items.Count } } -Descending)
+        $dppRevCount = $dppSorted.Count
+        [void]$sb.Append("<div class='scope-section'>")
+        [void]$sb.Append("<h3 class='section-hdr'>Reviewer Escalation: Persistently Pending <span class='cnt-badge'>$($dppItems.Count) items across $dppRevCount reviewers</span></h3>")
+        [void]$sb.Append("<div class='explain'>These reviewers have items pending across two or more consecutive campaign cycles without a decision. Follow up with these reviewers or escalate to their managers.</div>")
+        foreach ($entry in $dppSorted) {
+            $revName = Get-SPDiffEnc $entry.Value.Name
+            $revItems = @($entry.Value.Items)
+            [void]$sb.Append("<h4 style='color:#264d73;margin:16px 0 4px'>$revName <span class='cnt-badge'>$($revItems.Count) items</span></h4>")
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Privileged</th></tr>")
+            foreach ($ri in ($revItems | Sort-Object @{ Expression = { if ([bool](Get-SPDiffProp $_ 'Privileged' $false)) { 0 } else { 1 } } }, @{ Expression = { [string](Get-SPDiffProp $_ 'AccessName' '') } })) {
+                $priv = [bool](Get-SPDiffProp $ri 'Privileged' $false)
+                $cls = if ($priv) { " class='priv'" } else { '' }
+                $pb  = if ($priv) { "<span class='badge b-priv'>PRIV</span>" } else { '' }
+                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'AccessName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ri 'SourceName' ''))</td><td>$pb</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+        [void]$sb.Append("</div>")
+    }
     [void]$sb.Append("<div class='note'>Read-only change report for your org. No reassignment or escalation is performed. 'Newly completed' / 'Stalled' are context signals (timing / out-of-office), not findings.</div>")
     [void]$sb.Append("</body></html>")
     return $sb.ToString()
@@ -1184,12 +1255,12 @@ function Export-SPCampaignDiffByDirectorHtml {
         [void]$ib.Append((Get-SPDiffHtmlHead -Title $title))
         [void]$ib.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
         [void]$ib.Append("<div class='meta'>$window | $(@($split.Directors).Count) director report(s)</div>")
-        [void]$ib.Append("<table><tr><th>Director</th><th>Reviewers</th><th>Newly completed</th><th>Outstanding</th><th>Added</th><th>Removed</th><th>Changed</th><th>New priv</th><th>Persisted revokes</th><th>Report</th></tr>")
+        [void]$ib.Append("<table><tr><th>Director</th><th>Reviewers</th><th>Newly completed</th><th>Outstanding</th><th>Added</th><th>Removed</th><th>Changed</th><th>New priv</th><th>Persisted revokes</th><th>Persistently pending</th><th>Report</th></tr>")
         foreach ($d in @($split.Directors)) {
             $c = $d.Counts
             $fn = [string](Get-SPDiffProp $d 'File' '')
             $link = if ($fn) { "<a href='$(Get-SPDiffEnc $fn)'>$(Get-SPDiffEnc $fn)</a>" } else { '' }
-            [void]$ib.Append("<tr><td>$(Get-SPDiffEnc $d.DirectorName)</td><td>$($c.Reviewers)</td><td>$($c.NewlyCompleted)</td><td>$($c.Outstanding)</td><td>$($c.Added)</td><td>$($c.Removed)</td><td>$($c.Changed)</td><td>$($c.AddedPrivileged)</td><td>$($c.PersistedRevokeCount)</td><td>$link</td></tr>")
+            [void]$ib.Append("<tr><td>$(Get-SPDiffEnc $d.DirectorName)</td><td>$($c.Reviewers)</td><td>$($c.NewlyCompleted)</td><td>$($c.Outstanding)</td><td>$($c.Added)</td><td>$($c.Removed)</td><td>$($c.Changed)</td><td>$($c.AddedPrivileged)</td><td>$($c.PersistedRevokeCount)</td><td>$($c.PersistentlyPendingCount)</td><td>$link</td></tr>")
         }
         [void]$ib.Append("</table>")
         [void]$ib.Append("<div class='note'>One HTML file per director &mdash; their team's attestation progress + access changes &mdash; suitable to send individually. Read-only; no reassignment or escalation.</div>")
