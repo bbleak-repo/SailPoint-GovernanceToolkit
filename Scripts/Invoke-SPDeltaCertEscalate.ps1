@@ -101,13 +101,28 @@
 .PARAMETER EmailHtmlPath
     Override the auto-generated HTML report path. Implies -EmailHtml.
 .PARAMETER EmailHtmlManagers
-    When set, generates one self-contained HTML email template per skip-level manager.
-    Each file contains a personalized escalation email for that manager listing only their
-    direct reports who have not completed their attestation, suitable for SMTP automation.
-    Output directory: {DeltaCert.OutputPath}\escalation-managers\ (or -EmailHtmlManagersPath).
-    Also produces a _manifest.json with recipient info for automated sending.
+    When set, generates tiered HTML email templates organized by escalation level.
+    For each late reviewer, the org tree is walked UP to MaxEscalationLevels levels using
+    Get-SPDeltaIdentityDetail. At each level (2 = direct manager, 3 = director, 4+ = VP/SVP),
+    a personalized HTML file is generated showing the outstanding reviewers rolling up under
+    that manager.
+
+    Level 2 (direct manager): lists the reviewer's direct reports who are behind.
+    Level 3+ (higher levels): groups reviewers by their subordinate managers at the next
+    level down, with sub-headings per manager.
+
+    Output structure:
+        {DeltaCert.OutputPath}\escalation-managers\{timestamp}\
+            level2\jane-smith.html
+            level3\vp-williams.html
+            level4\svp-chen.html
+            _manifest.json
+
+    The _manifest.json contains recipient info for all levels, suitable for SMTP automation.
+    Identity lookups are cached to avoid redundant API calls.
 .PARAMETER EmailHtmlManagersPath
-    Override the auto-generated per-manager HTML output directory. Implies -EmailHtmlManagers.
+    Override the auto-generated per-manager HTML output base directory. Implies -EmailHtmlManagers.
+    The timestamped run folder and level subfolders are created inside this directory.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     JSON: machine-parseable result object.
@@ -150,13 +165,14 @@
     # Full audit: CSV spreadsheet + copy-paste email lines + HTML report, all in one run.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailHtmlManagers
-    # Dry-run + per-manager HTML emails: one self-contained HTML file per skip-level
-    # manager, each listing only their direct reports who are behind on attestation.
-    # Also produces a _manifest.json for SMTP automation.
+    # Dry-run + tiered per-manager HTML emails: generates a timestamped run folder under
+    # escalation-managers/ with level2/, level3/, etc. subfolders. Each level contains one
+    # HTML file per manager at that org level. Level 2 = direct manager, Level 3 = director,
+    # Level 4+ = VP/SVP. Also produces _manifest.json for SMTP automation.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 7 -WhatIf -Csv -EmailHtml -EmailHtmlManagers
-    # Full audit: CSV spreadsheet + consolidated HTML report + individual per-manager
-    # HTML email templates, all in one run. The manifest enables automated sending.
+    # Full audit: CSV spreadsheet + consolidated HTML report + tiered per-manager HTML
+    # email templates across all escalation levels. The manifest covers all levels.
 .EXAMPLE
     .\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Csv
     # Live escalation with CSV evidence log of what was processed.
@@ -587,6 +603,8 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             $outcome = 'Escalated'
         }
 
+        $reassignedFrom = if ($null -ne $sc.PSObject.Properties['ReassignedFromName']) { [string]$sc.ReassignedFromName } else { '' }
+
         $csvRows.Add([PSCustomObject]@{
             CampaignName         = $sc.CampaignName
             CampaignStatus       = $sc.CampaignStatus
@@ -595,6 +613,7 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             ReviewerEmail        = $reviewerEmail
             ReviewerIdentityId   = $sc.ReviewerIdentityId
             Classification       = $sc.ReviewerClassification
+            ReassignedFrom       = $reassignedFrom
             SkipLevelName        = $skipName
             SkipLevelEmail       = $skipEmail
             SkipLevelIdentityId  = $skipId
@@ -939,30 +958,21 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         }
     }
 
-    # --- Per-manager HTML email templates: one file per skip-level manager for SMTP automation. ---
+    # --- Tiered per-manager HTML email templates: one file per manager per escalation level. ---
     if ($wantManagerHtml -and $null -ne $lateRows -and $lateRows.Count -gt 0) {
-        # Determine output directory
-        $mgrHtmlDir = $effectiveEmailHtmlManagersPath
-        if ([string]::IsNullOrWhiteSpace($mgrHtmlDir)) {
-            $mgrHtmlDir = Join-Path $reportOutputDir 'escalation-managers'
+        # Determine base output directory
+        $mgrHtmlBaseDir = $effectiveEmailHtmlManagersPath
+        if ([string]::IsNullOrWhiteSpace($mgrHtmlBaseDir)) {
+            $mgrHtmlBaseDir = Join-Path $reportOutputDir 'escalation-managers'
         }
+
+        # Create timestamped run folder inside the base directory
+        $runTimestamp = (Get-Date -Format 'yyyy-MM-ddTHHmmss')
+        $mgrHtmlDir = Join-Path $mgrHtmlBaseDir $runTimestamp
         $effectiveEmailHtmlManagersPath = $mgrHtmlDir
 
         if (-not (Test-Path -LiteralPath $mgrHtmlDir -PathType Container)) {
             New-Item -Path $mgrHtmlDir -ItemType Directory -Force -WhatIf:$false | Out-Null
-        }
-
-        # Group late rows by FIRST skip-level (direct manager of the reviewer).
-        # Reviewers with no resolved manager are skipped (they appear in the consolidated report).
-        $mgrGroups = [ordered]@{}
-        foreach ($row in $lateRows) {
-            if (-not $row.SkipLevelResolved) { continue }
-            $mgrKey = [string]$row.SkipLevelIdentityId
-            if ([string]::IsNullOrWhiteSpace($mgrKey)) { continue }
-            if (-not $mgrGroups.Contains($mgrKey)) {
-                $mgrGroups[$mgrKey] = [System.Collections.Generic.List[object]]::new()
-            }
-            $mgrGroups[$mgrKey].Add($row)
         }
 
         # Helper: extract first name from a display name
@@ -991,11 +1001,129 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             return $safe
         }
 
-        $manifest = [System.Collections.Generic.List[object]]::new()
-        $mgrFilesWritten = 0
+        # --- Step 1: Build the full org chain for each late reviewer ---
+        # For each late reviewer, walk UP the org tree to build a chain of identity IDs.
+        # Chain index: 0 = reviewer (self), 1 = reviewer's manager (level 2 in output),
+        # 2 = manager's manager (level 3), etc.
+        # Identity detail cache avoids redundant API calls (Get-SPDeltaIdentityDetail
+        # already has in-memory + disk caching, but we also cache locally for chain building).
+        $identityCache = @{}
+
+        # Helper: resolve identity detail with local cache layer
+        $resolveIdentity = {
+            param([string]$identityId)
+            if ([string]::IsNullOrWhiteSpace($identityId)) { return $null }
+            if ($identityCache.ContainsKey($identityId)) { return $identityCache[$identityId] }
+            $d = Get-SPDeltaIdentityDetail -IdentityId $identityId -CorrelationID $correlationID
+            $identityCache[$identityId] = $d
+            return $d
+        }
+
+        # Structure: array of chains, each chain is an array of identity detail hashtables
+        # chain[0] = reviewer, chain[1] = reviewer's manager (level 2), chain[2] = level 3, etc.
+        $reviewerChains = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($row in $lateRows) {
+            $reviewerId = [string]$row.ReviewerIdentityId
+            if ([string]::IsNullOrWhiteSpace($reviewerId)) { continue }
+            if (-not $row.SkipLevelResolved) { continue }
+
+            $chain = [System.Collections.Generic.List[object]]::new()
+
+            # Index 0: the reviewer themselves (use data from $row + identity detail)
+            $reviewerDetail = & $resolveIdentity $reviewerId
+            $chain.Add(@{
+                IdentityId  = $reviewerId
+                DisplayName = [string]$row.ReviewerName
+                Email       = [string]$row.ReviewerEmail
+                ManagerId   = if ($reviewerDetail -and $reviewerDetail.Found) { [string]$reviewerDetail.ManagerId } else { '' }
+                Found       = ($null -ne $reviewerDetail -and $reviewerDetail.Found)
+                Row         = $row
+            })
+
+            # Walk up: index 1 = level 2 (direct manager), index 2 = level 3, etc.
+            # We need effectiveMaxLevels levels above the reviewer (indices 1..effectiveMaxLevels).
+            $curId = if ($reviewerDetail -and $reviewerDetail.Found) { [string]$reviewerDetail.ManagerId } else { '' }
+            for ($lvl = 1; $lvl -le $effectiveMaxLevels; $lvl++) {
+                if ([string]::IsNullOrWhiteSpace($curId)) { break }
+                $d = & $resolveIdentity $curId
+                if ($null -eq $d -or -not $d.Found) { break }
+
+                $chain.Add(@{
+                    IdentityId  = [string]$d.IdentityId
+                    DisplayName = [string]$d.DisplayName
+                    Email       = [string]$d.Email
+                    ManagerId   = [string]$d.ManagerId
+                    Found       = $true
+                })
+
+                $curId = [string]$d.ManagerId
+            }
+
+            $reviewerChains.Add($chain)
+        }
+
+        # --- Step 2: Build per-level aggregations ---
+        # For each level N (2 through effectiveMaxLevels+1, but we use chain index N-1):
+        #   levelData[N] = hashtable keyed by manager identity ID at level N
+        #     -> each entry: Name, Email, FirstName, IdentityId
+        #     -> For level 2 (chain index 1): DirectReviewers = list of reviewer rows
+        #     -> For level 3+ (chain index 2+): Subordinates = hashtable keyed by
+        #        subordinate manager ID -> { Name, Email, Reviewers = list of reviewer rows }
+        $levelData = @{}
+
+        foreach ($chain in $reviewerChains) {
+            $reviewerRow = $chain[0].Row
+
+            # Process each level above the reviewer (chain index 1 = level 2, etc.)
+            for ($chainIdx = 1; $chainIdx -lt $chain.Count; $chainIdx++) {
+                $levelNum = $chainIdx + 1  # chain index 1 -> level 2
+                $mgrEntry = $chain[$chainIdx]
+                $mgrId    = [string]$mgrEntry.IdentityId
+
+                if (-not $levelData.ContainsKey($levelNum)) {
+                    $levelData[$levelNum] = @{}
+                }
+
+                if (-not $levelData[$levelNum].ContainsKey($mgrId)) {
+                    $levelData[$levelNum][$mgrId] = @{
+                        IdentityId      = $mgrId
+                        DisplayName     = [string]$mgrEntry.DisplayName
+                        Email           = [string]$mgrEntry.Email
+                        FirstName       = & $getFirstName ([string]$mgrEntry.DisplayName)
+                        DirectReviewers = [System.Collections.Generic.List[object]]::new()
+                        Subordinates    = [ordered]@{}
+                    }
+                }
+
+                $mgrData = $levelData[$levelNum][$mgrId]
+
+                if ($levelNum -eq 2) {
+                    # Level 2: direct manager of the reviewer -- reviewers list directly
+                    $mgrData.DirectReviewers.Add($reviewerRow)
+                }
+                else {
+                    # Level 3+: group by the subordinate manager at the level below
+                    # The subordinate is at chain index ($chainIdx - 1)
+                    $subEntry = $chain[$chainIdx - 1]
+                    $subId    = [string]$subEntry.IdentityId
+                    if (-not $mgrData.Subordinates.Contains($subId)) {
+                        $mgrData.Subordinates[$subId] = @{
+                            IdentityId = $subId
+                            DisplayName = [string]$subEntry.DisplayName
+                            Email       = [string]$subEntry.Email
+                            Reviewers   = [System.Collections.Generic.List[object]]::new()
+                        }
+                    }
+                    $mgrData.Subordinates[$subId].Reviewers.Add($reviewerRow)
+                }
+            }
+        }
+
+        # --- Step 3: Generate HTML files per manager per level ---
         $genDateUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
 
-        # Collect distinct campaign names for the subject line
+        # Collect distinct campaign names for the greeting
         $allLateCampaignNames = @($lateRows | ForEach-Object { [string]$_.CampaignName } | Sort-Object -Unique)
         $campaignDisplayName = if ($allLateCampaignNames.Count -eq 1) {
             $allLateCampaignNames[0]
@@ -1003,121 +1131,231 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
             ($allLateCampaignNames -join ', ')
         }
 
-        foreach ($mgrKey in $mgrGroups.Keys) {
-            $mgrRows = $mgrGroups[$mgrKey]
-            $mgrName  = [string]($mgrRows[0].SkipLevelName)
-            $mgrEmail = [string]($mgrRows[0].SkipLevelEmail)
-            if ([string]::IsNullOrWhiteSpace($mgrName)) { $mgrName = '(unknown)' }
+        # Inline CSS styles shared across all generated HTML files (email-safe inline)
+        $bodyStyle    = "font-family:'Segoe UI',Arial,sans-serif;color:#333;max-width:700px;margin:0 auto;padding:20px"
+        $tableStyle   = "border-collapse:collapse;width:100%;margin:16px 0;font-size:13px"
+        $thRowStyle   = "background:#264d73;color:#fff"
+        $thCellStyle  = "padding:10px 12px;text-align:left"
+        $thCenterStyle = "padding:10px 12px;text-align:center"
+        $tdStyle      = "padding:8px 12px"
+        $tdCenterStyle = "padding:8px 12px;text-align:center;font-weight:bold;color:#CC3333"
+        $subHeadStyle = "margin:20px 0 8px;padding:8px 12px;background:#f0f4f8;border-left:4px solid #264d73;font-size:14px;color:#264d73"
+        $hrStyle      = "border:none;border-top:1px solid #e0e0e0;margin:24px 0"
+        $footerStyle  = "font-size:11px;color:#999"
 
-            $firstName = & $getFirstName $mgrName
-            $safeFile  = "$(& $sanitizeFilename $mgrName).html"
+        # Helper scriptblock: render a reviewer table given a list of rows
+        $renderReviewerTable = {
+            param(
+                [System.Text.StringBuilder]$sb,
+                [object[]]$rows
+            )
+            [void]$sb.AppendLine("<table style=`"$tableStyle`">")
+            [void]$sb.AppendLine('<thead>')
+            [void]$sb.AppendLine("<tr style=`"$thRowStyle`">")
+            [void]$sb.AppendLine("  <th style=`"$thCellStyle`">Reviewer</th>")
+            [void]$sb.AppendLine("  <th style=`"$thCellStyle`">Campaign</th>")
+            [void]$sb.AppendLine("  <th style=`"$thCenterStyle`">Pending Items</th>")
+            [void]$sb.AppendLine('</tr>')
+            [void]$sb.AppendLine('</thead>')
+            [void]$sb.AppendLine('<tbody>')
 
-            $reviewerCount = $mgrRows.Count
-
-            $mgrHtml = New-Object System.Text.StringBuilder
-            [void]$mgrHtml.AppendLine('<!DOCTYPE html>')
-            [void]$mgrHtml.AppendLine('<html><head>')
-            [void]$mgrHtml.AppendLine('<meta charset="utf-8">')
-            [void]$mgrHtml.AppendLine('<title>Attestation Action Required</title>')
-            [void]$mgrHtml.AppendLine('</head>')
-            [void]$mgrHtml.AppendLine("<body style=`"font-family:'Segoe UI',Arial,sans-serif;color:#333;max-width:700px;margin:0 auto;padding:20px`">")
-            [void]$mgrHtml.AppendLine('')
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:15px`">Hi $(ConvertTo-EscHtml $firstName),</p>")
-            [void]$mgrHtml.AppendLine('')
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
-            [void]$mgrHtml.AppendLine("You have direct reports who have not completed today's daily attestation for the campaign")
-            [void]$mgrHtml.AppendLine("<strong>$(ConvertTo-EscHtml $campaignDisplayName)</strong>.")
-            [void]$mgrHtml.AppendLine('</p>')
-            [void]$mgrHtml.AppendLine('')
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
-            [void]$mgrHtml.AppendLine('The following reviewers under your organization still have pending certification items')
-            [void]$mgrHtml.AppendLine('that require action:')
-            [void]$mgrHtml.AppendLine('</p>')
-            [void]$mgrHtml.AppendLine('')
-
-            # Table header
-            [void]$mgrHtml.AppendLine("<table style=`"border-collapse:collapse;width:100%;margin:16px 0;font-size:13px`">")
-            [void]$mgrHtml.AppendLine('<thead>')
-            [void]$mgrHtml.AppendLine("<tr style=`"background:#264d73;color:#fff`">")
-            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:left`">Reviewer</th>")
-            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:left`">Campaign</th>")
-            [void]$mgrHtml.AppendLine("  <th style=`"padding:10px 12px;text-align:center`">Pending Items</th>")
-            [void]$mgrHtml.AppendLine('</tr>')
-            [void]$mgrHtml.AppendLine('</thead>')
-            [void]$mgrHtml.AppendLine('<tbody>')
-
-            $rowIdx = 0
-            foreach ($r in ($mgrRows | Sort-Object { [string]$_.ReviewerName })) {
-                $rowBg = if ($rowIdx % 2 -eq 1) { "background:#f8f9fa;" } else { '' }
+            $tblIdx = 0
+            foreach ($r in ($rows | Sort-Object { [string]$_.ReviewerName })) {
+                $rowBg = if ($tblIdx % 2 -eq 1) { "background:#f8f9fa;" } else { '' }
                 $rName = ConvertTo-EscHtml ([string]$r.ReviewerName)
                 $cName = ConvertTo-EscHtml ([string]$r.CampaignName)
-
-                # Pending items: use HoursOpen as a proxy indicator; show "Pending" as we lack
-                # item-level counts at the certification level in the current data model.
-                $pendingDisplay = 'Pending'
-
-                [void]$mgrHtml.AppendLine("<tr style=`"border-bottom:1px solid #e0e0e0;${rowBg}`">")
-                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px`">$rName</td>")
-                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px`">$cName</td>")
-                [void]$mgrHtml.AppendLine("  <td style=`"padding:8px 12px;text-align:center;font-weight:bold;color:#CC3333`">$pendingDisplay</td>")
-                [void]$mgrHtml.AppendLine('</tr>')
-                $rowIdx++
+                [void]$sb.AppendLine("<tr style=`"border-bottom:1px solid #e0e0e0;${rowBg}`">")
+                [void]$sb.AppendLine("  <td style=`"$tdStyle`">$rName</td>")
+                [void]$sb.AppendLine("  <td style=`"$tdStyle`">$cName</td>")
+                [void]$sb.AppendLine("  <td style=`"$tdCenterStyle`">Pending</td>")
+                [void]$sb.AppendLine('</tr>')
+                $tblIdx++
             }
 
-            [void]$mgrHtml.AppendLine('</tbody>')
-            [void]$mgrHtml.AppendLine('</table>')
-            [void]$mgrHtml.AppendLine('')
-
-            # Summary line
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
-            $reviewerWord = if ($reviewerCount -eq 1) { 'reviewer' } else { 'reviewers' }
-            [void]$mgrHtml.AppendLine("<strong>$reviewerCount $reviewerWord</strong> with pending items require completion.")
-            [void]$mgrHtml.AppendLine('Please follow up with your team to ensure timely attestation.')
-            [void]$mgrHtml.AppendLine('</p>')
-            [void]$mgrHtml.AppendLine('')
-
-            # Footer
-            [void]$mgrHtml.AppendLine("<hr style=`"border:none;border-top:1px solid #e0e0e0;margin:24px 0`">")
-            [void]$mgrHtml.AppendLine("<p style=`"font-size:11px;color:#999`">")
-            [void]$mgrHtml.AppendLine("This report was generated by the SailPoint ISC Governance Toolkit on $genDateUtc.")
-            [void]$mgrHtml.AppendLine("Campaign scope: $(ConvertTo-EscHtml $nameFilterDesc). This is an automated notification.")
-            [void]$mgrHtml.AppendLine('</p>')
-            [void]$mgrHtml.AppendLine('')
-            [void]$mgrHtml.AppendLine('</body></html>')
-
-            # Write the file
-            $mgrFilePath = Join-Path $mgrHtmlDir $safeFile
-            try {
-                $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-                [System.IO.File]::WriteAllText($mgrFilePath, $mgrHtml.ToString(), $utf8NoBom)
-                $mgrFilesWritten++
-            }
-            catch {
-                Write-Host "  WARNING: Failed to write manager HTML for '$mgrName': $($_.Exception.Message)" -ForegroundColor Yellow
-                Write-SPLog -Message "Failed to write manager HTML '$mgrFilePath': $($_.Exception.Message)" `
-                    -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
-                    -CorrelationID $correlationID
-            }
-
-            # Add to manifest
-            $manifest.Add([PSCustomObject]@{
-                ManagerName         = $mgrName
-                ManagerEmail        = $mgrEmail
-                ManagerIdentityId   = $mgrKey
-                File                = $safeFile
-                PendingReviewerCount = $reviewerCount
-                PendingItemCount    = $reviewerCount   # One cert per reviewer row
-            })
+            [void]$sb.AppendLine('</tbody>')
+            [void]$sb.AppendLine('</table>')
         }
 
-        # Write manifest
+        $manifestLevels = [ordered]@{}
+        $mgrFilesWritten = 0
+        $totalReviewersPending = 0
+
+        # Sort levels numerically for consistent output
+        $sortedLevels = @($levelData.Keys | Sort-Object)
+
+        foreach ($levelNum in $sortedLevels) {
+            # Skip level 1 (that is the reviewer themselves, not a manager)
+            if ($levelNum -lt 2) { continue }
+
+            $levelLabel = "level$levelNum"
+            $levelDir = Join-Path $mgrHtmlDir $levelLabel
+            if (-not (Test-Path -LiteralPath $levelDir -PathType Container)) {
+                New-Item -Path $levelDir -ItemType Directory -Force -WhatIf:$false | Out-Null
+            }
+
+            $levelManifest = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($mgrId in $levelData[$levelNum].Keys) {
+                $mgrData   = $levelData[$levelNum][$mgrId]
+                $mgrName   = [string]$mgrData.DisplayName
+                $mgrEmail  = [string]$mgrData.Email
+                $firstName = [string]$mgrData.FirstName
+                if ([string]::IsNullOrWhiteSpace($mgrName)) { $mgrName = '(unknown)' }
+                if ([string]::IsNullOrWhiteSpace($firstName)) { $firstName = $mgrName }
+
+                $safeFile = "$(& $sanitizeFilename $mgrName).html"
+
+                $mgrHtml = New-Object System.Text.StringBuilder
+                [void]$mgrHtml.AppendLine('<!DOCTYPE html>')
+                [void]$mgrHtml.AppendLine('<html><head>')
+                [void]$mgrHtml.AppendLine('<meta charset="utf-8">')
+                [void]$mgrHtml.AppendLine('<title>Attestation Action Required</title>')
+                [void]$mgrHtml.AppendLine('</head>')
+                [void]$mgrHtml.AppendLine("<body style=`"$bodyStyle`">")
+                [void]$mgrHtml.AppendLine('')
+                [void]$mgrHtml.AppendLine("<p style=`"font-size:15px`">Hi $(ConvertTo-EscHtml $firstName),</p>")
+                [void]$mgrHtml.AppendLine('')
+
+                $reviewerCount = 0
+                $directReportMgrCount = 0
+
+                if ($levelNum -eq 2) {
+                    # Level 2: direct manager -- show direct reviewer list
+                    $directRows = @($mgrData.DirectReviewers)
+                    $reviewerCount = $directRows.Count
+
+                    [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+                    [void]$mgrHtml.AppendLine("You have direct reports who have not completed today's daily attestation")
+                    [void]$mgrHtml.AppendLine("for the campaign <strong>$(ConvertTo-EscHtml $campaignDisplayName)</strong>.")
+                    [void]$mgrHtml.AppendLine('</p>')
+                    [void]$mgrHtml.AppendLine('')
+
+                    & $renderReviewerTable $mgrHtml $directRows
+                    [void]$mgrHtml.AppendLine('')
+
+                    # Summary line
+                    $reviewerWord = if ($reviewerCount -eq 1) { 'reviewer requires' } else { 'reviewers require' }
+                    [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+                    [void]$mgrHtml.AppendLine("<strong>$reviewerCount $reviewerWord</strong> follow-up.")
+                    [void]$mgrHtml.AppendLine('</p>')
+                }
+                else {
+                    # Level 3+: group by subordinate managers
+                    [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+                    [void]$mgrHtml.AppendLine("Members of your organization have not completed today's daily attestation")
+                    [void]$mgrHtml.AppendLine("for the campaign <strong>$(ConvertTo-EscHtml $campaignDisplayName)</strong>.")
+                    [void]$mgrHtml.AppendLine('</p>')
+                    [void]$mgrHtml.AppendLine('')
+
+                    $subMgrCount = 0
+                    foreach ($subId in $mgrData.Subordinates.Keys) {
+                        $subData = $mgrData.Subordinates[$subId]
+                        $subName = [string]$subData.DisplayName
+                        if ([string]::IsNullOrWhiteSpace($subName)) { $subName = '(unknown)' }
+                        $subReviewers = @($subData.Reviewers)
+                        $subCount = $subReviewers.Count
+                        $reviewerCount += $subCount
+                        $subMgrCount++
+
+                        $subReviewerWord = if ($subCount -eq 1) { 'outstanding reviewer' } else { 'outstanding reviewers' }
+                        [void]$mgrHtml.AppendLine("<div style=`"$subHeadStyle`">")
+                        [void]$mgrHtml.AppendLine("<strong>$(ConvertTo-EscHtml $subName)</strong> -- $subCount $subReviewerWord")
+                        [void]$mgrHtml.AppendLine('</div>')
+
+                        & $renderReviewerTable $mgrHtml $subReviewers
+                        [void]$mgrHtml.AppendLine('')
+                    }
+
+                    $directReportMgrCount = $subMgrCount
+
+                    # Summary line
+                    $mgrWord = if ($subMgrCount -eq 1) { 'manager' } else { 'managers' }
+                    $reviewerWord = if ($reviewerCount -eq 1) { 'reviewer' } else { 'reviewers' }
+                    [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+                    [void]$mgrHtml.AppendLine("<strong>$reviewerCount $reviewerWord</strong> across <strong>$subMgrCount $mgrWord</strong> require follow-up.")
+                    [void]$mgrHtml.AppendLine('</p>')
+                }
+
+                $totalReviewersPending += $reviewerCount
+
+                [void]$mgrHtml.AppendLine('')
+                [void]$mgrHtml.AppendLine("<p style=`"font-size:14px;line-height:1.6`">")
+                [void]$mgrHtml.AppendLine('Please follow up with your team to ensure timely attestation.')
+                [void]$mgrHtml.AppendLine('</p>')
+
+                # Footer
+                [void]$mgrHtml.AppendLine('')
+                [void]$mgrHtml.AppendLine("<hr style=`"$hrStyle`">")
+                [void]$mgrHtml.AppendLine("<p style=`"$footerStyle`">")
+                [void]$mgrHtml.AppendLine("This report was generated by the SailPoint ISC Governance Toolkit on $genDateUtc.")
+                [void]$mgrHtml.AppendLine("Campaign scope: $(ConvertTo-EscHtml $nameFilterDesc). This is an automated notification.")
+                [void]$mgrHtml.AppendLine('</p>')
+                [void]$mgrHtml.AppendLine('')
+                [void]$mgrHtml.AppendLine('</body></html>')
+
+                # Write the file
+                $mgrFilePath = Join-Path $levelDir $safeFile
+                $relativeFile = "$levelLabel/$safeFile"
+                try {
+                    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                    [System.IO.File]::WriteAllText($mgrFilePath, $mgrHtml.ToString(), $utf8NoBom)
+                    $mgrFilesWritten++
+                }
+                catch {
+                    Write-Host "  WARNING: Failed to write manager HTML for '$mgrName' ($levelLabel): $($_.Exception.Message)" -ForegroundColor Yellow
+                    Write-SPLog -Message "Failed to write manager HTML '$mgrFilePath': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
+                        -CorrelationID $correlationID
+                }
+
+                # Add to level manifest
+                $manifestEntry = [ordered]@{
+                    ManagerName  = $mgrName
+                    ManagerEmail = $mgrEmail
+                    File         = $relativeFile
+                    ReviewerCount = $reviewerCount
+                }
+                if ($levelNum -ge 3) {
+                    $manifestEntry['DirectReportManagerCount'] = $directReportMgrCount
+                }
+                $levelManifest.Add([PSCustomObject]$manifestEntry)
+            }
+
+            $manifestLevels[$levelLabel] = $levelManifest
+        }
+
+        # De-duplicate totalReviewersPending: the same reviewer may appear at multiple levels.
+        # Use the level-2 count as the canonical total since every late reviewer appears there once.
+        $canonicalReviewerCount = 0
+        if ($manifestLevels.Contains('level2')) {
+            foreach ($entry in $manifestLevels['level2']) {
+                $canonicalReviewerCount += $entry.ReviewerCount
+            }
+        }
+        elseif ($lateRows.Count -gt 0) {
+            # Fallback: count distinct reviewer identity IDs from late rows
+            $canonicalReviewerCount = @($lateRows | ForEach-Object { [string]$_.ReviewerIdentityId } | Sort-Object -Unique).Count
+        }
+
+        # Write combined _manifest.json
+        $manifestObj = [ordered]@{
+            GeneratedAt         = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            CampaignScope       = $campaignDisplayName
+            MaxEscalationLevels = $effectiveMaxLevels
+            Levels              = [ordered]@{}
+            TotalFiles          = $mgrFilesWritten
+            TotalReviewersPending = $canonicalReviewerCount
+        }
+
+        foreach ($lvlKey in $manifestLevels.Keys) {
+            $lvlEntries = @($manifestLevels[$lvlKey])
+            # Ensure array wrapper even for single entries
+            $manifestObj.Levels[$lvlKey] = $lvlEntries
+        }
+
         $manifestPath = Join-Path $mgrHtmlDir '_manifest.json'
         try {
-            $manifestJson = $manifest | ConvertTo-Json -Depth 5
-            # ConvertTo-Json returns a bare object (not array) when there is exactly one item
-            if ($manifest.Count -eq 1 -and $manifestJson -notmatch '^\s*\[') {
-                $manifestJson = "[$manifestJson]"
-            }
+            $manifestJson = $manifestObj | ConvertTo-Json -Depth 10
             $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
             [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
         }
@@ -1129,8 +1367,9 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
         }
 
         if ($mgrFilesWritten -gt 0) {
-            Write-Host "  Manager HTML emails written: $mgrHtmlDir ($mgrFilesWritten file(s), $($manifest.Count) manager(s))" -ForegroundColor Green
-            Write-SPLog -Message "Per-manager HTML emails written: $mgrHtmlDir (files=$mgrFilesWritten managers=$($manifest.Count))" `
+            $levelSummary = @($manifestLevels.Keys | ForEach-Object { "$_=$($manifestLevels[$_].Count)" }) -join ', '
+            Write-Host "  Manager HTML emails written: $mgrHtmlDir ($mgrFilesWritten file(s) across $($manifestLevels.Count) level(s): $levelSummary)" -ForegroundColor Green
+            Write-SPLog -Message "Per-manager HTML emails written: $mgrHtmlDir (files=$mgrFilesWritten levels=$($manifestLevels.Count) $levelSummary)" `
                 -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'EmailHtmlManagers' `
                 -CorrelationID $correlationID
         }
@@ -1228,7 +1467,8 @@ try {
         EmailListPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailListPath)) { $effectiveEmailListPath } else { $null }
         EmailHtmlPath               = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlPath)) { $effectiveEmailHtmlPath } else { $null }
         EmailHtmlManagersPath       = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { $effectiveEmailHtmlManagersPath } else { $null }
-        EmailHtmlManagersFileCount  = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { @(Get-ChildItem -LiteralPath $effectiveEmailHtmlManagersPath -Filter '*.html' -File -ErrorAction SilentlyContinue).Count } else { 0 }
+        EmailHtmlManagersFileCount  = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { @(Get-ChildItem -LiteralPath $effectiveEmailHtmlManagersPath -Filter '*.html' -File -Recurse -ErrorAction SilentlyContinue).Count } else { 0 }
+        EmailHtmlManagersLevels     = if (-not [string]::IsNullOrWhiteSpace($effectiveEmailHtmlManagersPath)) { @(Get-ChildItem -LiteralPath $effectiveEmailHtmlManagersPath -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^level\d+$' }).Count } else { 0 }
         DurationSeconds             = [math]::Round($runDuration, 2)
     }
 

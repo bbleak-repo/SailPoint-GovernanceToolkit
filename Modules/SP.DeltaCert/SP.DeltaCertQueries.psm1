@@ -1350,6 +1350,26 @@ function Get-SPDeltaCertStaleCertifications {
                     $reviewerClassification = [string]$cert.ReviewerClassification
                 }
 
+                # Capture the original reviewer if this cert was reassigned
+                $reassignedFromName = ''
+                if ($reviewerClassification -eq 'Reassigned') {
+                    if ($null -ne $cert.PSObject.Properties['reassignedFrom'] -and $null -ne $cert.reassignedFrom) {
+                        if ($null -ne $cert.reassignedFrom.PSObject.Properties['name'] -and
+                            -not [string]::IsNullOrWhiteSpace($cert.reassignedFrom.name)) {
+                            $reassignedFromName = [string]$cert.reassignedFrom.name
+                        }
+                    }
+                    # Fallback: check the reassignment object shape used by some API versions
+                    if ([string]::IsNullOrWhiteSpace($reassignedFromName) -and
+                        $null -ne $cert.PSObject.Properties['reassignment'] -and
+                        $null -ne $cert.reassignment -and
+                        $null -ne $cert.reassignment.PSObject.Properties['from'] -and
+                        $null -ne $cert.reassignment.from -and
+                        -not [string]::IsNullOrWhiteSpace($cert.reassignment.from.name)) {
+                        $reassignedFromName = [string]$cert.reassignment.from.name
+                    }
+                }
+
                 $resultCerts.Add([PSCustomObject]@{
                     CertificationId        = [string]$cert.id
                     CampaignId             = $campaignId
@@ -1357,6 +1377,7 @@ function Get-SPDeltaCertStaleCertifications {
                     CampaignStatus         = $campaignStatus
                     ReviewerIdentityId     = $reviewerId
                     ReviewerName           = $reviewerName
+                    ReassignedFromName     = $reassignedFromName
                     HoursOpen              = $hoursOpen
                     HoursUntilDeadline     = if ($hoursUntilDeadline -eq [double]::MaxValue) { $null } else { $hoursUntilDeadline }
                     EscalationReason       = $escalationReason
