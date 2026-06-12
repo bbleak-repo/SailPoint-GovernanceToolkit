@@ -149,6 +149,9 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -158,10 +161,19 @@
             <Button Grid.Column="1" x:Name="BtnGenerateGovReport"
                     Content="Generate Governance Report"
                     Margin="0,0,6,0"/>
-            <Button Grid.Column="2" x:Name="BtnExportDashboardData"
+            <Button Grid.Column="2" x:Name="BtnCampaignDiff"
+                    Content="Campaign Diff"
+                    Margin="0,0,6,0"/>
+            <Button Grid.Column="3" x:Name="BtnCertTracker"
+                    Content="Cert Tracker"
+                    Margin="0,0,6,0"/>
+            <Button Grid.Column="4" x:Name="BtnDailyEvidence"
+                    Content="Daily Evidence"
+                    Margin="0,0,6,0"/>
+            <Button Grid.Column="5" x:Name="BtnExportDashboardData"
                     Content="Export Dashboard Data"
                     Margin="0,0,6,0"/>
-            <Button Grid.Column="3" x:Name="BtnOpenGovFolder"
+            <Button Grid.Column="6" x:Name="BtnOpenGovFolder"
                     Content="Open Reports Folder"/>
         </Grid>
 

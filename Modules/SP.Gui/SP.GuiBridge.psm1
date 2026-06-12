@@ -3030,6 +3030,479 @@ function Invoke-SPGuiHierarchicalReport {
 
 #endregion Hierarchical Leadership Report Bridge
 
+#region Campaign Diff Bridge
+
+function Invoke-SPGuiCampaignDiff {
+    <#
+    .SYNOPSIS
+        Run the day-over-day campaign diff from the GUI and return the HTML report path.
+    .DESCRIPTION
+        Bridge function for the [Campaign Diff] button on the Governance tab. Resolves
+        the campaign using the supplied filter parameters, invokes the CLI script
+        Invoke-SPCampaignDiff.ps1, and returns the path to the generated HTML report.
+        The caller (MainWindow runspace) opens the report on completion.
+    .PARAMETER CampaignNameContains
+        Substring filter for campaign name resolution (maps to -CampaignNameContains on
+        the CLI script). When empty the script falls back to ACTIVE campaigns.
+    .PARAMETER Status
+        Campaign status filter. Default: 'ACTIVE'.
+    .PARAMETER DaysBack
+        Campaign lookback window in days. Default: 30.
+    .PARAMETER IncludeCsv
+        Also write flat CSV files alongside the HTML report.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{OutputPath; DurationSeconds}; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiCampaignDiff -CampaignNameContains 'Daily Attestation'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
+        [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+        [string]$Status = 'ACTIVE',
+
+        [Parameter()]
+        [int]$DaysBack = 30,
+
+        [Parameter()]
+        [switch]$IncludeCsv,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPCampaignDiff.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            $sw.Stop()
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Campaign diff script not found: $scriptPath"
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiCampaignDiff started: Status=$Status, DaysBack=$DaysBack, NameContains='$CampaignNameContains'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCampaignDiff' -CorrelationID $CorrelationID
+
+        # Resolve output path from config (Audit.OutputPath\diff) or default
+        $effectiveOutputPath = $null
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                $null -ne $cfg.Audit -and
+                $null -ne $cfg.Audit.PSObject.Properties['OutputPath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $ap = [string]$cfg.Audit.OutputPath
+                if (-not [System.IO.Path]::IsPathRooted($ap)) { $ap = Join-Path $toolkitRoot $ap }
+                $effectiveOutputPath = Join-Path $ap 'diff'
+            }
+        }
+        catch { }
+
+        if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+            $effectiveOutputPath = Join-Path $toolkitRoot 'Audit\diff'
+        }
+
+        # Build script arguments
+        $scriptArgs = @{
+            Status     = $Status
+            DaysBack   = $DaysBack
+            OutputMode = 'HTML'
+            OutputPath = $effectiveOutputPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $scriptArgs['CampaignNameContains'] = $CampaignNameContains
+        }
+        if ($IncludeCsv) {
+            $scriptArgs['IncludeCsv'] = $true
+        }
+
+        $diffResult = & $scriptPath @scriptArgs
+
+        # The CLI script writes its HTML to OutputPath; locate the most recent HTML file
+        $htmlReport = $null
+        if (Test-Path $effectiveOutputPath) {
+            $htmlFile = Get-ChildItem -Path $effectiveOutputPath -Filter '*.html' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+            if ($null -ne $htmlFile) {
+                $htmlReport = $htmlFile.FullName
+            }
+        }
+
+        $sw.Stop()
+
+        Write-SPLog -Message "Invoke-SPGuiCampaignDiff complete: OutputPath='$htmlReport'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCampaignDiff' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                OutputPath      = if ($htmlReport) { $htmlReport } else { $effectiveOutputPath }
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiCampaignDiff failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCampaignDiff' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiCampaignDiff failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion Campaign Diff Bridge
+
+#region Cert Tracker Bridge
+
+function Invoke-SPGuiCertTracker {
+    <#
+    .SYNOPSIS
+        Run the Certification Progress Tracker from the GUI and return the HTML report path.
+    .DESCRIPTION
+        Bridge function that invokes Scripts/Invoke-SPCertTracker.ps1 with the supplied
+        campaign name filters and optional EvidencePack switch.  Returns the path to the
+        generated HTML board so the GUI layer can open it automatically.
+    .PARAMETER CampaignName
+        Exact campaign name filter.
+    .PARAMETER CampaignNameStartsWith
+        Campaign name starts-with filter.
+    .PARAMETER CampaignNameContains
+        Campaign name contains filter.
+    .PARAMETER EvidencePack
+        When set, appends the per-campaign Attestation Evidence Pack to the output.
+    .PARAMETER DaysBack
+        Campaign lookback window. Default 60.
+    .PARAMETER Cadence
+        Which prior snapshot to compare against. Default 'Adjacent'.
+    .PARAMETER OutputPath
+        Directory for the HTML board. Resolved from config if omitted.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{ OutputPath=$string; HtmlFile=$string; DurationSeconds=$double }; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiCertTracker -CampaignNameContains 'Q2' -EvidencePack
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CampaignName,
+
+        [Parameter()]
+        [string]$CampaignNameStartsWith,
+
+        [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
+        [switch]$EvidencePack,
+
+        [Parameter()]
+        [int]$DaysBack = 60,
+
+        [Parameter()]
+        [ValidateSet('Adjacent', 'IntraDay', 'Daily', 'Weekly', 'Monthly')]
+        [string]$Cadence = 'Adjacent',
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPCertTracker.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Cert Tracker script not found: $scriptPath"
+            }
+        }
+
+        # Resolve output path from config when not specified
+        $effectiveOutputPath = $OutputPath
+        if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+            try {
+                $cfg = Get-SPConfig
+                if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                    $null -ne $cfg.Audit -and
+                    $null -ne $cfg.Audit.PSObject.Properties['OutputPath'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                    $ap = [string]$cfg.Audit.OutputPath
+                    if (-not [System.IO.Path]::IsPathRooted($ap)) { $ap = Join-Path $toolkitRoot $ap }
+                    $effectiveOutputPath = Join-Path $ap 'tracker'
+                }
+            }
+            catch { }
+
+            if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+                $effectiveOutputPath = Join-Path $toolkitRoot (Join-Path 'Audit' 'tracker')
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiCertTracker started: DaysBack=$DaysBack, Cadence=$Cadence, EvidencePack=$EvidencePack" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCertTracker' -CorrelationID $CorrelationID
+
+        # Build script arguments
+        $scriptArgs = @{
+            OutputPath = $effectiveOutputPath
+            OutputMode = 'HTML'
+            DaysBack   = $DaysBack
+            Cadence    = $Cadence
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignName))           { $scriptArgs['CampaignName']           = $CampaignName }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $scriptArgs['CampaignNameStartsWith'] = $CampaignNameStartsWith }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { $scriptArgs['CampaignNameContains']   = $CampaignNameContains }
+        if ($EvidencePack)                                               { $scriptArgs['EvidencePack']           = $true }
+
+        # Execute the tracker script
+        & $scriptPath @scriptArgs
+
+        # Locate the most recent HTML file in the output directory
+        $htmlFile = $null
+        if (Test-Path $effectiveOutputPath) {
+            $htmlFile = Get-ChildItem -Path $effectiveOutputPath -Filter '*.html' -File |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+        }
+
+        $sw.Stop()
+
+        if ([string]::IsNullOrWhiteSpace($htmlFile)) {
+            Write-SPLog -Message "Invoke-SPGuiCertTracker completed but no HTML output found in '$effectiveOutputPath'" `
+                -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCertTracker' -CorrelationID $CorrelationID
+            return @{
+                Success = $false
+                Data    = @{ OutputPath = $effectiveOutputPath }
+                Error   = "Tracker ran but no HTML report was found in '$effectiveOutputPath'."
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiCertTracker complete: HtmlFile='$htmlFile'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCertTracker' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                OutputPath      = $effectiveOutputPath
+                HtmlFile        = $htmlFile
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 2)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiCertTracker failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiCertTracker' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiCertTracker failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion Cert Tracker Bridge
+
+#region Daily Evidence Bridge
+
+function Invoke-SPGuiDailyEvidence {
+    <#
+    .SYNOPSIS
+        Run the Daily Evidence Report V3 script from the GUI and return the HTML path.
+    .DESCRIPTION
+        Bridge function that invokes Scripts\Invoke-SPDailyEvidenceReportV3.ps1 with
+        -OutputMode Both, captures the generated HTML report path, and returns a
+        standard Success/Data/Error result hashtable for the GUI handler.
+    .PARAMETER DaysBack
+        Campaign lookback window in days. Default: 1.
+    .PARAMETER CampaignNameContains
+        Campaign name substring filter (optional).
+    .PARAMETER OutputPath
+        Directory for output files. Auto-resolved if omitted.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{HtmlPath; DurationSeconds}; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiDailyEvidence -DaysBack 1
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [int]$DaysBack = 1,
+
+        [Parameter()]
+        [string]$CampaignNameContains,
+
+        [Parameter()]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPDailyEvidenceReportV3.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Daily Evidence V3 script not found: $scriptPath"
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiDailyEvidence started: DaysBack=$DaysBack" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDailyEvidence' -CorrelationID $CorrelationID
+
+        # Resolve output path (mirrors V3 script logic)
+        $effectiveOutputPath = $OutputPath
+        if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+            try {
+                $cfg = Get-SPConfig
+                if ($null -ne $cfg.PSObject.Properties['DailyEvidence'] -and
+                    $null -ne $cfg.DailyEvidence -and
+                    $null -ne $cfg.DailyEvidence.PSObject.Properties['OutputPath'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.DailyEvidence.OutputPath)) {
+                    $effectiveOutputPath = [string]$cfg.DailyEvidence.OutputPath
+                }
+                elseif ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                    $null -ne $cfg.Audit -and
+                    $null -ne $cfg.Audit.PSObject.Properties['OutputPath'] -and
+                    -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                    $effectiveOutputPath = Join-Path ([string]$cfg.Audit.OutputPath) 'daily-evidence'
+                }
+            }
+            catch { }
+
+            if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+                $effectiveOutputPath = Join-Path $toolkitRoot (Join-Path 'Audit' 'daily-evidence')
+            }
+        }
+        if (-not [System.IO.Path]::IsPathRooted($effectiveOutputPath)) {
+            $effectiveOutputPath = Join-Path $toolkitRoot $effectiveOutputPath
+        }
+        if (-not (Test-Path $effectiveOutputPath)) {
+            New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null
+        }
+
+        # Build script arguments
+        $scriptArgs = @{
+            DaysBack   = $DaysBack
+            OutputMode = 'Both'
+            OutputPath = $effectiveOutputPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
+            $scriptArgs['CampaignNameContains'] = $CampaignNameContains
+        }
+
+        # Snapshot HTML files before run to detect the new one
+        $htmlBefore = @()
+        if (Test-Path $effectiveOutputPath) {
+            $htmlBefore = @(Get-ChildItem -Path $effectiveOutputPath -Filter 'daily-evidence-v3-*.html' -File |
+                Select-Object -ExpandProperty FullName)
+        }
+
+        # Execute the V3 script
+        & $scriptPath @scriptArgs
+
+        # Find the newly created HTML file
+        $htmlAfter = @(Get-ChildItem -Path $effectiveOutputPath -Filter 'daily-evidence-v3-*.html' -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -ExpandProperty FullName)
+
+        $newHtml = $null
+        foreach ($f in $htmlAfter) {
+            if ($f -notin $htmlBefore) {
+                $newHtml = $f
+                break
+            }
+        }
+        # Fallback: most recent file
+        if ([string]::IsNullOrWhiteSpace($newHtml) -and $htmlAfter.Count -gt 0) {
+            $newHtml = $htmlAfter[0]
+        }
+
+        $sw.Stop()
+
+        if ([string]::IsNullOrWhiteSpace($newHtml)) {
+            Write-SPLog -Message "Invoke-SPGuiDailyEvidence completed but no HTML report found in '$effectiveOutputPath'" `
+                -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDailyEvidence' -CorrelationID $CorrelationID
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "Daily Evidence script completed but no HTML report was generated."
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiDailyEvidence complete: HtmlPath='$newHtml' Duration=$([math]::Round($sw.Elapsed.TotalSeconds, 1))s" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDailyEvidence' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                HtmlPath        = $newHtml
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiDailyEvidence failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiDailyEvidence' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiDailyEvidence failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion Daily Evidence Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -3050,5 +3523,8 @@ Export-ModuleMember -Function @(
     'Get-SPGuiGovernanceReports',
     'Get-SPGuiDisconnectedAppStatus',
     'Invoke-SPGuiReportDistribution',
-    'Invoke-SPGuiHierarchicalReport'
+    'Invoke-SPGuiHierarchicalReport',
+    'Invoke-SPGuiCampaignDiff',
+    'Invoke-SPGuiCertTracker',
+    'Invoke-SPGuiDailyEvidence'
 )

@@ -1157,6 +1157,9 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
@@ -1170,12 +1173,27 @@
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="2" x:Name="BtnExportDashboardData"
+                        <Button Grid.Column="2" x:Name="BtnCampaignDiff"
+                                Content="Campaign Diff"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="3" x:Name="BtnCertTracker"
+                                Content="Cert Tracker"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="4" x:Name="BtnDailyEvidence"
+                                Content="Daily Evidence"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"/>
+
+                        <Button Grid.Column="5" x:Name="BtnExportDashboardData"
                                 Content="Export Dashboard Data"
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
-                        <Button Grid.Column="3" x:Name="BtnOpenGovFolder"
+                        <Button Grid.Column="6" x:Name="BtnOpenGovFolder"
                                 Content="Open Reports Folder"
                                 Style="{StaticResource SecondaryButton}"/>
                     </Grid>

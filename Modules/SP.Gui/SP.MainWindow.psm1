@@ -3702,12 +3702,15 @@ function Initialize-GovernanceTab {
 
     $module = $script:ThisModule
 
-    $btnHealthCheck = Find-Control -Parent $TabContent -Name 'BtnRunHealthCheck'
-    $btnGovReport   = Find-Control -Parent $TabContent -Name 'BtnGenerateGovReport'
-    $btnExportData  = Find-Control -Parent $TabContent -Name 'BtnExportDashboardData'
-    $btnOpenFolder  = Find-Control -Parent $TabContent -Name 'BtnOpenGovFolder'
-    $btnRefresh     = Find-Control -Parent $TabContent -Name 'BtnRefreshGovReports'
-    $govReportList  = Find-Control -Parent $TabContent -Name 'GovReportList'
+    $btnHealthCheck   = Find-Control -Parent $TabContent -Name 'BtnRunHealthCheck'
+    $btnGovReport     = Find-Control -Parent $TabContent -Name 'BtnGenerateGovReport'
+    $btnCampaignDiff  = Find-Control -Parent $TabContent -Name 'BtnCampaignDiff'
+    $btnCertTracker   = Find-Control -Parent $TabContent -Name 'BtnCertTracker'
+    $btnDailyEvidence = Find-Control -Parent $TabContent -Name 'BtnDailyEvidence'
+    $btnExportData    = Find-Control -Parent $TabContent -Name 'BtnExportDashboardData'
+    $btnOpenFolder    = Find-Control -Parent $TabContent -Name 'BtnOpenGovFolder'
+    $btnRefresh       = Find-Control -Parent $TabContent -Name 'BtnRefreshGovReports'
+    $govReportList    = Find-Control -Parent $TabContent -Name 'GovReportList'
 
     if ($btnHealthCheck) {
         $btnHealthCheck.Add_Click({
@@ -3723,6 +3726,33 @@ function Initialize-GovernanceTab {
             & $module {
                 param($tc)
                 Invoke-GuiGovernanceReport -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnCampaignDiff) {
+        $btnCampaignDiff.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiCampaignDiff -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnCertTracker) {
+        $btnCertTracker.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiCertTracker -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnDailyEvidence) {
+        $btnDailyEvidence.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiDailyEvidence -TabContent $tc
             } $TabContent
         }.GetNewClosure())
     }
@@ -4608,6 +4638,471 @@ function Resolve-GovernanceOutputPath {
     }
 
     return [System.IO.Path]::GetFullPath($rawPath)
+}
+
+function Invoke-GuiCampaignDiff {
+    <#
+    .SYNOPSIS
+        Runs the day-over-day campaign diff in a background runspace and opens
+        the resulting HTML report on completion.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel     = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar     = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct     = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnCampaignDiff = Find-Control -Parent $TabContent -Name 'BtnCampaignDiff'
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running campaign diff. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running campaign diff...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '' }
+    if ($null -ne $btnCampaignDiff) { $btnCampaignDiff.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CorrelationID', $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',   $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',    $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',   $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPct',   $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',   $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.DeltaCert\SP.DeltaCert.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $diffResult = Invoke-SPGuiCampaignDiff -CorrelationID $CorrelationID
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $diffResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPct
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) {
+                $capturedProgressBar.IsIndeterminate = $false
+                $capturedProgressBar.Value = 100
+            }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $capturedResult.Success) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "Campaign diff complete ($($d.DurationSeconds)s). Report: $($d.OutputPath)"
+                }
+                elseif ($null -ne $capturedResult) {
+                    $capturedLabel.Text = "Campaign diff failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $diffResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnCampaignDiff
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $reportResult = $null
+                try { $reportResult = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Campaign diff failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Campaign diff complete.'
+                    Load-GovernanceReports -TabContent $tab
+
+                    # Open the HTML report if available
+                    if ($null -ne $reportResult -and $reportResult.Success -and
+                        -not [string]::IsNullOrWhiteSpace($reportResult.Data.OutputPath) -and
+                        (Test-Path $reportResult.Data.OutputPath) -and
+                        $reportResult.Data.OutputPath -match '\.html$') {
+                        Start-Process $reportResult.Data.OutputPath
+                    }
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiCertTracker {
+    <#
+    .SYNOPSIS
+        Runs the Certification Progress Tracker in a background runspace and
+        opens the generated HTML board on completion.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $progressBar    = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct    = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $statusLabel    = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $btnCertTracker = Find-Control -Parent $TabContent -Name 'BtnCertTracker'
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running Cert Tracker. CorrelationID: $correlationID"
+
+    if ($null -ne $statusLabel)    { $statusLabel.Text = 'Running Cert Tracker...' }
+    if ($null -ne $progressBar)    {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct)    { $progressPct.Text = '0%' }
+    if ($null -ne $btnCertTracker) { $btnCertTracker.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('GovernanceTabContent', $TabContent)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $trackerResult = Invoke-SPGuiCertTracker -CorrelationID $CorrelationID
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $trackerResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPercent
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) { $capturedProgressBar.Value = 100 }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+
+            if ($null -ne $capturedResult -and $capturedResult.Success) {
+                $d = $capturedResult.Data
+                if ($null -ne $capturedLabel) {
+                    $capturedLabel.Text = "Cert Tracker complete ($($d.DurationSeconds)s). Opening report..."
+                }
+                # Open the generated HTML report
+                if (-not [string]::IsNullOrWhiteSpace($d.HtmlFile) -and (Test-Path $d.HtmlFile)) {
+                    Start-Process $d.HtmlFile
+                }
+            }
+            elseif ($null -ne $capturedResult) {
+                if ($null -ne $capturedLabel) {
+                    $capturedLabel.Text = "Cert Tracker failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $trackerResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnCertTracker
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Cert Tracker failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Cert Tracker complete.'
+                    Load-GovernanceReports -TabContent $tab
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiDailyEvidence {
+    <#
+    .SYNOPSIS
+        Runs the Daily Evidence Report V3 in a background runspace and opens the
+        generated HTML report on completion.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel    = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar    = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct    = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnEvidence    = Find-Control -Parent $TabContent -Name 'BtnDailyEvidence'
+
+    # Read DaysBack from config (Audit.DefaultDaysBack), fall back to 1
+    $daysBack = 1
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.Audit -and
+            $cfg.Audit.PSObject.Properties.Name -contains 'DefaultDaysBack' -and
+            [int]$cfg.Audit.DefaultDaysBack -gt 0) {
+            $daysBack = [int]$cfg.Audit.DefaultDaysBack
+        }
+    } catch { }
+
+    # Read campaign filter from Governance tab control if present
+    $campaignFilter = ''
+    $txtFilter = Find-Control -Parent $TabContent -Name 'TxtHierCampaignContains'
+    if ($null -ne $txtFilter -and -not [string]::IsNullOrWhiteSpace($txtFilter.Text)) {
+        $campaignFilter = [string]$txtFilter.Text
+    }
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running Daily Evidence Report. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running Daily Evidence Report...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '0%' }
+    if ($null -ne $btnEvidence) { $btnEvidence.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('DaysBack',             $daysBack)
+    $runspace.SessionStateProxy.SetVariable('CampaignFilter',       $campaignFilter)
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',        $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',          $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',           $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',          $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPercent',      $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',          $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Audit\SP.Audit.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $evidenceParams = @{
+            DaysBack      = $DaysBack
+            CorrelationID = $CorrelationID
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CampaignFilter)) {
+            $evidenceParams['CampaignNameContains'] = $CampaignFilter
+        }
+
+        $evidenceResult = Invoke-SPGuiDailyEvidence @evidenceParams
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $evidenceResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPercent
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) { $capturedProgressBar.Value = 100 }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $capturedResult.Success) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "Daily Evidence report generated in $($d.DurationSeconds)s"
+                }
+                elseif ($null -ne $capturedResult) {
+                    $capturedLabel.Text = "Daily Evidence failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $evidenceResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnEvidence
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "Daily Evidence report failed: $errMsg" -IsError
+                } else {
+                    Set-StatusMessage -Message 'Daily Evidence report generated.'
+                    Load-GovernanceReports -TabContent $tab
+
+                    # Open the HTML report automatically
+                    try {
+                        $output = $ps.EndInvoke($async)
+                        if ($null -ne $output -and $output.Count -gt 0) {
+                            $result = $output[0]
+                            if ($null -ne $result -and $result.Success -and
+                                -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
+                                (Test-Path $result.Data.HtmlPath)) {
+                                Start-Process $result.Data.HtmlPath
+                            }
+                        }
+                    } catch { }
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) { $prog.Visibility = [System.Windows.Visibility]::Collapsed }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
 }
 
 #endregion
