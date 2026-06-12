@@ -646,9 +646,25 @@ try {
         $diff = $cmp.Data
 
         # Extract newly approved items from the Added scope.
+        # If DecisionDate is empty, fall back to the campaign's sign-off or creation date
+        # (the manager's sign-off on the campaign is sufficient for audit).
+        $fallbackDate = [string]$audit['Created']
+        $ra2 = $audit['ReviewerActions']
+        if ($null -ne $ra2 -and $null -ne $ra2['Primary']) {
+            $signedReviewers = @($ra2['Primary'] | Where-Object { $_.Phase -eq 'SIGNED' -and -not [string]::IsNullOrWhiteSpace($_.SignOffDate) })
+            if ($signedReviewers.Count -gt 0) {
+                $fallbackDate = [string]$signedReviewers[0].SignOffDate
+            }
+        }
+
         foreach ($a in @($diff.Scope.Added)) {
             $dec = [string](Get-V4Prop $a 'Decision' '')
             if ($dec -eq 'APPROVE' -or $dec -eq 'Approved') {
+                # Ensure DecisionDate has a value -- fall back to sign-off or campaign date
+                $itemDate = [string](Get-V4Prop $a 'DecisionDate' '')
+                if ([string]::IsNullOrWhiteSpace($itemDate)) {
+                    $a | Add-Member -NotePropertyName 'DecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                }
                 $v4NewlyApproved.Add($a)
             }
         }
