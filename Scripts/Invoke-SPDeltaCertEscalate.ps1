@@ -207,6 +207,10 @@ param(
     [string]$CampaignNameContains,
 
     [Parameter()]
+    [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+    [string[]]$Status,
+
+    [Parameter()]
     [int]$StaleHours = 0,
 
     [Parameter()]
@@ -482,6 +486,7 @@ if ($DaysBack -gt 0) {
 if (-not [string]::IsNullOrWhiteSpace($CampaignName))           { $staleParams['CampaignName'] = $CampaignName }
 if (-not [string]::IsNullOrWhiteSpace($CampaignNameStartsWith)) { $staleParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
 if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains))   { $staleParams['CampaignNameContains'] = $CampaignNameContains }
+if ($Status -and $Status.Count -gt 0)                          { $staleParams['Status'] = $Status }
 
 $staleResult = Get-SPDeltaCertStaleCertifications @staleParams
 

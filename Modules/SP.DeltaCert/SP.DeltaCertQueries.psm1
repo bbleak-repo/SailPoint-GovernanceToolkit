@@ -1127,6 +1127,10 @@ function Get-SPDeltaCertStaleCertifications {
         [int]$DaysBack = 0,
 
         [Parameter()]
+        [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+        [string[]]$Status,
+
+        [Parameter()]
         [switch]$AllCertifications,
 
         [Parameter()]
@@ -1165,14 +1169,17 @@ function Get-SPDeltaCertStaleCertifications {
         }
 
         if ($auditMode) {
-            # Audit mode: all statuses, DaysBack date window (client-side date filter).
+            # Audit mode: DaysBack date window. When -Status is supplied, use it;
+            # otherwise all statuses (original behaviour).
             $auditSearchParams = @{ CorrelationID = $CorrelationID } + $nameFilter
-            $auditSearchParams['DaysBack'] = if ($DaysBack -gt 0) { $DaysBack } else { 0 }  # 0 = no date limit
+            $auditSearchParams['DaysBack'] = if ($DaysBack -gt 0) { $DaysBack } else { 0 }
+            if ($Status -and $Status.Count -gt 0) { $auditSearchParams['Status'] = $Status }
             $searchResult = Get-SPAuditCampaigns @auditSearchParams
         }
         else {
-            # Standard mode: ACTIVE only, no date limit.
-            $stdParams = @{ Status = @('ACTIVE'); DaysBack = 0; CorrelationID = $CorrelationID } + $nameFilter
+            # Standard mode: ACTIVE only (or explicit -Status), no date limit.
+            $stdParams = @{ DaysBack = 0; CorrelationID = $CorrelationID } + $nameFilter
+            $stdParams['Status'] = if ($Status -and $Status.Count -gt 0) { $Status } else { @('ACTIVE') }
             $searchResult = Get-SPAuditCampaigns @stdParams
         }
 
