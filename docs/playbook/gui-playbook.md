@@ -119,8 +119,17 @@ manage the **disconnected-app** pipeline.
 ---
 
 ## 5. Governance tab
-**Purpose:** run governance health checks and generate governance reports/dashboards.
-**When to use:** posture checks, audit prep, KPI/dashboard generation.
+**Purpose:** run governance health checks, generate governance reports/dashboards, and
+perform daily operational checks (campaign diffs, certification tracking, evidence
+generation, disconnected-app SLA monitoring).
+**When to use:** posture checks, audit prep, KPI/dashboard generation, daily governance
+operations.
+
+> **Health badges auto-populate.** When `Governance.HealthCheckOnStartup = true` in
+> `settings.json` (toggle on the [Settings tab](#8-settings-tab) via **Health Check on
+> Startup**), the six health badges on this tab auto-populate when the tab loads instead
+> of showing "?". Disable the setting if startup speed matters more than at-a-glance
+> health status.
 
 | Control | What it does |
 |---|---|
@@ -129,8 +138,29 @@ manage the **disconnected-app** pipeline.
 | **Export Dashboard Data** (`BtnExportDashboardData`) | Export the dashboard data set. |
 | **Open Folder** / **Refresh Reports** | Open the `Reports\` folder / reload the report list. |
 
+**Campaign Diff / Cert Tracker / Daily Evidence**
+
+| Control | What it does |
+|---|---|
+| **Campaign Diff** (`BtnCampaignDiff`) | Runs `Invoke-SPCampaignDiff.ps1` against active campaigns -- captures a snapshot, diffs it against the prior snapshot, and auto-opens the HTML scope-diff report showing Added/Removed/Changed access. Output: `Audit\diff\`. |
+| **Cert Tracker** (`BtnCertTracker`) | Runs `Invoke-SPCertTracker.ps1` to generate an executive certification tracker board showing campaign progress, reviewer engagement, and compliance metrics. Output: `Audit\tracker\`. |
+| **Daily Evidence** (`BtnDailyEvidence`) | Runs `Invoke-SPDailyEvidenceReportV3.ps1 -OutputMode Both` to produce the full day-over-day evidence report with KPI dashboard, domino tracker, reviewer timeliness, and access change tracking. Output: `Audit\daily-evidence\`. |
+
+**When to use each:**
+
+- **Campaign Diff** -- daily, to see what access changed since the last campaign run.
+- **Cert Tracker** -- for executive visibility into certification campaign status.
+- **Daily Evidence** -- daily governance evidence generation (the recommended V3 version).
+
+**Disconnected Apps** (governance operations)
+
+| Control | What it does |
+|---|---|
+| **View SLA** (`BtnViewSla`) | Checks each enabled disconnected app's snapshot age against its configured SLA days. Shows pass/fail per app in the status bar. Use for a quick SLA compliance check on disconnected application feeds. |
+| **Batch Monitor** (`BtnRunDisconnectedBatch`) | Runs the disconnected-app certification pipeline in the background. Now monitors the background process and reports exit code in the status bar when complete (previously fire-and-forget). |
+
 **Leadership Reports** (flat, per-band): `BtnDistributionPreview` / `BtnDistributionGenerate` /
-`BtnDistributionSend` — generates per-leader HTML files grouped by org band and optionally
+`BtnDistributionSend` -- generates per-leader HTML files grouped by org band and optionally
 emails each leader their report.
 
 **Hierarchical Drill-Down Reports** (new): generates one self-contained HTML report per
@@ -142,7 +172,7 @@ sections and decision counts that aggregate upward.
 | **Days Back** (`TxtHierDaysBack`, default 30) | Look-back window for campaign selection. |
 | **Campaign Filter** (`TxtHierCampaignContains`) | Optional substring filter (e.g. `Daily Attestation`). |
 | **Min Level** (`CboHierMinLevel`) | Directors+ (default), VPs+, or All Certifiers. |
-| **Preview** (`BtnHierPreview`) | Instantly shows matching campaign count — no files written. |
+| **Preview** (`BtnHierPreview`) | Instantly shows matching campaign count -- no files written. |
 | **Generate Drill-Down Reports** (`BtnHierGenerate`) | Runs in background; status label updates on completion. |
 
 Reports are written to `Audit\HierarchicalReports\run-YYYYMMDD-HHmmss\`. Each generated
@@ -157,7 +187,8 @@ HTML report has four controls in its header bar:
 
 **Related CLI:** `Invoke-SPGovernanceHealthCheck.ps1`, `Invoke-SPGovernanceReport.ps1`,
 `Invoke-SPGovernanceMetrics.ps1`, `Invoke-SPDataQualityReport.ps1`,
-`Invoke-SPHierarchicalReport.ps1`.
+`Invoke-SPHierarchicalReport.ps1`, `Invoke-SPCampaignDiff.ps1`,
+`Invoke-SPCertTracker.ps1`, `Invoke-SPDailyEvidenceReportV3.ps1`.
 
 ---
 

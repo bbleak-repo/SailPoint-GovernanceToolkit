@@ -3017,6 +3017,7 @@ function Invoke-GuiDisconnectedAppBatch {
 
     $runspace.SessionStateProxy.SetVariable('BatchProcess', $proc)
     $runspace.SessionStateProxy.SetVariable('MainWindow',   $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('StatusBarText', (Find-Control $script:MainWindow 'StatusBarText'))
 
     $psInstance = [System.Management.Automation.PowerShell]::Create()
     $psInstance.Runspace = $runspace
@@ -3035,11 +3036,8 @@ function Invoke-GuiDisconnectedAppBatch {
 
         if ($null -ne $capturedWindow) {
             $capturedWindow.Dispatcher.Invoke([System.Action]{
-                if ($capturedExitCode -eq 0) {
-                    Set-StatusMessage -Message "Batch complete (exit code 0)."
-                } else {
-                    Set-StatusMessage -Message "Batch failed (exit code $capturedExitCode)." -IsError
-                }
+                $msg = if ($capturedExitCode -eq 0) { "Batch complete (exit code 0)." } else { "Batch failed (exit code $capturedExitCode)." }
+                if ($null -ne $StatusBarText) { $StatusBarText.Text = $msg }
             }, [System.Windows.Threading.DispatcherPriority]::Normal)
         }
     }) | Out-Null
