@@ -101,6 +101,7 @@ tr:nth-child(even) td{background:#f6f9fc;}
 .empty{color:#888;font-style:italic;padding:8px 0;}
 .note{font-size:11px;color:#777;margin-top:4px;}
 .first{background:#fff7e6;border:1px solid #ffd97a;border-radius:6px;padding:10px 14px;margin:10px 0;color:#7a5a00;}
+.explain{background:#eef3fa;border:1px solid #b8cfe6;border-radius:6px;padding:8px 14px;margin:6px 0 10px 0;color:#2a4a6e;font-size:12px;}
 '@
     return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>$([System.Web.HttpUtility]::HtmlEncode($Title))</title><style>$css</style></head><body>"
 }
@@ -704,6 +705,37 @@ function Export-SPCampaignScopeDiffHtml {
             }
             [void]$sb.Append("</table>")
         }
+        # Persisted Revokes section -- access revoked in the prior capture that is still present.
+        $prItems = @($scope.PersistedRevokes)
+        [void]$sb.Append("<h2>Persisted revokes ($($scope.PersistedRevokeCount))</h2>")
+        [void]$sb.Append("<div class='explain'>Access that was revoked in the prior capture but remains present. Split by source type to distinguish removal failures from queued fulfillment.</div>")
+        if ($prItems.Count -eq 0) { [void]$sb.Append("<div class='empty'>No persisted revokes.</div>") }
+        else {
+            $prAD    = @($prItems | Where-Object { [bool](Get-SPDiffProp $_ 'IsConnectedAD' $false) })
+            $prOther = @($prItems | Where-Object { -not [bool](Get-SPDiffProp $_ 'IsConnectedAD' $false) })
+            if ($prAD.Count -gt 0) {
+                [void]$sb.Append("<h2>Connected AD -- removal failures ($($prAD.Count))</h2>")
+                [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Revoked</th><th>Current decision</th></tr>")
+                foreach ($pr in $prAD) {
+                    $priv = [bool](Get-SPDiffProp $pr 'Privileged' $false)
+                    $cls = if ($priv) { " class='priv'" } else { '' }
+                    $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                    [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $pr 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'CurrDecision' ''))</td></tr>")
+                }
+                [void]$sb.Append("</table>")
+            }
+            if ($prOther.Count -gt 0) {
+                [void]$sb.Append("<h2>Other sources -- queued for removal ($($prOther.Count))</h2>")
+                [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Revoked</th><th>Current decision</th></tr>")
+                foreach ($pr in $prOther) {
+                    $priv = [bool](Get-SPDiffProp $pr 'Privileged' $false)
+                    $cls = if ($priv) { " class='priv'" } else { '' }
+                    $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                    [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $pr 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'CurrDecision' ''))</td></tr>")
+                }
+                [void]$sb.Append("</table>")
+            }
+        }
         [void]$sb.Append("<div class='note'>Read-only scope view. No reassignment or escalation is performed by this report.</div>")
         [void]$sb.Append("</body></html>")
 
@@ -905,7 +937,7 @@ function Split-SPCampaignDiffByDirector {
     .PARAMETER OrgTree
         .Data from Build-SPOrgTree, built on the diff's reviewer identity ids.
     .OUTPUTS
-        [hashtable] @{ Meta; Directors=@(@{DirectorId;DirectorName;Reviewers;Added;Removed;Changed;NewlyAddedPrivileged;Counts}) }
+        [hashtable] @{ Meta; Directors=@(@{DirectorId;DirectorName;Reviewers;Added;Removed;Changed;NewlyAddedPrivileged;PersistedRevokes;Counts}) }
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -925,6 +957,7 @@ function Split-SPCampaignDiffByDirector {
     foreach ($r in @(Get-SPDiffProp $completion 'Reviewers' @())) { [void]$revIds.Add([string](Get-SPDiffProp $r 'ReviewerId' '')) }
     foreach ($sk in @('Added', 'Removed', 'Changed')) { foreach ($it in @(Get-SPDiffProp $scope $sk @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) } }
     foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
+    foreach ($it in @(Get-SPDiffProp $scope 'PersistedRevokes' @())) { [void]$revIds.Add([string](Get-SPDiffProp $it 'ReviewerId' '')) }
 
     # Pass B: resolve each reviewer -> director and create an (ordered) bucket per director.
     $dirOf   = @{}
@@ -941,6 +974,7 @@ function Split-SPCampaignDiffByDirector {
                 Removed              = [System.Collections.Generic.List[object]]::new()
                 Changed              = [System.Collections.Generic.List[object]]::new()
                 NewlyAddedPrivileged = [System.Collections.Generic.List[object]]::new()
+                PersistedRevokes     = [System.Collections.Generic.List[object]]::new()
             }
         }
     }
@@ -951,6 +985,7 @@ function Split-SPCampaignDiffByDirector {
     foreach ($it in @(Get-SPDiffProp $scope 'Removed' @()))  { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Removed.Add($it) }
     foreach ($it in @(Get-SPDiffProp $scope 'Changed' @()))  { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].Changed.Add($it) }
     foreach ($it in @(Get-SPDiffProp $comp 'NewlyAddedPrivileged' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].NewlyAddedPrivileged.Add($it) }
+    foreach ($it in @(Get-SPDiffProp $scope 'PersistedRevokes' @())) { $buckets[$dirOf[[string](Get-SPDiffProp $it 'ReviewerId' '')].Id].PersistedRevokes.Add($it) }
 
     # Finalize: arrays + per-director counts; sort by name with the unassigned bucket last.
     $dirs = [System.Collections.Generic.List[object]]::new()
@@ -965,16 +1000,18 @@ function Split-SPCampaignDiffByDirector {
             Removed              = @($b.Removed)
             Changed              = @($b.Changed)
             NewlyAddedPrivileged = @($b.NewlyAddedPrivileged)
+            PersistedRevokes     = @($b.PersistedRevokes)
             Counts = [ordered]@{
-                Reviewers       = $revs.Count
-                Added           = @($b.Added).Count
-                Removed         = @($b.Removed).Count
-                Changed         = @($b.Changed).Count
-                AddedPrivileged = @($b.NewlyAddedPrivileged).Count
-                NewlyCompleted  = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NewlyCompleted' $false) }).Count
-                Stalled         = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'Stalled' $false) }).Count
-                NotStarted      = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NotStarted' $false) }).Count
-                Outstanding     = @($revs | Where-Object { -not [bool](Get-SPDiffProp $_ 'Completed' $false) }).Count
+                Reviewers          = $revs.Count
+                Added              = @($b.Added).Count
+                Removed            = @($b.Removed).Count
+                Changed            = @($b.Changed).Count
+                AddedPrivileged    = @($b.NewlyAddedPrivileged).Count
+                PersistedRevokeCount = @($b.PersistedRevokes).Count
+                NewlyCompleted     = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NewlyCompleted' $false) }).Count
+                Stalled            = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'Stalled' $false) }).Count
+                NotStarted         = @($revs | Where-Object { [bool](Get-SPDiffProp $_ 'NotStarted' $false) }).Count
+                Outstanding        = @($revs | Where-Object { -not [bool](Get-SPDiffProp $_ 'Completed' $false) }).Count
             }
         })
     }
@@ -1005,6 +1042,7 @@ function Get-SPDiffDirectorBodyHtml {
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Added)</span><span class='l'>Access added</span></div>")
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.Removed)</span><span class='l'>Access removed</span></div>")
     [void]$sb.Append("<div class='kpi'><span class='n'>$($c.AddedPrivileged)</span><span class='l'>New privileged</span></div>")
+    [void]$sb.Append("<div class='kpi'><span class='n'>$($c.PersistedRevokeCount)</span><span class='l'>Persisted revokes</span></div>")
     [void]$sb.Append("</div>")
 
     [void]$sb.Append("<h2>Reviewer progress ($($c.Reviewers))</h2>")
@@ -1055,6 +1093,37 @@ function Get-SPDiffDirectorBodyHtml {
             [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'PrevDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $ch 'CurrDecision' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $ch 'CurrDecisionDate' '')))</td></tr>")
         }
         [void]$sb.Append("</table>")
+    }
+    # Persisted Revokes section -- access revoked in the prior capture that is still present.
+    $prItems = @($d.PersistedRevokes)
+    [void]$sb.Append("<h2>Persisted revokes ($($c.PersistedRevokeCount))</h2>")
+    [void]$sb.Append("<div class='explain'>Access that was revoked in the prior capture but remains present. Split by source type to distinguish removal failures from queued fulfillment.</div>")
+    if ($prItems.Count -eq 0) { [void]$sb.Append("<div class='empty'>No persisted revokes.</div>") }
+    else {
+        $prAD    = @($prItems | Where-Object { [bool](Get-SPDiffProp $_ 'IsConnectedAD' $false) })
+        $prOther = @($prItems | Where-Object { -not [bool](Get-SPDiffProp $_ 'IsConnectedAD' $false) })
+        if ($prAD.Count -gt 0) {
+            [void]$sb.Append("<h2>Connected AD -- removal failures ($($prAD.Count))</h2>")
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Revoked</th><th>Current decision</th></tr>")
+            foreach ($pr in $prAD) {
+                $priv = [bool](Get-SPDiffProp $pr 'Privileged' $false)
+                $cls = if ($priv) { " class='priv'" } else { '' }
+                $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $pr 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'CurrDecision' ''))</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
+        if ($prOther.Count -gt 0) {
+            [void]$sb.Append("<h2>Other sources -- queued for removal ($($prOther.Count))</h2>")
+            [void]$sb.Append("<table><tr><th>Identity</th><th>Access</th><th>Source</th><th>Reviewer</th><th>Revoked</th><th>Current decision</th></tr>")
+            foreach ($pr in $prOther) {
+                $priv = [bool](Get-SPDiffProp $pr 'Privileged' $false)
+                $cls = if ($priv) { " class='priv'" } else { '' }
+                $pb  = if ($priv) { " <span class='badge b-priv'>PRIV</span>" } else { '' }
+                [void]$sb.Append("<tr$cls><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'IdentityName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'AccessName' ''))$pb</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'SourceName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'ReviewerName' ''))</td><td>$(Get-SPDiffEnc (Get-SPDiffShortDate (Get-SPDiffProp $pr 'PrevDecisionDate' '')))</td><td>$(Get-SPDiffEnc (Get-SPDiffProp $pr 'CurrDecision' ''))</td></tr>")
+            }
+            [void]$sb.Append("</table>")
+        }
     }
     [void]$sb.Append("<div class='note'>Read-only change report for your org. No reassignment or escalation is performed. 'Newly completed' / 'Stalled' are context signals (timing / out-of-office), not findings.</div>")
     [void]$sb.Append("</body></html>")
@@ -1115,12 +1184,12 @@ function Export-SPCampaignDiffByDirectorHtml {
         [void]$ib.Append((Get-SPDiffHtmlHead -Title $title))
         [void]$ib.Append("<h1>$(Get-SPDiffEnc $title)</h1>")
         [void]$ib.Append("<div class='meta'>$window | $(@($split.Directors).Count) director report(s)</div>")
-        [void]$ib.Append("<table><tr><th>Director</th><th>Reviewers</th><th>Newly completed</th><th>Outstanding</th><th>Added</th><th>Removed</th><th>Changed</th><th>New priv</th><th>Report</th></tr>")
+        [void]$ib.Append("<table><tr><th>Director</th><th>Reviewers</th><th>Newly completed</th><th>Outstanding</th><th>Added</th><th>Removed</th><th>Changed</th><th>New priv</th><th>Persisted revokes</th><th>Report</th></tr>")
         foreach ($d in @($split.Directors)) {
             $c = $d.Counts
             $fn = [string](Get-SPDiffProp $d 'File' '')
             $link = if ($fn) { "<a href='$(Get-SPDiffEnc $fn)'>$(Get-SPDiffEnc $fn)</a>" } else { '' }
-            [void]$ib.Append("<tr><td>$(Get-SPDiffEnc $d.DirectorName)</td><td>$($c.Reviewers)</td><td>$($c.NewlyCompleted)</td><td>$($c.Outstanding)</td><td>$($c.Added)</td><td>$($c.Removed)</td><td>$($c.Changed)</td><td>$($c.AddedPrivileged)</td><td>$link</td></tr>")
+            [void]$ib.Append("<tr><td>$(Get-SPDiffEnc $d.DirectorName)</td><td>$($c.Reviewers)</td><td>$($c.NewlyCompleted)</td><td>$($c.Outstanding)</td><td>$($c.Added)</td><td>$($c.Removed)</td><td>$($c.Changed)</td><td>$($c.AddedPrivileged)</td><td>$($c.PersistedRevokeCount)</td><td>$link</td></tr>")
         }
         [void]$ib.Append("</table>")
         [void]$ib.Append("<div class='note'>One HTML file per director &mdash; their team's attestation progress + access changes &mdash; suitable to send individually. Read-only; no reassignment or escalation.</div>")
