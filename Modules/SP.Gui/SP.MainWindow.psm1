@@ -3711,6 +3711,7 @@ function Initialize-GovernanceTab {
     $govReportList    = Find-Control -Parent $TabContent -Name 'GovReportList'
     $btnEntitlementHist   = Find-Control -Parent $TabContent -Name 'BtnEntitlementHistory'
     $btnCacheValidate     = Find-Control -Parent $TabContent -Name 'BtnCacheValidate'
+    $btnIscRecon          = Find-Control -Parent $TabContent -Name 'BtnIscReconciliation'
 
     if ($btnHealthCheck) {
         $btnHealthCheck.Add_Click({
@@ -3790,6 +3791,15 @@ function Initialize-GovernanceTab {
             & $module {
                 param($tc)
                 Invoke-GuiCacheValidate -TabContent $tc
+            } $TabContent
+        }.GetNewClosure())
+    }
+
+    if ($btnIscRecon) {
+        $btnIscRecon.Add_Click({
+            & $module {
+                param($tc)
+                Invoke-GuiIscReconciliation -TabContent $tc
             } $TabContent
         }.GetNewClosure())
     }
@@ -5433,6 +5443,162 @@ function Invoke-GuiCacheValidate {
                         $msg = "Cache validation: $($validateOutput.Data.Summary)"
                     }
                     Set-StatusMessage -Message $msg
+                }
+
+                if ($null -ne $btn)  { $btn.IsEnabled = $true }
+                if ($null -ne $prog) {
+                    $prog.IsIndeterminate = $false
+                    $prog.Visibility = [System.Windows.Visibility]::Collapsed
+                }
+                if ($null -ne $pct)  { $pct.Text = '' }
+
+                try {
+                    $ps.Dispose()
+                    $rs.Close()
+                } catch { }
+            }
+            finally {
+                $script:IsGovernanceRunning = $false
+            }
+        } $capturedTimer $capturedPs $capturedRunspace $capturedAsync $capturedTab $capturedBtn $capturedProg $capturedPct
+    }.GetNewClosure())
+
+    $timer.Start()
+}
+
+function Invoke-GuiIscReconciliation {
+    <#
+    .SYNOPSIS
+        Runs the ISC Reconciliation export in a background runspace.
+        On completion, shows summary in status bar and opens the output directory.
+    #>
+    [CmdletBinding()]
+    param($TabContent)
+
+    if ($script:IsGovernanceRunning) {
+        Set-StatusMessage -Message 'A governance operation is already in progress.' -IsError
+        return
+    }
+
+    $statusLabel   = Find-Control -Parent $TabContent -Name 'GovStatusLabel'
+    $progressBar   = Find-Control -Parent $TabContent -Name 'GovProgressBar'
+    $progressPct   = Find-Control -Parent $TabContent -Name 'GovProgressPercent'
+    $btnIscRecon   = Find-Control -Parent $TabContent -Name 'BtnIscReconciliation'
+
+    $script:IsGovernanceRunning = $true
+    $correlationID = [guid]::NewGuid().ToString()
+
+    Set-StatusMessage -Message "Running ISC Reconciliation. CorrelationID: $correlationID"
+    if ($null -ne $statusLabel) { $statusLabel.Text = 'Running ISC Reconciliation export...' }
+    if ($null -ne $progressBar) {
+        $progressBar.Value      = 0
+        $progressBar.Maximum    = 100
+        $progressBar.IsIndeterminate = $true
+        $progressBar.Visibility = [System.Windows.Visibility]::Visible
+    }
+    if ($null -ne $progressPct) { $progressPct.Text = '' }
+    if ($null -ne $btnIscRecon) { $btnIscRecon.IsEnabled = $false }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('CorrelationID',   $correlationID)
+    $runspace.SessionStateProxy.SetVariable('ToolkitRoot',     $script:ToolkitRoot)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',      $script:MainWindow)
+    $runspace.SessionStateProxy.SetVariable('ProgressBar',     $progressBar)
+    $runspace.SessionStateProxy.SetVariable('ProgressPct',     $progressPct)
+    $runspace.SessionStateProxy.SetVariable('StatusLabel',     $statusLabel)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $scriptBlock = {
+        foreach ($rel in @(
+                'SP.Core\SP.Core.psd1',
+                'SP.Api\SP.Api.psd1',
+                'SP.Reconciliation\SP.Reconciliation.psd1',
+                'SP.Gui\SP.Gui.psd1')) {
+            $mod = Join-Path $ToolkitRoot "Modules\$rel"
+            if (Test-Path $mod) { Import-Module $mod -Force -DisableNameChecking -ErrorAction SilentlyContinue }
+        }
+
+        $reconResult = Invoke-SPGuiIscReconciliation -CorrelationID $CorrelationID
+
+        $dispatcher          = $MainWindow.Dispatcher
+        $capturedResult      = $reconResult
+        $capturedProgressBar = $ProgressBar
+        $capturedProgressPct = $ProgressPct
+        $capturedLabel       = $StatusLabel
+
+        $dispatcher.Invoke([System.Action]{
+            if ($null -ne $capturedProgressBar) {
+                $capturedProgressBar.IsIndeterminate = $false
+                $capturedProgressBar.Value = 100
+            }
+            if ($null -ne $capturedProgressPct) { $capturedProgressPct.Text = '100%' }
+            if ($null -ne $capturedLabel) {
+                if ($null -ne $capturedResult -and $capturedResult.Success) {
+                    $d = $capturedResult.Data
+                    $capturedLabel.Text = "ISC Reconciliation complete: $($d.FileCount) files, $($d.IdentityCount) identities, $($d.CoveragePct)% coverage ($($d.DurationSeconds)s)"
+                }
+                elseif ($null -ne $capturedResult -and $null -ne $capturedResult.Error) {
+                    $capturedLabel.Text = "ISC Reconciliation failed: $($capturedResult.Error)"
+                }
+            }
+        }, [System.Windows.Threading.DispatcherPriority]::Normal)
+
+        return $reconResult
+    }
+
+    $psInstance.AddScript($scriptBlock) | Out-Null
+    $asyncResult = $psInstance.BeginInvoke()
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromMilliseconds(500)
+
+    $capturedTimer    = $timer
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $capturedAsync    = $asyncResult
+    $capturedTab      = $TabContent
+    $capturedBtn      = $btnIscRecon
+    $capturedProg     = $progressBar
+    $capturedPct      = $progressPct
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async, $tab, $btn, $prog, $pct)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+
+            try {
+                $reconOutput = $null
+                try { $reconOutput = $ps.EndInvoke($async) | Select-Object -First 1 } catch { }
+
+                if ($ps.HadErrors) {
+                    $errMsg = ($ps.Streams.Error | Select-Object -First 1).Exception.Message
+                    Set-StatusMessage -Message "ISC Reconciliation failed: $errMsg" -IsError
+                } else {
+                    # Build a status message from the result
+                    $msg = 'ISC Reconciliation export complete.'
+                    if ($null -ne $reconOutput -and $reconOutput.Success -and $null -ne $reconOutput.Data) {
+                        $d = $reconOutput.Data
+                        $msg = "ISC Reconciliation: $($d.FileCount) files generated, $($d.IdentityCount) identities, $($d.CoveragePct)% join-key coverage"
+                    }
+                    Set-StatusMessage -Message $msg
+
+                    # Open the output directory (not a single file -- it produces JSON+CSV+SHA256)
+                    try {
+                        if ($null -ne $reconOutput -and $reconOutput.Success -and
+                            -not [string]::IsNullOrWhiteSpace($reconOutput.Data.OutputDir) -and
+                            (Test-Path $reconOutput.Data.OutputDir)) {
+                            Start-Process 'explorer.exe' -ArgumentList "`"$($reconOutput.Data.OutputDir)`""
+                        }
+                    } catch { }
                 }
 
                 if ($null -ne $btn)  { $btn.IsEnabled = $true }

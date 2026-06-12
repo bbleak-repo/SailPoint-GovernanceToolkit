@@ -1204,6 +1204,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
@@ -1216,7 +1217,13 @@
                         <Button Grid.Column="1" x:Name="BtnCacheValidate"
                                 Content="Validate Cache"
                                 Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,6,0"
                                 ToolTip="Run snapshot/cache integrity checks and report data-quality findings"/>
+
+                        <Button Grid.Column="2" x:Name="BtnIscReconciliation"
+                                Content="ISC Reconciliation"
+                                Style="{StaticResource SecondaryButton}"
+                                ToolTip="Generate the ISC reconciliation export (JSON + CSV + SHA256) for AD/ISC/HR cross-project reconciliation"/>
                     </Grid>
 
                     <!-- Row 4: Progress bar + status label -->

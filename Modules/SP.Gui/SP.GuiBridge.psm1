@@ -3793,6 +3793,189 @@ function Invoke-SPGuiCacheValidate {
 
 #endregion Cache Validate Bridge
 
+#region ISC Reconciliation Bridge
+
+function Invoke-SPGuiIscReconciliation {
+    <#
+    .SYNOPSIS
+        Run the ISC Reconciliation export from the GUI and return the output directory.
+    .DESCRIPTION
+        Bridge function for the [ISC Reconciliation] button on the Governance tab.
+        Invokes Scripts/Invoke-SPIscReconciliation.ps1 with -RefreshCache and
+        -OutputMode Both, and returns a summary of the generated export files.
+    .PARAMETER JoinKeyAttribute
+        The identity attributes.* field holding the SuccessFactors join key.
+        Default: 'employeeNumber'.
+    .PARAMETER CorrelationID
+        Correlation ID for log tracing. Auto-generated if omitted.
+    .OUTPUTS
+        @{ Success=$bool; Data=@{OutputDir; JsonPath; CsvPath; Sha256Path; IdentityCount; CoveragePct; DurationSeconds}; Error=$string }
+    .EXAMPLE
+        $result = Invoke-SPGuiIscReconciliation
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$JoinKeyAttribute = 'employeeNumber',
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $toolkitRoot = Resolve-SPToolkitRoot
+        $scriptPath  = Join-Path $toolkitRoot 'Scripts\Invoke-SPIscReconciliation.ps1'
+
+        if (-not (Test-Path $scriptPath)) {
+            $sw.Stop()
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "ISC Reconciliation script not found: $scriptPath"
+            }
+        }
+
+        Write-SPLog -Message "Invoke-SPGuiIscReconciliation started: JoinKeyAttribute='$JoinKeyAttribute'" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiIscReconciliation' -CorrelationID $CorrelationID
+
+        # Resolve output path from config or default
+        $effectiveOutputPath = $null
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+                $null -ne $cfg.Audit -and
+                $null -ne $cfg.Audit.PSObject.Properties['OutputPath'] -and
+                -not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) {
+                $ap = [string]$cfg.Audit.OutputPath
+                if (-not [System.IO.Path]::IsPathRooted($ap)) { $ap = Join-Path $toolkitRoot $ap }
+                $effectiveOutputPath = Join-Path $ap 'Reconciliation'
+            }
+        }
+        catch { }
+
+        if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+            $effectiveOutputPath = Join-Path $toolkitRoot 'Audit\Reconciliation'
+        }
+        if (-not (Test-Path $effectiveOutputPath)) {
+            New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null
+        }
+
+        # Snapshot JSON files before run to detect new ones
+        $jsonBefore = @()
+        if (Test-Path $effectiveOutputPath) {
+            $jsonBefore = @(Get-ChildItem -Path $effectiveOutputPath -Filter '*.json' -File |
+                Select-Object -ExpandProperty FullName)
+        }
+
+        # Build script arguments
+        $scriptArgs = @{
+            RefreshCache = $true
+            OutputMode   = 'Both'
+            OutputPath   = $effectiveOutputPath
+        }
+        if (-not [string]::IsNullOrWhiteSpace($JoinKeyAttribute) -and $JoinKeyAttribute -ne 'employeeNumber') {
+            $scriptArgs['JoinKeyAttribute'] = $JoinKeyAttribute
+        }
+
+        # Execute the script
+        & $scriptPath @scriptArgs
+
+        # Find the newly created JSON export
+        $jsonAfter = @(Get-ChildItem -Path $effectiveOutputPath -Filter 'isc-recon-*.json' -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -ExpandProperty FullName)
+
+        $newJson = $null
+        foreach ($f in $jsonAfter) {
+            if ($f -notin $jsonBefore) {
+                $newJson = $f
+                break
+            }
+        }
+        # Fallback: most recent file
+        if ([string]::IsNullOrWhiteSpace($newJson) -and $jsonAfter.Count -gt 0) {
+            $newJson = $jsonAfter[0]
+        }
+
+        # Derive CSV and SHA256 paths from the JSON file
+        $newCsv    = $null
+        $newSha256 = $null
+        if (-not [string]::IsNullOrWhiteSpace($newJson)) {
+            $csvCandidate    = [System.IO.Path]::ChangeExtension($newJson, '.csv')
+            $sha256Candidate = "$newJson.sha256"
+            if (Test-Path $csvCandidate)    { $newCsv    = $csvCandidate }
+            if (Test-Path $sha256Candidate) { $newSha256 = $sha256Candidate }
+        }
+
+        # Parse the JSON to extract summary metrics
+        $identityCount = 0
+        $coveragePct   = 0
+        if (-not [string]::IsNullOrWhiteSpace($newJson) -and (Test-Path $newJson)) {
+            try {
+                $jsonContent = Get-Content $newJson -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($null -ne $jsonContent -and $null -ne $jsonContent.Summary) {
+                    $identityCount = [int]$jsonContent.Summary.IdentityCount
+                    $coveragePct   = [double]$jsonContent.Summary.JoinKeyCoveragePct
+                }
+            }
+            catch { }
+        }
+
+        $sw.Stop()
+
+        if ([string]::IsNullOrWhiteSpace($newJson)) {
+            Write-SPLog -Message "Invoke-SPGuiIscReconciliation completed but no export found in '$effectiveOutputPath'" `
+                -Severity WARN -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiIscReconciliation' -CorrelationID $CorrelationID
+            return @{
+                Success = $false
+                Data    = $null
+                Error   = "ISC Reconciliation script completed but no export was generated."
+            }
+        }
+
+        $fileCount = 1
+        if ($null -ne $newCsv)    { $fileCount++ }
+        if ($null -ne $newSha256) { $fileCount++ }
+
+        Write-SPLog -Message "Invoke-SPGuiIscReconciliation complete: OutputDir='$effectiveOutputPath' Files=$fileCount Identities=$identityCount Coverage=$($coveragePct)% Duration=$([math]::Round($sw.Elapsed.TotalSeconds, 1))s" `
+            -Severity INFO -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiIscReconciliation' -CorrelationID $CorrelationID
+
+        return @{
+            Success = $true
+            Data    = @{
+                OutputDir       = $effectiveOutputPath
+                JsonPath        = $newJson
+                CsvPath         = $newCsv
+                Sha256Path      = $newSha256
+                FileCount       = $fileCount
+                IdentityCount   = $identityCount
+                CoveragePct     = $coveragePct
+                DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            }
+            Error   = $null
+        }
+    }
+    catch {
+        $sw.Stop()
+        Write-SPLog -Message "Invoke-SPGuiIscReconciliation failed: $($_.Exception.Message)" `
+            -Severity ERROR -Component 'SP.GuiBridge' -Action 'Invoke-SPGuiIscReconciliation' -CorrelationID $CorrelationID
+        return @{
+            Success = $false
+            Data    = $null
+            Error   = "Invoke-SPGuiIscReconciliation failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+#endregion ISC Reconciliation Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -3818,5 +4001,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiCertTracker',
     'Invoke-SPGuiDailyEvidence',
     'Invoke-SPGuiEntitlementHistory',
-    'Invoke-SPGuiCacheValidate'
+    'Invoke-SPGuiCacheValidate',
+    'Invoke-SPGuiIscReconciliation'
 )

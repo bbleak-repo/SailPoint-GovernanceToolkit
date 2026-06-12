@@ -31,6 +31,9 @@ anyone who needs to know "what report do I give to whom?"
 | Campaign Comparison | `Invoke-SPCampaignSearch.ps1 -CompareIds` | Governance analysis | On-demand | Side-by-side metric comparison of 2+ campaigns | CSV, HTML |
 | Source Coverage | `Invoke-SPCampaignSearch.ps1 -SourceCoverage` | Governance leads | Monthly | Which sources have/haven't been audited by campaigns | HTML, CSV |
 | Orchestrator Summary | `Invoke-SPDailyOrchestrator.ps1` | Operations | Daily | 11-step run status with per-step timing and exit codes | JSONL |
+| Entitlement History | `Invoke-SPEntitlementHistory.ps1` | Governance analysis, compliance | On-demand | Multi-snapshot timeline showing how entitlement decisions evolved across campaigns | HTML |
+| Cache Validation (diagnostic) | `Invoke-SPCacheValidate.ps1` | IAM operations, troubleshooting | On-demand | SHA-256 integrity checks + schema validation of all toolkit cache files | Status bar summary (no report file) |
+| ISC Reconciliation | `Invoke-SPIscReconciliation.ps1` | Governance leads, auditors | On-demand | Discrepancy export comparing local governance data against ISC source-of-truth | HTML, JSON |
 
 ---
 

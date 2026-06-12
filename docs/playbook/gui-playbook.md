@@ -185,10 +185,26 @@ HTML report has four controls in its header bar:
 | **Hide Empty** | Hide nodes with zero decisions in the window (turns yellow when active) |
 | **Hide Identities** | Show org hierarchy + counts only, hide individual names (turns blue when active) |
 
+**Utility Row** (R5 additions)
+
+| Control | What it does |
+|---|---|
+| **Entitlement History** (`BtnEntitlementHistory`) | Runs `Invoke-SPEntitlementHistory.ps1` to build a multi-snapshot timeline showing how entitlement decisions evolved across successive campaigns. Generates an HTML report and auto-opens it in the default browser. Output: `Audit\entitlement-history\`. |
+| **Validate Cache** (`BtnValidateCache`) | Runs `Invoke-SPCacheValidate.ps1` to perform SHA-256 integrity validation and schema checks on all toolkit cache files. Results are displayed in the status bar (pass count, warning count, error count). Does not generate an HTML report -- this is a diagnostic action. |
+| **ISC Reconciliation** (`BtnIscReconciliation`) | Runs `Invoke-SPIscReconciliation.ps1` to reconcile local governance data against ISC source-of-truth. Produces a structured export of discrepancies. *(Added alongside the other R5 utility-row buttons; see the CLI playbook for full parameter reference.)* |
+
+**When to use each:**
+
+- **Entitlement History** -- before or after a campaign cycle, to understand decision drift over time (e.g., was an entitlement approved in Q1 but revoked in Q2?).
+- **Validate Cache** -- when troubleshooting stale or corrupted data, or as a pre-flight check before a major reporting run.
+- **ISC Reconciliation** -- to verify that the toolkit's local cache and reports match the live ISC tenant state.
+
 **Related CLI:** `Invoke-SPGovernanceHealthCheck.ps1`, `Invoke-SPGovernanceReport.ps1`,
 `Invoke-SPGovernanceMetrics.ps1`, `Invoke-SPDataQualityReport.ps1`,
 `Invoke-SPHierarchicalReport.ps1`, `Invoke-SPCampaignDiff.ps1`,
-`Invoke-SPCertTracker.ps1`, `Invoke-SPDailyEvidenceReportV3.ps1`.
+`Invoke-SPCertTracker.ps1`, `Invoke-SPDailyEvidenceReportV3.ps1`,
+`Invoke-SPEntitlementHistory.ps1`, `Invoke-SPCacheValidate.ps1`,
+`Invoke-SPIscReconciliation.ps1`.
 
 ---
 
