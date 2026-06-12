@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Prints an ASCII org-tree preview for a campaign's certifiers, so you can review the
+    [STABLE] Prints an ASCII org-tree preview for a campaign's certifiers, so you can review the
     management chain before generating leadership reports.
 
 .DESCRIPTION

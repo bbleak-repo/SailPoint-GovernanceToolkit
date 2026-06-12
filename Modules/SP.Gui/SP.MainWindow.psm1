@@ -2984,6 +2984,8 @@ function Invoke-GuiDisconnectedAppBatch {
         Runs Scripts\Invoke-SPDisconnectedAppBatch.ps1 via Start-Process so the
         long-running batch pipeline does not block the GUI. The console window
         stays open on completion so the user can review output.
+        A background runspace monitors the process exit code and updates the
+        status bar when the batch completes.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -2996,23 +2998,89 @@ function Invoke-GuiDisconnectedAppBatch {
     }
 
     try {
-        Start-Process 'powershell.exe' `
+        $proc = Start-Process 'powershell.exe' `
             -ArgumentList "-NoExit -ExecutionPolicy Bypass -File `"$batchScript`"" `
-            -WorkingDirectory $script:ToolkitRoot
-        Set-StatusMessage -Message 'Disconnected app batch launched in a new window.'
+            -WorkingDirectory $script:ToolkitRoot `
+            -PassThru
+        Set-StatusMessage -Message 'Disconnected app batch launched in a new window. Waiting for completion...'
     }
     catch {
         Set-StatusMessage -Message "Failed to launch batch: $($_.Exception.Message)" -IsError
+        return
     }
+
+    # Spin up a runspace that blocks until the process exits, then marshals
+    # the exit code back to the GUI thread via the Dispatcher.
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'MTA'
+    $runspace.Open()
+
+    $runspace.SessionStateProxy.SetVariable('BatchProcess', $proc)
+    $runspace.SessionStateProxy.SetVariable('MainWindow',   $script:MainWindow)
+
+    $psInstance = [System.Management.Automation.PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+
+    $psInstance.AddScript({
+        try {
+            $BatchProcess.WaitForExit()
+            $exitCode = $BatchProcess.ExitCode
+        }
+        catch {
+            $exitCode = -1
+        }
+
+        $capturedWindow   = $MainWindow
+        $capturedExitCode = $exitCode
+
+        if ($null -ne $capturedWindow) {
+            $capturedWindow.Dispatcher.Invoke([System.Action]{
+                if ($capturedExitCode -eq 0) {
+                    Set-StatusMessage -Message "Batch complete (exit code 0)."
+                } else {
+                    Set-StatusMessage -Message "Batch failed (exit code $capturedExitCode)." -IsError
+                }
+            }, [System.Windows.Threading.DispatcherPriority]::Normal)
+        }
+    }) | Out-Null
+
+    $capturedPs       = $psInstance
+    $capturedRunspace = $runspace
+    $asyncResult      = $psInstance.BeginInvoke()
+
+    # Fire-and-forget: clean up once the monitor runspace finishes.
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [System.TimeSpan]::FromSeconds(2)
+
+    $capturedTimer    = $timer
+    $capturedModule   = $script:ThisModule
+
+    $timer.Add_Tick({
+        & $capturedModule {
+            param($t, $ps, $rs, $async)
+
+            if ($ps.InvocationStateInfo.State -notin @('Completed', 'Failed', 'Stopped')) { return }
+
+            $t.Stop()
+            try { $ps.EndInvoke($async) } catch { }
+            try { $ps.Dispose(); $rs.Close() } catch { }
+        } $capturedTimer $capturedPs $capturedRunspace $asyncResult
+    }.GetNewClosure())
+
+    $timer.Start()
 }
 
 function Invoke-GuiViewDisconnectedAppSla {
     <#
     .SYNOPSIS
-        Shows a 30-day SLA compliance summary for disconnected apps in the status bar.
+        Shows a per-app SLA compliance summary for disconnected apps in the status bar.
     .DESCRIPTION
-        Calls Get-SPDisconnectedAppSlaStatus (if available) and formats a brief summary
-        into the main status label. Full details require the CLI report.
+        Reads DisconnectedApps.Applications from settings.json and checks the most
+        recent snapshot file for each enabled app. Calculates whether the snapshot
+        age is within the app's SlaDays budget and formats a compact summary into
+        the main status label, e.g.:
+            "PEP-Plus: SLA 1d [OK] | DebtNext: SLA 2d [MISS]"
+        No external module dependency -- all logic is self-contained.
     #>
     [CmdletBinding()]
     param($TabContent)
@@ -3020,29 +3088,83 @@ function Invoke-GuiViewDisconnectedAppSla {
     Set-StatusMessage -Message 'Checking SLA status...'
 
     try {
-        $toolkitRoot = $script:ToolkitRoot
-        $daModule = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
-        if (-not (Test-Path -Path $daModule -PathType Leaf)) {
-            Set-StatusMessage -Message 'DisconnectedApps module not found -- SLA check unavailable.'
+        # Resolve config
+        $configParams = @{}
+        if ($script:ConfigPath) { $configParams['ConfigPath'] = $script:ConfigPath }
+        $config = Get-SPConfig @configParams
+
+        if ($null -eq $config -or
+            -not ($config.PSObject.Properties.Name -contains 'DisconnectedApps') -or
+            $null -eq $config.DisconnectedApps) {
+            Set-StatusMessage -Message 'SLA check: DisconnectedApps config not found.'
             return
         }
 
-        Import-Module $daModule -Force -ErrorAction SilentlyContinue
-
-        $slaResult = Get-SPDisconnectedAppSlaStatus -DaysBack 30
-
-        if (-not $slaResult.Success) {
-            Set-StatusMessage -Message "SLA check failed: $($slaResult.Error)" -IsError
+        $daConfig = $config.DisconnectedApps
+        $apps     = $daConfig.Applications
+        if ($null -eq $apps -or $apps.Count -eq 0) {
+            Set-StatusMessage -Message 'SLA check: No applications defined in config.'
             return
         }
 
-        $summary   = $slaResult.Data.Summary
-        $totalApps = [int]$summary.TotalApps
-        $compliant = [int]$summary.Compliant
-        $nonComp   = [int]$summary.NonCompliant
-        $avgRate   = [math]::Round([double]$summary.AvgDeliveryRate * 100, 1)
+        # Resolve snapshot root
+        $rawSnapshotPath = if (-not [string]::IsNullOrWhiteSpace($daConfig.SnapshotPath)) {
+            $daConfig.SnapshotPath
+        } else {
+            '.\DisconnectedApps\Snapshots'
+        }
+        if (-not [System.IO.Path]::IsPathRooted($rawSnapshotPath)) {
+            $rawSnapshotPath = Join-Path $script:ToolkitRoot $rawSnapshotPath
+        }
+        $snapshotRoot = [System.IO.Path]::GetFullPath($rawSnapshotPath)
 
-        Set-StatusMessage -Message "SLA (30d): $totalApps apps -- $compliant compliant, $nonComp non-compliant, avg delivery $avgRate%"
+        $now     = [System.DateTime]::UtcNow
+        $parts   = [System.Collections.Generic.List[string]]::new()
+        $enabled = @($apps | Where-Object { $_.Enabled -eq $true })
+
+        if ($enabled.Count -eq 0) {
+            Set-StatusMessage -Message 'SLA check: No enabled applications in config.'
+            return
+        }
+
+        foreach ($app in $enabled) {
+            $appName = $app.Name
+            $slaDays = [int]$app.SlaDays
+
+            # Look for the most recent snapshot file for this app.
+            # Convention: snapshot files live under SnapshotPath\<AppName>\
+            # or directly under SnapshotPath with the app name in the filename.
+            $appSnapshotDir = Join-Path $snapshotRoot $appName
+            $latestFile     = $null
+
+            if (Test-Path -Path $appSnapshotDir -PathType Container) {
+                $latestFile = Get-ChildItem -Path $appSnapshotDir -File -Recurse |
+                    Sort-Object LastWriteTimeUtc -Descending |
+                    Select-Object -First 1
+            }
+
+            if ($null -eq $latestFile) {
+                # Fallback: any file in snapshot root whose name contains the app name
+                if (Test-Path -Path $snapshotRoot -PathType Container) {
+                    $latestFile = Get-ChildItem -Path $snapshotRoot -File -Recurse |
+                        Where-Object { $_.Name -like "*$appName*" } |
+                        Sort-Object LastWriteTimeUtc -Descending |
+                        Select-Object -First 1
+                }
+            }
+
+            if ($null -eq $latestFile) {
+                $parts.Add("${appName}: SLA ${slaDays}d [NO SNAPSHOT]")
+                continue
+            }
+
+            $ageDays = ($now - $latestFile.LastWriteTimeUtc).TotalDays
+            $status  = if ($ageDays -le $slaDays) { 'OK' } else { 'MISS' }
+            $parts.Add("${appName}: SLA ${slaDays}d [$status]")
+        }
+
+        $summary = $parts -join ' | '
+        Set-StatusMessage -Message "SLA: $summary"
     }
     catch {
         Set-StatusMessage -Message "SLA check error: $($_.Exception.Message)" -IsError

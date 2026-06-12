@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Authored live-mock resilience probe (T-04). NOT the headless gate.
+    [DIAGNOSTIC] Authored live-mock resilience probe (T-04). NOT the headless gate.
 .DESCRIPTION
     Proves end-to-end that the toolkit's daily attestation cadence survives
     injected API failures (429 rate limit / 503 / slow) WITHOUT crashing, by:

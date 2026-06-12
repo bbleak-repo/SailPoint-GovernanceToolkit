@@ -1,12 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Generates a daily governance evidence report with executive KPI dashboard,
+    [LEGACY] Generates a daily governance evidence report with executive KPI dashboard,
     domino risk tracker, and compliance evidence sections.
 .DESCRIPTION
     Produces a single-page executive dashboard (above the fold) with six governance
     KPIs, a Governance Confidence Score, and a cascading risk "Domino Tracker",
     plus detailed evidence registers (below the fold) for audit/IAG compliance.
+
+    NOTE: This is the v1 (legacy) daily evidence report. For production daily use,
+    prefer Invoke-SPDailyEvidenceReportV3.ps1 which adds day-over-day delta tracking,
+    access change detection, and source-aware remediation. V1 is retained for
+    backward compatibility and standalone KPI dashboard use.
 
     Designed for daily scheduled execution after the daily orchestrator. Consolidates
     data from multiple toolkit analytics functions into the format required by
@@ -77,6 +82,8 @@
         3 = Authentication error
         4 = Configuration error
         5 = Any KPI Red, confidence D/F, or critical failure
+.LINK
+    Invoke-SPDailyEvidenceReportV3.ps1
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(

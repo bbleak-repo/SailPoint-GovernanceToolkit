@@ -1276,6 +1276,10 @@ the prior campaign resolves to yesterday's, not an unrelated one. It captures a 
 > cross-campaign), **`Invoke-SPCampaignDiff.ps1`** (day-over-day diff). Kept temporarily for
 > back-compat; will be removed.
 
+> **Deprecation timeline:** Deprecated as of June 2026. Will be removed in a future release.
+> **Migration:** Use `Invoke-SPCertTracker.ps1` (executive tracker), `Invoke-SPCampaignTrendReport.ps1`
+> (KPI trend), or `Invoke-SPCampaignDiff.ps1` (day-over-day diff) instead.
+
 **Purpose:** generate **adaptive, composable HTML reports** over your governance data —
 a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group
 table) plus a **baseline report library** (entitlement inventory, privileged review,

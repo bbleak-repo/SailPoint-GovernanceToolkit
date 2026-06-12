@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Validates campaign snapshot / items-cache JSON files for data completeness and
+    [DIAGNOSTIC] Validates campaign snapshot / items-cache JSON files for data completeness and
     consistency -- a fast, HTML-free data-quality check for spotting bad runs.
 .DESCRIPTION
     Runs Test-SPCampaignSnapshotIntegrity over one file or every snapshot / items-cache

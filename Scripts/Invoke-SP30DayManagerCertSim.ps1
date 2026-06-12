@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Drives a 30-day MANAGER certification simulation against the mock SailPoint
+    [SIMULATION] Drives a 30-day MANAGER certification simulation against the mock SailPoint
     ISC API by exercising the toolkit's EXISTING CLI/functions headlessly and
     capturing all outputs for downstream validation. ADDITIVE -- it orchestrates
     the existing scripts/functions and changes nothing.
