@@ -3677,6 +3677,21 @@ function Initialize-GovernanceTab {
         $statusLabel.Text = 'Ready. Click Run Health Check to populate badges.'
     }
 
+    # Auto-trigger health check on tab init when the user has enabled the
+    # HealthCheckOnStartup setting (Governance section in config).
+    $autoRun = $false
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.Governance -and
+            $cfg.Governance.PSObject.Properties.Name -contains 'HealthCheckOnStartup' -and
+            $cfg.Governance.HealthCheckOnStartup -eq $true) {
+            $autoRun = $true
+        }
+    } catch { }
+    if ($autoRun) {
+        Invoke-GuiHealthCheck -TabContent $TabContent
+    }
+
     # Hierarchical Leadership Report buttons
     $btnHierPreview  = Find-Control -Parent $TabContent -Name 'BtnHierPreview'
     $btnHierGenerate = Find-Control -Parent $TabContent -Name 'BtnHierGenerate'

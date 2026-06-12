@@ -1089,16 +1089,27 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 **Related GUI:** Governance tab.
 
 ### `Invoke-SPDailyEvidenceReport.ps1`
+
+> **Which version?** Three versions of the Daily Evidence Report exist. All three coexist
+> and produce separate output files, so you can run any combination.
+>
+> - **V3 (recommended)** -- `Invoke-SPDailyEvidenceReportV3.ps1` -- full day-over-day
+>   evidence with KPI dashboard, domino tracker, reviewer timeliness aging, high-risk
+>   exposure, and access change tracking (added/removed/changed). Best for daily
+>   scheduled production use.
+> - **V2** -- `Invoke-SPDailyEvidenceReportV2.ps1` -- lean per-campaign executive summary
+>   with donut chart, scope, completion, and reviewer accountability. Best for focused
+>   single-campaign evidence.
+> - **V1** -- `Invoke-SPDailyEvidenceReport.ps1` -- original 6-KPI dashboard with domino
+>   tracker. Best for standalone daily KPI overview when you do not need day-over-day
+>   comparison.
+
 **Purpose:** a daily executive governance dashboard with six KPIs, a Governance Confidence
 Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy
 **Step 6: Evidence and Reporting** of the IAM governance program -- a single report that
 answers whether campaigns are completing, attestations are on time, revocations are being
 enforced, remediation is timely, high-risk access is being reviewed, and reviewers are
 performing responsibly.
-
-> **A leaner v2 exists** — `Invoke-SPDailyEvidenceReportV2.ps1` (below) drops the KPI dashboard,
-> Confidence Score, Domino Tracker, and the Past-Due / High-Risk / Reviewer-Performance registers,
-> keeping only audit-grade evidence. Both scripts coexist; run whichever you prefer.
 
 **When to use:** daily, scheduled after the daily orchestrator. Also useful on-demand with
 `-DaysBack 7` for a weekly evidence summary or `-CampaignNameContains 'Tuesday'` to scope to

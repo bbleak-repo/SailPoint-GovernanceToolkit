@@ -85,7 +85,6 @@
         'Export-SPCampaignComparisonHtml'
         'Export-SPAuditTrailHtml'
         'Export-SPAuditCsv'
-        'Export-SPCampaignTrendHtml'
 
         # SP.AuditReportHtml - Rolling 7/30-day manager-cert trend HTML (T-06)
         'Export-SPRollingTrendHtml'

@@ -164,10 +164,31 @@ Top-level sections and the keys that matter most:
 | | `CorrelationAttribute`, `AccountDeletionThresholdPct`, `RequiredAccountColumns` | Correlation key, delete-safety threshold, CSV schema. |
 | | `ISC.UploadMethod`, `Applications` | How accounts reach ISC; per-app definitions. |
 | **Sdk** | `OutputPath`, `CampaignTemplates.*`, `Approvals.*`, `WorkItems.*`, `Workflows.*` | Defaults for the SDK Features (templates, approvals, work items, workflows incl. OOO fallback). |
-| **DailyEvidence** | `OutputPath`, `DefaultDaysBack`, `DefaultSlaHours`, `HighRiskThreshold` | Daily evidence report output location and defaults. |
-| | `Thresholds.*` | GREEN/YELLOW thresholds for each of the 6 KPIs (completion rate, overdue attestations, revocation execution, remediation SLA, high-risk pending, reviewer health). |
-| | `ConfidenceScoreGrade.*` | Score-to-grade mapping for the Governance Confidence Score (A/B/C/D/F). |
-| **Metrics / Governance / Leadership** | various | KPI persistence, governance report depth, leadership band mapping. |
+| **DailyEvidence** | `OutputPath` | Daily evidence report output directory (default `.\Audit\daily-evidence`). |
+| | `DefaultDaysBack` | Campaign look-back window in days (default `1`). |
+| | `DefaultSlaHours` | Remediation SLA threshold in hours (default `48`). |
+| | `HighRiskThreshold` | Risk score at or above which an identity is flagged high-risk (default `70`). |
+| | `EvidenceDetailLimit` | Max rows shown per evidence register table in the HTML report (default `50`). |
+| | `Thresholds.CompletionRate` | `{ "Green": 95, "Yellow": 80 }` -- campaign completion percentage. |
+| | `Thresholds.OverdueAttestations` | `{ "Green": 0, "Yellow": 2 }` -- count of overdue attestations. |
+| | `Thresholds.RevocationExecution` | `{ "Green": 95, "Yellow": 80 }` -- revocation execution percentage. |
+| | `Thresholds.RemediationSla` | `{ "Green": 95, "Yellow": 80 }` -- remediation within SLA percentage. |
+| | `Thresholds.HighRiskPending` | `{ "Green": 0, "Yellow": 3 }` -- count of high-risk items still pending. |
+| | `Thresholds.ReviewerHealth` | `{ "GreenMaxAtRisk": 0, "YellowMaxAtRisk": 2 }` -- reviewers flagged at-risk. |
+| | `ConfidenceScoreGrade` | Score-to-grade mapping: `{ "A": 90, "B": 80, "C": 70, "D": 60 }`. Scores below D threshold receive an F. |
+| **GovernancePolicy** | `Enabled` | Master switch for policy evaluation (`true`/`false`). |
+| | `Policies` | Array of policy objects. Each policy has `Id`, `Name`, `Description`, `Type`, `Scope` (where applicable), `Severity` (`Critical`/`Warning`), and type-specific thresholds. |
+| | `Policies[]: POL-001` | **Privileged Access Review Frequency** -- all privileged entitlements reviewed within `MaxDaysSinceReview` days (default 90). Severity: Critical. |
+| | `Policies[]: POL-002` | **Source Coverage Minimum** -- every source has at least `MinCoveragePercent`% entitlement review coverage (default 75). Severity: Warning. |
+| | `Policies[]: POL-003` | **Identity Risk Ceiling** -- no identity remains at high risk (above `MaxRiskScore`, default 70) for more than 30 days. Severity: Critical. |
+| | `Policies[]: POL-004` | **Stale Access Limit** -- no more than `MaxStalePercent`% of entitlements classified as stale (default 10). Severity: Warning. |
+| | `Policies[]: POL-005` | **Reviewer Performance Floor** -- no reviewer has a reputation score below `MinReputationScore` (default 40). Severity: Warning. |
+| **Metrics** | `Path` | KPI time-series storage directory (default `.\Audit\metrics`). |
+| | `RetentionDays` | How long metric snapshots are retained (default `365`). |
+| | `AutoCapture` | When `true`, scripts that produce KPIs automatically persist them to the metrics store. |
+| | `CampaignTrendPath` | Storage directory for campaign-trend data (default `.\Audit\metrics\campaign-trend`). |
+| | `CampaignTrendRetentionDays` | Retention for campaign-trend data (default `1825` -- 5 years). |
+| **Governance / Leadership** | various | Governance report depth, leadership band mapping. |
 | **Retention** | `Enabled`, `ArchiveDays`, `DeleteDays`, `ArchivePath`, `Paths` | Log/report archival + deletion windows. |
 | **Notification** | `Backends`, `Smtp`, `Webhook` | Where notifications go (log, email, webhook). |
 
