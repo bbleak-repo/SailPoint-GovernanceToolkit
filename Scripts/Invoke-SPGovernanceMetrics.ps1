@@ -48,6 +48,12 @@
     Output format: Console, HTML, JSON, or Both (Console + HTML). Default Console.
 .PARAMETER OutputPath
     Directory for HTML/JSON output files.
+.PARAMETER IncludeDashboard
+    Generate a governance trend dashboard HTML file after metrics capture
+    and trend analysis. Dashboard failure does not fail the overall run.
+.PARAMETER DashboardPeriod
+    Lookback window for the dashboard data. One of Last7Days, Last30Days,
+    Last90Days, or AllTime. Default Last30Days.
 .PARAMETER AlertOnDecline
     Send notification when metrics decline >5% over last 4 periods.
 .PARAMETER AlertRecipients
@@ -68,6 +74,9 @@
 .EXAMPLE
     .\Invoke-SPGovernanceMetrics.ps1 -CaptureOnly -Token $token
     # Capture metrics only, no trend report.
+.EXAMPLE
+    .\Invoke-SPGovernanceMetrics.ps1 -IncludeDashboard -DashboardPeriod Last90Days -Token $token
+    # Full capture with a 90-day governance trend dashboard.
 .EXAMPLE
     .\Invoke-SPGovernanceMetrics.ps1 -WhatIf
     # Dry run -- shows what would be captured without API calls.
@@ -135,6 +144,14 @@ param(
 
     [Parameter()]
     [string]$OutputPath,
+
+    # Dashboard
+    [Parameter()]
+    [switch]$IncludeDashboard,
+
+    [Parameter()]
+    [ValidateSet('Last7Days', 'Last30Days', 'Last90Days', 'AllTime')]
+    [string]$DashboardPeriod = 'Last30Days',
 
     # Alerting
     [Parameter()]
@@ -322,6 +339,12 @@ if ($isWhatIf) {
     else {
         Write-Host '  [4] Decline Alerting: SKIPPED' -ForegroundColor DarkGray
     }
+    if ($IncludeDashboard) {
+        Write-Host "  [5] Governance Dashboard: $DashboardPeriod lookback" -ForegroundColor Gray
+    }
+    else {
+        Write-Host '  [5] Governance Dashboard: SKIPPED' -ForegroundColor DarkGray
+    }
     Write-Host ''
     Write-Host '  No API calls will be made.' -ForegroundColor Yellow
     Write-Host ''
@@ -338,6 +361,7 @@ $stepResults = [ordered]@{
     CompletionForecast   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     TrendAnalysis        = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DeclineDetection     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    Dashboard            = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
 $worstExitCode = 0
@@ -805,7 +829,79 @@ else {
 
 #endregion
 
-#region Step 5: Output
+#region Step 5: Governance Dashboard (if -IncludeDashboard)
+
+$dashboardPath = $null
+
+if ($IncludeDashboard) {
+    Write-Host '  Step 5: Governance Dashboard' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        # Build dashboard data
+        Write-Host "    Building dashboard data ($DashboardPeriod)..." -ForegroundColor DarkGray
+        $dashboardResult = Get-SPGovernanceDashboardData -Period $DashboardPeriod `
+            -CorrelationID $correlationID
+
+        if (-not $dashboardResult.Success) {
+            $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+            Set-StepResult -Step 'Dashboard' -Status 'Warning' `
+                -Detail "Dashboard data build failed: $($dashboardResult.Error)" -Duration $stepDuration
+            Write-Host "  Step 5: WARN - $($dashboardResult.Error)" -ForegroundColor Yellow
+        }
+        else {
+            # Optionally build month-over-month comparison
+            $comparisonData = $null
+            try {
+                Write-Host '    Computing month-over-month comparison...' -ForegroundColor DarkGray
+                $compResult = Compare-SPGovernancePeriods -CorrelationID $correlationID
+                if ($compResult.Success -and $null -ne $compResult.Data) {
+                    $comparisonData = $compResult.Data
+                }
+            }
+            catch {
+                Write-Host "    WARN: Month comparison skipped: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
+            # Generate HTML
+            $dashboardTimestamp = $startTime.ToString('yyyyMMdd-HHmmss')
+            $dashboardPath = Join-Path $effectiveOutputPath "governance-dashboard-${dashboardTimestamp}.html"
+
+            Write-Host '    Generating dashboard HTML...' -ForegroundColor DarkGray
+            $exportParams = @{
+                DashboardData = $dashboardResult.Data
+                OutputPath    = $dashboardPath
+                CorrelationID = $correlationID
+            }
+            if ($null -ne $comparisonData) {
+                $exportParams['ComparisonData'] = $comparisonData
+            }
+
+            $dashboardPath = Export-SPGovernanceDashboardHtml @exportParams
+            $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+
+            $detail = "Dashboard written to $dashboardPath"
+            Set-StepResult -Step 'Dashboard' -Status 'Success' -Detail $detail -Duration $stepDuration
+            Write-Host "  Step 5: $detail" -ForegroundColor Green
+        }
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Step 5: WARN - Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Dashboard generation exception: $($_.Exception.Message)" `
+            -Severity WARN -Component 'GovernanceMetrics' -Action 'DashboardError' -CorrelationID $correlationID
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 5: Governance Dashboard [SKIPPED - not requested]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 6: Output
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime)
@@ -999,6 +1095,11 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
         Write-Host "  Metrics saved to $($saveResult.Data.FilePath)"
     }
 
+    # Dashboard output
+    if ($null -ne $dashboardPath) {
+        Write-Host "  Dashboard:   $dashboardPath" -ForegroundColor Green
+    }
+
     Write-Host "  Duration: $durationStr"
     Write-Host ''
 }
@@ -1030,6 +1131,7 @@ $summaryObject = [ordered]@{
     MetricsSave     = if ($null -ne $saveResult) { $saveResult } else { $null }
     Forecast        = if ($null -ne $forecastData) { $forecastData.Summary } else { $null }
     Trend           = if ($null -ne $trendData) { $trendData.Summary } else { $null }
+    DashboardPath   = $dashboardPath
     DecliningMetrics = $decliningMetrics
     Steps           = $stepResults
     ExitCode        = $worstExitCode
@@ -1138,6 +1240,8 @@ try {
             MetricsSaved      = $stepResults['MetricsSave'].Status
             ForecastRun       = $stepResults['CompletionForecast'].Status
             TrendAnalysis     = $stepResults['TrendAnalysis'].Status
+            Dashboard         = $stepResults['Dashboard'].Status
+            DashboardPath     = $dashboardPath
             DecliningMetrics  = $decliningMetrics.Count
             DurationSeconds   = [math]::Round($totalDuration.TotalSeconds, 1)
             ExitCode          = $worstExitCode
