@@ -557,6 +557,8 @@ if (-not $TrendOnly) {
             if ($null -ne $staleAccessData)          { $saveParams['StaleAccess']        = $staleAccessData }
             if ($null -ne $governanceMaturityData)   { $saveParams['GovernanceMaturity'] = $governanceMaturityData }
             if ($null -ne $orchestratorData)          { $saveParams['OrchestratorHistory'] = $orchestratorData }
+            if ($currentCampaigns.Count -gt 0)       { $saveParams['CampaignList']       = $currentCampaigns }
+            if ($campaignAudits.Count -gt 0)         { $saveParams['CampaignAuditData']  = $campaignAudits }
 
             $saveResult = Save-SPGovernanceMetrics @saveParams
             $saveDuration = ((Get-Date) - $saveStart).TotalSeconds

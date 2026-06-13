@@ -1658,6 +1658,12 @@ function Save-SPGovernanceMetrics {
         Output from Measure-SPGovernanceMaturity.
     .PARAMETER OrchestratorHistory
         Output from Get-SPOrchestratorHistory.
+    .PARAMETER CampaignList
+        Array of raw campaign objects from Get-SPAuditCampaigns. Used to compute
+        campaign throughput KPIs (active, completed, overdue counts and avg days).
+    .PARAMETER CampaignAuditData
+        Array of campaign audit hashtables (same structure used by analytics).
+        Used to compute reviewer health KPIs (active reviewers, completion %).
     .PARAMETER Label
         Optional label for the metrics record (e.g. 'weekly-digest-2026-05-30').
     .PARAMETER CorrelationID
@@ -1678,6 +1684,8 @@ function Save-SPGovernanceMetrics {
         [Parameter()][hashtable]$StaleAccess,
         [Parameter()][hashtable]$GovernanceMaturity,
         [Parameter()][hashtable]$OrchestratorHistory,
+        [Parameter()][object[]]$CampaignList,
+        [Parameter()][object[]]$CampaignAuditData,
         [Parameter()][string]$Label,
         [Parameter()][string]$CorrelationID
     )
@@ -1835,6 +1843,176 @@ function Save-SPGovernanceMetrics {
         }
     } else {
         $metrics['orchestrator.successRate'] = $null
+    }
+
+    # Campaign Throughput (from $CampaignList -- raw campaign objects)
+    $metrics['campaigns.activeCount']       = $null
+    $metrics['campaigns.completedCount']    = $null
+    $metrics['campaigns.overdueCount']      = $null
+    $metrics['campaigns.avgDaysToComplete'] = $null
+
+    if ($null -ne $CampaignList -and @($CampaignList).Count -gt 0) {
+        $campArray = @($CampaignList)
+        $activeStatuses = @('ACTIVE', 'ACTIVATING')
+        $activeList    = [System.Collections.Generic.List[object]]::new()
+        $completedList = [System.Collections.Generic.List[object]]::new()
+        $overdueCount  = 0
+
+        foreach ($camp in $campArray) {
+            # Safe property access: support hashtables and PSCustomObjects
+            $campStatus = $null
+            if ($camp -is [System.Collections.IDictionary]) {
+                if ($camp.ContainsKey('status')) { $campStatus = [string]$camp['status'] }
+                elseif ($camp.ContainsKey('Status')) { $campStatus = [string]$camp['Status'] }
+            } else {
+                if ($null -ne $camp.status) { $campStatus = [string]$camp.status }
+            }
+
+            if ($null -ne $campStatus -and $campStatus.ToUpper() -in $activeStatuses) {
+                $activeList.Add($camp)
+            }
+            elseif ($null -ne $campStatus -and $campStatus.ToUpper() -eq 'COMPLETED') {
+                $completedList.Add($camp)
+            }
+
+            # Check overdue: active campaign past deadline
+            if ($null -ne $campStatus -and $campStatus.ToUpper() -in $activeStatuses) {
+                $deadlineStr = $null
+                if ($camp -is [System.Collections.IDictionary]) {
+                    if ($camp.ContainsKey('deadline')) { $deadlineStr = [string]$camp['deadline'] }
+                    elseif ($camp.ContainsKey('due')) { $deadlineStr = [string]$camp['due'] }
+                } else {
+                    if ($null -ne $camp.deadline) { $deadlineStr = [string]$camp.deadline }
+                    elseif ($null -ne $camp.due) { $deadlineStr = [string]$camp.due }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($deadlineStr)) {
+                    try {
+                        $dlDate = [datetime]::Parse($deadlineStr).ToUniversalTime()
+                        if ($dlDate -lt (Get-Date).ToUniversalTime()) {
+                            $overdueCount++
+                        }
+                    } catch { }
+                }
+            }
+        }
+
+        $metrics['campaigns.activeCount']    = $activeList.Count
+        $metrics['campaigns.completedCount'] = $completedList.Count
+        $metrics['campaigns.overdueCount']   = $overdueCount
+
+        # Average days to complete for completed campaigns
+        if ($completedList.Count -gt 0) {
+            $totalDays = 0.0
+            $validCount = 0
+            foreach ($comp in $completedList) {
+                $createdStr    = $null
+                $completedStr  = $null
+                if ($comp -is [System.Collections.IDictionary]) {
+                    if ($comp.ContainsKey('created'))   { $createdStr   = [string]$comp['created'] }
+                    if ($comp.ContainsKey('completed')) { $completedStr = [string]$comp['completed'] }
+                } else {
+                    if ($null -ne $comp.created)   { $createdStr   = [string]$comp.created }
+                    if ($null -ne $comp.completed) { $completedStr = [string]$comp.completed }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($createdStr) -and
+                    -not [string]::IsNullOrWhiteSpace($completedStr)) {
+                    try {
+                        $dtCreated   = [datetime]::Parse($createdStr).ToUniversalTime()
+                        $dtCompleted = [datetime]::Parse($completedStr).ToUniversalTime()
+                        $days = ($dtCompleted - $dtCreated).TotalDays
+                        if ($days -ge 0) {
+                            $totalDays += $days
+                            $validCount++
+                        }
+                    } catch { }
+                }
+            }
+            if ($validCount -gt 0) {
+                $metrics['campaigns.avgDaysToComplete'] = [math]::Round($totalDays / $validCount, 1)
+            }
+        }
+    }
+
+    # Reviewer Health (from $CampaignAuditData and/or $ReviewerReputation)
+    $metrics['reviewers.totalActive']      = $null
+    $metrics['reviewers.completedCount']   = $null
+    $metrics['reviewers.notStartedCount']  = $null
+    $metrics['reviewers.avgCompletionPct'] = $null
+
+    if ($null -ne $CampaignAuditData -and @($CampaignAuditData).Count -gt 0) {
+        $auditArray = @($CampaignAuditData)
+        $allReviewers = [System.Collections.Generic.Dictionary[string,hashtable]]::new()
+
+        foreach ($audit in $auditArray) {
+            # Extract ReviewerMetrics from each campaign audit
+            $rmData = $null
+            if ($audit -is [System.Collections.IDictionary]) {
+                if ($audit.ContainsKey('ReviewerMetrics') -and $null -ne $audit['ReviewerMetrics']) {
+                    $rm = $audit['ReviewerMetrics']
+                    if ($rm -is [System.Collections.IDictionary] -and $rm.ContainsKey('ReviewerMetrics')) {
+                        $rmData = @($rm['ReviewerMetrics'])
+                    }
+                }
+            }
+            if ($null -eq $rmData) { continue }
+
+            foreach ($reviewer in $rmData) {
+                $rName = ''
+                $decMade = 0
+                $totalItems = 0
+                if ($reviewer -is [System.Collections.IDictionary]) {
+                    if ($reviewer.ContainsKey('Name'))          { $rName     = [string]$reviewer['Name'] }
+                    if ($reviewer.ContainsKey('DecisionsMade')) { $decMade   = [int]$reviewer['DecisionsMade'] }
+                    if ($reviewer.ContainsKey('TotalItems'))    { $totalItems = [int]$reviewer['TotalItems'] }
+                } else {
+                    if ($null -ne $reviewer.Name)          { $rName     = [string]$reviewer.Name }
+                    if ($null -ne $reviewer.DecisionsMade) { try { $decMade   = [int]$reviewer.DecisionsMade } catch { } }
+                    if ($null -ne $reviewer.TotalItems)    { try { $totalItems = [int]$reviewer.TotalItems } catch { } }
+                }
+                if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+
+                if (-not $allReviewers.ContainsKey($rName)) {
+                    $allReviewers[$rName] = @{
+                        DecisionsMade = 0
+                        TotalItems    = 0
+                    }
+                }
+                $allReviewers[$rName]['DecisionsMade'] += $decMade
+                $allReviewers[$rName]['TotalItems']    += $totalItems
+            }
+        }
+
+        if ($allReviewers.Count -gt 0) {
+            $metrics['reviewers.totalActive'] = $allReviewers.Count
+            $completedReviewers = 0
+            $notStartedReviewers = 0
+            $totalCompPct = 0.0
+
+            foreach ($kvp in $allReviewers.GetEnumerator()) {
+                $dec   = $kvp.Value['DecisionsMade']
+                $total = $kvp.Value['TotalItems']
+                if ($total -gt 0 -and $dec -ge $total) {
+                    $completedReviewers++
+                }
+                if ($dec -eq 0) {
+                    $notStartedReviewers++
+                }
+                $pct = if ($total -gt 0) { ($dec / $total) * 100 } else { 0 }
+                $totalCompPct += $pct
+            }
+
+            $metrics['reviewers.completedCount']  = $completedReviewers
+            $metrics['reviewers.notStartedCount'] = $notStartedReviewers
+            $metrics['reviewers.avgCompletionPct'] = [math]::Round($totalCompPct / $allReviewers.Count, 1)
+        }
+    }
+    elseif ($null -ne $ReviewerReputation) {
+        # Fallback: extract reviewer counts from ReviewerReputation summary
+        $rrSummary2 = $null
+        if ($ReviewerReputation.ContainsKey('Summary')) { $rrSummary2 = $ReviewerReputation['Summary'] }
+        if ($null -ne $rrSummary2) {
+            $metrics['reviewers.totalActive'] = if ($rrSummary2.ContainsKey('TotalReviewers')) { $rrSummary2['TotalReviewers'] } else { $null }
+        }
     }
 
     # Build the record

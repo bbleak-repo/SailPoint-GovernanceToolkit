@@ -872,6 +872,216 @@ Describe "P16-T06: Save-SPGovernanceMetrics persists KPIs to JSONL" {
             $script:emptyMetrics.Data.MetricCount | Should -Be 0
         }
     }
+
+    Context "When called with CampaignList for campaign throughput" {
+        BeforeAll {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
+                return [PSCustomObject]@{
+                    Metrics = [PSCustomObject]@{
+                        Path          = (Join-Path $TestDrive 'metrics-campaign-throughput')
+                        RetentionDays = 365
+                    }
+                }
+            }
+
+            $now = [datetime]::UtcNow
+            $script:mockCampaignList = @(
+                @{
+                    id        = 'camp-001'
+                    name      = 'Q2 Review'
+                    status    = 'ACTIVE'
+                    created   = $now.AddDays(-14).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    deadline  = $now.AddDays(7).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                },
+                @{
+                    id        = 'camp-002'
+                    name      = 'Q1 Review'
+                    status    = 'COMPLETED'
+                    created   = $now.AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    completed = $now.AddDays(-30).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                },
+                @{
+                    id        = 'camp-003'
+                    name      = 'Overdue Review'
+                    status    = 'ACTIVE'
+                    created   = $now.AddDays(-30).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    deadline  = $now.AddDays(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                }
+            )
+
+            $script:campResult = Save-SPGovernanceMetrics `
+                -CampaignList $script:mockCampaignList `
+                -Label 'test-campaign-throughput'
+        }
+
+        It "Should return Success true" {
+            $script:campResult.Success | Should -Be $true
+        }
+
+        It "Should include campaigns.activeCount in record" {
+            $content = Get-Content $script:campResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.activeCount' | Should -Be 2
+        }
+
+        It "Should include campaigns.completedCount in record" {
+            $content = Get-Content $script:campResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.completedCount' | Should -Be 1
+        }
+
+        It "Should include campaigns.overdueCount in record" {
+            $content = Get-Content $script:campResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.overdueCount' | Should -Be 1
+        }
+
+        It "Should compute campaigns.avgDaysToComplete as non-negative" {
+            $content = Get-Content $script:campResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.avgDaysToComplete' | Should -BeGreaterOrEqual 0
+        }
+
+        It "Should have campaigns.avgDaysToComplete as null when no completed campaigns" {
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
+                return [PSCustomObject]@{
+                    Metrics = [PSCustomObject]@{
+                        Path          = (Join-Path $TestDrive 'metrics-no-completed')
+                        RetentionDays = 365
+                    }
+                }
+            }
+
+            $activeOnly = @(
+                @{ id = 'camp-a'; name = 'Active Only'; status = 'ACTIVE'; created = '2026-01-01T00:00:00Z'; deadline = '2027-01-01T00:00:00Z' }
+            )
+            $result = Save-SPGovernanceMetrics -CampaignList $activeOnly
+            $content = Get-Content $result.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.avgDaysToComplete' | Should -BeNullOrEmpty
+        }
+    }
+
+    Context "When called with CampaignAuditData for reviewer health" {
+        BeforeAll {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
+                return [PSCustomObject]@{
+                    Metrics = [PSCustomObject]@{
+                        Path          = (Join-Path $TestDrive 'metrics-reviewer-health')
+                        RetentionDays = 365
+                    }
+                }
+            }
+
+            $script:mockAuditData = @(
+                @{
+                    CampaignName    = 'Q2 Review'
+                    CampaignId      = 'camp-001'
+                    ReviewerMetrics = @{
+                        ReviewerMetrics = @(
+                            [PSCustomObject]@{
+                                Name          = 'Alice'
+                                DecisionsMade = 10
+                                TotalItems    = 10
+                            },
+                            [PSCustomObject]@{
+                                Name          = 'Bob'
+                                DecisionsMade = 3
+                                TotalItems    = 8
+                            },
+                            [PSCustomObject]@{
+                                Name          = 'Carol'
+                                DecisionsMade = 0
+                                TotalItems    = 5
+                            }
+                        )
+                    }
+                }
+            )
+
+            $script:reviewerResult = Save-SPGovernanceMetrics `
+                -CampaignAuditData $script:mockAuditData `
+                -Label 'test-reviewer-health'
+        }
+
+        It "Should return Success true" {
+            $script:reviewerResult.Success | Should -Be $true
+        }
+
+        It "Should include reviewers.totalActive as non-negative" {
+            $content = Get-Content $script:reviewerResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'reviewers.totalActive' | Should -Be 3
+        }
+
+        It "Should include reviewers.completedCount" {
+            $content = Get-Content $script:reviewerResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            # Alice completed all 10 of 10
+            $record.metrics.'reviewers.completedCount' | Should -Be 1
+        }
+
+        It "Should include reviewers.notStartedCount" {
+            $content = Get-Content $script:reviewerResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            # Carol has 0 decisions
+            $record.metrics.'reviewers.notStartedCount' | Should -Be 1
+        }
+
+        It "Should include reviewers.avgCompletionPct between 0 and 100" {
+            $content = Get-Content $script:reviewerResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'reviewers.avgCompletionPct' | Should -BeGreaterOrEqual 0
+            $record.metrics.'reviewers.avgCompletionPct' | Should -BeLessOrEqual 100
+        }
+    }
+
+    Context "When called with no CampaignList or CampaignAuditData" {
+        BeforeAll {
+            Mock Write-SPLog -ModuleName SP.AuditOperations { }
+            Mock Get-SPConfig -ModuleName SP.AuditOperations {
+                return [PSCustomObject]@{
+                    Metrics = [PSCustomObject]@{
+                        Path          = (Join-Path $TestDrive 'metrics-no-enrichment')
+                        RetentionDays = 365
+                    }
+                }
+            }
+
+            $script:noEnrichResult = Save-SPGovernanceMetrics -Label 'test-no-enrichment'
+        }
+
+        It "Should include null campaign throughput fields" {
+            $content = Get-Content $script:noEnrichResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'campaigns.activeCount'       | Should -BeNullOrEmpty
+            $record.metrics.'campaigns.completedCount'    | Should -BeNullOrEmpty
+            $record.metrics.'campaigns.overdueCount'      | Should -BeNullOrEmpty
+            $record.metrics.'campaigns.avgDaysToComplete' | Should -BeNullOrEmpty
+        }
+
+        It "Should include null reviewer health fields" {
+            $content = Get-Content $script:noEnrichResult.Data.FilePath -Raw
+            $line = @($content.Trim().Split("`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[-1]
+            $record = $line | ConvertFrom-Json
+            $record.metrics.'reviewers.totalActive'      | Should -BeNullOrEmpty
+            $record.metrics.'reviewers.completedCount'   | Should -BeNullOrEmpty
+            $record.metrics.'reviewers.notStartedCount'  | Should -BeNullOrEmpty
+            $record.metrics.'reviewers.avgCompletionPct' | Should -BeNullOrEmpty
+        }
+    }
 }
 
 #endregion
