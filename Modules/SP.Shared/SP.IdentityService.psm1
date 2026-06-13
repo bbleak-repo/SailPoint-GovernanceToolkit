@@ -153,6 +153,41 @@ function Get-SPIdentityCacheInfo {
     return @{ File = $file; TtlMin = $ttl }
 }
 
+function _WarnIfCacheDirectoryInsecure {
+    <#
+    .SYNOPSIS
+        Checks cache directory permissions and warns if overly permissive.
+    .DESCRIPTION
+        Lightweight ACL check run once per session during Import-SPIdentityCacheFromDisk.
+        On Windows: warns if Everyone, BUILTIN\Users, or Authenticated Users has Read access.
+        On macOS/Linux: warns if group or other has read permission.
+        Logs via Write-SPLog at WARN severity but never blocks execution.
+    #>
+    param([string]$DirPath)
+    if ([string]::IsNullOrWhiteSpace($DirPath) -or -not (Test-Path $DirPath)) { return }
+    try {
+        if ($IsWindows -or [System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+            # On Windows: check if Everyone or Users has access
+            $acl = Get-Acl $DirPath
+            foreach ($rule in $acl.Access) {
+                $id = $rule.IdentityReference.Value
+                if ($id -match 'Everyone|BUILTIN\\Users|Authenticated Users' -and $rule.FileSystemRights -match 'Read') {
+                    Write-SPLog -Message "Cache directory '$DirPath' is readable by '$id' -- consider restricting access for PII protection" `
+                        -Severity WARN -Component 'SP.IdentityService' -Action '_WarnIfCacheDirectoryInsecure'
+                    return
+                }
+            }
+        } else {
+            # macOS/Linux: check if group/other has read
+            $mode = (Get-Item $DirPath).UnixMode
+            if ($null -ne $mode -and $mode -match '.{4}r|.{7}r') {
+                Write-SPLog -Message "Cache directory '$DirPath' may be readable by group/other -- consider restricting access for PII protection" `
+                    -Severity WARN -Component 'SP.IdentityService' -Action '_WarnIfCacheDirectoryInsecure'
+            }
+        }
+    } catch { }
+}
+
 function Import-SPIdentityCacheFromDisk {
     <#
     .SYNOPSIS
@@ -176,6 +211,11 @@ function Import-SPIdentityCacheFromDisk {
 
     $info = Get-SPIdentityCacheInfo
     if ($null -eq $info.File -or -not (Test-Path $info.File)) { return }
+
+    # One-time permission check on the cache directory
+    $cacheDir = Split-Path -Parent $info.File
+    _WarnIfCacheDirectoryInsecure -DirPath $cacheDir
+
     try {
         $now = Get-Date
         $latest = @{}
@@ -211,7 +251,12 @@ function Import-SPIdentityCacheFromDisk {
             Set-SPCachedItem -Store 'SPIdentity' -Key $id -Value $detail -NoPersist
             [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
         }
-        Write-SPHtmlFile -Path $info.File -Content $sb.ToString()
+        # Atomic write: write to .tmp file, then replace original to avoid
+        # corruption if the process crashes mid-compaction.
+        $tmpFile = "$($info.File).tmp"
+        Write-SPHtmlFile -Path $tmpFile -Content $sb.ToString()
+        if (Test-Path $info.File) { Remove-Item $info.File -Force }
+        Move-Item -Path $tmpFile -Destination $info.File -Force
     } catch { }
 }
 
@@ -627,6 +672,7 @@ function Clear-SPIdentityCache {
         [Parameter()] [switch]$DiskOnly,
         [Parameter()] [switch]$MemoryOnly
     )
+    $clearedTargets = @()
     if (-not $DiskOnly) {
         _EnsureSPIdentityStore
         # Clear-SPCacheStore calls .Clear() on Items/Timestamps in-place,
@@ -635,6 +681,7 @@ function Clear-SPIdentityCache {
         Clear-SPCacheStore -Store 'SPIdentity'
         Clear-SPCacheStore -Store 'SPEmailLookup'
         $script:_IdentityDiskLoaded = $false
+        $clearedTargets += 'memory'
         Write-Host "  Identity memory cache cleared." -ForegroundColor DarkGray
     }
     if (-not $MemoryOnly) {
@@ -642,9 +689,15 @@ function Clear-SPIdentityCache {
             $info = Get-SPIdentityCacheInfo
             if ($null -ne $info.File -and (Test-Path $info.File)) {
                 Remove-Item $info.File -Force -ErrorAction SilentlyContinue
+                $clearedTargets += 'disk'
                 Write-Host "  Identity disk cache cleared." -ForegroundColor DarkGray
             }
         } catch { }
+    }
+    if ($clearedTargets.Count -gt 0) {
+        $targetDesc = $clearedTargets -join ' + '
+        Write-SPLog -Message "Identity cache cleared ($targetDesc)" `
+            -Severity INFO -Component 'SP.IdentityService' -Action 'Clear-SPIdentityCache'
     }
 }
 

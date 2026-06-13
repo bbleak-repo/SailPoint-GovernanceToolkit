@@ -7098,13 +7098,16 @@ function Clear-SPAuditItemCache {
         [Parameter()] [switch]$MemoryOnly
     )
 
+    $clearedTargets = @()
     if (-not $DiskOnly) {
         if ([string]::IsNullOrWhiteSpace($CampaignId)) {
             $script:_ItemMemCache.Clear()
+            $clearedTargets += 'memory'
             Write-Host "  Memory cache cleared." -ForegroundColor DarkGray
         }
         elseif ($script:_ItemMemCache.ContainsKey($CampaignId)) {
             $script:_ItemMemCache.Remove($CampaignId)
+            $clearedTargets += "memory($CampaignId)"
             Write-Host "  Memory cache cleared for $CampaignId." -ForegroundColor DarkGray
         }
     }
@@ -7119,9 +7122,15 @@ function Clear-SPAuditItemCache {
                 }
                 $files = Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
                 foreach ($f in $files) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
+                $clearedTargets += "disk($($files.Count) files)"
                 Write-Host "  Disk cache cleared ($($files.Count) file(s) removed)." -ForegroundColor DarkGray
             }
         } catch { }
+    }
+    if ($clearedTargets.Count -gt 0) {
+        $targetDesc = $clearedTargets -join ' + '
+        Write-SPLog -Message "Audit item cache cleared ($targetDesc)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Clear-SPAuditItemCache'
     }
 }
 
@@ -7143,10 +7152,12 @@ function Clear-SPAuditAccountCache {
         [Parameter()] [switch]$MemoryOnly
     )
 
+    $clearedTargets = @()
     if (-not $DiskOnly) {
         $script:AccountCache.Clear()
         $script:_AccountCachedAt.Clear()
         $script:_AccountDiskLoaded = $false
+        $clearedTargets += 'memory'
         Write-Host "  Account memory cache cleared." -ForegroundColor DarkGray
     }
 
@@ -7155,9 +7166,15 @@ function Clear-SPAuditAccountCache {
             $acctFile = Join-Path (Get-SPAuditCacheDir) 'accounts.jsonl'
             if (Test-Path $acctFile) {
                 Remove-Item $acctFile -Force -ErrorAction SilentlyContinue
+                $clearedTargets += 'disk'
                 Write-Host "  Account disk cache cleared." -ForegroundColor DarkGray
             }
         } catch { }
+    }
+    if ($clearedTargets.Count -gt 0) {
+        $targetDesc = $clearedTargets -join ' + '
+        Write-SPLog -Message "Audit account cache cleared ($targetDesc)" `
+            -Severity INFO -Component 'SP.AuditQueries' -Action 'Clear-SPAuditAccountCache'
     }
 }
 

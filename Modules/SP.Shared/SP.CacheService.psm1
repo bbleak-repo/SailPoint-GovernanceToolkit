@@ -317,13 +317,25 @@ function Clear-SPCacheStore {
         Removes every key/value pair and timestamp from the store but
         keeps the store registration (Name, TtlMinutes) intact.
         If the store does not exist, this is a no-op.
+
+        An optional -OnClear scriptblock can be provided by consumers
+        that have logging capabilities (SP.CacheService has no dependency
+        on SP.Core and cannot call Write-SPLog directly).
     .PARAMETER Store
         Name of the cache store to flush.
+    .PARAMETER OnClear
+        Optional scriptblock invoked after the store is cleared. Receives
+        the store name as its first positional argument. Exceptions from
+        the scriptblock are silently swallowed so logging failures never
+        break cache operations.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$Store
+        [string]$Store,
+
+        [Parameter()]
+        [scriptblock]$OnClear
     )
 
     if (-not $script:CacheStores.ContainsKey($Store)) { return }
@@ -336,6 +348,8 @@ function Clear-SPCacheStore {
         $s.HitCount  = 0
         $s.MissCount = 0
     }
+
+    if ($OnClear) { try { & $OnClear $Store } catch { } }
 }
 
 # ---------------------------------------------------------------------------
