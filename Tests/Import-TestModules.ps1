@@ -31,11 +31,11 @@ function Import-SPTestModules {
         with -ModuleName <psm1-base-name> will reach the call sites
         correctly because the modules are top-level, not nested.
     .PARAMETER Shared
-        Imports SP.HtmlHelpers (shared HTML encoding, date formatting,
-        property access, file writing) and SP.IdentityService (identity
-        resolution and caching). HtmlHelpers has no dependencies;
-        IdentityService depends on SP.Core + SP.Api at runtime but is
-        safe to import (functions will fail gracefully if deps are missing).
+        Imports SP.HtmlHelpers (HTML encoding, date formatting, property
+        access, file writing), SP.CacheService (generic TTL cache), and
+        SP.IdentityService (identity resolution and caching). HtmlHelpers
+        and CacheService have no dependencies; IdentityService depends on
+        SP.Core + SP.Api at runtime but is safe to import standalone.
     .PARAMETER Core
         Imports SP.Config, SP.Logging, SP.Vault, SP.Auth.
     .PARAMETER Api
@@ -85,8 +85,9 @@ function Import-SPTestModules {
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
 
     if ($Shared) {
-        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.HtmlHelpers.psm1')      -Force -DisableNameChecking
-        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.IdentityService.psm1')  -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.HtmlHelpers.psm1')     -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.CacheService.psm1')    -Force -DisableNameChecking
+        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.IdentityService.psm1') -Force -DisableNameChecking
     }
     if ($Core) {
         Import-Module (Join-Path $modulesRoot 'SP.Core\SP.Config.psm1')  -Force -DisableNameChecking
