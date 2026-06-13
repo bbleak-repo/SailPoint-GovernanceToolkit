@@ -3155,7 +3155,7 @@ function Export-SPOrgChartHtml {
         $count = if ($bandCounts.ContainsKey($b)) { $bandCounts[$b] } else { 0 }
         [void]$legendCells.Append(@"
 <td style="padding:6px 10px; border-left:4px solid $($style.Border); background:$($style.Background); font-family:$fontFamily; font-size:12px;">
-<strong style="color:$($style.Text);">Band $b</strong> $([System.Net.WebUtility]::HtmlEncode($label)) <span style="color:#777;">($count)</span>
+<strong style="color:$($style.Text);">Band $b</strong> $(ConvertTo-SPHtmlSafe $label) <span style="color:#777;">($count)</span>
 </td>
 "@)
     }
@@ -3174,9 +3174,9 @@ $($legendCells.ToString())
     }
 
     # --- Footer ---
-    $safeTitle     = [System.Net.WebUtility]::HtmlEncode($Title)
-    $safeGenerated = [System.Net.WebUtility]::HtmlEncode($generatedAt)
-    $safeCorrId    = [System.Net.WebUtility]::HtmlEncode($CorrelationID)
+    $safeTitle     = ConvertTo-SPHtmlSafe $Title
+    $safeGenerated = ConvertTo-SPHtmlSafe $generatedAt
+    $safeCorrId    = ConvertTo-SPHtmlSafe $CorrelationID
 
     $footerHtml = @"
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">

@@ -41,6 +41,12 @@
 # Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
 $script:EmailToIdentityCache = @{}
 
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal Functions
 
 function Search-SPIdentityByAttribute {
@@ -2383,12 +2389,12 @@ function Send-SPDisconnectedAppAlert {
     # Build HTML body for email
     $htmlBody = @"
 <html><body style="font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;">
-<h2 style="color: $(switch ($Severity) { 'CRITICAL' { '#CC3333' } 'WARN' { '#FF6600' } default { '#336699' } });">$([System.Net.WebUtility]::HtmlEncode($subject))</h2>
+<h2 style="color: $(switch ($Severity) { 'CRITICAL' { '#CC3333' } 'WARN' { '#FF6600' } default { '#336699' } });">$(ConvertTo-SPHtmlSafe $subject)</h2>
 <table style="border-collapse: collapse; margin: 16px 0;">
-<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Alert Type</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($AlertType))</td></tr>
-<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Severity</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($Severity))</td></tr>
-$(if (-not [string]::IsNullOrWhiteSpace($AppName)) { "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>Application</td><td style='padding: 4px 0;'>$([System.Net.WebUtility]::HtmlEncode($AppName))</td></tr>" })
-<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Message</td><td style="padding: 4px 0;">$([System.Net.WebUtility]::HtmlEncode($Message))</td></tr>
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Alert Type</td><td style="padding: 4px 0;">$(ConvertTo-SPHtmlSafe $AlertType)</td></tr>
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Severity</td><td style="padding: 4px 0;">$(ConvertTo-SPHtmlSafe $Severity)</td></tr>
+$(if (-not [string]::IsNullOrWhiteSpace($AppName)) { "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>Application</td><td style='padding: 4px 0;'>$(ConvertTo-SPHtmlSafe $AppName)</td></tr>" })
+<tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Message</td><td style="padding: 4px 0;">$(ConvertTo-SPHtmlSafe $Message)</td></tr>
 <tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">Timestamp</td><td style="padding: 4px 0;">$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))</td></tr>
 <tr><td style="padding: 4px 12px 4px 0; font-weight: bold;">CorrelationID</td><td style="padding: 4px 0;">$CorrelationID</td></tr>
 </table>
@@ -2401,8 +2407,8 @@ $(if (-not [string]::IsNullOrWhiteSpace($AppName)) { "<tr><td style='padding: 4p
             if ($val -is [array]) {
                 $val = ($val -join ', ')
             }
-            $htmlBody += "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>$([System.Net.WebUtility]::HtmlEncode($key))</td>"
-            $htmlBody += "<td style='padding: 4px 0;'>$([System.Net.WebUtility]::HtmlEncode([string]$val))</td></tr>`n"
+            $htmlBody += "<tr><td style='padding: 4px 12px 4px 0; font-weight: bold;'>$(ConvertTo-SPHtmlSafe $key)</td>"
+            $htmlBody += "<td style='padding: 4px 0;'>$(ConvertTo-SPHtmlSafe ([string]$val))</td></tr>`n"
         }
         $htmlBody += "</table>`n"
     }

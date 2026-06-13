@@ -422,8 +422,7 @@ function Export-SPDisconnectedAppDeltaHtml {
         # ---------------------------------------------------------------
         # Write file (UTF-8 no BOM)
         # ---------------------------------------------------------------
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Delta HTML report saved to $filePath ($totalChanges change(s))" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppDeltaHtml'
@@ -619,8 +618,7 @@ function Export-SPDisconnectedAppIdentityRiskHtml {
         [void]$html.AppendLine('</html>')
 
         # Write file (UTF-8 no BOM)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Identity risk HTML report saved to $filePath ($($identities.Count) identit(ies))" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppIdentityRiskHtml'
@@ -811,8 +809,7 @@ function Export-SPDisconnectedAppEntitlementCatalogHtml {
         [void]$html.AppendLine('</html>')
 
         # Write file (UTF-8 no BOM)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Entitlement catalog HTML report saved to $filePath ($($catalogEntries.Count) entitlement(s))" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppEntitlementCatalogHtml'
@@ -1230,8 +1227,7 @@ function Export-SPDisconnectedAppBatchHtml {
         [void]$html.AppendLine('</html>')
 
         # Write file (UTF-8 no BOM)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Batch summary HTML report saved to $filePath ($totalApps app(s))" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppBatchHtml'
@@ -1523,8 +1519,7 @@ function Export-SPDisconnectedAppSlaHtml {
         [void]$html.AppendLine('</html>')
 
         # Write file (UTF-8 no BOM)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "SLA HTML report saved to $filePath ($($apps.Count) app(s))" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppSlaHtml'
@@ -1752,8 +1747,7 @@ function Export-SPDisconnectedAppDecisionHarvestHtml {
         # -----------------------------------------------------------
         # Write file (UTF-8 no BOM)
         # -----------------------------------------------------------
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Decision harvest HTML report saved to $filePath" `
             -Severity INFO -Component 'SP.DisconnectedAppRunner' -Action 'Export-SPDisconnectedAppDecisionHarvestHtml'
@@ -2410,8 +2404,7 @@ function Export-SPDisconnectedAppTeamDashboard {
         [void]$html.AppendLine('</html>')
 
         # Write file (UTF-8 no BOM)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($filePath, $html.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $filePath -Content $html.ToString()
 
         Write-SPLog -Message "Team dashboard generated for '$AppName' at $filePath" `
             -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
