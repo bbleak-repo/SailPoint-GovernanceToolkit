@@ -8,6 +8,7 @@
     Description          = 'Composable, data-source-agnostic HTML report-component engine (RC framework), ported verbatim from Group-Enumerator. Pure presentation; no SP.* or platform dependency.'
     PowerShellVersion    = '5.1'
     CompatiblePSEditions = @('Desktop')
+    # SP.Shared is auto-imported by RC00-Framework if not already loaded.
     RequiredModules      = @()
     FunctionsToExport    = @(
         'New-ComposableReport', 'New-RCContext', 'Get-RCTheme', 'Get-RCSharedCss',

@@ -15,6 +15,7 @@
     Copyright         = '(c) 2026. All rights reserved.'
 
     # SP.Core and SP.Api must be imported before SP.DeltaCert (caller handles import order).
+    # SP.Shared is auto-imported by SP.DeltaCertQueries if not already loaded.
     # SP.DeltaCertQueries calls Write-SPLog (SP.Core) and Invoke-SPApiRequest (SP.Api).
     # SP.DeltaCertRunner calls New-SPCampaign and Start-SPCampaign (SP.Api).
     # RequiredModules is empty to avoid PSModulePath resolution failures in

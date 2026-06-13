@@ -11,6 +11,7 @@
     Description       = 'SailPoint ISC Governance Toolkit - Test Orchestration Module'
 
     # Dependency: SP.Core and SP.Api must be imported before SP.Testing (caller handles import order).
+    # SP.Shared is auto-imported by SP.Evidence if not already loaded.
     RequiredModules   = @()
 
     # Sub-modules loaded when this manifest is imported

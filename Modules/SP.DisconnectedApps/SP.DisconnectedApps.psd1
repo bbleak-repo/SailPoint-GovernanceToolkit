@@ -15,6 +15,7 @@
     Copyright         = '(c) 2026. All rights reserved.'
 
     # SP.Core and SP.Api must be imported before SP.DisconnectedApps (caller handles import order).
+    # SP.Shared is auto-imported by SP.DisconnectedAppReports and SP.DisconnectedAppRunner if not already loaded.
     # SP.DisconnectedAppRunner calls Write-SPLog (SP.Core) and Invoke-SPApiRequest (SP.Api).
     # RequiredModules is empty to avoid PSModulePath resolution failures in
     # non-standard deployment layouts.

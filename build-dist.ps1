@@ -108,6 +108,7 @@ function Build-Zip {
 function Get-RuntimePlan {
     # Shared runtime tree (structured): Modules, Scripts, Gui, base Config.
     param($Plan)
+    # Recursively discovers all .psm1/.psd1 under Modules/ -- includes SP.Shared automatically.
     Add-Tree $Plan 'Modules' 'Modules' @('*.psm1', '*.psd1')
     Add-Tree $Plan 'Scripts' 'Scripts' @('*.ps1')
     Add-Tree $Plan 'Gui'     'Gui'     @('*.xaml')

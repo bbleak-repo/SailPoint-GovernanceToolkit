@@ -8,6 +8,7 @@
     Description          = 'Adaptive-report data adapters (Build-SPRCDataset: entitlement / campaign anchors) plus the ported baseline report library (B0x), rendering the RC GroupResults shape. Pairs with SP.ReportComponents.'
     PowerShellVersion    = '5.1'
     CompatiblePSEditions = @('Desktop')
+    # SP.Shared is auto-imported by SP.BaselineReports if not already loaded.
     RequiredModules      = @()
     FunctionsToExport    = @(
         'Build-SPRCDataset',

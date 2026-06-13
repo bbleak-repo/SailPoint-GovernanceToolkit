@@ -15,6 +15,7 @@
     Copyright         = '(c) 2026. All rights reserved.'
 
     # SP.Core and SP.Api must be imported before SP.Audit (caller handles import order).
+    # SP.Shared is auto-imported by nested modules if not already loaded.
     # SP.Audit calls Write-SPLog (SP.Core) and may call Invoke-SPApiRequest (SP.Api)
     # indirectly through the query module. RequiredModules is empty to avoid
     # PSModulePath resolution failures in non-standard deployment layouts.

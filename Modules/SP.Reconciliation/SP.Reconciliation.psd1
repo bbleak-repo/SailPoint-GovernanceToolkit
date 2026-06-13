@@ -15,8 +15,9 @@
     Copyright         = '(c) 2026. All rights reserved.'
 
     # SP.Core must be imported before SP.Reconciliation when the export runner resolves config /
-    # logs (Get-SPConfig / Write-SPLog). The pure builder (Build-SPIscReconciliationModel) has no
-    # toolkit dependency. RequiredModules is empty to avoid PSModulePath resolution failures in
+    # logs (Get-SPConfig / Write-SPLog). SP.Shared is auto-imported by SP.IscReconciliation if not already loaded.
+    # The pure builder (Build-SPIscReconciliationModel) has no toolkit dependency.
+    # RequiredModules is empty to avoid PSModulePath resolution failures in
     # non-standard deployment layouts (caller handles import order).
     RequiredModules   = @()
 
