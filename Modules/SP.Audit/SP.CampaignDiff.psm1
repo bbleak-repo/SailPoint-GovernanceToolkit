@@ -603,8 +603,7 @@ function Export-SPCampaignCompletionDiffHtml {
         [void]$sb.Append("</body></html>")
 
         $file = Resolve-SPDiffOutFile -OutputPath $OutputPath -Default ("completion-diff-{0}.html" -f (Get-SPDiffStamp $meta))
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $utf8)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPCampaignCompletionDiffHtml failed: $($_.Exception.Message)" } }
@@ -765,8 +764,7 @@ function Export-SPCampaignScopeDiffHtml {
         [void]$sb.Append("</body></html>")
 
         $file = Resolve-SPDiffOutFile -OutputPath $OutputPath -Default ("scope-diff-{0}.html" -f (Get-SPDiffStamp $meta))
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $utf8)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPCampaignScopeDiffHtml failed: $($_.Exception.Message)" } }
@@ -1227,7 +1225,6 @@ function Export-SPCampaignDiffByDirectorHtml {
                       $pCurr = Get-SPDiffShortDate (Get-SPDiffProp $meta 'CurrentCampaignStartDate' '')
                       "$(Get-SPDiffEnc (Get-SPDiffProp $meta 'PreviousCampaignName' ''))$(if ($pPrev) { " ($pPrev)" }) &rarr; $(Get-SPDiffEnc (Get-SPDiffProp $meta 'CampaignName' ''))$(if ($pCurr) { " ($pCurr)" })"
                   } elseif ($meta.HasPrevious) { "$(Get-SPDiffEnc $meta.PreviousCapturedAt) &rarr; $(Get-SPDiffEnc $meta.CurrentCapturedAt)" } else { "First capture: $(Get-SPDiffEnc $meta.CurrentCapturedAt)" }
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
         $files = [System.Collections.Generic.List[string]]::new()
 
         foreach ($d in @($split.Directors)) {
@@ -1236,7 +1233,7 @@ function Export-SPCampaignDiffByDirectorHtml {
             if ([string]::IsNullOrWhiteSpace($safe)) { $safe = 'director' }
             $file = Join-Path $runDir ("director-diff-$safe.html")
             $d['File'] = (Split-Path $file -Leaf)   # for the index links
-            [System.IO.File]::WriteAllText($file, (Get-SPDiffDirectorBodyHtml -Director $d -Meta $meta -Window $window), $utf8)
+            Write-SPHtmlFile -Path $file -Content (Get-SPDiffDirectorBodyHtml -Director $d -Meta $meta -Window $window)
             [void]$files.Add($file)
         }
 
@@ -1257,7 +1254,7 @@ function Export-SPCampaignDiffByDirectorHtml {
         [void]$ib.Append("<div class='note'>One HTML file per director &mdash; their team's attestation progress + access changes &mdash; suitable to send individually. Read-only; no reassignment or escalation.</div>")
         [void]$ib.Append("</body></html>")
         $indexPath = Join-Path $runDir 'index.html'
-        [System.IO.File]::WriteAllText($indexPath, $ib.ToString(), $utf8)
+        Write-SPHtmlFile -Path $indexPath -Content $ib.ToString()
 
         return @{ Success = $true; Data = @{ RunDir = $runDir; Index = $indexPath; Files = @($files); DirectorCount = @($split.Directors).Count }; Error = $null }
     }
@@ -1521,8 +1518,7 @@ function Export-SPEntitlementHistoryHtml {
         [void]$sb.Append("</body></html>")
 
         $file = Resolve-SPDiffOutFile -OutputPath $OutputPath -Default 'entitlement-history.html'
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $utf8)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPEntitlementHistoryHtml failed: $($_.Exception.Message)" } }

@@ -320,8 +320,7 @@ code{background:#1c2230;padding:1px 5px;border-radius:4px;font-size:12px;}
     }
 
     # Write UTF-8 no BOM for clean browser rendering
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), $utf8NoBom)
+    Write-SPHtmlFile -Path $OutputPath -Content $sb.ToString()
 
     return $OutputPath
 }

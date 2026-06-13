@@ -1116,7 +1116,7 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
 
     if (-not (Test-Path $effectiveOutputPath)) { New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null }
     $metricsHtmlPath = Join-Path $effectiveOutputPath ('governance-metrics-{0}.html' -f $startTime.ToString('yyyyMMdd-HHmmss'))
-    [System.IO.File]::WriteAllText($metricsHtmlPath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    Write-SPHtmlFile -Path $metricsHtmlPath -Content $sb.ToString()
     Write-Host "  HTML report: $metricsHtmlPath" -ForegroundColor Green
 }
 

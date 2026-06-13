@@ -383,6 +383,6 @@ td.fill { min-width:120px; }
     if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
-    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
+    Write-SPHtmlFile -Path $OutputPath -Content $sb.ToString()
     return $OutputPath
 }

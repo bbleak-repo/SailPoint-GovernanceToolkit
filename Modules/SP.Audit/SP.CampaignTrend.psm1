@@ -406,8 +406,7 @@ td{border-bottom:1px solid #e3e9f0;padding:4px 9px;}
             $safeId = ([string]$Trend.CampaignId) -replace '[^A-Za-z0-9_\-]', '_'
             $file = Join-Path $OutputPath "trend-$safeId-$($Trend.Granularity).html"
         }
-        $u = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPCampaignTrendHtml failed: $($_.Exception.Message)" } }
@@ -544,8 +543,7 @@ function Export-SPProgramTrendHtml {
             if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
             $file = Join-Path $OutputPath "program-trend-$($Trend.Granularity).html"
         }
-        $u = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPProgramTrendHtml failed: $($_.Exception.Message)" } }

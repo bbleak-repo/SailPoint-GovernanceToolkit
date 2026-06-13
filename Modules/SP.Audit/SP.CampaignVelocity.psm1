@@ -217,8 +217,7 @@ tr.fast td{background:#fff3cd;}
             $stamp = try { ([datetime]::Parse([string]$s.CapturedAt)).ToString('yyyy-MM-ddTHHmmss') } catch { 'capture' }
             $file = Join-Path $OutputPath "velocity-advisory-$safeId-$stamp.html"
         }
-        $u = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPReviewerVelocityHtml failed: $($_.Exception.Message)" } }

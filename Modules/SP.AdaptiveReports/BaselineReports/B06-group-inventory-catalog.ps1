@@ -326,8 +326,7 @@ tbody tr.flagged:nth-child(even) { background: #fdeeea; }
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), $utf8NoBom)
+    Write-SPHtmlFile -Path $OutputPath -Content $sb.ToString()
 
     return $OutputPath
 }

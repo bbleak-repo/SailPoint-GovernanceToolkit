@@ -34,6 +34,12 @@
             -FunctionName 'New-RC<Name>Component' -Requires @('GroupResults')
 #>
 
+# Auto-import SP.Shared if Write-SPHtmlFile is not yet available.
+if (-not (Get-Command Write-SPHtmlFile -ErrorAction Ignore)) {
+    $_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+    if (Test-Path $_spSharedPsd1) { Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking }
+}
+
 # ---------------------------------------------------------------------------
 # Registry (initialised at dot-source; components self-register after).
 # ---------------------------------------------------------------------------
@@ -539,8 +545,7 @@ function New-ComposableReport {
     if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), $utf8NoBom)
+    Write-SPHtmlFile -Path $OutputPath -Content $sb.ToString()
 
     return $OutputPath
 }

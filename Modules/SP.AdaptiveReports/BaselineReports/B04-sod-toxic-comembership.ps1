@@ -24,6 +24,12 @@
     Dot-sources nothing; no module imports; no AD calls.
 #>
 
+# Auto-import SP.Shared if Write-SPHtmlFile is not yet available.
+if (-not (Get-Command Write-SPHtmlFile -ErrorAction Ignore)) {
+    $_spSharedPsd1 = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'SP.Shared\SP.Shared.psd1'
+    if (Test-Path $_spSharedPsd1) { Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking }
+}
+
 function ConvertTo-SodHtmlSafe {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
@@ -484,7 +490,6 @@ function Export-SodToxicComembershipReport {
     if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), $utf8)
+    Write-SPHtmlFile -Path $OutputPath -Content $sb.ToString()
     return $OutputPath
 }

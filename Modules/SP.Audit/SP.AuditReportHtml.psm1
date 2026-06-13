@@ -1713,7 +1713,7 @@ function Export-SPAuditText {
         $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
 
         $content = $lines -join "`r`n"
-        [System.IO.File]::WriteAllText($filePath, $content, [System.Text.Encoding]::UTF8)
+        Write-SPHtmlFile -Path $filePath -Content $content
         $writtenFiles.Add($filePath)
 
         if (Get-Command -Name Write-SPLog -ErrorAction SilentlyContinue) {
@@ -3772,7 +3772,7 @@ $tbodyHtml
 </html>
 "@
 
-    [System.IO.File]::WriteAllText($htmlFile, $html, [System.Text.Encoding]::UTF8)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
     return $htmlFile
 }
 
@@ -3926,7 +3926,7 @@ $tbodyHtml
 </html>
 "@
 
-    [System.IO.File]::WriteAllText($htmlFile, $html, [System.Text.Encoding]::UTF8)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Audit trail HTML written ($($Events.Count) events): $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditTrailHtml' `
@@ -4107,8 +4107,7 @@ function Export-SPAuditCsv {
             } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             # Remove the empty data row, keep only headers
             $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+            Write-SPHtmlFile -Path $csvPath -Content "$headerLine`n"
         }
 
         $files['Decisions']     = $csvPath
@@ -4229,8 +4228,7 @@ function Export-SPAuditCsv {
                 RubberStampRisk=''
             } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+            Write-SPHtmlFile -Path $csvPath -Content "$headerLine`n"
         }
 
         $files['Reviewers']     = $csvPath
@@ -4326,8 +4324,7 @@ function Export-SPAuditCsv {
                 CompletionPct='';ReviewerCount='';AvgResponseHours='';MedianResponseHours=''
             } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+            Write-SPHtmlFile -Path $csvPath -Content "$headerLine`n"
         }
 
         $files['Campaigns']     = $csvPath
@@ -4400,8 +4397,7 @@ function Export-SPAuditCsv {
                 ProvisioningEventId='';DaysToRemediate=''
             } | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
             $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+            Write-SPHtmlFile -Path $csvPath -Content "$headerLine`n"
         }
 
         $files['Remediation']     = $csvPath
@@ -4604,8 +4600,7 @@ $($sourceSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Entitlement inventory HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPEntitlementInventoryHtml' `
@@ -4812,8 +4807,7 @@ $($sourceSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Access profile inventory HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAccessProfileInventoryHtml' `
@@ -5070,8 +5064,7 @@ ${tableHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Role inventory HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRoleInventoryHtml' `
@@ -5276,8 +5269,7 @@ $($tierSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Identity risk HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityRiskHtml' `
@@ -5518,8 +5510,7 @@ $($detailCards -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Source governance HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceGovernanceHtml' `
@@ -5766,8 +5757,7 @@ $($sourceSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Stale access HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPStaleAccessHtml' `
@@ -6371,8 +6361,7 @@ ${riskHtml}
 </html>
 "@
 
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+        Write-SPHtmlFile -Path $htmlFile -Content $html
 
         Write-SPLog -Message "Campaign completion report written: $htmlFile" `
             -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionReport' `
@@ -6616,8 +6605,7 @@ function Export-SPOrchestratorHistoryHtml {
     [void]$sb.AppendLine('</body></html>')
 
     # Write file
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($filePath, $sb.ToString(), $utf8NoBom)
+    Write-SPHtmlFile -Path $filePath -Content $sb.ToString()
 
     Write-SPLog -Message "Orchestrator history report written: $filePath" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrchestratorHistoryHtml' `
@@ -7021,8 +7009,7 @@ function Export-SPGovernanceBIData {
         foreach ($col in $columnNames) { $emptyRow[$col] = '' }
         [PSCustomObject]$emptyRow | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
         $headerLine = (Get-Content -Path $csvPath -TotalCount 1)
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($csvPath, "$headerLine`n", $utf8NoBom)
+        Write-SPHtmlFile -Path $csvPath -Content "$headerLine`n"
     }
 
     Write-SPLog -Message "Power BI CSV written ($($biRows.Count) rows, $($columnNames.Count) columns): $csvPath" `
@@ -7217,8 +7204,7 @@ ${tableHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     # --- CSV export ---
     $csvRows = [System.Collections.Generic.List[object]]::new()
@@ -7526,8 +7512,7 @@ ${levelRefHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Governance maturity HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPGovernanceMaturityHtml' `
@@ -7748,8 +7733,7 @@ $($detailSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Identity access spread HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityAccessSpreadHtml' `
@@ -8127,8 +8111,7 @@ $($dimensionSections -join "`n")
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Audit period comparison HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPAuditPeriodComparisonHtml' `
@@ -8414,8 +8397,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Orphan account HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPOrphanAccountHtml' `
@@ -8700,8 +8682,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Source aggregation health HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPSourceAggregationHealthHtml' `
@@ -9006,8 +8987,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Identity data quality HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPIdentityDataQualityHtml' `
@@ -9314,8 +9294,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Campaign coverage gap HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCoverageGapHtml' `
@@ -9591,8 +9570,7 @@ ${campaignContent}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Campaign completion forecast HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPCampaignCompletionForecastHtml' `
@@ -9965,8 +9943,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Reviewer delegation HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPReviewerDelegationHtml' `
@@ -10228,8 +10205,7 @@ ${recsHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Policy compliance HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPPolicyComplianceHtml' `
@@ -10420,8 +10396,7 @@ ${changesSectionHtml}
 </html>
 "@
 
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+    Write-SPHtmlFile -Path $htmlFile -Content $html
 
     Write-SPLog -Message "Config drift HTML written: $htmlFile" `
         -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPConfigDriftHtml' `
@@ -10873,8 +10848,7 @@ $($windowSections -join "`n")
 </html>
 "@
 
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($htmlFile, $html, $utf8NoBom)
+        Write-SPHtmlFile -Path $htmlFile -Content $html
 
         Write-SPLog -Message "Export-SPRollingTrendHtml: rolling trend HTML written: $htmlFile" `
             -Severity INFO -Component 'SP.AuditReport' -Action 'Export-SPRollingTrendHtml' `
@@ -11395,8 +11369,7 @@ function toggleIdentities(){
 </html>
 "@
 
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($filePath, $html, $utf8NoBom)
+            Write-SPHtmlFile -Path $filePath -Content $html
             $files.Add($filePath)
 
             Write-SPLog -Message "Wrote hierarchical report for '$($rNode.DisplayName)' (level=$($rNode.Level)) → $filePath" `
@@ -11479,7 +11452,6 @@ function Export-SPMasterLeadershipHtml {
         $genDate   = Get-Date -Format 'yyyy-MM-dd HH:mm'
         $runDir    = Join-Path $OutputPath "master-$runStamp"
         New-Item -Path $runDir -ItemType Directory -Force | Out-Null
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         $topNodes  = @($HierarchyData.TopNodes)
         $files     = [System.Collections.Generic.List[string]]::new()
         $enc       = { param($s) ConvertTo-SPHtmlSafe [string]$s }
@@ -11635,7 +11607,7 @@ function toggleAll(open){document.querySelectorAll('details').forEach(function(d
 </body></html>
 "@
             $fp = Join-Path $runDir $fileName
-            [System.IO.File]::WriteAllText($fp, $html, $utf8NoBom)
+            Write-SPHtmlFile -Path $fp -Content $html
             $files.Add($fp)
         }
 

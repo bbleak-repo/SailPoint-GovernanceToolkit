@@ -116,7 +116,7 @@ function Import-SPIdentityCacheFromDisk {
             $script:_IdentityCachedAt[$id] = $latest[$id].CachedAt
             [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
         }
-        [System.IO.File]::WriteAllText($info.File, $sb.ToString(), $utf8NoBom)
+        Write-SPHtmlFile -Path $info.File -Content $sb.ToString()
     } catch { }
 }
 

@@ -370,8 +370,7 @@ h1{font-size:21px;color:#1f3a5f;margin:0 0 2px;}
             if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force -WhatIf:$false | Out-Null }
             $file = Join-Path $OutputPath 'cert-tracker.html'
         }
-        $u = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPCertTrackerHtml failed: $($_.Exception.Message)" } }
@@ -522,8 +521,7 @@ tr:nth-child(even) td{background:#f6f9fc;}
             $safeId = ([string]$CampaignMeta['Id']) -replace '[^A-Za-z0-9_\-]', '_'
             $file = Join-Path $OutputPath "attestation-evidence-$safeId.html"
         }
-        $u = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($file, $sb.ToString(), $u)
+        Write-SPHtmlFile -Path $file -Content $sb.ToString()
         return @{ Success = $true; Data = $file; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Export-SPAttestationEvidenceHtml failed: $($_.Exception.Message)" } }
