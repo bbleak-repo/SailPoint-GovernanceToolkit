@@ -62,6 +62,11 @@ scheduled orchestrator run).
 | Disconnected app snapshots | `DisconnectedApps\Snapshots\<AppName>\` (date-stamped CSVs) |
 | Disconnected app reports | `DisconnectedApps\Reports\<AppName>\` (delta HTML + JSONL) |
 | Governance metrics (time-series) | `Audit\metrics\` (JSONL KPI history) |
+| Governance trend dashboard | `Reports\governance-dashboard-*.html` (KPI cards + sparklines + alerts) |
+| Campaign trend (per-campaign) | `Audit\metrics\campaign-trend\{env}\{campaignId}.jsonl` |
+| Identity cache | `Audit\.cache\identities.jsonl` (PII -- restrict directory ACLs) |
+| Account cache | `Audit\.cache\accounts.jsonl` |
+| Campaign item cache | `Audit\.cache\items-{campaignId}.jsonl` + `.meta.json` |
 | Governance health/report output | `Reports\` (composite report packages) |
 | Encrypted vault | `Data\sp-vault.enc` |
 | Task Scheduler history | Windows Event Viewer > Applications and Services Logs > Microsoft > Windows > TaskScheduler |
@@ -144,6 +149,79 @@ Perform these checks weekly (suggested: Monday morning).
    maximum level without resolution. These require manual reviewer outreach.
 5. **Disk usage check** -- Verify the toolkit directory is not filling up. If retention
    is disabled, consider enabling it or running `Invoke-SPRetention.ps1` manually.
+
+---
+
+## Cache Management
+
+The toolkit caches identity details, account data, and campaign items to reduce API
+calls. All caches use JSONL files in the `.cache` directory under `Audit.OutputPath`.
+
+### Cache directory security
+
+The identity cache (`identities.jsonl`) contains PII (names, emails, manager names).
+On production workstations, restrict the cache directory to the service account:
+
+```powershell
+# Windows: restrict to the current user
+$dir = Join-Path (Get-SPConfig).Audit.OutputPath '.cache'
+icacls $dir /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+```
+
+The toolkit warns at startup if the cache directory has overly permissive ACLs
+(readable by Everyone, Users, or Authenticated Users on Windows; group/other on
+macOS/Linux).
+
+### Cache inspection
+
+```powershell
+# Check identity cache health
+Import-Module .\Modules\SP.Shared\SP.Shared.psd1
+Get-SPCacheStoreInfo -Store 'SPIdentity'
+# Returns: ItemCount, OldestEntry, NewestEntry, ExpiredCount, DiskSizeBytes, HitRate
+
+# Validate JSONL integrity
+Test-SPCacheStoreIntegrity -Store 'SPIdentity'
+# Returns: Ok=$true/$false, Findings (parse errors, duplicates, expired ratio)
+
+# View all registered stores
+Get-SPCacheStoreSummary
+```
+
+### Cache clearing
+
+Clear caches when you suspect stale data (e.g., after a reorg or bulk termination):
+
+```powershell
+# Clear identity cache (memory + disk)
+Clear-SPIdentityCache
+
+# Clear identity cache (disk only -- memory survives for current session)
+Clear-SPIdentityCache -DiskOnly
+
+# Clear campaign item cache for a specific campaign
+Clear-SPAuditItemCache -CampaignId 'abc-123'
+
+# Clear all campaign item caches
+Clear-SPAuditItemCache
+```
+
+All cache-clear operations are logged via `Write-SPLog` for SOX audit trail.
+
+### TTL tuning
+
+| Cache | Config key | Default | Tradeoff |
+|---|---|---|---|
+| Identity | `Audit.IdentityCacheTtlMinutes` | 1440 (24h) | Shorter = more API calls but fresher org data. For same-day termination SLAs, consider 480 (8h). |
+| Active campaign items | `Audit.CacheActiveTtlMinutes` | 180 (3h) | Shorter = more API calls but closer to real-time decision data. |
+| Completed campaign items | (permanent) | Never expires | Correct -- COMPLETED campaigns are immutable in ISC. |
+| Account details | `Audit.AccountCacheTtlMinutes` | 1440 (24h) | Similar tradeoff as identity. |
+
+For SOX-critical evidence runs, consider clearing the identity cache at the start:
+```powershell
+Clear-SPIdentityCache
+.\Scripts\Invoke-SPDailyEvidenceReportV4.ps1 -CampaignName 'Q2 Entitlement Review'
+```
 
 ---
 

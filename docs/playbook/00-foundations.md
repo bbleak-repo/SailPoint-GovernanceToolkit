@@ -70,18 +70,21 @@ scripts and the GUI. Every script and the dashboard share the same module chain.
 
 | Module | Purpose | Used by | Notes |
 |---|---|---|---|
+| **SP.Shared** | Shared utilities: HTML encoding/dates/properties/file writing (SP.HtmlHelpers), generic TTL-aware cache with JSONL persistence (SP.CacheService), identity resolution and caching (SP.IdentityService) | Everything | Infrastructure -- loaded first, before SP.Core. 26 exported functions across 3 sub-modules. |
 | **SP.Core** | Configuration, logging, authentication, vault, TLS enforcement | Everything | Infrastructure -- you never call this directly. |
 | **SP.Api** | HTTP client, campaign/certification/decision API wrappers, rate limiting, pagination | All scripts that talk to ISC | Infrastructure -- you never call this directly. |
 | **SP.Testing** | Test-case loader, batch runner, assertions, evidence writer | `Invoke-GovernanceTest.ps1`, the Campaigns GUI tab | Infrastructure for the test harness. |
-| **SP.Audit** | Audit queries, analytics, identity-account resolution, HTML/text report generation | `Invoke-SPCampaignAudit.ps1`, `Invoke-SPCampaignSearch.ps1`, governance reports, the Audit GUI tab | The core reporting engine. |
+| **SP.Audit** | Audit queries, analytics, identity-account resolution, HTML/text report generation, governance trend queries, governance dashboard | `Invoke-SPCampaignAudit.ps1`, `Invoke-SPCampaignSearch.ps1`, `Invoke-SPGovernanceMetrics.ps1`, governance reports, the Audit GUI tab | The core reporting engine. Includes SP.GovernanceTrendQuery for dashboard data + alerts. |
 | **SP.DeltaCert** | Delta-cert queries (account activities, identity resolution, band classification), campaign runner, escalation, delta report | `Invoke-SPADDeltaCert.ps1`, `Invoke-SPDeltaCertEscalate.ps1`, `Invoke-SPDeltaReport.ps1`, the Delta Cert GUI tab | |
 | **SP.DisconnectedApps** | CSV validation, snapshot/diff, identity correlation, campaign creation, batch orchestration, analytics, reports | `Invoke-SPDisconnectedAppCert.ps1`, `Invoke-SPDisconnectedAppBatch.ps1`, `Invoke-SPDisconnectedAppRegistry.ps1`, the Delta Cert GUI tab | |
 | **SP.Sdk** | Vendor SDK wrappers -- campaign templates, cert summaries, approvals, work items, workflows, campaign filters, OOO fallback | `Invoke-SPSdkCampaignTemplates.ps1`, `Invoke-SPSdkWorkItems.ps1`, `Invoke-SPSdkWorkflows.ps1`, the SDK Features GUI tab | |
 | **SP.AdaptiveReports** | Composable adaptive report engine, baseline report library, dataset builder | `Invoke-SPAdaptiveReport.ps1`, the Adaptive Reports GUI tab | |
 | **SP.ReportComponents** | Individual HTML report components -- KPI cards, heatmap, tree, diff, top-N, group table, framework CSS | SP.AdaptiveReports (indirectly) | Infrastructure -- you never call this directly. Component files: `RC00-Framework.ps1` through `RC06-GroupTable.ps1`. |
+| **SP.Reconciliation** | ISC-side reconciliation operand builder/exporter | `Invoke-SPIscReconciliation.ps1` | Pure builder -- no ISC API dependency for the builder itself. |
 | **SP.Gui** | WPF window construction, GUI bridge (translates button clicks to module calls), SDK bridge | `Show-SPDashboard.ps1` | Infrastructure for the GUI. |
 
 **Module dependency chain:**
+`SP.Shared` (HTML helpers, cache service, identity service -- no dependencies) -->
 `SP.Core` (config, auth, logging) --> `SP.Api` (HTTP + ISC endpoints) --> domain modules
 (`SP.Audit`, `SP.DeltaCert`, `SP.DisconnectedApps`, `SP.Sdk`, `SP.Testing`) -->
 `SP.AdaptiveReports` + `SP.ReportComponents` (report rendering) --> `SP.Gui` (presentation).

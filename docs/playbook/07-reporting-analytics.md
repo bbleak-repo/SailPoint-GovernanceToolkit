@@ -374,6 +374,51 @@ generates trend reports:
 | Pending items | Count of undecided access review items |
 | Reviewer count | Unique reviewers active in the period |
 | Source coverage | Percentage of sources covered by campaigns |
+| Active campaign count | Campaigns currently ACTIVE or ACTIVATING |
+| Completed campaign count | Campaigns completed in this period |
+| Overdue campaign count | Active campaigns past their deadline |
+| Avg days to complete | Average duration from campaign start to completion |
+| Reviewer completion % | Average completion percentage across active reviewers |
+| Reviewers not started | Reviewers with zero decisions made |
+
+### Per-campaign trend enrichment
+
+Each campaign snapshot also captures scope change and risk metrics in the
+per-campaign JSONL time-series (`{CampaignTrendPath}/{env}/{campaignId}.jsonl`):
+
+| Metric | Description |
+|---|---|
+| `scope.added` | Items added since last snapshot (new access entering scope) |
+| `scope.removed` | Items removed since last snapshot |
+| `scope.changed` | Items whose decision changed between snapshots |
+| `scope.revokedItems` | Total items with REVOKE decision in this capture |
+| `scope.totalSources` | Distinct sources in scope |
+| `timing.daysSinceStart` | Days elapsed since campaign created |
+| `timing.daysUntilDeadline` | Days remaining until deadline (negative if overdue) |
+| `risk.privilegedApproved` | Privileged items with APPROVE decision |
+| `risk.privilegedTotal` | Total privileged items in scope |
+
+### Governance trend dashboard
+
+The toolkit produces a single-page HTML governance dashboard with KPI cards, inline
+SVG sparklines (no JavaScript), direction indicators, and alert callouts:
+
+```powershell
+# Generate dashboard data + render HTML
+$data = Get-SPGovernanceDashboardData -Period Last30Days
+Export-SPGovernanceDashboardHtml -DashboardData $data -OutputPath '.\Reports\'
+
+# With period-over-period comparison
+$comparison = Compare-SPGovernancePeriods -Period1 '2026-05' -Period2 '2026-06'
+Export-SPGovernanceDashboardHtml -DashboardData $data -PeriodComparison $comparison `
+    -OutputPath '.\Reports\'
+
+# Check for governance alerts (declining metrics, overdue campaigns)
+Get-SPGovernanceAlerts -LookbackDays 30
+```
+
+The dashboard HTML uses inline CSS only (Word/email compatible), with CSS-triangle
+direction arrows and inline SVG sparkline bar charts. No external dependencies.
 
 ### Campaign comparison
 
