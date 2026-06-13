@@ -22,10 +22,10 @@ Set-StrictMode -Version 1
 
 #region Assembly Loading
 
-Add-Type -AssemblyName PresentationFramework  -ErrorAction Stop
-Add-Type -AssemblyName PresentationCore       -ErrorAction Stop
-Add-Type -AssemblyName WindowsBase            -ErrorAction Stop
-Add-Type -AssemblyName System.Xml             -ErrorAction Stop
+try { Add-Type -AssemblyName PresentationFramework -ErrorAction Stop } catch {}
+try { Add-Type -AssemblyName PresentationCore      -ErrorAction Stop } catch {}
+try { Add-Type -AssemblyName WindowsBase           -ErrorAction Stop } catch {}
+try { Add-Type -AssemblyName System.Xml            -ErrorAction Stop } catch {}
 
 #endregion
 

@@ -290,14 +290,15 @@ Describe 'Invoke-SPReportDistribution' {
 
         It 'PreviewOnly block exits with code 0' {
             $scriptContent = Get-Content -Path $script:ScriptPath -Raw
-            # After the preview section there is an exit 0
-            $scriptContent | Should -Match 'Preview.*exit\s+0' `
+            # After the preview section there is an exit 0 -- use (?s) for dotall (cross-line) matching
+            $scriptContent | Should -Match '(?s)Action.*Preview.*exit\s+0' `
                 -Because 'PreviewOnly should exit with code 0 after displaying preview'
         }
 
         It 'Send-SPReport is only called when SendReports is true' {
             $scriptContent = Get-Content -Path $script:ScriptPath -Raw
-            $scriptContent | Should -Match '\$SendReports.*Send-SPReport' `
+            # $SendReports gates a block that calls Send-SPReport -- use (?s) for dotall matching
+            $scriptContent | Should -Match '(?s)\$SendReports.*Send-SPReport' `
                 -Because 'email sending should be gated by the SendReports switch'
         }
     }

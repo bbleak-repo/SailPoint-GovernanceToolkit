@@ -137,7 +137,7 @@ Describe 'T-01: SDK load-wait UX -- Set-SdkSubTabButtonsEnabled disable/re-enabl
         $body | Should -Match 'if \(\$script:IsSdkRunning\) \{ \$chainedRefreshOwnsState = \$true \}'
     }
 
-    It 'Set-SdkSubTabButtonsEnabled actually keeps a design-disabled button disabled after a load cycle' {
+    It 'Set-SdkSubTabButtonsEnabled actually keeps a design-disabled button disabled after a load cycle' -Skip:(-not $IsWindows) {
         # Functional (non-AST) proof: import the module, build a tiny in-memory WPF
         # tree with one enabled button + one design-disabled button, run a full
         # disable->re-enable cycle, and assert the design-disabled one stays off.
@@ -176,7 +176,7 @@ Describe 'T-01: SDK load-wait UX -- Set-SdkSubTabButtonsEnabled disable/re-enabl
         }
     }
 
-    It 'Set-SdkSubTabButtonsEnabled nested disable/enable preserves original enabled state' {
+    It 'Set-SdkSubTabButtonsEnabled nested disable/enable preserves original enabled state' -Skip:(-not $IsWindows) {
         Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue
         $psd1 = Join-Path $PSScriptRoot '..\Modules\SP.Gui\SP.Gui.psd1'
         Import-Module $psd1 -Force -DisableNameChecking -ErrorAction Stop

@@ -532,8 +532,10 @@ Describe "RE-04: HTML uses collapsible detail sections in Detailed mode, none in
                 -DetailLevel 'Detailed'
 
             $script:RE04DetailedHtml = ''
-            if (@($script:RE04DetailedPaths).Count -gt 0 -and (Test-Path $script:RE04DetailedPaths[0])) {
-                $script:RE04DetailedHtml = Get-Content -Path $script:RE04DetailedPaths[0] -Raw
+            foreach ($p in @($script:RE04DetailedPaths)) {
+                if (-not [string]::IsNullOrWhiteSpace($p) -and (Test-Path $p)) {
+                    $script:RE04DetailedHtml += (Get-Content -Path $p -Raw)
+                }
             }
         }
 
