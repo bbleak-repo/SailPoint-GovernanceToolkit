@@ -124,6 +124,88 @@ Describe "CT-07: program (cross-campaign) trend" {
     }
 }
 
+Describe "CT-08: per-reviewer decision summaries" {
+    It "Includes reviewer summaries in the trend JSONL row" {
+        $dir = Join-Path $TestDrive 't8'
+        $camp = [PSCustomObject]@{ id='camp-rev'; name='REV'; status='ACTIVE' }
+        $certs = @(
+            [PSCustomObject]@{ id='c1'; reviewer=[PSCustomObject]@{id='r1';name='Alice'}; decisionsTotal=4; decisionsMade=3 },
+            [PSCustomObject]@{ id='c2'; reviewer=[PSCustomObject]@{id='r2';name='Bob'};   decisionsTotal=3; decisionsMade=3 }
+        )
+        $decisions = @{
+            Approved = @(
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i1'; AccessName='AppA'; SourceName='AD'; Decision='APPROVE' },
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i2'; AccessName='AppB'; SourceName='AD'; Decision='APPROVE' },
+                [PSCustomObject]@{ CertificationId='c2'; IdentityId='i3'; AccessName='AppC'; SourceName='AD'; Decision='APPROVE' },
+                [PSCustomObject]@{ CertificationId='c2'; IdentityId='i4'; AccessName='AppD'; SourceName='AD'; Decision='APPROVE' }
+            )
+            Revoked = @(
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i5'; AccessName='AppE'; SourceName='AD'; Decision='REVOKE' },
+                [PSCustomObject]@{ CertificationId='c2'; IdentityId='i6'; AccessName='AppF'; SourceName='AD'; Decision='REVOKE' }
+            )
+            Pending = @(
+                [PSCustomObject]@{ CertificationId='c1'; IdentityId='i7'; AccessName='AppG'; SourceName='AD'; Decision='' }
+            )
+        }
+        $s = Build-SPCampaignSnapshotData -Campaign $camp -Certifications $certs -Decisions $decisions -Provenance @{ Environment='TEST' }
+        $s.Meta.CapturedAt = (Get-Date '2026-06-10T08:00:00').ToString('o')
+        $r = Save-SPCampaignTrendPoint -Snapshot $s -TrendDir $dir
+        $r.Success | Should -Be $true
+        # Read back the JSONL row and parse it
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $lines = @([System.IO.File]::ReadAllLines($r.Data.FilePath, $utf8) | Where-Object { $_ -match '\S' })
+        $row = $lines[0] | ConvertFrom-Json
+        $row.reviewers | Should -Not -BeNullOrEmpty
+        @($row.reviewers).Count | Should -Be 2
+        $alice = @($row.reviewers | Where-Object { $_.reviewer -eq 'Alice' })[0]
+        $alice.total | Should -Be 4
+        $alice.approved | Should -Be 2
+        $alice.revoked | Should -Be 1
+        $alice.pending | Should -Be 1
+        $alice.completion | Should -Be 75.0
+        $bob = @($row.reviewers | Where-Object { $_.reviewer -eq 'Bob' })[0]
+        $bob.total | Should -Be 3
+        $bob.approved | Should -Be 2
+        $bob.revoked | Should -Be 1
+        $bob.pending | Should -Be 0
+        $bob.completion | Should -Be 100.0
+    }
+    It "Sets reviewers to empty array when no certs data" {
+        $dir = Join-Path $TestDrive 't8b'
+        $camp = [PSCustomObject]@{ id='camp-empty'; name='EMPTY'; status='ACTIVE' }
+        $s = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='AppA'; SourceName='AD'; Decision='APPROVE' }); Revoked=@(); Pending=@() } -Provenance @{ Environment='TEST' }
+        $s.Meta.CapturedAt = (Get-Date '2026-06-10T08:00:00').ToString('o')
+        $r = Save-SPCampaignTrendPoint -Snapshot $s -TrendDir $dir
+        $r.Success | Should -Be $true
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $lines = @([System.IO.File]::ReadAllLines($r.Data.FilePath, $utf8) | Where-Object { $_ -match '\S' })
+        $row = $lines[0] | ConvertFrom-Json
+        @($row.reviewers).Count | Should -Be 0
+    }
+    It "Skips reviewers with zero decisions total" {
+        $dir = Join-Path $TestDrive 't8c'
+        $camp = [PSCustomObject]@{ id='camp-skip'; name='SKIP'; status='ACTIVE' }
+        $certs = @(
+            [PSCustomObject]@{ id='c1'; reviewer=[PSCustomObject]@{id='r1';name='Active'}; decisionsTotal=2; decisionsMade=1 },
+            [PSCustomObject]@{ id='c2'; reviewer=[PSCustomObject]@{id='r2';name='Empty'};  decisionsTotal=0; decisionsMade=0 }
+        )
+        $decisions = @{
+            Approved = @([PSCustomObject]@{ CertificationId='c1'; IdentityId='i1'; AccessName='AppA'; SourceName='AD'; Decision='APPROVE' })
+            Revoked = @()
+            Pending = @([PSCustomObject]@{ CertificationId='c1'; IdentityId='i2'; AccessName='AppB'; SourceName='AD'; Decision='' })
+        }
+        $s = Build-SPCampaignSnapshotData -Campaign $camp -Certifications $certs -Decisions $decisions -Provenance @{ Environment='TEST' }
+        $s.Meta.CapturedAt = (Get-Date '2026-06-10T08:00:00').ToString('o')
+        $r = Save-SPCampaignTrendPoint -Snapshot $s -TrendDir $dir
+        $r.Success | Should -Be $true
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $lines = @([System.IO.File]::ReadAllLines($r.Data.FilePath, $utf8) | Where-Object { $_ -match '\S' })
+        $row = $lines[0] | ConvertFrom-Json
+        @($row.reviewers).Count | Should -Be 1
+        $row.reviewers[0].reviewer | Should -Be 'Active'
+    }
+}
+
 Describe "CT-06: velocity from diff" {
     It "Derives decisions-per-hour from the diff interval + made-delta" {
         $dir = Join-Path $TestDrive 't6'

@@ -238,6 +238,42 @@ function Save-SPCampaignTrendPoint {
         $capturedAt = [string](Get-SPTrendVal $meta 'CapturedAt' '')
         $tsUtc = if ($capturedAt) { try { ([datetime]::Parse($capturedAt)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } catch { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
 
+        # --- Per-reviewer decision summaries (compact, only reviewers with total > 0) ---
+        $reviewerSummaries = @()
+        $certs = @(Get-SPTrendVal $Snapshot 'Certs' @())
+        if ($certs.Count -gt 0) {
+            # Build per-reviewer decision counts from Items array
+            $items = @(Get-SPTrendVal $Snapshot 'Items' @())
+            $revCounts = @{}  # ReviewerId -> @{ Approved; Revoked; Pending }
+            foreach ($item in $items) {
+                $rid = [string](Get-SPTrendVal $item 'ReviewerId' '')
+                if ([string]::IsNullOrWhiteSpace($rid)) { continue }
+                if (-not $revCounts.ContainsKey($rid)) { $revCounts[$rid] = @{ Approved = 0; Revoked = 0; Pending = 0 } }
+                $dec = [string](Get-SPTrendVal $item 'Decision' '')
+                switch ($dec) {
+                    'APPROVE' { $revCounts[$rid].Approved++ }
+                    'REVOKE'  { $revCounts[$rid].Revoked++ }
+                    default   { $revCounts[$rid].Pending++ }
+                }
+            }
+            foreach ($cert in $certs) {
+                $total = [int](Get-SPTrendVal $cert 'DecisionsTotal' 0)
+                if ($total -eq 0) { continue }
+                $rid = [string](Get-SPTrendVal $cert 'ReviewerId' '')
+                $rc  = if ($revCounts.ContainsKey($rid)) { $revCounts[$rid] } else { $null }
+                $made = [int](Get-SPTrendVal $cert 'DecisionsMade' 0)
+                $compPct = if ($total -gt 0) { [math]::Round($made * 100.0 / $total, 1) } else { 0.0 }
+                $reviewerSummaries += [ordered]@{
+                    reviewer   = [string](Get-SPTrendVal $cert 'ReviewerName' '')
+                    total      = $total
+                    approved   = if ($null -ne $rc) { [int]$rc.Approved } else { 0 }
+                    revoked    = if ($null -ne $rc) { [int]$rc.Revoked }  else { 0 }
+                    pending    = if ($null -ne $rc) { [int]$rc.Pending }  else { 0 }
+                    completion = [double]$compPct
+                }
+            }
+        }
+
         $record = [ordered]@{
             timestamp    = $tsUtc
             campaignId   = $campId
@@ -246,6 +282,7 @@ function Save-SPCampaignTrendPoint {
             environment  = $env
             dueDate      = [string](Get-SPTrendVal $meta 'DueDate' '')
             metrics      = $metrics
+            reviewers    = $reviewerSummaries
         }
 
         $utf8 = New-Object System.Text.UTF8Encoding($false)
