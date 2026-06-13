@@ -18,6 +18,12 @@
         Gray   #777777 - SKIP / footer
 #>
 
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 $script:ToolkitVersion = '1.0.0'
 
 #region Path Management
@@ -281,8 +287,8 @@ function Export-SPCampaignReport {
             }
             $prevTimestamp = $ev.Timestamp
 
-            $actionLabel = if ($null -ne $ev.Action) { [System.Net.WebUtility]::HtmlEncode($ev.Action) } else { '' }
-            $msgLabel    = if ($null -ne $ev.Message) { [System.Net.WebUtility]::HtmlEncode($ev.Message) } else { '' }
+            $actionLabel = if ($null -ne $ev.Action) { ConvertTo-SPHtmlSafe $ev.Action } else { '' }
+            $msgLabel    = if ($null -ne $ev.Message) { ConvertTo-SPHtmlSafe $ev.Message } else { '' }
 
             $stepRowsHtml += @"
             <tr>
@@ -349,7 +355,7 @@ function Export-SPCampaignReport {
             $errorSectionHtml = @"
         <div style="background:#fff0f0; border-left:4px solid #CC3333; padding:12px 16px; margin-bottom:24px; border-radius:4px;">
             <strong style="color:#CC3333;">Test Error:</strong>
-            <span style="color:#333;">$([System.Net.WebUtility]::HtmlEncode($errorText))</span>
+            <span style="color:#333;">$(ConvertTo-SPHtmlSafe $errorText)</span>
         </div>
 "@
         }
@@ -362,7 +368,7 @@ function Export-SPCampaignReport {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Campaign Test Report: $([System.Net.WebUtility]::HtmlEncode($TestId))</title>
+    <title>Campaign Test Report: $(ConvertTo-SPHtmlSafe $TestId)</title>
     <style>
         body {
             font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -423,13 +429,13 @@ function Export-SPCampaignReport {
 <body>
     <div class="container">
         <h1>Campaign Test Report</h1>
-        <div class="subtitle">$([System.Net.WebUtility]::HtmlEncode($TestName))</div>
+        <div class="subtitle">$(ConvertTo-SPHtmlSafe $TestName)</div>
         <div class="badge" style="background-color:$badgeColor;">$badgeText</div>
 
         <div class="meta-grid">
             <div class="meta-card">
                 <div class="meta-label">Test ID</div>
-                <div class="meta-value">$([System.Net.WebUtility]::HtmlEncode($TestId))</div>
+                <div class="meta-value">$(ConvertTo-SPHtmlSafe $TestId)</div>
             </div>
             <div class="meta-card">
                 <div class="meta-label">Duration</div>
@@ -441,7 +447,7 @@ function Export-SPCampaignReport {
             </div>
             <div class="meta-card">
                 <div class="meta-label">Correlation ID</div>
-                <div class="meta-value" style="font-size:11px; word-break:break-all;">$([System.Net.WebUtility]::HtmlEncode($correlationId))</div>
+                <div class="meta-value" style="font-size:11px; word-break:break-all;">$(ConvertTo-SPHtmlSafe $correlationId)</div>
             </div>
         </div>
 
@@ -561,13 +567,13 @@ function Export-SPSuiteReport {
             }
 
             # Relative link to per-campaign summary.html
-            $summaryLink = "..\\Evidence\\$([System.Net.WebUtility]::HtmlEncode($testId))\\summary.html"
+            $summaryLink = "..\\Evidence\\$(ConvertTo-SPHtmlSafe $testId)\\summary.html"
 
             $testRowsHtml += @"
             <tr>
-                <td style="font-weight:600;">$([System.Net.WebUtility]::HtmlEncode($testId))</td>
-                <td><a href="$summaryLink" style="color:#336699;">$([System.Net.WebUtility]::HtmlEncode($testName))</a></td>
-                <td style="color:#666;">$([System.Net.WebUtility]::HtmlEncode($testType))</td>
+                <td style="font-weight:600;">$(ConvertTo-SPHtmlSafe $testId)</td>
+                <td><a href="$summaryLink" style="color:#336699;">$(ConvertTo-SPHtmlSafe $testName)</a></td>
+                <td style="color:#666;">$(ConvertTo-SPHtmlSafe $testType)</td>
                 <td style="text-align:right;">${testDur}s</td>
                 <td style="text-align:center;">
                     <span style="display:inline-block; padding:3px 12px; border-radius:12px; background:$statusColor; color:#fff; font-weight:bold; font-size:12px;">$statusText</span>
@@ -592,9 +598,9 @@ function Export-SPSuiteReport {
 
                 $failDetailHtml += @"
                 <tr>
-                    <td style="font-weight:600; color:#CC3333;">$([System.Net.WebUtility]::HtmlEncode($testId))</td>
-                    <td>$([System.Net.WebUtility]::HtmlEncode($testName))</td>
-                    <td>$([System.Net.WebUtility]::HtmlEncode($failedStep))</td>
+                    <td style="font-weight:600; color:#CC3333;">$(ConvertTo-SPHtmlSafe $testId)</td>
+                    <td>$(ConvertTo-SPHtmlSafe $testName)</td>
+                    <td>$(ConvertTo-SPHtmlSafe $failedStep)</td>
                 </tr>
 "@
             }
@@ -627,7 +633,7 @@ $failDetailHtml
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SailPoint Governance Suite Report - $([System.Net.WebUtility]::HtmlEncode($RunTimestamp))</title>
+    <title>SailPoint Governance Suite Report - $(ConvertTo-SPHtmlSafe $RunTimestamp)</title>
     <style>
         body {
             font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -711,7 +717,7 @@ $failDetailHtml
 <body>
     <div class="container">
         <h1>SailPoint ISC Governance Suite Report</h1>
-        <div class="subtitle">Run: $([System.Net.WebUtility]::HtmlEncode($RunTimestamp)) &nbsp;|&nbsp; Generated: $generatedAt</div>
+        <div class="subtitle">Run: $(ConvertTo-SPHtmlSafe $RunTimestamp) &nbsp;|&nbsp; Generated: $generatedAt</div>
         <div class="badge" style="background-color:$suiteColor;">$suiteBadge</div>
 
         <div class="summary-grid">
@@ -745,15 +751,15 @@ $failDetailHtml
         <div class="env-grid">
             <div class="env-card">
                 <div class="env-label">Tenant URL</div>
-                <div class="env-value">$([System.Net.WebUtility]::HtmlEncode($tenantUrl))</div>
+                <div class="env-value">$(ConvertTo-SPHtmlSafe $tenantUrl)</div>
             </div>
             <div class="env-card">
                 <div class="env-label">Environment</div>
-                <div class="env-value">$([System.Net.WebUtility]::HtmlEncode($environment))</div>
+                <div class="env-value">$(ConvertTo-SPHtmlSafe $environment)</div>
             </div>
             <div class="env-card">
                 <div class="env-label">Correlation ID</div>
-                <div class="env-value" style="font-size:11px;">$([System.Net.WebUtility]::HtmlEncode($correlationId))</div>
+                <div class="env-value" style="font-size:11px;">$(ConvertTo-SPHtmlSafe $correlationId)</div>
             </div>
             <div class="env-card">
                 <div class="env-label">Toolkit Version</div>
@@ -781,7 +787,7 @@ $testRowsHtml
 
         <div class="footer">
             SailPoint ISC Governance Toolkit v$($script:ToolkitVersion) &nbsp;|&nbsp;
-            Correlation ID: $([System.Net.WebUtility]::HtmlEncode($correlationId))
+            Correlation ID: $(ConvertTo-SPHtmlSafe $correlationId)
         </div>
     </div>
 </body>

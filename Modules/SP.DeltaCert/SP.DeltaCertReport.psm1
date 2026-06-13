@@ -23,6 +23,11 @@
 
 $script:DeltaReportVersion = '1.0.0'
 
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal Helpers
 
 function Get-SPDeltaRevokeEvents {
@@ -683,14 +688,14 @@ function Export-SPDeltaReportHtml {
     [void]$html.AppendLine('<head>')
     [void]$html.AppendLine('    <meta charset="UTF-8">')
     [void]$html.AppendLine('    <meta name="viewport" content="width=device-width, initial-scale=1.0">')
-    [void]$html.AppendLine("    <title>Delta Report - $([System.Net.WebUtility]::HtmlEncode($dateStamp))</title>")
+    [void]$html.AppendLine("    <title>Delta Report - $(ConvertTo-SPHtmlSafe $dateStamp)</title>")
     [void]$html.AppendLine('</head>')
     [void]$html.AppendLine('<body style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; margin:0; padding:24px; background:#f0f2f5; color:#333;">')
     [void]$html.AppendLine('<div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">')
 
     # Header
     [void]$html.AppendLine("<h1 style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; font-size:22px; margin-bottom:4px;"">Delta Certification Report</h1>")
-    [void]$html.AppendLine("<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:16px;"">As of $([System.Net.WebUtility]::HtmlEncode($generatedAt)) | Last $hoursBack hours | Sources: $([System.Net.WebUtility]::HtmlEncode($sourceLabel))</p>")
+    [void]$html.AppendLine("<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:16px;"">As of $(ConvertTo-SPHtmlSafe $generatedAt) | Last $hoursBack hours | Sources: $(ConvertTo-SPHtmlSafe $sourceLabel)</p>")
 
     # Summary cards
     [void]$html.AppendLine('<table style="width:100%; border-collapse:collapse; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; margin-bottom:24px;">')
@@ -735,11 +740,11 @@ function Export-SPDeltaReportHtml {
         foreach ($grant in $newGrants) {
             $bgStyle = if ($rowIdx % 2 -eq 1) { ' background:#f9f9f9;' } else { '' }
             $nameDisplay = if (-not [string]::IsNullOrWhiteSpace($grant.IdentityName)) {
-                [System.Net.WebUtility]::HtmlEncode($grant.IdentityName)
+                (ConvertTo-SPHtmlSafe $grant.IdentityName)
             } else {
-                [System.Net.WebUtility]::HtmlEncode($grant.IdentityId)
+                (ConvertTo-SPHtmlSafe $grant.IdentityId)
             }
-            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$nameDisplay</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($grant.SourceId))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($grant.Entitlement))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($grant.Date))</td></tr>")
+            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$nameDisplay</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $grant.SourceId)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $grant.Entitlement)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $grant.Date)</td></tr>")
             $rowIdx++
         }
 
@@ -776,7 +781,7 @@ function Export-SPDeltaReportHtml {
                 default      { '#333333' }
             }
 
-            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($camp.CampaignName))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:${statusColor}; font-weight:bold;"">$([System.Net.WebUtility]::HtmlEncode($camp.Status))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($camp.Created))</td></tr>")
+            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $camp.CampaignName)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:${statusColor}; font-weight:bold;"">$(ConvertTo-SPHtmlSafe $camp.Status)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $camp.Created)</td></tr>")
             $rowIdx++
         }
 
@@ -805,11 +810,11 @@ function Export-SPDeltaReportHtml {
         foreach ($rev in $revocations) {
             $bgStyle = if ($rowIdx % 2 -eq 1) { ' background:#f9f9f9;' } else { '' }
             $nameDisplay = if (-not [string]::IsNullOrWhiteSpace($rev.IdentityName)) {
-                [System.Net.WebUtility]::HtmlEncode($rev.IdentityName)
+                (ConvertTo-SPHtmlSafe $rev.IdentityName)
             } else {
-                [System.Net.WebUtility]::HtmlEncode($rev.IdentityId)
+                (ConvertTo-SPHtmlSafe $rev.IdentityId)
             }
-            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$nameDisplay</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:#CC3333;"">$([System.Net.WebUtility]::HtmlEncode($rev.ItemName))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($rev.ActivityCreated))</td></tr>")
+            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$nameDisplay</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:#CC3333;"">$(ConvertTo-SPHtmlSafe $rev.ItemName)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $rev.ActivityCreated)</td></tr>")
             $rowIdx++
         }
 
@@ -842,7 +847,7 @@ function Export-SPDeltaReportHtml {
                         elseif ($review.AgeHours -gt 24) { '#FF8800' }
                         else { '#333333' }
 
-            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($review.CampaignName))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($review.ReviewerName))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; text-align:right; color:${ageColor}; font-weight:bold;"">$($review.AgeHours)</td></tr>")
+            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $review.CampaignName)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $review.ReviewerName)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; text-align:right; color:${ageColor}; font-weight:bold;"">$($review.AgeHours)</td></tr>")
             $rowIdx++
         }
 
@@ -871,7 +876,7 @@ function Export-SPDeltaReportHtml {
         $rowIdx = 0
         foreach ($anomaly in $anomalies) {
             $bgStyle = if ($rowIdx % 2 -eq 1) { ' background:#f9f9f9;' } else { '' }
-            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:#CC3333; font-weight:bold;"">$([System.Net.WebUtility]::HtmlEncode($anomaly.Type))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($anomaly.Description))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($anomaly.Reviewer))</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($anomaly.Campaign))</td></tr>")
+            [void]$html.AppendLine("        <tr style=""$bgStyle""><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0; color:#CC3333; font-weight:bold;"">$(ConvertTo-SPHtmlSafe $anomaly.Type)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $anomaly.Description)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $anomaly.Reviewer)</td><td style=""padding:5px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $anomaly.Campaign)</td></tr>")
             $rowIdx++
         }
 
@@ -881,7 +886,7 @@ function Export-SPDeltaReportHtml {
 
     # Footer
     [void]$html.AppendLine("<div style=""margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;"">")
-    [void]$html.AppendLine("    SailPoint ISC Governance Toolkit - Delta Report v$script:DeltaReportVersion | Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) | Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))")
+    [void]$html.AppendLine("    SailPoint ISC Governance Toolkit - Delta Report v$script:DeltaReportVersion | Generated: $(ConvertTo-SPHtmlSafe $generatedAt) | Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)")
     [void]$html.AppendLine('</div>')
 
     [void]$html.AppendLine('</div>')

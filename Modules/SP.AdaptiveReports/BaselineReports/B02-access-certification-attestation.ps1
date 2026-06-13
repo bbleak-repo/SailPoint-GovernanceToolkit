@@ -30,6 +30,12 @@
     This module dot-sources NOTHING and does not modify any existing repo file.
 #>
 
+# Auto-import SP.Shared if Get-SPObjectProperty is not yet available.
+if (-not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    $_spSharedPsd1 = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'SP.Shared\SP.Shared.psd1'
+    if (Test-Path $_spSharedPsd1) { Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking }
+}
+
 function ConvertTo-B02PSObject {
     # Normalize the -FromCache hashtable shape (and nested members) to
     # PSCustomObjects so the PSObject-based property checks below work for both
@@ -116,13 +122,7 @@ function Export-AccessCertificationAttestationReport {
 
     function Get-B02Prop {
         param([object]$Obj, [string]$Name, [object]$Default = $null)
-        if ($null -eq $Obj) { return $Default }
-        if ($Obj.PSObject.Properties.Name -contains $Name) {
-            $v = $Obj.$Name
-            if ($null -eq $v) { return $Default }
-            return $v
-        }
-        return $Default
+        Get-SPObjectProperty -Object $Obj -Name $Name -Default $Default
     }
 
     # --- Build per-group certifiable rosters ----------------------------------
