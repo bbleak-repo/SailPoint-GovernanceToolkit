@@ -53,6 +53,9 @@
         'Import-SPCacheStore'
         'Add-SPCacheStoreEntry'
         'Compress-SPCacheStore'
+        'Get-SPCacheStoreInfo'
+        'Get-SPCacheStoreSummary'
+        'Test-SPCacheStoreIntegrity'
 
         # SP.IdentityService
         'Get-SPIdentityDetail'

@@ -100,6 +100,10 @@ function New-SPCacheStore {
         Optional path to a JSONL file for disk-backed persistence. When set,
         Set-SPCachedItem auto-appends entries and Get-SPCachedItem triggers
         a lazy import on first access.
+    .PARAMETER TrackStats
+        When set, enables hit/miss tracking on the store. Get-SPCachedItem
+        will increment HitCount on successful retrieval and MissCount on
+        miss or expired item.
     .OUTPUTS
         [hashtable] The store object.
     #>
@@ -112,7 +116,10 @@ function New-SPCacheStore {
         [int]$TtlMinutes = 0,
 
         [Parameter()]
-        [string]$DiskPath
+        [string]$DiskPath,
+
+        [Parameter()]
+        [switch]$TrackStats
     )
 
     $store = @{
@@ -123,6 +130,9 @@ function New-SPCacheStore {
         DiskPath       = $DiskPath
         DiskLoaded     = $false
         DiskAutoAppend = ($null -ne $DiskPath -and $DiskPath -ne '')
+        TrackStats     = [bool]$TrackStats
+        HitCount       = 0
+        MissCount      = 0
     }
     $script:CacheStores[$Name] = $store
     return $store
@@ -166,7 +176,10 @@ function Get-SPCachedItem {
         $s.DiskLoaded = $true
     }
 
-    if (-not $s.Items.ContainsKey($Key)) { return $null }
+    if (-not $s.Items.ContainsKey($Key)) {
+        if ($s.ContainsKey('TrackStats') -and $s.TrackStats) { $s.MissCount++ }
+        return $null
+    }
 
     # Check per-item TTL first, fall back to store TTL
     $overrideTtl = -1
@@ -179,9 +192,11 @@ function Get-SPCachedItem {
         $s.Items.Remove($Key)
         $s.Timestamps.Remove($Key)
         if ($s.ContainsKey('ItemTtl')) { $s['ItemTtl'].Remove($Key) }
+        if ($s.ContainsKey('TrackStats') -and $s.TrackStats) { $s.MissCount++ }
         return $null
     }
 
+    if ($s.ContainsKey('TrackStats') -and $s.TrackStats) { $s.HitCount++ }
     return $s.Items[$Key]
 }
 
@@ -317,6 +332,10 @@ function Clear-SPCacheStore {
     $s.Items.Clear()
     $s.Timestamps.Clear()
     if ($s.ContainsKey('ItemTtl')) { $s['ItemTtl'].Clear() }
+    if ($s.ContainsKey('TrackStats') -and $s.TrackStats) {
+        $s.HitCount  = 0
+        $s.MissCount = 0
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -694,6 +713,339 @@ function Compress-SPCacheStore {
     Rename-Item -Path $tmpPath -NewName (Split-Path -Leaf $Path) -Force
 
     return @{ Before = $before; After = $after; Pruned = $pruned }
+}
+
+# ---------------------------------------------------------------------------
+# Inspection & Stats Functions
+# ---------------------------------------------------------------------------
+
+function Get-SPCacheStoreInfo {
+    <#
+    .SYNOPSIS
+        Returns diagnostic information about a single cache store.
+    .DESCRIPTION
+        Provides a hashtable with item count, TTL, oldest/newest entry timestamps,
+        expired count (without evicting), disk file metrics, and hit/miss stats.
+        Returns $null if the store does not exist.
+    .PARAMETER Store
+        Name of the cache store to inspect.
+    .OUTPUTS
+        [hashtable] Diagnostic info or $null if the store is unknown.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Store
+    )
+
+    if (-not $script:CacheStores.ContainsKey($Store)) { return $null }
+
+    $s = $script:CacheStores[$Store]
+
+    # Item count
+    $itemCount = $s.Items.Count
+
+    # Oldest and newest entry from Timestamps
+    $oldest = $null
+    $newest = $null
+    if ($s.Timestamps.Count -gt 0) {
+        foreach ($ts in $s.Timestamps.Values) {
+            $dt = [datetime]$ts
+            if ($null -eq $oldest -or $dt -lt $oldest) { $oldest = $dt }
+            if ($null -eq $newest -or $dt -gt $newest) { $newest = $dt }
+        }
+    }
+
+    # Expired count: scan without evicting
+    $expiredCount = 0
+    $now = Get-Date
+    if ($s.TtlMinutes -gt 0) {
+        foreach ($key in @($s.Timestamps.Keys)) {
+            $ttl = $s.TtlMinutes
+            if ($s.ContainsKey('ItemTtl') -and $s['ItemTtl'].ContainsKey($key)) {
+                $ttl = $s['ItemTtl'][$key]
+            }
+            if ($ttl -gt 0) {
+                $elapsed = ($now - [datetime]$s.Timestamps[$key]).TotalMinutes
+                if ($elapsed -ge $ttl) { $expiredCount++ }
+            }
+        }
+    }
+
+    # Disk metrics
+    $diskPath      = if ($s.ContainsKey('DiskPath')) { $s.DiskPath } else { $null }
+    $diskSizeBytes = $null
+    $diskLineCount = $null
+    $diskLoaded    = if ($s.ContainsKey('DiskLoaded')) { $s.DiskLoaded } else { $false }
+
+    if (-not [string]::IsNullOrWhiteSpace($diskPath) -and (Test-Path $diskPath)) {
+        try {
+            $fileInfo = Get-Item $diskPath
+            $diskSizeBytes = $fileInfo.Length
+            $diskLineCount = 0
+            $fileLines = Get-Content $diskPath
+            foreach ($fl in $fileLines) {
+                if (-not [string]::IsNullOrWhiteSpace($fl)) { $diskLineCount++ }
+            }
+        } catch {
+            # Disk read failures are non-fatal
+        }
+    }
+
+    # Hit/miss stats
+    $hitCount  = if ($s.ContainsKey('HitCount'))  { $s.HitCount }  else { 0 }
+    $missCount = if ($s.ContainsKey('MissCount')) { $s.MissCount } else { 0 }
+    $total     = $hitCount + $missCount
+    $hitRate   = if ($total -gt 0) {
+        '{0:F1}%' -f (($hitCount / $total) * 100)
+    } else {
+        '0.0%'
+    }
+
+    return @{
+        Name          = $s.Name
+        TtlMinutes    = $s.TtlMinutes
+        ItemCount     = $itemCount
+        OldestEntry   = $oldest
+        NewestEntry   = $newest
+        ExpiredCount  = $expiredCount
+        DiskPath      = $diskPath
+        DiskSizeBytes = $diskSizeBytes
+        DiskLineCount = $diskLineCount
+        DiskLoaded    = $diskLoaded
+        HitCount      = $hitCount
+        MissCount     = $missCount
+        HitRate       = $hitRate
+    }
+}
+
+function Get-SPCacheStoreSummary {
+    <#
+    .SYNOPSIS
+        Returns a summary table of all registered cache stores.
+    .DESCRIPTION
+        Returns an array of hashtables, one per registered store, with key
+        metrics: Name, ItemCount, TtlMinutes, DiskPath, DiskSizeKB, HitRate.
+    .OUTPUTS
+        [array] Array of hashtables with store summary info.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $results = @()
+
+    foreach ($name in $script:CacheStores.Keys) {
+        $s = $script:CacheStores[$name]
+
+        # Disk size in KB
+        $diskSizeKB = $null
+        $diskPath = if ($s.ContainsKey('DiskPath')) { $s.DiskPath } else { $null }
+        if (-not [string]::IsNullOrWhiteSpace($diskPath) -and (Test-Path $diskPath)) {
+            try {
+                $fileInfo = Get-Item $diskPath
+                $diskSizeKB = [math]::Round($fileInfo.Length / 1024, 2)
+            } catch {
+                # Disk read failures are non-fatal
+            }
+        }
+
+        # Hit rate
+        $hitCount  = if ($s.ContainsKey('HitCount'))  { $s.HitCount }  else { 0 }
+        $missCount = if ($s.ContainsKey('MissCount')) { $s.MissCount } else { 0 }
+        $total     = $hitCount + $missCount
+        $hitRate   = if ($total -gt 0) {
+            '{0:F1}%' -f (($hitCount / $total) * 100)
+        } else {
+            '0.0%'
+        }
+
+        $results += @{
+            Name       = $s.Name
+            ItemCount  = $s.Items.Count
+            TtlMinutes = $s.TtlMinutes
+            DiskPath   = $diskPath
+            DiskSizeKB = $diskSizeKB
+            HitRate    = $hitRate
+        }
+    }
+
+    return $results
+}
+
+function Test-SPCacheStoreIntegrity {
+    <#
+    .SYNOPSIS
+        Validates a cache store's JSONL file on disk.
+    .DESCRIPTION
+        Reads the JSONL file line by line and checks for: valid JSON per line,
+        CachedAt present and parseable, duplicate keys, expired entry ratio,
+        and file vs memory consistency. Returns a result hashtable with Ok
+        (bool) and Findings (array of finding hashtables).
+    .PARAMETER Store
+        Name of the cache store to validate.
+    .OUTPUTS
+        [hashtable] @{ Ok = $bool; Findings = @(...) }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Store
+    )
+
+    $findings = @()
+
+    # Check store exists
+    if (-not $script:CacheStores.ContainsKey($Store)) {
+        $findings += @{
+            Severity = 'Error'
+            Code     = 'UNKNOWN_STORE'
+            Message  = "Store '$Store' is not registered"
+            Count    = 1
+        }
+        return @{ Ok = $false; Findings = $findings }
+    }
+
+    $s = $script:CacheStores[$Store]
+    $diskPath = if ($s.ContainsKey('DiskPath')) { $s.DiskPath } else { $null }
+
+    # Check DiskPath is set
+    if ([string]::IsNullOrWhiteSpace($diskPath)) {
+        $findings += @{
+            Severity = 'Error'
+            Code     = 'NO_DISK_PATH'
+            Message  = "Store '$Store' has no DiskPath configured"
+            Count    = 1
+        }
+        return @{ Ok = $false; Findings = $findings }
+    }
+
+    # Check file exists
+    if (-not (Test-Path $diskPath)) {
+        $findings += @{
+            Severity = 'Error'
+            Code     = 'FILE_NOT_FOUND'
+            Message  = "Disk file not found: $diskPath"
+            Count    = 1
+        }
+        return @{ Ok = $false; Findings = $findings }
+    }
+
+    # Read and validate each line
+    $lines       = Get-Content $diskPath
+    $totalLines  = 0
+    $parseErrors = 0
+    $cachedAtErrors = 0
+    $keyCounts   = @{}
+    $expiredCount = 0
+    $now = Get-Date
+
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $totalLines++
+
+        # Check valid JSON
+        $rec = $null
+        try {
+            $rec = $line | ConvertFrom-Json
+        } catch {
+            $parseErrors++
+            continue
+        }
+
+        # Check CachedAt present and parseable
+        $cachedAtOk = $false
+        $cachedAtDt = $null
+        if ($null -ne $rec.CachedAt) {
+            try {
+                $cachedAtDt = [datetime]::Parse([string]$rec.CachedAt)
+                $cachedAtOk = $true
+            } catch {
+                $cachedAtErrors++
+            }
+        } else {
+            $cachedAtErrors++
+        }
+
+        # Track keys for duplicate detection
+        $key = [string]$rec.Key
+        if (-not [string]::IsNullOrWhiteSpace($key)) {
+            if (-not $keyCounts.ContainsKey($key)) {
+                $keyCounts[$key] = 0
+            }
+            $keyCounts[$key]++
+        }
+
+        # Check expired
+        if ($cachedAtOk -and $s.TtlMinutes -gt 0) {
+            $elapsed = ($now - $cachedAtDt).TotalMinutes
+            if ($elapsed -ge $s.TtlMinutes) { $expiredCount++ }
+        }
+    }
+
+    # Report parse errors
+    if ($parseErrors -gt 0) {
+        $findings += @{
+            Severity = 'Error'
+            Code     = 'INVALID_JSON'
+            Message  = "$parseErrors line(s) contain invalid JSON"
+            Count    = $parseErrors
+        }
+    }
+
+    # Report CachedAt errors
+    if ($cachedAtErrors -gt 0) {
+        $findings += @{
+            Severity = 'Warn'
+            Code     = 'CACHEDATPROBLEM'
+            Message  = "$cachedAtErrors line(s) have missing or unparseable CachedAt"
+            Count    = $cachedAtErrors
+        }
+    }
+
+    # Report duplicate keys
+    $dupCount = 0
+    foreach ($kv in $keyCounts.GetEnumerator()) {
+        if ($kv.Value -gt 1) { $dupCount += ($kv.Value - 1) }
+    }
+    if ($dupCount -gt 0) {
+        $findings += @{
+            Severity = 'Warn'
+            Code     = 'DEDUP_NEEDED'
+            Message  = "$dupCount duplicate key(s) found"
+            Count    = $dupCount
+        }
+    }
+
+    # Report expired ratio
+    if ($totalLines -gt 0 -and $expiredCount -gt 0) {
+        $pct = [math]::Round(($expiredCount / $totalLines) * 100, 0)
+        $findings += @{
+            Severity = 'Info'
+            Code     = 'EXPIRED_RATIO'
+            Message  = "${pct}% of entries are expired"
+            Count    = $expiredCount
+        }
+    }
+
+    # File vs memory consistency
+    $memoryCount = $s.Items.Count
+    $uniqueFileKeys = $keyCounts.Count
+    if ($memoryCount -ne $uniqueFileKeys -and $s.ContainsKey('DiskLoaded') -and $s.DiskLoaded) {
+        $findings += @{
+            Severity = 'Warn'
+            Code     = 'MEM_DISK_MISMATCH'
+            Message  = "Memory has $memoryCount items but file has $uniqueFileKeys unique keys"
+            Count    = [math]::Abs($memoryCount - $uniqueFileKeys)
+        }
+    }
+
+    # Ok = true if no Error-level findings
+    $hasError = $false
+    foreach ($f in $findings) {
+        if ($f.Severity -eq 'Error') { $hasError = $true; break }
+    }
+
+    return @{ Ok = (-not $hasError); Findings = $findings }
 }
 
 #endregion Public Functions

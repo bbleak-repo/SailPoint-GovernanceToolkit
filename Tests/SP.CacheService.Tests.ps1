@@ -724,3 +724,352 @@ Describe "CD -- JSONL Persistence Layer" {
         }
     }
 }
+
+# ===========================================================================
+# Inspection & Stats Tests (Tier 2)
+# ===========================================================================
+
+Describe "CI -- Inspection and Stats" {
+
+    BeforeAll {
+        $script:CITempDir = Join-Path ([System.IO.Path]::GetTempPath()) "SPCacheCI_$(Get-Random)"
+        New-Item -Path $script:CITempDir -ItemType Directory -Force | Out-Null
+    }
+
+    AfterAll {
+        if (Test-Path $script:CITempDir) {
+            Remove-Item $script:CITempDir -Recurse -Force
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-01: Get-SPCacheStoreInfo returns correct ItemCount
+    # -----------------------------------------------------------------------
+    Context "CI-01: Get-SPCacheStoreInfo returns correct ItemCount" {
+
+        It "reports the number of items in the store" {
+            $sn = "CI01_$(Get-Random)"
+            New-SPCacheStore -Name $sn
+            Set-SPCachedItem -Store $sn -Key 'a' -Value 1
+            Set-SPCachedItem -Store $sn -Key 'b' -Value 2
+            Set-SPCachedItem -Store $sn -Key 'c' -Value 3
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.ItemCount | Should -Be 3
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-02: Get-SPCacheStoreInfo returns OldestEntry/NewestEntry
+    # -----------------------------------------------------------------------
+    Context "CI-02: Get-SPCacheStoreInfo returns OldestEntry/NewestEntry" {
+
+        It "returns correct oldest and newest timestamps" {
+            $sn = "CI02_$(Get-Random)"
+            New-SPCacheStore -Name $sn
+
+            $t1 = [datetime]::new(2026, 1, 1, 10, 0, 0)
+            $t2 = [datetime]::new(2026, 1, 1, 12, 0, 0)
+            $t3 = [datetime]::new(2026, 1, 1, 14, 0, 0)
+
+            Mock Get-Date { return $t1 } -ModuleName SP.CacheService
+            Set-SPCachedItem -Store $sn -Key 'early' -Value 'first'
+            Mock Get-Date { return $t2 } -ModuleName SP.CacheService
+            Set-SPCachedItem -Store $sn -Key 'mid'   -Value 'second'
+            Mock Get-Date { return $t3 } -ModuleName SP.CacheService
+            Set-SPCachedItem -Store $sn -Key 'late'  -Value 'third'
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.OldestEntry | Should -Be $t1
+            $info.NewestEntry | Should -Be $t3
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-03: Get-SPCacheStoreInfo returns ExpiredCount
+    # -----------------------------------------------------------------------
+    Context "CI-03: Get-SPCacheStoreInfo returns ExpiredCount" {
+
+        It "counts expired items without evicting them" {
+            $sn = "CI03_$(Get-Random)"
+            New-SPCacheStore -Name $sn -TtlMinutes 10
+
+            $baseTime = [datetime]::new(2026, 6, 1, 12, 0, 0)
+
+            # Add fresh item
+            Mock Get-Date { return $baseTime } -ModuleName SP.CacheService
+            Set-SPCachedItem -Store $sn -Key 'fresh' -Value 'good'
+
+            # Add item that will be expired
+            $oldTime = $baseTime.AddMinutes(-15)
+            Mock Get-Date { return $oldTime } -ModuleName SP.CacheService
+            Set-SPCachedItem -Store $sn -Key 'stale' -Value 'bad'
+
+            # Set time to "now" for the info check
+            Mock Get-Date { return $baseTime } -ModuleName SP.CacheService
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.ExpiredCount | Should -Be 1
+            # The stale item should still be in Items (not evicted)
+            $info.ItemCount | Should -Be 2
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-04: Get-SPCacheStoreInfo returns DiskSizeBytes when DiskPath set
+    # -----------------------------------------------------------------------
+    Context "CI-04: Get-SPCacheStoreInfo returns DiskSizeBytes" {
+
+        It "reports file size in bytes for a disk-backed store" {
+            $sn   = "CI04_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci04.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            Set-SPCachedItem -Store $sn -Key 'item1' -Value @{ Name = 'Test' }
+            Set-SPCachedItem -Store $sn -Key 'item2' -Value @{ Name = 'Test2' }
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.DiskSizeBytes | Should -BeGreaterThan 0
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-05: Get-SPCacheStoreInfo returns DiskLineCount
+    # -----------------------------------------------------------------------
+    Context "CI-05: Get-SPCacheStoreInfo returns DiskLineCount" {
+
+        It "reports the number of non-empty lines in the JSONL file" {
+            $sn   = "CI05_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci05.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            Set-SPCachedItem -Store $sn -Key 'x1' -Value 'a'
+            Set-SPCachedItem -Store $sn -Key 'x2' -Value 'b'
+            Set-SPCachedItem -Store $sn -Key 'x3' -Value 'c'
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.DiskLineCount | Should -Be 3
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-06: Get-SPCacheStoreSummary returns all registered stores
+    # -----------------------------------------------------------------------
+    Context "CI-06: Get-SPCacheStoreSummary returns all registered stores" {
+
+        It "includes stores created in this test" {
+            $sn1 = "CI06a_$(Get-Random)"
+            $sn2 = "CI06b_$(Get-Random)"
+            New-SPCacheStore -Name $sn1 -TtlMinutes 30
+            New-SPCacheStore -Name $sn2 -TtlMinutes 60
+            Set-SPCachedItem -Store $sn1 -Key 'k' -Value 'v'
+
+            $summary = Get-SPCacheStoreSummary
+            $names = $summary | ForEach-Object { $_.Name }
+            $names | Should -Contain $sn1
+            $names | Should -Contain $sn2
+
+            $entry1 = $summary | Where-Object { $_.Name -eq $sn1 }
+            $entry1.ItemCount  | Should -Be 1
+            $entry1.TtlMinutes | Should -Be 30
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-07: Test-SPCacheStoreIntegrity Ok=$true for clean store
+    # -----------------------------------------------------------------------
+    Context "CI-07: Test-SPCacheStoreIntegrity Ok for clean store" {
+
+        It "returns Ok=true when JSONL is valid and clean" {
+            $sn   = "CI07_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci07.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            Set-SPCachedItem -Store $sn -Key 'clean1' -Value @{ Data = 'ok' }
+            Set-SPCachedItem -Store $sn -Key 'clean2' -Value @{ Data = 'fine' }
+
+            $result = Test-SPCacheStoreIntegrity -Store $sn
+            $result.Ok | Should -Be $true
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-08: Test-SPCacheStoreIntegrity detects duplicate keys
+    # -----------------------------------------------------------------------
+    Context "CI-08: Test-SPCacheStoreIntegrity detects duplicate keys" {
+
+        It "reports DEDUP_NEEDED for duplicate keys in JSONL" {
+            $sn   = "CI08_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci08.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            # Write duplicate keys directly to the JSONL file
+            $now  = (Get-Date).ToString('o')
+            $line1 = @{ Key = 'dup'; Value = 'v1'; CachedAt = $now; TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $line2 = @{ Key = 'dup'; Value = 'v2'; CachedAt = $now; TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $line3 = @{ Key = 'unique'; Value = 'v3'; CachedAt = $now; TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $utf8 = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($file, "$line1`n$line2`n$line3`n", $utf8)
+
+            $result = Test-SPCacheStoreIntegrity -Store $sn
+            $dedupFinding = $result.Findings | Where-Object { $_.Code -eq 'DEDUP_NEEDED' }
+            $dedupFinding | Should -Not -BeNullOrEmpty
+            $dedupFinding.Severity | Should -Be 'Warn'
+            $dedupFinding.Count | Should -Be 1
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-09: Test-SPCacheStoreIntegrity detects expired ratio
+    # -----------------------------------------------------------------------
+    Context "CI-09: Test-SPCacheStoreIntegrity detects expired ratio" {
+
+        It "reports EXPIRED_RATIO when entries are past TTL" {
+            $sn   = "CI09_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci09.jsonl"
+            New-SPCacheStore -Name $sn -TtlMinutes 10 -DiskPath $file
+
+            # Write entries: one ancient, one fresh
+            $ancient = [datetime]::new(2020, 1, 1, 0, 0, 0).ToString('o')
+            $now     = (Get-Date).ToString('o')
+            $line1 = @{ Key = 'old'; Value = 1; CachedAt = $ancient; TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $line2 = @{ Key = 'new'; Value = 2; CachedAt = $now;     TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $utf8 = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($file, "$line1`n$line2`n", $utf8)
+
+            $result = Test-SPCacheStoreIntegrity -Store $sn
+            $expFinding = $result.Findings | Where-Object { $_.Code -eq 'EXPIRED_RATIO' }
+            $expFinding | Should -Not -BeNullOrEmpty
+            $expFinding.Severity | Should -Be 'Info'
+            $expFinding.Count | Should -Be 1
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-10: Test-SPCacheStoreIntegrity detects malformed JSON lines
+    # -----------------------------------------------------------------------
+    Context "CI-10: Test-SPCacheStoreIntegrity detects malformed JSON" {
+
+        It "reports INVALID_JSON for lines that fail to parse" {
+            $sn   = "CI10_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci10.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            # Write a mix of valid and invalid lines
+            $now = (Get-Date).ToString('o')
+            $good = @{ Key = 'ok'; Value = 1; CachedAt = $now; TtlMinutes = $null } | ConvertTo-Json -Depth 6 -Compress
+            $bad1 = '{this is not valid'
+            $bad2 = 'totally broken'
+            $utf8 = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($file, "$good`n$bad1`n$bad2`n", $utf8)
+
+            $result = Test-SPCacheStoreIntegrity -Store $sn
+            $result.Ok | Should -Be $false
+
+            $jsonFinding = $result.Findings | Where-Object { $_.Code -eq 'INVALID_JSON' }
+            $jsonFinding | Should -Not -BeNullOrEmpty
+            $jsonFinding.Severity | Should -Be 'Error'
+            $jsonFinding.Count | Should -Be 2
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-11: Hit/miss tracking increments on Get (TrackStats enabled)
+    # -----------------------------------------------------------------------
+    Context "CI-11: Hit/miss tracking increments on Get" {
+
+        It "increments HitCount on successful Get and MissCount on miss" {
+            $sn = "CI11_$(Get-Random)"
+            New-SPCacheStore -Name $sn -TrackStats
+            Set-SPCachedItem -Store $sn -Key 'exists' -Value 'data'
+
+            # Hit
+            Get-SPCachedItem -Store $sn -Key 'exists' | Out-Null
+            Get-SPCachedItem -Store $sn -Key 'exists' | Out-Null
+
+            # Miss
+            Get-SPCachedItem -Store $sn -Key 'nope' | Out-Null
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.HitCount  | Should -Be 2
+            $info.MissCount | Should -Be 1
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-12: HitRate calculation is correct
+    # -----------------------------------------------------------------------
+    Context "CI-12: HitRate calculation is correct" {
+
+        It "computes the correct hit percentage" {
+            $sn = "CI12_$(Get-Random)"
+            New-SPCacheStore -Name $sn -TrackStats
+            Set-SPCachedItem -Store $sn -Key 'present' -Value 'yes'
+
+            # 3 hits, 1 miss = 75.0%
+            Get-SPCachedItem -Store $sn -Key 'present' | Out-Null
+            Get-SPCachedItem -Store $sn -Key 'present' | Out-Null
+            Get-SPCachedItem -Store $sn -Key 'present' | Out-Null
+            Get-SPCachedItem -Store $sn -Key 'missing' | Out-Null
+
+            $info = Get-SPCacheStoreInfo -Store $sn
+            $info.HitRate | Should -Be '75.0%'
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-13: Stats reset on Clear-SPCacheStore
+    # -----------------------------------------------------------------------
+    Context "CI-13: Stats reset on Clear-SPCacheStore" {
+
+        It "resets HitCount and MissCount to 0 after Clear" {
+            $sn = "CI13_$(Get-Random)"
+            New-SPCacheStore -Name $sn -TrackStats
+            Set-SPCachedItem -Store $sn -Key 'item' -Value 'val'
+
+            Get-SPCachedItem -Store $sn -Key 'item' | Out-Null   # hit
+            Get-SPCachedItem -Store $sn -Key 'nope' | Out-Null   # miss
+
+            $infoBefore = Get-SPCacheStoreInfo -Store $sn
+            $infoBefore.HitCount  | Should -Be 1
+            $infoBefore.MissCount | Should -Be 1
+
+            Clear-SPCacheStore -Store $sn
+
+            $infoAfter = Get-SPCacheStoreInfo -Store $sn
+            $infoAfter.HitCount  | Should -Be 0
+            $infoAfter.MissCount | Should -Be 0
+            $infoAfter.HitRate   | Should -Be '0.0%'
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-14: Get-SPCacheStoreInfo returns null for unknown store
+    # -----------------------------------------------------------------------
+    Context "CI-14: Get-SPCacheStoreInfo returns null for unknown store" {
+
+        It "returns null for a store name that does not exist" {
+            $result = Get-SPCacheStoreInfo -Store "NoSuchStore_$(Get-Random)"
+            $result | Should -BeNullOrEmpty
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # CI-15: Test-SPCacheStoreIntegrity returns Error for missing file
+    # -----------------------------------------------------------------------
+    Context "CI-15: Test-SPCacheStoreIntegrity returns Error for missing file" {
+
+        It "returns Ok=false with FILE_NOT_FOUND for non-existent disk file" {
+            $sn = "CI15_$(Get-Random)"
+            $file = Join-Path $script:CITempDir "ci15_nonexistent.jsonl"
+            New-SPCacheStore -Name $sn -DiskPath $file
+
+            $result = Test-SPCacheStoreIntegrity -Store $sn
+            $result.Ok | Should -Be $false
+
+            $finding = $result.Findings | Where-Object { $_.Code -eq 'FILE_NOT_FOUND' }
+            $finding | Should -Not -BeNullOrEmpty
+            $finding.Severity | Should -Be 'Error'
+        }
+    }
+}
