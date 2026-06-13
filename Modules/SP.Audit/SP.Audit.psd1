@@ -33,6 +33,7 @@
         'SP.CampaignDelta.psm1'
         'SP.CampaignDiff.psm1'
         'SP.CampaignTrend.psm1'
+        'SP.GovernanceTrendQuery.psm1'
         'SP.CampaignVelocity.psm1'
         'SP.CertTracker.psm1'
     )
@@ -250,6 +251,11 @@
         'Export-SPCampaignTrendHtml'
         'Get-SPProgramTrend'
         'Export-SPProgramTrendHtml'
+
+        # SP.GovernanceTrendQuery - Unified trend query layer (dashboard KPIs, comparisons, alerts)
+        'Get-SPGovernanceDashboardData'
+        'Compare-SPGovernancePeriods'
+        'Get-SPGovernanceAlerts'
 
         # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
         'Measure-SPReviewerVelocity'
