@@ -125,18 +125,9 @@ function ConvertTo-RCHtmlText {
 }
 
 function Get-RCProp {
-    # Safe property accessor that tolerates missing members under StrictMode AND
-    # works for BOTH hashtables/dictionaries (the -FromCache shape) and
-    # PSCustomObjects (the live-enumeration shape).
+    # Thin wrapper -- canonical implementation is Get-SPObjectProperty (SP.HtmlHelpers).
     param([object]$Object, [string]$Name)
-    if ($null -eq $Object) { return $null }
-    if ($Object -is [System.Collections.IDictionary]) {
-        if ($Object.Contains($Name)) { return $Object[$Name] }
-        return $null
-    }
-    $p = $Object.PSObject.Properties[$Name]
-    if ($null -eq $p) { return $null }
-    return $p.Value
+    return (Get-SPObjectProperty -Object $Object -Name $Name)
 }
 
 function Get-RCDirectCount {
