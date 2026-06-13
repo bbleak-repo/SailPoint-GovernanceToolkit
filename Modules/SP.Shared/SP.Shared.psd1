@@ -49,6 +49,10 @@
         'Set-SPCachedItem'
         'Test-SPCacheValid'
         'Clear-SPCacheStore'
+        'Export-SPCacheStore'
+        'Import-SPCacheStore'
+        'Add-SPCacheStoreEntry'
+        'Compress-SPCacheStore'
 
         # SP.IdentityService
         'Get-SPIdentityDetail'
