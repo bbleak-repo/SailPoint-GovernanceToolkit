@@ -11652,3 +11652,360 @@ function toggleAll(open){document.querySelectorAll('details').forEach(function(d
 # In PS5.1, Export-ModuleMember calls are cumulative; this additive call registers the
 # new hierarchical report functions.
 Export-ModuleMember -Function 'Export-SPHierarchicalLeadershipHtml', 'Export-SPMasterLeadershipHtml'
+
+#region Governance Trend Dashboard (Phase 5)
+
+function Export-SPGovernanceDashboardHtml {
+    <#
+    .SYNOPSIS
+        Renders an HTML governance trend dashboard from Get-SPGovernanceDashboardData output.
+    .DESCRIPTION
+        Produces a single-page, Word-compatible HTML dashboard showing:
+        - KPI cards row with direction indicators (CSS triangles, no unicode)
+        - Sparkline mini bar charts (inline SVG)
+        - Alert callouts (amber/red)
+        - Campaign throughput summary
+        - Period comparison table (when provided)
+        All inline CSS, table-based layout, no JavaScript.
+    .PARAMETER DashboardData
+        Hashtable from Get-SPGovernanceDashboardData containing KPIs, Sparklines,
+        Alerts, and Campaigns keys.
+    .PARAMETER OutputPath
+        Directory for the HTML output file.
+    .PARAMETER Title
+        Report title. Defaults to 'Governance Trend Dashboard'.
+    .PARAMETER PeriodComparison
+        Optional hashtable from Compare-SPGovernancePeriods for period-over-period table.
+    .PARAMETER CorrelationID
+        Optional correlation ID for the report footer.
+    .OUTPUTS
+        [hashtable] @{ Success = [bool]; Data = [string] filepath; Error = [string] }
+    .EXAMPLE
+        $data = Get-SPGovernanceDashboardData -Period Last30Days
+        $result = Export-SPGovernanceDashboardHtml -DashboardData $data -OutputPath '.\Reports'
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$DashboardData,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$Title = 'Governance Trend Dashboard',
+
+        [Parameter()]
+        [hashtable]$PeriodComparison,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+            $CorrelationID = [guid]::NewGuid().ToString()
+        }
+
+        if (-not (Test-Path -Path $OutputPath -PathType Container)) {
+            New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        $timestamp   = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm') + ' UTC'
+        $htmlFile    = Join-Path $OutputPath "GovernanceDashboard-${timestamp}.html"
+
+        $palette = Get-SPHtmlColorPalette
+
+        # Extract data with null safety
+        $kpis       = if ($null -ne $DashboardData -and $DashboardData.ContainsKey('KPIs')) { $DashboardData['KPIs'] } else { $null }
+        $sparklines = if ($null -ne $DashboardData -and $DashboardData.ContainsKey('Sparklines')) { $DashboardData['Sparklines'] } else { $null }
+        $alerts     = if ($null -ne $DashboardData -and $DashboardData.ContainsKey('Alerts')) { $DashboardData['Alerts'] } else { $null }
+        $campaigns  = if ($null -ne $DashboardData -and $DashboardData.ContainsKey('Campaigns')) { $DashboardData['Campaigns'] } else { $null }
+        $periodLabel = if ($null -ne $DashboardData -and $DashboardData.ContainsKey('Period')) { [string]$DashboardData['Period'] } else { '' }
+
+        $sb = New-SPHtmlDocument -Title (ConvertTo-SPHtmlSafe $Title)
+
+        # ---- Section 1: Header ----
+        [void]$sb.Append("<h1 style='font-size:22px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;margin-bottom:4px;'>")
+        [void]$sb.Append((ConvertTo-SPHtmlSafe $Title))
+        [void]$sb.Append("</h1>")
+        [void]$sb.Append("<p style='font-size:12px;color:#566;margin-top:0;margin-bottom:16px;'>")
+        if (-not [string]::IsNullOrWhiteSpace($periodLabel)) {
+            [void]$sb.Append("Period: $(ConvertTo-SPHtmlSafe $periodLabel) | ")
+        }
+        [void]$sb.Append("Generated: $(ConvertTo-SPHtmlSafe $generatedAt)")
+        [void]$sb.Append("</p>")
+
+        # ---- Section 2: KPI Cards Row ----
+        if ($null -eq $kpis -or $kpis.Count -eq 0) {
+            [void]$sb.Append("<table style='width:100%;border:none;margin:16px 0;'><tr>")
+            [void]$sb.Append("<td style='padding:20px;text-align:center;border:1px solid $($palette.Border);border-radius:6px;background:$($palette.LightGrayBg);color:#566;font-size:14px;'>")
+            [void]$sb.Append("No trend data available")
+            [void]$sb.Append("</td></tr></table>")
+        }
+        else {
+            # Define KPI display order and labels
+            $kpiOrder = @(
+                @{ Key = 'MaturityScore';      Label = 'Maturity Score' }
+                @{ Key = 'ActiveCampaigns';    Label = 'Active Campaigns' }
+                @{ Key = 'PrivApprovalRate';   Label = 'Priv. Approval Rate' }
+                @{ Key = 'ReviewerCompletion'; Label = 'Reviewer Completion' }
+                @{ Key = 'StaleAccessCount';   Label = 'Stale Access' }
+            )
+
+            [void]$sb.Append("<table style='width:100%;border:none;margin:16px 0;border-spacing:8px;border-collapse:separate;'><tr>")
+
+            foreach ($kpiDef in $kpiOrder) {
+                $kpiKey = $kpiDef.Key
+                $kpiLabel = $kpiDef.Label
+                $kpi = $null
+                if ($kpis -is [System.Collections.IDictionary] -and $kpis.Contains($kpiKey)) {
+                    $kpi = $kpis[$kpiKey]
+                }
+
+                if ($null -eq $kpi) {
+                    [void]$sb.Append("<td style='width:20%;padding:8px;text-align:center;border:1px solid $($palette.Border);border-radius:6px;background:$($palette.LightGrayBg);'>")
+                    [void]$sb.Append("<div style='font-size:28px;font-weight:700;color:$($palette.Dark);'>--</div>")
+                    [void]$sb.Append("<div style='font-size:11px;color:#566;text-transform:uppercase;'>$(ConvertTo-SPHtmlSafe $kpiLabel)</div>")
+                    [void]$sb.Append("</td>")
+                    continue
+                }
+
+                $kpiValue     = if ($kpi -is [System.Collections.IDictionary] -and $kpi.Contains('Value'))     { $kpi['Value'] }     else { '--' }
+                $kpiDirection = if ($kpi -is [System.Collections.IDictionary] -and $kpi.Contains('Direction')) { [string]$kpi['Direction'] } else { 'Flat' }
+                $kpiDelta     = if ($kpi -is [System.Collections.IDictionary] -and $kpi.Contains('Delta'))     { $kpi['Delta'] }     else { '' }
+
+                # Direction arrow and color using CSS triangles (no unicode)
+                $directionHtml = ''
+                $dirColor = $palette.Amber
+                switch ($kpiDirection) {
+                    'Up' {
+                        $dirColor = $palette.Green
+                        $directionHtml = "<span style='display:inline-block;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid $($palette.Green);'></span>"
+                    }
+                    'Down' {
+                        $dirColor = $palette.Red
+                        $directionHtml = "<span style='display:inline-block;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid $($palette.Red);'></span>"
+                    }
+                    default {
+                        $dirColor = $palette.Amber
+                        $directionHtml = "<span style='display:inline-block;width:12px;height:3px;background:$($palette.Amber);'></span>"
+                    }
+                }
+
+                [void]$sb.Append("<td style='width:20%;padding:8px;text-align:center;border:1px solid $($palette.Border);border-radius:6px;background:$($palette.LightGrayBg);'>")
+                [void]$sb.Append("<div style='font-size:28px;font-weight:700;color:$($palette.Dark);'>$(ConvertTo-SPHtmlSafe ([string]$kpiValue))</div>")
+                [void]$sb.Append("<div style='font-size:11px;color:#566;text-transform:uppercase;'>$(ConvertTo-SPHtmlSafe $kpiLabel)</div>")
+                [void]$sb.Append("<div style='font-size:13px;color:${dirColor};font-weight:600;'>$directionHtml $(ConvertTo-SPHtmlSafe ([string]$kpiDelta))</div>")
+                [void]$sb.Append("</td>")
+            }
+
+            [void]$sb.Append("</tr></table>")
+        }
+
+        # ---- Section 3: Sparklines ----
+        if ($null -ne $sparklines -and $sparklines.Count -gt 0) {
+            [void]$sb.Append("<h2 style='font-size:15px;color:#1f3a5f;margin-top:26px;border-bottom:1px solid $($palette.Border);padding-bottom:4px;'>Trend Sparklines</h2>")
+            [void]$sb.Append("<table style='width:100%;border-collapse:collapse;margin-top:8px;font-size:13px;'>")
+
+            $sparkKeys = if ($sparklines -is [System.Collections.IDictionary]) { @($sparklines.Keys) } else { @() }
+            foreach ($metricName in $sparkKeys) {
+                $values = @($sparklines[$metricName])
+                if ($values.Count -eq 0) { continue }
+
+                # Calculate bar dimensions
+                $svgWidth  = 100
+                $svgHeight = 24
+                $barCount  = $values.Count
+                if ($barCount -eq 0) { continue }
+
+                $barGap    = 2
+                $barWidth  = [math]::Floor(($svgWidth - ($barCount - 1) * $barGap) / $barCount)
+                if ($barWidth -lt 4) { $barWidth = 4 }
+
+                $minVal = ($values | Measure-Object -Minimum).Minimum
+                $maxVal = ($values | Measure-Object -Maximum).Maximum
+                $range  = $maxVal - $minVal
+                if ($range -eq 0) { $range = 1 }
+
+                [void]$sb.Append("<tr>")
+                [void]$sb.Append("<td style='padding:6px 10px;border-bottom:1px solid #e3e9f0;width:200px;vertical-align:middle;'>$(ConvertTo-SPHtmlSafe $metricName)</td>")
+                [void]$sb.Append("<td style='padding:6px 10px;border-bottom:1px solid #e3e9f0;vertical-align:middle;'>")
+                [void]$sb.Append("<svg width='$svgWidth' height='$svgHeight' style='vertical-align:middle;'>")
+
+                for ($i = 0; $i -lt $barCount; $i++) {
+                    $val = [double]$values[$i]
+                    # Bar height: minimum 2px, proportional to range
+                    $barHeight = [math]::Max(2, [math]::Round((($val - $minVal) / $range) * ($svgHeight - 2) + 2))
+                    $x = $i * ($barWidth + $barGap)
+                    $y = $svgHeight - $barHeight
+
+                    # Opacity: latest bar fully opaque, earlier bars progressively more transparent
+                    if ($barCount -eq 1) {
+                        $opacity = '1.0'
+                    }
+                    else {
+                        $opacityVal = 0.3 + (0.7 * ($i / ($barCount - 1)))
+                        $opacity = [math]::Round($opacityVal, 2).ToString()
+                    }
+
+                    [void]$sb.Append("<rect x='$x' y='$y' width='$barWidth' height='$barHeight' fill='$($palette.Dark)' opacity='$opacity'/>")
+                }
+
+                [void]$sb.Append("</svg>")
+                [void]$sb.Append("</td></tr>")
+            }
+
+            [void]$sb.Append("</table>")
+        }
+
+        # ---- Section 4: Alert Callouts ----
+        [void]$sb.Append("<h2 style='font-size:15px;color:#1f3a5f;margin-top:26px;border-bottom:1px solid $($palette.Border);padding-bottom:4px;'>Alerts</h2>")
+
+        if ($null -eq $alerts -or @($alerts).Count -eq 0) {
+            [void]$sb.Append("<div style='border:1px solid #b7e4c7;background:#e6f4ea;border-radius:6px;padding:10px 14px;margin:8px 0;color:#0a5c1f;'>")
+            [void]$sb.Append("<strong>Healthy:</strong> All metrics within normal range")
+            [void]$sb.Append("</div>")
+        }
+        else {
+            $sortedAlerts = @($alerts) | Sort-Object { if ($_.Severity -eq 'Red') { 0 } else { 1 } }
+            foreach ($alert in $sortedAlerts) {
+                $severity = if ($null -ne $alert -and $null -ne $alert.Severity) { [string]$alert.Severity } else { 'Amber' }
+                $message  = if ($null -ne $alert -and $null -ne $alert.Message)  { [string]$alert.Message }  else { '' }
+
+                if ($severity -eq 'Red') {
+                    $borderColor = '#f5c6cb'
+                    $bgColor     = '#fdecec'
+                    $textColor   = '#7a0014'
+                }
+                else {
+                    $borderColor = '#ffd97a'
+                    $bgColor     = '#fff7e6'
+                    $textColor   = '#7a5a00'
+                }
+
+                [void]$sb.Append("<div style='border:1px solid ${borderColor};background:${bgColor};border-radius:6px;padding:10px 14px;margin:8px 0;color:${textColor};'>")
+                [void]$sb.Append("<strong>$(ConvertTo-SPHtmlSafe $severity):</strong> $(ConvertTo-SPHtmlSafe $message)")
+                [void]$sb.Append("</div>")
+            }
+        }
+
+        # ---- Section 5: Campaign Throughput ----
+        if ($null -ne $campaigns) {
+            [void]$sb.Append("<h2 style='font-size:15px;color:#1f3a5f;margin-top:26px;border-bottom:1px solid $($palette.Border);padding-bottom:4px;'>Campaign Throughput</h2>")
+            [void]$sb.Append("<table style='width:100%;border-collapse:collapse;margin-top:8px;font-size:13px;'>")
+
+            $thStyle = "style='background:#1f3a5f;color:#fff;text-align:left;padding:6px 8px;font-weight:600;'"
+            $tdStyle = "style='border-bottom:1px solid #e3e9f0;padding:5px 8px;vertical-align:top;'"
+
+            [void]$sb.Append("<thead><tr><th ${thStyle}>Metric</th><th ${thStyle}>Value</th></tr></thead>")
+            [void]$sb.Append("<tbody>")
+
+            # Active campaigns
+            $activeData = if ($campaigns -is [System.Collections.IDictionary] -and $campaigns.Contains('Active')) { $campaigns['Active'] } else { $null }
+            $activeCount   = if ($null -ne $activeData -and $activeData -is [System.Collections.IDictionary] -and $activeData.Contains('Count'))   { $activeData['Count'] }   else { 0 }
+            $overdueCount  = if ($null -ne $activeData -and $activeData -is [System.Collections.IDictionary] -and $activeData.Contains('Overdue')) { $activeData['Overdue'] } else { 0 }
+
+            [void]$sb.Append("<tr><td ${tdStyle}>Active Campaigns</td><td ${tdStyle}>$(ConvertTo-SPHtmlSafe ([string]$activeCount))</td></tr>")
+            [void]$sb.Append("<tr style='background:#f6f9fc;'><td ${tdStyle}>Overdue Campaigns</td><td ${tdStyle}>$(ConvertTo-SPHtmlSafe ([string]$overdueCount))</td></tr>")
+
+            # Completed campaigns
+            $completedData = if ($campaigns -is [System.Collections.IDictionary] -and $campaigns.Contains('Completed')) { $campaigns['Completed'] } else { $null }
+            $completedCount = if ($null -ne $completedData -and $completedData -is [System.Collections.IDictionary] -and $completedData.Contains('Count'))   { $completedData['Count'] }   else { 0 }
+            $avgDays        = if ($null -ne $completedData -and $completedData -is [System.Collections.IDictionary] -and $completedData.Contains('AvgDays')) { $completedData['AvgDays'] } else { '--' }
+
+            [void]$sb.Append("<tr><td ${tdStyle}>Completed Campaigns</td><td ${tdStyle}>$(ConvertTo-SPHtmlSafe ([string]$completedCount))</td></tr>")
+            [void]$sb.Append("<tr style='background:#f6f9fc;'><td ${tdStyle}>Avg. Days to Complete</td><td ${tdStyle}>$(ConvertTo-SPHtmlSafe ([string]$avgDays))</td></tr>")
+
+            [void]$sb.Append("</tbody></table>")
+        }
+
+        # ---- Section 6: Period Comparison Table ----
+        if ($null -ne $PeriodComparison -and $PeriodComparison.Count -gt 0) {
+            [void]$sb.Append("<h2 style='font-size:15px;color:#1f3a5f;margin-top:26px;border-bottom:1px solid $($palette.Border);padding-bottom:4px;'>Period Comparison</h2>")
+            [void]$sb.Append("<table style='width:100%;border-collapse:collapse;margin-top:8px;font-size:13px;'>")
+
+            $thStyle = "style='background:#1f3a5f;color:#fff;text-align:left;padding:6px 8px;font-weight:600;'"
+            [void]$sb.Append("<thead><tr>")
+            [void]$sb.Append("<th ${thStyle}>Metric</th>")
+            [void]$sb.Append("<th ${thStyle}>Previous</th>")
+            [void]$sb.Append("<th ${thStyle}>Current</th>")
+            [void]$sb.Append("<th ${thStyle}>Delta</th>")
+            [void]$sb.Append("<th ${thStyle}>Direction</th>")
+            [void]$sb.Append("</tr></thead><tbody>")
+
+            $tdStyle = "style='border-bottom:1px solid #e3e9f0;padding:5px 8px;vertical-align:top;'"
+            $compKeys = @($PeriodComparison.Keys)
+            $rowIdx = 0
+            foreach ($metricKey in $compKeys) {
+                $rowIdx++
+                $comp = $PeriodComparison[$metricKey]
+                $isAlt = (($rowIdx % 2) -eq 0)
+                $rowStyle = if ($isAlt) { " style='background:#f6f9fc;'" } else { '' }
+
+                $before    = if ($comp -is [System.Collections.IDictionary] -and $comp.Contains('Before'))    { [string]$comp['Before'] }    else { '--' }
+                $after     = if ($comp -is [System.Collections.IDictionary] -and $comp.Contains('After'))     { [string]$comp['After'] }     else { '--' }
+                $delta     = if ($comp -is [System.Collections.IDictionary] -and $comp.Contains('Delta'))     { [string]$comp['Delta'] }     else { '--' }
+                $direction = if ($comp -is [System.Collections.IDictionary] -and $comp.Contains('Direction')) { [string]$comp['Direction'] } else { 'Flat' }
+
+                # Direction indicator using CSS
+                $compDirHtml = ''
+                switch ($direction) {
+                    'Up' {
+                        $compDirHtml = "<span style='display:inline-block;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid $($palette.Green);'></span> <span style='color:$($palette.Green);'>Up</span>"
+                    }
+                    'Down' {
+                        $compDirHtml = "<span style='display:inline-block;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid $($palette.Red);'></span> <span style='color:$($palette.Red);'>Down</span>"
+                    }
+                    default {
+                        $compDirHtml = "<span style='display:inline-block;width:12px;height:3px;background:$($palette.Amber);'></span> <span style='color:$($palette.Amber);'>Flat</span>"
+                    }
+                }
+
+                [void]$sb.Append("<tr${rowStyle}>")
+                [void]$sb.Append("<td ${tdStyle}>$(ConvertTo-SPHtmlSafe $metricKey)</td>")
+                [void]$sb.Append("<td ${tdStyle}>$(ConvertTo-SPHtmlSafe $before)</td>")
+                [void]$sb.Append("<td ${tdStyle}>$(ConvertTo-SPHtmlSafe $after)</td>")
+                [void]$sb.Append("<td ${tdStyle}>$(ConvertTo-SPHtmlSafe $delta)</td>")
+                [void]$sb.Append("<td ${tdStyle}>$compDirHtml</td>")
+                [void]$sb.Append("</tr>")
+            }
+
+            [void]$sb.Append("</tbody></table>")
+        }
+
+        # ---- Section 7: Footer ----
+        [void]$sb.Append("<hr style='border:none;border-top:1px solid #d4dce6;margin:24px 0 8px 0;'/>")
+        [void]$sb.Append("<p style='font-size:11px;color:#777;'>")
+        [void]$sb.Append("Generated: $(ConvertTo-SPHtmlSafe $generatedAt)")
+        if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) {
+            [void]$sb.Append(" | Correlation: $(ConvertTo-SPHtmlSafe $CorrelationID)")
+        }
+        [void]$sb.Append(" | SailPoint ISC Governance Toolkit")
+        [void]$sb.Append("</p>")
+
+        [void]$sb.Append("</body></html>")
+
+        Write-SPHtmlFile -Path $htmlFile -Content $sb.ToString()
+
+        Write-SPLog -Message "Governance dashboard HTML written: $htmlFile" `
+            -Severity INFO -Component 'SP.AuditReportHtml' -Action 'Export-SPGovernanceDashboardHtml' `
+            -CorrelationID $CorrelationID
+
+        return @{ Success = $true; Data = $htmlFile; Error = $null }
+    }
+    catch {
+        $errMsg = "Export-SPGovernanceDashboardHtml failed: $($_.Exception.Message)"
+        try {
+            Write-SPLog -Message $errMsg -Severity ERROR -Component 'SP.AuditReportHtml' `
+                -Action 'Export-SPGovernanceDashboardHtml' -CorrelationID $CorrelationID
+        } catch { }
+        return @{ Success = $false; Data = $null; Error = $errMsg }
+    }
+}
+
+#endregion Governance Trend Dashboard
+
+Export-ModuleMember -Function 'Export-SPGovernanceDashboardHtml'

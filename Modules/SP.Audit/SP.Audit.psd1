@@ -257,6 +257,9 @@
         'Compare-SPGovernancePeriods'
         'Get-SPGovernanceAlerts'
 
+        # SP.AuditReportHtml - Governance Trend Dashboard (Phase 5)
+        'Export-SPGovernanceDashboardHtml'
+
         # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
         'Measure-SPReviewerVelocity'
         'Export-SPReviewerVelocityHtml'
