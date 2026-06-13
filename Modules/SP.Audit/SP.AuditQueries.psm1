@@ -23,17 +23,52 @@
     Version: 1.0.0
 #>
 
+# Ensure SP.Shared is loaded (provides SP.CacheService for account cache store).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command New-SPCacheStore -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 # Module-scope source name cache to avoid redundant API calls within a session.
 $script:SourceNameCache = @{}
 
-# Module-scope account cache: keyed by identity ID, value is @{SamAccountName; UserPrincipalName; Email; NativeIdentity}.
-$script:AccountCache = @{}
-
-# Persistent (disk-backed) account-cache state. $script:_AccountCachedAt records the
-# CachedAt timestamp per identity so resolutions can be aged out and persisted across
-# runs; the disk warm-load happens once per session.
+# Account cache backed by SP.CacheService (in-memory store 'SPAccountCache').
+# $script:AccountCache is aliased to the store's Items hashtable for backward compat.
+# Disk persistence (accounts.jsonl) uses the legacy format unchanged.
+$script:AccountCache       = @{}
 $script:_AccountCachedAt   = @{}
 $script:_AccountDiskLoaded = $false
+
+$script:_AccountStoreReady = $false
+
+function _EnsureAccountStore {
+    # Lazily initialize the SPAccountCache store via SP.CacheService.
+    # After init, $script:AccountCache points to the store's Items hashtable
+    # so existing code that reads/writes $script:AccountCache[$id] keeps working.
+    if ($script:_AccountStoreReady) { return }
+    if (-not (Get-Command New-SPCacheStore -ErrorAction Ignore)) { return }
+
+    # Capture any pre-existing entries (from InModuleScope in tests)
+    $preExisting = $script:AccountCache
+
+    # Create the store (TtlMinutes=0 -- no in-memory expiry, same as original)
+    $store = New-SPCacheStore -Name 'SPAccountCache' -TtlMinutes 0 -TrackStats
+
+    # Migrate pre-existing entries into the new store
+    if ($null -ne $preExisting -and $preExisting.Count -gt 0) {
+        foreach ($key in @($preExisting.Keys)) {
+            $store.Items[$key]      = $preExisting[$key]
+            $store.Timestamps[$key] = Get-Date
+        }
+    }
+
+    # Wire the compatibility alias to the store's Items hashtable
+    $script:AccountCache = $store.Items
+    $script:_AccountStoreReady = $true
+}
+
+# Initialize eagerly if SP.CacheService is already loaded.
+_EnsureAccountStore
 
 #region Internal Functions
 
