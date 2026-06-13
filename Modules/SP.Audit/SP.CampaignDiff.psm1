@@ -33,23 +33,18 @@
 
 Set-StrictMode -Version 1
 
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe, Format-SPHtmlDate).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal helpers
 
 function Get-SPDiffProp {
-    # Uniform read across the two shapes a snapshot can arrive in: freshly built
-    # ([ordered] hashtables) or round-tripped from JSON (PSCustomObjects). Returns
-    # $Default when the member is absent or null.
+    # Thin wrapper -- canonical implementation is Get-SPObjectProperty (SP.HtmlHelpers).
     param([object]$Object, [string]$Name, $Default = $null)
-    if ($null -eq $Object) { return $Default }
-    try {
-        if ($Object -is [System.Collections.IDictionary]) {
-            if ($Object.Contains($Name)) { $v = $Object[$Name]; if ($null -ne $v) { return $v } }
-            return $Default
-        }
-        $p = $Object.PSObject.Properties[$Name]
-        if ($null -ne $p -and $null -ne $p.Value) { return $p.Value }
-    } catch { }
-    return $Default
+    return (Get-SPObjectProperty -Object $Object -Name $Name -Default $Default)
 }
 
 function ConvertTo-SPDiffMap {
@@ -110,9 +105,9 @@ tr:nth-child(even) td{background:#f6f9fc;}
 }
 
 function Get-SPDiffEnc {
+    # Thin wrapper -- canonical implementation is ConvertTo-SPHtmlSafe (SP.HtmlHelpers).
     param([object]$Value)
-    if ($null -eq $Value) { return '' }
-    return [System.Web.HttpUtility]::HtmlEncode([string]$Value)
+    return (ConvertTo-SPHtmlSafe -Value $Value)
 }
 
 function Get-SPDiffDelta {
@@ -124,13 +119,9 @@ function Get-SPDiffDelta {
 }
 
 function Get-SPDiffShortDate {
-    # A parseable timestamp -> 'yyyy-MM-dd HH:mm'; falls back to the raw string when
-    # unparseable, '' when empty. Display-only -- used for the per-item decision dates
-    # ("approved on 6/10, revoked on 6/11") surfaced in the scope/change tables.
+    # Thin wrapper -- canonical implementation is Format-SPHtmlDate (SP.HtmlHelpers).
     param([object]$Value)
-    $s = if ($null -eq $Value) { '' } else { [string]$Value }
-    if ([string]::IsNullOrWhiteSpace($s)) { return '' }
-    try { return ([datetime]::Parse($s)).ToString('yyyy-MM-dd HH:mm') } catch { return $s }
+    return (Format-SPHtmlDate -DateString ([string]$Value))
 }
 
 #endregion

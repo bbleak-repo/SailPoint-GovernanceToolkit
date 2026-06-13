@@ -22,52 +22,29 @@
 
 $script:AuditReportVersion = '1.0.0'
 
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe, Format-SPHtmlDate).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region HTML Rendering Helpers
 
 function ConvertTo-SafeHtml {
-    <#
-    .SYNOPSIS
-        HTML-encodes a value for safe embedding in markup.
-    .DESCRIPTION
-        Converts the input to a string and applies HtmlEncode. Returns an
-        empty string for null or empty input rather than throwing.
-    #>
+    # Thin wrapper -- canonical implementation is ConvertTo-SPHtmlSafe (SP.HtmlHelpers).
     [CmdletBinding()]
     [OutputType([string])]
-    param(
-        [Parameter()]
-        $Value
-    )
-
-    if ($null -eq $Value) { return '' }
-    $str = [string]$Value
-    if ([string]::IsNullOrWhiteSpace($str)) { return '' }
-    return [System.Net.WebUtility]::HtmlEncode($str)
+    param([Parameter()] $Value)
+    return (ConvertTo-SPHtmlSafe -Value $Value)
 }
 
 
 function Format-HtmlDate {
-    <#
-    .SYNOPSIS
-        Formats an ISO 8601 date string to a readable date for HTML output.
-    .DESCRIPTION
-        Attempts to parse and reformat. Returns the raw string on parse failure.
-    #>
+    # Thin wrapper -- canonical implementation is Format-SPHtmlDate (SP.HtmlHelpers).
     [CmdletBinding()]
     [OutputType([string])]
-    param(
-        [Parameter()]
-        [string]$DateString
-    )
-
-    if ([string]::IsNullOrWhiteSpace($DateString)) { return '' }
-    try {
-        $dt = [datetime]::Parse($DateString)
-        return $dt.ToString('yyyy-MM-dd HH:mm')
-    }
-    catch {
-        return $DateString
-    }
+    param([Parameter()] [string]$DateString)
+    return (Format-SPHtmlDate -DateString $DateString)
 }
 
 

@@ -25,20 +25,21 @@
 
 Set-StrictMode -Version 1
 
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal
 
 function Get-SPVelVal {
+    # Thin wrapper -- canonical implementation is Get-SPObjectProperty (SP.HtmlHelpers).
     param([object]$Object, [string]$Name, $Default = $null)
-    if ($null -eq $Object) { return $Default }
-    try {
-        if ($Object -is [System.Collections.IDictionary]) { if ($Object.Contains($Name)) { $v = $Object[$Name]; if ($null -ne $v) { return $v } } ; return $Default }
-        $p = $Object.PSObject.Properties[$Name]
-        if ($null -ne $p -and $null -ne $p.Value) { return $p.Value }
-    } catch { }
-    return $Default
+    return (Get-SPObjectProperty -Object $Object -Name $Name -Default $Default)
 }
 
-function Get-SPVelEnc { param([object]$v) if ($null -eq $v) { return '' } return [System.Web.HttpUtility]::HtmlEncode([string]$v) }
+function Get-SPVelEnc { param([object]$v) return (ConvertTo-SPHtmlSafe -Value $v) } # Thin wrapper -- SP.HtmlHelpers
 
 #endregion
 

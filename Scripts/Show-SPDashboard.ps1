@@ -186,6 +186,7 @@ if (-not $scriptRoot) {
 
 $toolkitRoot = Split-Path -Parent $scriptRoot
 
+$sharedModulePath = Join-Path $toolkitRoot 'Modules\SP.Shared\SP.Shared.psd1'
 $coreModulePath  = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1'
 $apiModulePath   = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1'
 $auditModulePath = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1'
@@ -201,6 +202,7 @@ $testingModulePath       = Join-Path $toolkitRoot 'Modules\SP.Testing\SP.Testing
 $disconnectedModulePath  = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'
 
 foreach ($moduleDef in @(
+    @{ Path = $sharedModulePath; Name = 'SP.Shared'; Required = $true },
     @{ Path = $coreModulePath;  Name = 'SP.Core';  Required = $true },
     @{ Path = $apiModulePath;   Name = 'SP.Api';   Required = $true },
     @{ Path = $auditModulePath; Name = 'SP.Audit'; Required = $true },

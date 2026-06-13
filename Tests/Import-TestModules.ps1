@@ -30,6 +30,10 @@ function Import-SPTestModules {
         family's nested .psm1 files in dependency order. Pester mocks
         with -ModuleName <psm1-base-name> will reach the call sites
         correctly because the modules are top-level, not nested.
+    .PARAMETER Shared
+        Imports SP.HtmlHelpers (shared HTML encoding, date formatting,
+        property access, file writing). No dependencies -- safe to import
+        before or alongside any other module family.
     .PARAMETER Core
         Imports SP.Config, SP.Logging, SP.Vault, SP.Auth.
     .PARAMETER Api
@@ -64,6 +68,7 @@ function Import-SPTestModules {
     #>
     [CmdletBinding()]
     param(
+        [switch]$Shared,
         [switch]$Core,
         [switch]$Api,
         [switch]$Audit,
@@ -77,6 +82,9 @@ function Import-SPTestModules {
 
     $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
 
+    if ($Shared) {
+        Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.HtmlHelpers.psm1') -Force -DisableNameChecking
+    }
     if ($Core) {
         Import-Module (Join-Path $modulesRoot 'SP.Core\SP.Config.psm1')  -Force -DisableNameChecking
         Import-Module (Join-Path $modulesRoot 'SP.Core\SP.Logging.psm1') -Force -DisableNameChecking

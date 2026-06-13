@@ -35,24 +35,20 @@
         Gray   #777777 - N/A / footer
 #>
 
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal HTML Helpers
 
 function ConvertTo-DisconnectedHtmlSafe {
-    <#
-    .SYNOPSIS
-        HTML-encodes a value for safe embedding in report output.
-    #>
+    # Thin wrapper -- canonical implementation is ConvertTo-SPHtmlSafe (SP.HtmlHelpers).
     [CmdletBinding()]
     [OutputType([string])]
-    param(
-        [Parameter()]
-        $Value
-    )
-
-    if ($null -eq $Value) { return '' }
-    $str = [string]$Value
-    if ([string]::IsNullOrWhiteSpace($str)) { return '' }
-    return [System.Net.WebUtility]::HtmlEncode($str)
+    param([Parameter()] $Value)
+    return (ConvertTo-SPHtmlSafe -Value $Value)
 }
 
 function Build-DisconnectedHtmlRow {
