@@ -911,22 +911,22 @@ if ($OutputMode -eq 'HTML') {
         [void]$htmlBody.AppendLine("<p>Generated: $generatedAt | CorrelationID: $correlationID | Mode: $resultLabel | Results: $resultCount</p>")
 
         if ($modeReviewer) {
-            [void]$htmlBody.AppendLine("<h2>Reviewer Workload: $([System.Net.WebUtility]::HtmlEncode($outputData.ReviewerName))</h2>")
+            [void]$htmlBody.AppendLine("<h2>Reviewer Workload: $(ConvertTo-SPHtmlSafe $outputData.ReviewerName)</h2>")
             [void]$htmlBody.AppendLine("<p>Total Campaigns: $($outputData.TotalCampaigns) | Items: $($outputData.TotalItems) | Pending: $($outputData.TotalPending)</p>")
             [void]$htmlBody.AppendLine('<table><tr><th>Campaign</th><th>Assigned</th><th>Decided</th><th>Pending</th></tr>')
             foreach ($wl in $outputData.Campaigns) {
-                [void]$htmlBody.AppendLine("<tr><td>$([System.Net.WebUtility]::HtmlEncode($wl.CampaignName))</td><td>$($wl.ItemsAssigned)</td><td>$($wl.ItemsDecided)</td><td>$($wl.ItemsPending)</td></tr>")
+                [void]$htmlBody.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $wl.CampaignName)</td><td>$($wl.ItemsAssigned)</td><td>$($wl.ItemsDecided)</td><td>$($wl.ItemsPending)</td></tr>")
             }
             [void]$htmlBody.AppendLine('</table>')
         }
         elseif ($modeIdentity) {
-            [void]$htmlBody.AppendLine("<h2>Decision History: $([System.Net.WebUtility]::HtmlEncode($outputData.IdentityName))</h2>")
+            [void]$htmlBody.AppendLine("<h2>Decision History: $(ConvertTo-SPHtmlSafe $outputData.IdentityName)</h2>")
             [void]$htmlBody.AppendLine("<p>Total Decisions: $($outputData.TotalDecisions)</p>")
             foreach ($campEntry in $outputData.Campaigns) {
-                [void]$htmlBody.AppendLine("<h2>$([System.Net.WebUtility]::HtmlEncode($campEntry.CampaignName)) ($($campEntry.CampaignDate))</h2>")
+                [void]$htmlBody.AppendLine("<h2>$(ConvertTo-SPHtmlSafe $campEntry.CampaignName) ($($campEntry.CampaignDate))</h2>")
                 [void]$htmlBody.AppendLine('<table><tr><th>Access</th><th>Decision</th><th>Reviewer</th><th>Date</th></tr>')
                 foreach ($dec in $campEntry.Decisions) {
-                    [void]$htmlBody.AppendLine("<tr><td>$([System.Net.WebUtility]::HtmlEncode($dec.AccessName))</td><td>$($dec.Decision)</td><td>$([System.Net.WebUtility]::HtmlEncode($dec.ReviewerName))</td><td>$($dec.DecisionDate)</td></tr>")
+                    [void]$htmlBody.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $dec.AccessName)</td><td>$($dec.Decision)</td><td>$(ConvertTo-SPHtmlSafe $dec.ReviewerName)</td><td>$($dec.DecisionDate)</td></tr>")
                 }
                 [void]$htmlBody.AppendLine('</table>')
             }
@@ -940,7 +940,7 @@ if ($OutputMode -eq 'HTML') {
                 [void]$htmlBody.AppendLine('<h2>Uncovered Sources</h2>')
                 [void]$htmlBody.AppendLine('<table><tr><th>Source Name</th><th>Source ID</th></tr>')
                 foreach ($src in $outputData.Uncovered) {
-                    [void]$htmlBody.AppendLine("<tr><td>$([System.Net.WebUtility]::HtmlEncode($src.SourceName))</td><td>$($src.SourceId)</td></tr>")
+                    [void]$htmlBody.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $src.SourceName)</td><td>$($src.SourceId)</td></tr>")
                 }
                 [void]$htmlBody.AppendLine('</table>')
             }
@@ -948,7 +948,7 @@ if ($OutputMode -eq 'HTML') {
             [void]$htmlBody.AppendLine('<h2>Covered Sources</h2>')
             [void]$htmlBody.AppendLine('<table><tr><th>Source</th><th>Last Campaign</th><th>Count</th><th>Last Date</th></tr>')
             foreach ($src in $outputData.Covered) {
-                [void]$htmlBody.AppendLine("<tr><td>$([System.Net.WebUtility]::HtmlEncode($src.SourceName))</td><td>$([System.Net.WebUtility]::HtmlEncode($src.LastCampaign))</td><td>$($src.CampaignCount)</td><td>$($src.LastCampaignDate)</td></tr>")
+                [void]$htmlBody.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $src.SourceName)</td><td>$(ConvertTo-SPHtmlSafe $src.LastCampaign)</td><td>$($src.CampaignCount)</td><td>$($src.LastCampaignDate)</td></tr>")
             }
             [void]$htmlBody.AppendLine('</table>')
         }
@@ -959,7 +959,7 @@ if ($OutputMode -eq 'HTML') {
             if ($ShowMetrics -and $null -ne $outputData.MetricsData) {
                 [void]$htmlBody.AppendLine('<table><tr><th>Campaign</th><th>Type</th><th>Status</th><th>Items</th><th>Approve%</th><th>Revoke%</th><th>Complete%</th><th>Reviewers</th><th>Avg Resp (hrs)</th></tr>')
                 foreach ($m in $outputData.MetricsData) {
-                    [void]$htmlBody.AppendLine("<tr><td>$([System.Net.WebUtility]::HtmlEncode($m.CampaignName))</td><td>$($m.CampaignType)</td><td>$($m.CampaignStatus)</td><td>$($m.TotalItems)</td><td>$($m.ApprovalRate)</td><td>$($m.RevocationRate)</td><td>$($m.CompletionRate)</td><td>$($m.ReviewerCount)</td><td>$($m.AvgResponseTimeHours)</td></tr>")
+                    [void]$htmlBody.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $m.CampaignName)</td><td>$($m.CampaignType)</td><td>$($m.CampaignStatus)</td><td>$($m.TotalItems)</td><td>$($m.ApprovalRate)</td><td>$($m.RevocationRate)</td><td>$($m.CompletionRate)</td><td>$($m.ReviewerCount)</td><td>$($m.AvgResponseTimeHours)</td></tr>")
                 }
                 [void]$htmlBody.AppendLine('</table>')
             }
@@ -980,7 +980,7 @@ if ($OutputMode -eq 'HTML') {
                             $createdStr = $camp.created.ToString()
                         }
                     }
-                    $row = "<tr><td>$([System.Net.WebUtility]::HtmlEncode($camp.name))</td><td>$($camp.type)</td><td>$($camp.status)</td><td>$createdStr</td>"
+                    $row = "<tr><td>$(ConvertTo-SPHtmlSafe $camp.name)</td><td>$($camp.type)</td><td>$($camp.status)</td><td>$createdStr</td>"
                     if ($hasDeadline) {
                         $dStatus = if ($null -ne $camp.DeadlineStatus) { $camp.DeadlineStatus } else { 'N/A' }
                         $dClass = switch ($dStatus) {

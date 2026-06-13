@@ -517,7 +517,7 @@ $wantManagerHtml = ($EmailHtmlManagers.IsPresent -or -not [string]::IsNullOrWhit
 function ConvertTo-EscHtml {
     param([Parameter()][string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
-    try { return [System.Net.WebUtility]::HtmlEncode($Value) }
+    try { return (ConvertTo-SPHtmlSafe $Value) }
     catch {
         # Fallback: manual replacement covers the critical characters.
         return $Value.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')

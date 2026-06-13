@@ -101,7 +101,7 @@ tr:nth-child(even) td{background:#f6f9fc;}
 .section-hdr{font-size:16px;color:#7a0014;margin:0 0 6px 0;border-bottom:1px solid #d4dce6;padding-bottom:4px;}
 .cnt-badge{display:inline-block;background:#1f3a5f;color:#fff;font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;}
 '@
-    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>$([System.Web.HttpUtility]::HtmlEncode($Title))</title><style>$css</style></head><body>"
+    return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>$(ConvertTo-SPHtmlSafe $Title)</title><style>$css</style></head><body>"
 }
 
 function Get-SPDiffEnc {

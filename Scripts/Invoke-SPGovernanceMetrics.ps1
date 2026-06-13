@@ -1037,7 +1037,7 @@ $summaryObject = [ordered]@{
 # implementation (only Console + JSON existed), so it silently produced nothing.
 # Render the captured KPIs (mirrors the Console block's data) plus a trend summary.
 if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
-    $enc = { param($v) if ($null -eq $v) { '' } else { [System.Net.WebUtility]::HtmlEncode([string]$v) } }
+    $enc = { param($v) if ($null -eq $v) { '' } else { ConvertTo-SPHtmlSafe ([string]$v) } }
     $addRow = {
         param($label, $value, $dir)
         $dirHtml = if ([string]::IsNullOrWhiteSpace($dir)) { '' } else { '<span style="color:#666;font-size:12px">' + (& $enc $dir) + '</span>' }

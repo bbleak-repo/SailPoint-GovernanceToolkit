@@ -390,7 +390,7 @@ function ConvertTo-SafeHtml {
     if ($null -eq $Value) { return '' }
     $str = [string]$Value
     if ([string]::IsNullOrWhiteSpace($str)) { return '' }
-    return [System.Net.WebUtility]::HtmlEncode($str)
+    return (ConvertTo-SPHtmlSafe $str)
 }
 
 function Get-KpiStatus {

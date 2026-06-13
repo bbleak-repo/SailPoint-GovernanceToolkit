@@ -26,6 +26,12 @@
 
 Set-StrictMode -Version 1
 
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe, Get-SPObjectProperty, Format-SPHtmlDate).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Internal helpers
 
 function Get-SPCampaignTrendDir {
@@ -337,7 +343,7 @@ function Export-SPCampaignTrendHtml {
     )
     try {
         Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
-        $enc = { param($v) if ($null -eq $v) { '' } else { [System.Web.HttpUtility]::HtmlEncode([string]$v) } }
+        $enc = { param($v) if ($null -eq $v) { '' } else { ConvertTo-SPHtmlSafe ([string]$v) } }
         $title = "Campaign KPI Trend -- $($Trend.CampaignName)"
         $css = @'
 body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;}
@@ -514,7 +520,7 @@ function Export-SPProgramTrendHtml {
     param([Parameter(Mandatory)][object]$Trend, [Parameter(Mandatory)][string]$OutputPath)
     try {
         Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
-        $enc = { param($v) if ($null -eq $v) { '' } else { [System.Web.HttpUtility]::HtmlEncode([string]$v) } }
+        $enc = { param($v) if ($null -eq $v) { '' } else { ConvertTo-SPHtmlSafe ([string]$v) } }
         $arrow = { param($d) switch ($d) { 'Up' { "<span style='color:#9a6700;font-weight:700'>&#9650; up</span>" } 'Down' { "<span style='color:#0a7d2c;font-weight:700'>&#9660; down</span>" } default { "<span style='color:#888'>flat</span>" } } }
         $css = "body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;}h1{font-size:20px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;}table{border-collapse:collapse;margin-top:8px;font-size:12px;}th{background:#1f3a5f;color:#fff;text-align:left;padding:6px 10px;}td{border-bottom:1px solid #e3e9f0;padding:5px 10px;}.mv{background:#fff7e6;border:1px solid #ffd97a;border-radius:6px;padding:8px 12px;margin:8px 0;color:#7a5a00;font-size:12px;}.note{font-size:11px;color:#777;margin-top:8px;}"
         $sb = New-Object System.Text.StringBuilder

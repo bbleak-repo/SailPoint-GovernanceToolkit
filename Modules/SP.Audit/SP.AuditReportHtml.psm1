@@ -166,7 +166,7 @@ function Format-RiskFlagBadges {
             'SVC-ACCOUNT' { 'color:#fff; background:#999999;' }
             default       { 'color:#fff; background:#777777;' }
         }
-        "<span style=""$badgeStyle $color"">$([System.Net.WebUtility]::HtmlEncode($flag))</span>"
+        "<span style=""$badgeStyle $color"">$(ConvertTo-SPHtmlSafe $flag)</span>"
     }
 
     return ' ' + ($badges -join '')
@@ -502,7 +502,7 @@ function Build-ExecutiveSummaryHtml {
 
             $barColor = if ($avgH -le 24) { '#339933' } elseif ($avgH -le 72) { '#336699' } else { '#FF8800' }
             $avgLabel = Format-HoursDisplay $avgH
-            $nameHtml = [System.Net.WebUtility]::HtmlEncode($rm.Name)
+            $nameHtml = ConvertTo-SPHtmlSafe $rm.Name
 
             if ($barPct -ge 100) {
                 $barCellsHtml = "<td style=""width:100%; background:$barColor; height:14px; border-radius:3px;""></td>"
@@ -549,16 +549,16 @@ $barRows
     # --- Timeline table rows ---
     $timelineRows = ''
     if (-not [string]::IsNullOrWhiteSpace($createdDisplay)) {
-        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555; width:130px;"">Created</td><td style=""padding:5px 8px; color:#2c3e50;"">$([System.Net.WebUtility]::HtmlEncode($createdDisplay))</td></tr>`n"
+        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555; width:130px;"">Created</td><td style=""padding:5px 8px; color:#2c3e50;"">$(ConvertTo-SPHtmlSafe $createdDisplay)</td></tr>`n"
     }
     if (-not [string]::IsNullOrWhiteSpace($deadlineDisplay)) {
-        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Due Date</td><td style=""padding:5px 8px; color:#2c3e50;"">$([System.Net.WebUtility]::HtmlEncode($deadlineDisplay))</td></tr>`n"
+        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Due Date</td><td style=""padding:5px 8px; color:#2c3e50;"">$(ConvertTo-SPHtmlSafe $deadlineDisplay)</td></tr>`n"
     }
     if (-not [string]::IsNullOrWhiteSpace($completedDisplay)) {
-        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Completed</td><td style=""padding:5px 8px; color:#2c3e50;"">$([System.Net.WebUtility]::HtmlEncode($completedDisplay))</td></tr>`n"
+        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Completed</td><td style=""padding:5px 8px; color:#2c3e50;"">$(ConvertTo-SPHtmlSafe $completedDisplay)</td></tr>`n"
     }
     if (-not [string]::IsNullOrWhiteSpace($durationDisplay)) {
-        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Duration</td><td style=""padding:5px 8px; color:#2c3e50;"">$([System.Net.WebUtility]::HtmlEncode($durationDisplay))</td></tr>`n"
+        $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Duration</td><td style=""padding:5px 8px; color:#2c3e50;"">$(ConvertTo-SPHtmlSafe $durationDisplay)</td></tr>`n"
     }
     if (-not [string]::IsNullOrWhiteSpace($earlyLateHtml)) {
         $timelineRows += "<tr><td style=""padding:5px 8px; font-weight:bold; color:#555;"">Result</td><td style=""padding:5px 8px;"">$earlyLateHtml</td></tr>`n"
@@ -578,7 +578,7 @@ $barRows
     <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:0;">
     <tr>
         <td style="padding:12px 16px; background:$statusColor; border-radius:6px; text-align:center;" colspan="2">
-            <span style="color:#ffffff; font-size:22px; font-weight:bold; letter-spacing:1px;">$([System.Net.WebUtility]::HtmlEncode($status))</span>
+            <span style="color:#ffffff; font-size:22px; font-weight:bold; letter-spacing:1px;">$(ConvertTo-SPHtmlSafe $status)</span>
         </td>
     </tr>
     <tr>
@@ -695,7 +695,7 @@ function Build-SingleCampaignHtml {
         default     { '#777777' }
     }
 
-    $anchorAttr = if (-not [string]::IsNullOrWhiteSpace($AnchorId)) { " id=""$([System.Net.WebUtility]::HtmlEncode($AnchorId))""" } else { '' }
+    $anchorAttr = if (-not [string]::IsNullOrWhiteSpace($AnchorId)) { " id=""$(ConvertTo-SPHtmlSafe $AnchorId)""" } else { '' }
 
     $sectionHeadStyle = 'style="font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;"'
     $tableStyle       = 'style="width:100%; border-collapse:collapse; font-family:-apple-system,''Segoe UI'',system-ui,sans-serif; font-size:13px; margin-bottom:20px;"'
@@ -729,7 +729,7 @@ function Build-SingleCampaignHtml {
     }
 
     $durationRow = if (-not [string]::IsNullOrWhiteSpace($campaignDurationDisplay)) {
-        "        <tr><td $summaryTdLabel>Campaign Duration</td><td $summaryTdValue>$([System.Net.WebUtility]::HtmlEncode($campaignDurationDisplay))</td></tr>`n"
+        "        <tr><td $summaryTdLabel>Campaign Duration</td><td $summaryTdValue>$(ConvertTo-SPHtmlSafe $campaignDurationDisplay)</td></tr>`n"
     } else { '' }
 
     $html = @"
@@ -749,8 +749,8 @@ function Build-SingleCampaignHtml {
     <tbody>
         <tr><td $summaryTdLabel>Campaign Name</td><td $summaryTdValue>$campaignName</td></tr>
         <tr><td $summaryTdLabel>Status</td><td $summaryTdValue><span style="color:$statusColor; font-weight:bold;">$status</span></td></tr>
-        <tr><td $summaryTdLabel>Created</td><td $summaryTdValue>$([System.Net.WebUtility]::HtmlEncode($created))</td></tr>
-        <tr><td $summaryTdLabel>Completed</td><td $summaryTdValue>$([System.Net.WebUtility]::HtmlEncode($completed))</td></tr>
+        <tr><td $summaryTdLabel>Created</td><td $summaryTdValue>$(ConvertTo-SPHtmlSafe $created)</td></tr>
+        <tr><td $summaryTdLabel>Completed</td><td $summaryTdValue>$(ConvertTo-SPHtmlSafe $completed)</td></tr>
         <tr><td $summaryTdLabel>Total Certifications</td><td $summaryTdValue>$totalCerts</td></tr>
         $durationRow
     </tbody>
@@ -1013,7 +1013,7 @@ function Build-SingleCampaignHtml {
                 $rptData = @($campRpts[$rptKey])
 
                 $html += "<details$s5OpenAttr>`n"
-                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">$([System.Net.WebUtility]::HtmlEncode($rptKey)) ($($rptData.Count) row(s))</summary>`n"
+                $html += "<summary style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-weight:bold; font-size:13px; margin-bottom:6px; cursor:pointer;"">$(ConvertTo-SPHtmlSafe $rptKey) ($($rptData.Count) row(s))</summary>`n"
 
                 if ($rptData.Count -eq 0) {
                     $html += "<p style=""font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-style:italic;"">No records.</p>`n"
@@ -1045,7 +1045,7 @@ function Build-SingleCampaignHtml {
                                 $prop = $row.PSObject.Properties[$h]
                                 $val  = if ($null -ne $prop) { [string]$prop.Value } else { '' }
                             }
-                            $cells += [System.Net.WebUtility]::HtmlEncode($val)
+                            $cells += ConvertTo-SPHtmlSafe $val
                         }
                         $html += (Build-HtmlTableRow -Cells $cells -IsAlternate (($rowIdx % 2) -eq 1)) + "`n"
                         $rowIdx++
@@ -1346,7 +1346,7 @@ function Export-SPAuditHtml {
     $metaRowsHtml = ''
     if ($null -ne $RunMetadata) {
         foreach ($key in $RunMetadata.Keys) {
-            $metaRowsHtml += "<tr><td style=""padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode($key))</td><td style=""padding:6px 10px; border-bottom:1px solid #e0e0e0;"">$([System.Net.WebUtility]::HtmlEncode([string]$RunMetadata[$key]))</td></tr>`n"
+            $metaRowsHtml += "<tr><td style=""padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $key)</td><td style=""padding:6px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe [string]$RunMetadata[$key])</td></tr>`n"
         }
     }
 
@@ -1354,8 +1354,8 @@ function Export-SPAuditHtml {
 <h3 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:24px; margin-bottom:12px; font-size:16px;">7. Audit Metadata</h3>
 <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:20px;">
     <tbody>
-        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Correlation ID</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">$([System.Net.WebUtility]::HtmlEncode($CorrelationID))</td></tr>
-        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Report Generated</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">$([System.Net.WebUtility]::HtmlEncode($generatedAt))</td></tr>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Correlation ID</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">$(ConvertTo-SPHtmlSafe $CorrelationID)</td></tr>
+        <tr><td style="padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;">Report Generated</td><td style="padding:6px 10px; border-bottom:1px solid #e0e0e0;">$(ConvertTo-SPHtmlSafe $generatedAt)</td></tr>
         $metaRowsHtml
     </tbody>
 </table>
@@ -1363,7 +1363,7 @@ function Export-SPAuditHtml {
 
     $footerHtml = @"
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 "@
 
@@ -1418,7 +1418,7 @@ function Export-SPAuditHtml {
 
         # Accumulate for combined output
         if ($Combined) {
-            $tocEntries.Add("<li style=""margin-bottom:4px;""><a href=""#$([System.Net.WebUtility]::HtmlEncode($anchorId))"" style=""color:#336699;"">$([System.Net.WebUtility]::HtmlEncode($campName))</a></li>")
+            $tocEntries.Add("<li style=""margin-bottom:4px;""><a href=""#$(ConvertTo-SPHtmlSafe $anchorId)"" style=""color:#336699;"">$(ConvertTo-SPHtmlSafe $campName)</a></li>")
             if ($combinedBody.Length -gt 0) {
                 $combinedBody += "`n<div style=""page-break-before:always;""></div>`n"
             }
@@ -1477,9 +1477,9 @@ function Export-SPAuditHtml {
             $rowBg = if ($rowIdx % 2 -eq 0) { 'background:#f9f9f9;' } else { '' }
             $perCampaignRows += @"
 <tr style="$rowBg">
-  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; max-width:320px; word-wrap:break-word;">$([System.Net.WebUtility]::HtmlEncode($cName))</td>
-  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; white-space:nowrap;">$([System.Net.WebUtility]::HtmlEncode($cDate))</td>
-  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:11px; white-space:nowrap;"><span style="background:$statusColor;color:#fff;padding:2px 6px;border-radius:3px;">$([System.Net.WebUtility]::HtmlEncode($cStatus))</span></td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; max-width:320px; word-wrap:break-word;">$(ConvertTo-SPHtmlSafe $cName)</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:12px; white-space:nowrap;">$(ConvertTo-SPHtmlSafe $cDate)</td>
+  <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; font-size:11px; white-space:nowrap;"><span style="background:$statusColor;color:#fff;padding:2px 6px;border-radius:3px;">$(ConvertTo-SPHtmlSafe $cStatus)</span></td>
   <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#339933; font-weight:bold;">$approvedDisplay$activeNote</td>
   <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#CC3333; font-weight:bold;">$campRevoked</td>
   <td style="padding:7px 12px; border-bottom:1px solid #e0e0e0; text-align:right; color:#FF8800; font-weight:bold;">$campPending</td>
@@ -1492,7 +1492,7 @@ function Export-SPAuditHtml {
 
         $summaryHtml = @"
 <h1 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; font-size:24px; margin-bottom:8px;">SailPoint Campaign Audit - Combined Report</h1>
-<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:20px;">Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; $($CampaignAudits.Count) campaign(s)</p>
+<p style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#777777; font-size:12px; margin-bottom:20px;">Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; $($CampaignAudits.Count) campaign(s)</p>
 
 <h2 style="font-family:-apple-system,'Segoe UI',system-ui,sans-serif; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; font-size:18px;">Per-Campaign Breakdown</h2>
 <table style="width:100%; border-collapse:collapse; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:13px; margin-bottom:24px;">
@@ -2175,7 +2175,7 @@ $execRows
     # --- Footer ---
     $footerHtml = @"
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Leadership Executive Summary &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Leadership Executive Summary &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 "@
 
@@ -2625,7 +2625,7 @@ $detailRows
         # --- Footer ---
         $footerHtml = @"
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Director Report: $safeDirName &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Director Report: $safeDirName &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 "@
 
@@ -2984,11 +2984,11 @@ function Export-SPLeadershipLevelHtml {
                 }
 
                 $subordinateTableHtml = @"
-<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$([System.Net.WebUtility]::HtmlEncode($lowerLevelLabel)) Summary</h3>
+<h3 style="font-family:$fontFamily; color:#2c3e50; border-bottom:2px solid #336699; padding-bottom:6px; margin-top:28px; margin-bottom:12px; font-size:16px;">$(ConvertTo-SPHtmlSafe $lowerLevelLabel) Summary</h3>
 <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
 <thead>
 <tr>
-    <th $thStyle>$([System.Net.WebUtility]::HtmlEncode([string]($lowerLevelLabel -replace 's$', '')))</th>
+    <th $thStyle>$(ConvertTo-SPHtmlSafe [string]($lowerLevelLabel -replace 's$', ''))</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -3278,7 +3278,7 @@ $detailSectionsHtml
                         $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
                     } else {
                         $parentFile = "$parentFilePrefixSingular-$parentSafeName.html"
-                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""$parentFile"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to $([System.Net.WebUtility]::HtmlEncode($parentName))</a></p>"
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""$parentFile"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to $(ConvertTo-SPHtmlSafe $parentName)</a></p>"
                     }
                 }
             }
@@ -3303,7 +3303,7 @@ $detailSectionsHtml
         # --- Footer ---
         $footerHtml = @"
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:$fontFamily; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; $([System.Net.WebUtility]::HtmlEncode($reportTitle)) &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; $(ConvertTo-SPHtmlSafe $reportTitle) &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 "@
 
@@ -3314,14 +3314,14 @@ $detailSectionsHtml
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>$([System.Net.WebUtility]::HtmlEncode($reportTitle)) - $safeCampaignName</title>
+    <title>$(ConvertTo-SPHtmlSafe $reportTitle) - $safeCampaignName</title>
 </head>
 <body style="font-family:$fontFamily; margin:0; padding:24px; background:#f0f2f5; color:#333;">
 <div style="max-width:1100px; margin:0 auto; background:#fff; padding:32px 40px;">
 
 $navHtml
 
-<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">$([System.Net.WebUtility]::HtmlEncode($reportTitle))</h1>
+<h1 style="font-family:$fontFamily; color:#2c3e50; font-size:24px; margin-bottom:4px;">$(ConvertTo-SPHtmlSafe $reportTitle)</h1>
 <p style="font-family:$fontFamily; color:#555; font-size:14px; margin:0 0 4px 0;">$safeCampaignName</p>
 $dateRangeHtml
 
@@ -3765,7 +3765,7 @@ $tbodyHtml
 </table>
 
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Campaign Comparison &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Campaign Comparison &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 
 </body>
@@ -3919,7 +3919,7 @@ $tbodyHtml
 </table>
 
 <div style="margin-top:32px; padding-top:12px; border-top:1px solid #dee2e6; color:#777777; font-family:-apple-system,'Segoe UI',system-ui,sans-serif; font-size:11px; text-align:center;">
-    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Audit Trail Timeline &nbsp;|&nbsp; Generated: $([System.Net.WebUtility]::HtmlEncode($generatedAt)) &nbsp;|&nbsp; Correlation ID: $([System.Net.WebUtility]::HtmlEncode($CorrelationID))
+    SailPoint ISC Governance Toolkit v$($script:AuditReportVersion) &nbsp;|&nbsp; Audit Trail Timeline &nbsp;|&nbsp; Generated: $(ConvertTo-SPHtmlSafe $generatedAt) &nbsp;|&nbsp; Correlation ID: $(ConvertTo-SPHtmlSafe $CorrelationID)
 </div>
 
 </body>
@@ -11030,7 +11030,7 @@ function _Render-SPHierarchyNodeHtml {
 <tr>
   <td style="width:20px;color:#888;font-size:10px;">$(if($Depth-gt 0){'&nbsp;'*($Depth*2)})</td>
   <td style="font-size:13px;font-weight:600;color:#212529;padding:2px 6px;">
-    $([System.Web.HttpUtility]::HtmlEncode($Node.DisplayName))
+    $(ConvertTo-SPHtmlSafe $Node.DisplayName)
   </td>
   <td style="padding:2px 6px;">$kpiHtml</td>
   $noDataNote
@@ -11070,9 +11070,9 @@ function _Render-SPHierarchyNodeHtml {
                     'revoke'  { '#CC3333' }
                     default   { '#FF8800' }
                 }
-                $accessName  = [System.Web.HttpUtility]::HtmlEncode([string]$item.AccessName)
-                $accessType  = [System.Web.HttpUtility]::HtmlEncode([string]$item.AccessType)
-                $sourceName  = [System.Web.HttpUtility]::HtmlEncode([string]$item.SourceName)
+                $accessName  = ConvertTo-SPHtmlSafe [string]$item.AccessName
+                $accessType  = ConvertTo-SPHtmlSafe [string]$item.AccessType
+                $sourceName  = ConvertTo-SPHtmlSafe [string]$item.SourceName
                 $decDate     = [string]$item.DecisionDate
                 $decDisplay  = $dec
                 $rowsHtml += @"
@@ -11102,7 +11102,7 @@ function _Render-SPHierarchyNodeHtml {
 </table>
 "@
 
-            $encodedName  = [System.Web.HttpUtility]::HtmlEncode($identity.Name)
+            $encodedName  = ConvertTo-SPHtmlSafe $identity.Name
             $identityTotal = $identity.Approved + $identity.Revoked + $identity.Pending
             # class="identity-node" lets the "Hide Identities" CSS toggle suppress this level
             # while still showing the manager-level KPI counts in the summary bar above.
@@ -11328,9 +11328,9 @@ body.hide-identities .identity-node{display:none;}
 </table>
 "@
 
-            $encodedTitle = [System.Web.HttpUtility]::HtmlEncode($ReportTitle)
-            $encodedName  = [System.Web.HttpUtility]::HtmlEncode($rNode.DisplayName)
-            $encodedRange = [System.Web.HttpUtility]::HtmlEncode($DateRange)
+            $encodedTitle = ConvertTo-SPHtmlSafe $ReportTitle
+            $encodedName  = ConvertTo-SPHtmlSafe $rNode.DisplayName
+            $encodedRange = ConvertTo-SPHtmlSafe $DateRange
             $campNote     = if ($CampaignCount -gt 0) { " | $CampaignCount campaign(s)" } else { '' }
 
             $treeHtml = _Render-SPHierarchyNodeHtml -Node $rNode -Depth 0
@@ -11482,7 +11482,7 @@ function Export-SPMasterLeadershipHtml {
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         $topNodes  = @($HierarchyData.TopNodes)
         $files     = [System.Collections.Generic.List[string]]::new()
-        $enc       = { param($s) [System.Web.HttpUtility]::HtmlEncode([string]$s) }
+        $enc       = { param($s) ConvertTo-SPHtmlSafe [string]$s }
 
         # DFS collect every node in a subtree.
         $collectNodes = {
