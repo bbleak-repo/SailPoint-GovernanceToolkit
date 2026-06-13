@@ -258,6 +258,45 @@ Describe "ORK-02: Parameters" {
             $script:ParamNames | Should -Contain 'StaleHours'
         }
     }
+
+    Context "Dashboard parameters" {
+
+        It "Has -IncludeDashboard switch parameter" {
+            $script:ParamNames | Should -Contain 'IncludeDashboard'
+        }
+
+        It "-IncludeDashboard is a SwitchParameter" {
+            $pb = Get-OrchestratorParamBlock
+            $param = $pb.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'IncludeDashboard' }
+            $param | Should -Not -BeNullOrEmpty
+            $param.StaticType.Name | Should -Be 'SwitchParameter'
+        }
+
+        It "Has -DashboardPeriod parameter" {
+            $script:ParamNames | Should -Contain 'DashboardPeriod'
+        }
+
+        It "-DashboardPeriod has default value of Last30Days" {
+            $pb = Get-OrchestratorParamBlock
+            $param = $pb.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DashboardPeriod' }
+            $param | Should -Not -BeNullOrEmpty
+            $param.DefaultValue | Should -Not -BeNullOrEmpty -Because "DashboardPeriod should have a default"
+            $param.DefaultValue.Value | Should -Be 'Last30Days'
+        }
+
+        It "-DashboardPeriod has ValidateSet with expected values" {
+            $pb = Get-OrchestratorParamBlock
+            $param = $pb.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DashboardPeriod' }
+            $param | Should -Not -BeNullOrEmpty
+            $vsAttr = $param.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' }
+            $vsAttr | Should -Not -BeNullOrEmpty -Because "DashboardPeriod should have a ValidateSet"
+            $values = $vsAttr.PositionalArguments | ForEach-Object { $_.Value }
+            $values | Should -Contain 'Last7Days'
+            $values | Should -Contain 'Last30Days'
+            $values | Should -Contain 'Last90Days'
+            $values | Should -Contain 'AllTime'
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -293,9 +332,9 @@ Describe "ORK-03: Step tracking" {
             -Because "`$stepResults must be initialized before any step runs"
     }
 
-    It "\$stepResults has at least 10 step keys" {
-        $script:StepKeys.Count | Should -BeGreaterOrEqual 10 `
-            -Because "the orchestrator has 10 tracked steps (steps 1-10)"
+    It "\$stepResults has at least 11 step keys" {
+        $script:StepKeys.Count | Should -BeGreaterOrEqual 11 `
+            -Because "the orchestrator has 11 tracked steps (steps 1-11)"
     }
 
     It "\$stepResults contains 'Validation' key (Step 1)" {
@@ -336,6 +375,10 @@ Describe "ORK-03: Step tracking" {
 
     It "\$stepResults contains 'Retention' key (Step 10)" {
         $script:StepKeys | Should -Contain 'Retention'
+    }
+
+    It "\$stepResults contains 'Dashboard' key (Step 11)" {
+        $script:StepKeys | Should -Contain 'Dashboard'
     }
 
     It "Each step entry initializes with Status, Detail, and Duration fields" {

@@ -18,7 +18,8 @@
       8. Decision Collection       (Get-SPDisconnectedAppCampaignDecisions)
       9. Remediation Check         (Update-SPRemediationStatus)
      10. Log Retention             (Invoke-SPLogRetention)
-     11. Daily Summary             (consolidated output + JSONL audit trail)
+     11. Governance Dashboard      (Get-SPGovernanceDashboardData + Export-SPGovernanceDashboardHtml)
+     12. Daily Summary             (consolidated output + JSONL audit trail)
 
     Each step is isolated -- a failure in one step does not prevent subsequent
     steps from executing. The exit code reflects the worst outcome.
@@ -54,6 +55,12 @@
     Skip Steps 7-9: Disconnected app batch, decision collection, and remediation check.
 .PARAMETER SkipRetention
     Skip Step 10: Log retention (archive and delete old output files).
+.PARAMETER IncludeDashboard
+    Enable Step 11: Generate a governance trend dashboard HTML file.
+    Default OFF so existing automated runs are unaffected.
+.PARAMETER DashboardPeriod
+    Lookback window for the dashboard data. One of Last7Days, Last30Days,
+    Last90Days, or AllTime. Default Last30Days. Only used when -IncludeDashboard.
 .PARAMETER HoursBack
     Override the look-back window in hours for delta cert run and report.
 .PARAMETER DeadlineDays
@@ -133,6 +140,14 @@ param(
 
     [Parameter()]
     [switch]$SkipRetention,
+
+    # Dashboard
+    [Parameter()]
+    [switch]$IncludeDashboard,
+
+    [Parameter()]
+    [ValidateSet('Last7Days', 'Last30Days', 'Last90Days', 'AllTime')]
+    [string]$DashboardPeriod = 'Last30Days',
 
     # Overrides
     [Parameter()]
@@ -421,6 +436,7 @@ $stepResults = [ordered]@{
     DADecisions   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DARemediation = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     Retention     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    Dashboard     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
 # Track worst exit code
@@ -1247,7 +1263,87 @@ else {
 
 #endregion
 
-#region Step 11: Daily Summary
+#region Step 11: Governance Dashboard (if -IncludeDashboard)
+
+if ($IncludeDashboard) {
+    Write-Host '  Step 11: Governance Dashboard' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        # Build dashboard data
+        Write-Host "    Building dashboard data ($DashboardPeriod)..." -ForegroundColor DarkGray
+        $dashboardResult = Get-SPGovernanceDashboardData -Period $DashboardPeriod `
+            -CorrelationID $correlationID
+
+        if (-not $dashboardResult.Success) {
+            $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+            Set-StepResult -Step 'Dashboard' -Status 'Warning' `
+                -Detail "Dashboard data build failed: $($dashboardResult.Error)" -Duration $stepDuration
+            Write-Host "  Step 11: WARN - $($dashboardResult.Error)" -ForegroundColor Yellow
+        }
+        else {
+            # Optionally build month-over-month comparison
+            $comparisonData = $null
+            try {
+                Write-Host '    Computing month-over-month comparison...' -ForegroundColor DarkGray
+                $compResult = Compare-SPGovernancePeriods -CorrelationID $correlationID
+                if ($compResult.Success -and $null -ne $compResult.Data) {
+                    $comparisonData = $compResult.Data
+                }
+            }
+            catch {
+                Write-Host "    WARN: Month comparison skipped: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
+            # Generate HTML
+            $dashboardOutputDir = Join-Path $effectiveOutputPath 'reports'
+            if (-not (Test-Path $dashboardOutputDir)) {
+                New-Item -ItemType Directory -Path $dashboardOutputDir -Force | Out-Null
+            }
+
+            Write-Host '    Generating dashboard HTML...' -ForegroundColor DarkGray
+            $exportParams = @{
+                DashboardData = $dashboardResult.Data
+                OutputPath    = $dashboardOutputDir
+                CorrelationID = $correlationID
+            }
+            if ($null -ne $comparisonData) {
+                $exportParams['PeriodComparison'] = $comparisonData
+            }
+
+            $dashExportResult = Export-SPGovernanceDashboardHtml @exportParams
+            $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+
+            if ($dashExportResult.Success) {
+                $dashPath = $dashExportResult.Data
+                $detail = "Dashboard: $dashPath"
+                Set-StepResult -Step 'Dashboard' -Status 'Success' -Detail $detail -Duration $stepDuration
+                Write-Host "  Step 11: $detail" -ForegroundColor Green
+            }
+            else {
+                $detail = "Dashboard export failed: $($dashExportResult.Error)"
+                Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $detail -Duration $stepDuration
+                Write-Host "  Step 11: WARN - $detail" -ForegroundColor Yellow
+            }
+        }
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Step 11: WARN - Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Dashboard generation exception: $($_.Exception.Message)" `
+            -Severity WARN -Component 'DailyOrchestrator' -Action 'DashboardError' -CorrelationID $correlationID
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Step 11: Governance Dashboard [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 12: Daily Summary
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime)
