@@ -20,7 +20,7 @@
         OC-02 uses pure in-memory data (no mocks beyond logging).
         OC-03 mocks Get-SPDeltaIdentityDetail in SP.DeltaCertQueries.
         OC-04 mocks Get-SPConfig in SP.DeltaCertQueries for SMTP status.
-        OC-06 uses InModuleScope to populate $script:IdentityCache.
+        OC-06 uses InModuleScope SP.IdentityService to populate $script:IdentityCache.
         OC-07 mocks Export-SPLeadershipLevelHtml in SP.AuditReport.
         OC-09 mocks Write-SPLog in SP.DeltaCertQueries and uses InModuleScope.
 #>
@@ -769,7 +769,8 @@ Describe "OC-06-T: Resolve-SPIdentityBand uses correct priority order" {
             }
 
             # Pre-populate IdentityCache for ISC source
-            InModuleScope SP.DeltaCertQueries {
+            # Pre-populate shared identity cache (SP.IdentityService) for ISC source
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache['id-supp'] = @{
                     IdentityId  = 'id-supp'
                     Email       = 'supp@corp.com'
@@ -794,7 +795,7 @@ Describe "OC-06-T: Resolve-SPIdentityBand uses correct priority order" {
 
         AfterAll {
             # Clean up identity cache
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache.Remove('id-supp')
                 $script:IdentityCache.Remove('id-isc')
             }
@@ -1018,8 +1019,8 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
 
-            # Pre-populate IdentityCache with email for managed nodes
-            InModuleScope SP.DeltaCertQueries {
+            # Pre-populate shared identity cache (SP.IdentityService) with email for managed nodes
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache['id-mgr-ok'] = @{
                     IdentityId  = 'id-mgr-ok'
                     Email       = 'mgr@corp.com'
@@ -1076,7 +1077,7 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         }
 
         AfterAll {
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache.Remove('id-mgr-ok')
                 $script:IdentityCache.Remove('id-mgr-noemail')
             }
@@ -1126,7 +1127,7 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
 
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache['id-vp-clean'] = @{
                     IdentityId = 'id-vp-clean'; Email = 'vp@corp.com'; Found = $true; DisplayName = 'VP'
                 }
@@ -1174,7 +1175,7 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         }
 
         AfterAll {
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache.Remove('id-vp-clean')
                 $script:IdentityCache.Remove('id-dir-clean')
                 $script:IdentityCache.Remove('id-mgr-clean')
@@ -1208,7 +1209,7 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         BeforeAll {
             Mock Write-SPLog -ModuleName SP.DeltaCertQueries { }
 
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache['id-conflict-node'] = @{
                     IdentityId = 'id-conflict-node'; Email = 'conflict@corp.com'; Found = $true; DisplayName = 'Conflict User'
                 }
@@ -1250,7 +1251,7 @@ Describe "OC-09-T: Get-SPOrgChartGaps detects structural gaps" {
         }
 
         AfterAll {
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache.Remove('id-conflict-node')
                 $script:IdentityCache.Remove('id-conflict-mgr')
             }

@@ -38,16 +38,28 @@
     Component: Core Pipeline
 #>
 
-# Module-scope cache: email/username -> ISC identity ID (avoids duplicate searches)
-$script:EmailToIdentityCache = @{}
-
-# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe).
+# Ensure SP.Shared is loaded (provides ConvertTo-SPHtmlSafe and -- since Phase 2 --
+# identity services: Search-SPIdentityByEmail, Get-SPIdentityDetail).
 $_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
 if ((Test-Path $_spSharedPsd1) -and -not (Get-Command ConvertTo-SPHtmlSafe -ErrorAction Ignore)) {
     Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
 }
+# Also flat-import SP.IdentityService so its functions are visible inside this module scope
+# even when loaded via the .psd1 aggregator (Pester mock compatibility -- Bug 1 pattern).
+$_spIdentitySvc = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.IdentityService.psm1'
+if ((Test-Path $_spIdentitySvc) -and -not (Get-Command Search-SPIdentityByEmail -ErrorAction Ignore)) {
+    Import-Module $_spIdentitySvc -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
 
-#region Internal Functions
+# Module-scope email cache -- kept for backward compatibility with existing tests that
+# clear it directly via & (Get-Module SP.DisconnectedAppRunner) { ... }. Delegates to
+# the shared SP.IdentityService EmailToIdentityCache at runtime.
+$script:EmailToIdentityCache = @{}
+
+#region Identity function (shared cache via SP.IdentityService)
+# Makes API calls within this module's scope for Pester mock compatibility. Uses the
+# shared email cache from SP.IdentityService via module-scope proxy above. New callers
+# should prefer Search-SPIdentityByEmail from SP.IdentityService directly.
 
 function Search-SPIdentityByAttribute {
     <#
@@ -55,11 +67,7 @@ function Search-SPIdentityByAttribute {
         Searches ISC for an identity by email or username via POST /v3/search.
     .DESCRIPTION
         Uses the ISC search API to find an identity matching the given attribute
-        value. Searches by email first (attributes.email field), with optional
-        username fallback (name field). Requires sp:search:read scope.
-
-        Results are cached per attribute value for the session to avoid
-        redundant API calls when multiple delta records reference the same user.
+        value. Results are cached per attribute value for the session.
     .PARAMETER AttributeValue
         The value to search for (email address or username).
     .PARAMETER AttributeField
@@ -89,7 +97,7 @@ function Search-SPIdentityByAttribute {
         DisplayName = ''
     }
 
-    # Check cache first
+    # Check local module cache first (backward compat for tests that clear it)
     $cacheKey = "${AttributeField}:$($AttributeValue.ToLower())"
     if ($script:EmailToIdentityCache.ContainsKey($cacheKey)) {
         return $script:EmailToIdentityCache[$cacheKey]
@@ -100,7 +108,6 @@ function Search-SPIdentityByAttribute {
         -CorrelationID $CorrelationID
 
     try {
-        # Escape double-quotes in the search value
         $escapedValue = $AttributeValue -replace '"', '\"'
 
         $searchBody = @{
@@ -117,7 +124,6 @@ function Search-SPIdentityByAttribute {
             return $emptyResult
         }
 
-        # POST /v3/search returns an array
         $hits = @($result.Data)
         if ($hits.Count -eq 0) {
             $script:EmailToIdentityCache[$cacheKey] = $emptyResult
@@ -126,7 +132,6 @@ function Search-SPIdentityByAttribute {
 
         $identity = $hits[0]
 
-        # Extract identity ID
         $identityId = ''
         if ($null -ne $identity.PSObject.Properties['id'] -and
             -not [string]::IsNullOrWhiteSpace($identity.id)) {
@@ -138,7 +143,6 @@ function Search-SPIdentityByAttribute {
             return $emptyResult
         }
 
-        # Extract display name
         $displayName = ''
         foreach ($prop in @('displayName', 'name')) {
             if ($null -ne $identity.PSObject.Properties[$prop] -and

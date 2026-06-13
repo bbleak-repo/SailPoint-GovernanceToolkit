@@ -24,21 +24,19 @@
     Version: 1.0.0
 #>
 
-# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe).
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe,
+# and -- since Phase 2 -- the identity service: Get-SPIdentityDetail, Clear-SPIdentityCache,
+# Get-SPIdentityCacheInfo, Import-SPIdentityCacheFromDisk, Save-SPIdentityCacheEntry).
 $_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
 if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
     Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
 }
-
-# Module-scope identity cache to avoid redundant API calls within a session.
-$script:IdentityCache = @{}
-
-# Persistent (disk-backed) identity-cache state. $script:_IdentityCachedAt records the
-# CachedAt timestamp per identity so resolutions can be aged out (org movement) and
-# persisted across runs; the disk warm-load happens once per session. Only successfully
-# resolved (Found=true) identities are persisted -- transient misses stay session-only.
-$script:_IdentityCachedAt  = @{}
-$script:_IdentityDiskLoaded = $false
+# Also flat-import SP.IdentityService so its functions are visible inside this module scope
+# even when loaded via the .psd1 aggregator (Pester mock compatibility -- Bug 1 pattern).
+$_spIdentitySvc = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.IdentityService.psm1'
+if ((Test-Path $_spIdentitySvc) -and -not (Get-Command Get-SPIdentityDetail -ErrorAction Ignore)) {
+    Import-Module $_spIdentitySvc -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
 
 # Module-scope entitlement privileged-status cache (keyed by "SourceId::ItemValue").
 # Populated by Select-SPPrivilegedGrantEvents. Persists for the lifetime of the module
@@ -46,147 +44,28 @@ $script:_IdentityDiskLoaded = $false
 # for the same group.
 $script:EntitlementPrivilegedCache = @{}
 
-#region Internal Functions
-
-function Get-SPIdentityCacheInfo {
-    # Persistent identity-cache file (absolute -- Audit.CachePath is toolkit-root-resolved by
-    # Get-SPConfig) + TTL. Default 1440 min (24h): fast, but an org move surfaces next day.
-    # Override via Audit.IdentityCacheTtlMinutes.
-    $file = $null; $ttl = 1440
-    try {
-        $cfg = Get-SPConfig
-        $dir = $null
-        if ($null -ne $cfg.PSObject.Properties['Audit']) {
-            if ($null -ne $cfg.Audit.PSObject.Properties['CachePath'] -and
-                -not [string]::IsNullOrWhiteSpace($cfg.Audit.CachePath)) { $dir = [string]$cfg.Audit.CachePath }
-            elseif (-not [string]::IsNullOrWhiteSpace($cfg.Audit.OutputPath)) { $dir = Join-Path ([string]$cfg.Audit.OutputPath) '.cache' }
-            if ($null -ne $cfg.Audit.PSObject.Properties['IdentityCacheTtlMinutes'] -and
-                $null -ne $cfg.Audit.IdentityCacheTtlMinutes) { $ttl = [int]$cfg.Audit.IdentityCacheTtlMinutes }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($dir)) {
-            if (-not [System.IO.Path]::IsPathRooted($dir)) {
-                $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-                $dir  = [System.IO.Path]::GetFullPath((Join-Path $root $dir))
-            }
-            $file = Join-Path $dir 'identities.jsonl'
-        }
-    } catch { $file = $null }
-    return @{ File = $file; TtlMin = $ttl }
-}
-
-function Import-SPIdentityCacheFromDisk {
-    # Warm $script:IdentityCache from disk once per session: keep the most recent non-expired
-    # record per id, then compact the file (dedupe + prune) in one rewrite.
-    if ($script:_IdentityDiskLoaded) { return }
-    $script:_IdentityDiskLoaded = $true
-    $info = Get-SPIdentityCacheInfo
-    if ($null -eq $info.File -or -not (Test-Path $info.File)) { return }
-    try {
-        $now = Get-Date
-        $latest = @{}
-        Get-Content $info.File | ForEach-Object {
-            if ([string]::IsNullOrWhiteSpace($_)) { return }
-            try {
-                $rec = $_ | ConvertFrom-Json
-                $rid = [string]$rec.IdentityId
-                $rat = [datetime]::Parse([string]$rec.CachedAt)
-                if (-not [string]::IsNullOrWhiteSpace($rid) -and ($now - $rat).TotalMinutes -lt $info.TtlMin) {
-                    if (-not $latest.ContainsKey($rid) -or $rat -gt $latest[$rid].CachedAt) {
-                        $latest[$rid] = @{ Detail = $rec.Detail; CachedAt = $rat }
-                    }
-                }
-            } catch { }
-        }
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        $sb = New-Object System.Text.StringBuilder
-        foreach ($id in $latest.Keys) {
-            $d = $latest[$id].Detail
-            $detail = @{
-                IdentityId          = $id
-                DisplayName         = [string]$d.DisplayName
-                ManagerId           = [string]$d.ManagerId
-                ManagerName         = [string]$d.ManagerName
-                IsActive            = [bool]$d.IsActive
-                Found               = [bool]$d.Found
-                CloudLifecycleState = [string]$d.CloudLifecycleState
-                Email               = [string]$d.Email
-                JobLevel            = [string]$d.JobLevel
-            }
-            $script:IdentityCache[$id]     = $detail
-            $script:_IdentityCachedAt[$id] = $latest[$id].CachedAt
-            [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
-        }
-        Write-SPHtmlFile -Path $info.File -Content $sb.ToString()
-    } catch { }
-}
-
-function Save-SPIdentityCacheEntry {
-    param([string]$IdentityId, [hashtable]$Detail)
-    # Append a successful (Found=true) resolution; the warm-load compacts/dedupes per session.
-    if ($null -eq $Detail -or -not $Detail.Found) { return }
-    $info = Get-SPIdentityCacheInfo
-    if ($null -eq $info.File) { return }
-    try {
-        $now = Get-Date
-        $script:_IdentityCachedAt[$IdentityId] = $now
-        $dir = Split-Path -Parent $info.File
-        if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path $dir)) {
-            New-Item -Path $dir -ItemType Directory -Force -WhatIf:$false | Out-Null
-        }
-        $rec = @{ IdentityId = $IdentityId; CachedAt = $now.ToString('o'); Detail = $Detail }
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::AppendAllText($info.File, (($rec | ConvertTo-Json -Depth 6 -Compress) + "`r`n"), $utf8NoBom)
-    } catch { }
-}
-
-function Clear-SPIdentityCache {
-    <#
-    .SYNOPSIS
-        Clears the identity-detail cache (memory and/or disk).
-    .DESCRIPTION
-        Forces the next org-tree build to re-resolve identities from ISC -- use this to
-        validate org movement (manager changes / reorg) before the TTL would expire entries.
-    .PARAMETER DiskOnly
-        Clear the on-disk identities.jsonl only (keep the session memory cache).
-    .PARAMETER MemoryOnly
-        Clear the in-memory cache only (keep the disk file).
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter()] [switch]$DiskOnly,
-        [Parameter()] [switch]$MemoryOnly
-    )
-    if (-not $DiskOnly) {
-        $script:IdentityCache.Clear()
-        $script:_IdentityCachedAt.Clear()
-        $script:_IdentityDiskLoaded = $false
-        Write-Host "  Identity memory cache cleared." -ForegroundColor DarkGray
-    }
-    if (-not $MemoryOnly) {
-        try {
-            $info = Get-SPIdentityCacheInfo
-            if ($null -ne $info.File -and (Test-Path $info.File)) {
-                Remove-Item $info.File -Force -ErrorAction SilentlyContinue
-                Write-Host "  Identity disk cache cleared." -ForegroundColor DarkGray
-            }
-        } catch { }
-    }
-}
+#region Identity functions (shared cache via SP.IdentityService)
+# These functions use the shared identity cache from SP.IdentityService (via
+# Get-SPIdentityCacheEntry / Save-SPIdentityCacheEntry / Import-SPIdentityCacheFromDisk)
+# but make API calls within this module's scope for Pester mock compatibility.
+# New consumers should prefer Get-SPIdentityDetail from SP.IdentityService directly.
 
 function Get-SPDeltaIdentityDetail {
     <#
     .SYNOPSIS
-        Resolves an identity ID to its manager and active status, with in-memory caching.
+        Resolves an identity ID to its manager and active status, with shared caching.
     .DESCRIPTION
         Calls GET /v3/search/identities/{id} once per unique ID per session.
-        Caches the result (including failures) so repeated lookups do not re-call the API.
+        Caches the result (including failures) via SP.IdentityService so cache
+        state is shared with Get-SPIdentityDetail.
         Requires sp:search:read scope.
     .PARAMETER IdentityId
         The SailPoint ISC identity ID to resolve.
     .PARAMETER CorrelationID
         Unique ID for tracing related log entries.
     .OUTPUTS
-        [hashtable] @{IdentityId; DisplayName; ManagerId; ManagerName; IsActive; Found}
+        [hashtable] @{IdentityId; DisplayName; ManagerId; ManagerName; IsActive; Found;
+                       CloudLifecycleState; Email; JobLevel}
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -215,11 +94,13 @@ function Get-SPDeltaIdentityDetail {
         JobLevel            = ''
     }
 
-    # Warm the persistent (disk) cache into memory once per session, then check memory.
+    # Warm the persistent (disk) cache into memory once per session via SP.IdentityService.
     Import-SPIdentityCacheFromDisk
 
-    if ($script:IdentityCache.ContainsKey($IdentityId)) {
-        return $script:IdentityCache[$IdentityId]
+    # Check shared cache (returns $null if not cached)
+    $cached = Get-SPIdentityCacheEntry -IdentityId $IdentityId
+    if ($null -ne $cached) {
+        return $cached
     }
 
     Write-SPLog -Message "Resolving identity details for '$IdentityId'" `
@@ -227,15 +108,12 @@ function Get-SPDeltaIdentityDetail {
         -CorrelationID $CorrelationID
 
     try {
-        # NOTE: GET /v3/identities/{id} does not exist in the ISC v3 API.
-        # Use GET /v3/search/identities/{id} which returns the IdentityDocument
-        # schema: manager.id, manager.name, attributes.cloudLifecycleState, displayName.
-        # Requires sp:search:read scope.
         $result = Invoke-SPApiRequest -Method GET -Endpoint "/search/identities/$IdentityId" `
             -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {
-            $script:IdentityCache[$IdentityId] = $emptyResult
+            # Cache miss (not-found) -- store in shared memory cache as session-only
+            Set-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $emptyResult
             return $emptyResult
         }
 
@@ -269,8 +147,7 @@ function Get-SPDeltaIdentityDetail {
             }
         }
 
-        # Active status: ISC uses cloudLifecycleState on the attributes bag.
-        # Treat missing or unrecognised states as active.
+        # Active status
         $isActive = $true
         $cloudLifecycleState = ''
         if ($null -ne $identity.PSObject.Properties['attributes'] -and
@@ -285,7 +162,7 @@ function Get-SPDeltaIdentityDetail {
             }
         }
 
-        # Extract email for downstream consumers (band classification, reports)
+        # Extract email
         $email = ''
         if ($null -ne $identity.PSObject.Properties['email'] -and
             -not [string]::IsNullOrWhiteSpace($identity.email)) {
@@ -298,7 +175,7 @@ function Get-SPDeltaIdentityDetail {
             $email = [string]$identity.attributes.email
         }
 
-        # Extract job level / band attribute for band classification (OC-06)
+        # Extract job level / band
         $jobLevel = ''
         if ($null -ne $identity.PSObject.Properties['attributes'] -and
             $null -ne $identity.attributes) {
@@ -324,8 +201,8 @@ function Get-SPDeltaIdentityDetail {
             JobLevel            = $jobLevel
         }
 
-        $script:IdentityCache[$IdentityId] = $resolved
-        Save-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $resolved
+        # Store in shared cache (SP.IdentityService) -- visible to Get-SPIdentityDetail too
+        Set-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $resolved
         return $resolved
     }
     catch {
@@ -333,9 +210,29 @@ function Get-SPDeltaIdentityDetail {
             -Message "Get-SPDeltaIdentityDetail failed for '$IdentityId': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.DeltaCertQueries' -Action 'Get-SPDeltaIdentityDetail' `
             -CorrelationID $CorrelationID
-        $script:IdentityCache[$IdentityId] = $emptyResult
+        Set-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $emptyResult
         return $emptyResult
     }
+}
+
+function Clear-SPIdentityCache {
+    <#
+    .SYNOPSIS
+        Clears the identity-detail cache (delegates to SP.IdentityService).
+    .PARAMETER DiskOnly
+        Clear the on-disk identities.jsonl only.
+    .PARAMETER MemoryOnly
+        Clear the in-memory cache only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [switch]$DiskOnly,
+        [Parameter()] [switch]$MemoryOnly
+    )
+    $params = @{}
+    if ($DiskOnly)   { $params['DiskOnly']   = $true }
+    if ($MemoryOnly) { $params['MemoryOnly'] = $true }
+    SP.IdentityService\Clear-SPIdentityCache @params
 }
 
 #endregion
@@ -3343,10 +3240,10 @@ function Resolve-SPIdentityBand {
                 -not [string]::IsNullOrWhiteSpace($node.Email)) {
                 $nodeEmail = $node.Email.ToLower()
             }
-            # Real nodes: resolve email from identity cache
-            elseif ($script:IdentityCache.ContainsKey($nodeId)) {
-                $cached = $script:IdentityCache[$nodeId]
-                if (-not [string]::IsNullOrWhiteSpace($cached.Email)) {
+            # Real nodes: resolve email from identity cache (SP.IdentityService)
+            else {
+                $cached = Get-SPIdentityCacheEntry -IdentityId $nodeId
+                if ($null -ne $cached -and -not [string]::IsNullOrWhiteSpace($cached.Email)) {
                     $nodeEmail = $cached.Email.ToLower()
                 }
             }
@@ -3372,8 +3269,9 @@ function Resolve-SPIdentityBand {
         }
 
         # --- Source 2: ISC identity attribute (jobLevel / band) ---
-        if ($null -eq $band -and $script:IdentityCache.ContainsKey($nodeId)) {
-            $cached = $script:IdentityCache[$nodeId]
+        $iscCached = Get-SPIdentityCacheEntry -IdentityId $nodeId
+        if ($null -eq $band -and $null -ne $iscCached) {
+            $cached = $iscCached
             if ($cached.Found -and -not [string]::IsNullOrWhiteSpace($cached.JobLevel)) {
                 $iscValue = $cached.JobLevel.Trim()
 
@@ -3626,12 +3524,10 @@ function Get-SPOrgChartGaps {
                 }
             }
             else {
-                # Check identity cache for real nodes
-                if ($script:IdentityCache.ContainsKey($nodeId)) {
-                    $cached = $script:IdentityCache[$nodeId]
-                    if (-not [string]::IsNullOrWhiteSpace($cached.Email)) {
-                        $hasEmail = $true
-                    }
+                # Check identity cache for real nodes (SP.IdentityService)
+                $gapCached = Get-SPIdentityCacheEntry -IdentityId $nodeId
+                if ($null -ne $gapCached -and -not [string]::IsNullOrWhiteSpace($gapCached.Email)) {
+                    $hasEmail = $true
                 }
             }
 

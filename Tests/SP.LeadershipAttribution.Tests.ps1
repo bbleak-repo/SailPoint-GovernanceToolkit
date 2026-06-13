@@ -431,7 +431,7 @@ Describe "LA-04: band attribution honors supplement/ISC override on the same A-E
 
             # Seed an ISC band attribute on the IC node: jobLevel 'B' should WIN over
             # its depth (level 0 -> would be 'E'). Mirror OC-06 cache pattern.
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache['la04-ic'] = @{
                     IdentityId  = 'la04-ic'
                     Email       = 'ic4@corp.com'
@@ -445,7 +445,7 @@ Describe "LA-04: band attribution honors supplement/ISC override on the same A-E
         }
 
         AfterAll {
-            InModuleScope SP.DeltaCertQueries {
+            InModuleScope SP.IdentityService {
                 $script:IdentityCache.Remove('la04-ic')
             }
         }
