@@ -148,6 +148,56 @@ function Save-SPCampaignTrendPoint {
             }
         }
 
+        # --- Scope change metrics (from $Diff, when available) ---
+        $scopeAdded   = $null
+        $scopeRemoved = $null
+        $scopeChanged = $null
+        if ($null -ne $Diff) {
+            $diffScope = Get-SPTrendVal $Diff 'Scope'
+            if ($null -ne $diffScope) {
+                $scopeAdded   = [int](Get-SPTrendVal $diffScope 'AddedCount' 0)
+                $scopeRemoved = [int](Get-SPTrendVal $diffScope 'RemovedCount' 0)
+                $scopeChanged = [int](Get-SPTrendVal $diffScope 'ChangedCount' 0)
+            }
+        }
+
+        # --- Scope metrics from snapshot items ---
+        $revokedItemCount = 0
+        $sourceNames = @{}
+        $snapshotItems = @(Get-SPTrendVal $Snapshot 'Items' @())
+        foreach ($itm in $snapshotItems) {
+            if ($null -eq $itm) { continue }
+            $dec = [string](Get-SPTrendVal $itm 'Decision' '')
+            if ($dec -eq 'REVOKE') { $revokedItemCount++ }
+            $sn = [string](Get-SPTrendVal $itm 'SourceName' '')
+            if (-not [string]::IsNullOrWhiteSpace($sn)) { $sourceNames[$sn] = $true }
+        }
+
+        # --- Timing metrics (from $meta) ---
+        $capturedAtRaw = [string](Get-SPTrendVal $meta 'CapturedAt' '')
+        $capturedDt = $null
+        if ($capturedAtRaw) { try { $capturedDt = [datetime]::Parse($capturedAtRaw) } catch { } }
+        if ($null -eq $capturedDt) { $capturedDt = Get-Date }
+
+        $daysSinceStart = $null
+        $startDateRaw = [string](Get-SPTrendVal $meta 'StartDate' '')
+        if (-not [string]::IsNullOrWhiteSpace($startDateRaw)) {
+            try {
+                $startDt = [datetime]::Parse($startDateRaw)
+                $daysSinceStart = [int][math]::Floor(($capturedDt - $startDt).TotalDays)
+                if ($daysSinceStart -lt 0) { $daysSinceStart = 0 }
+            } catch { }
+        }
+
+        $daysUntilDeadline = $null
+        $dueDateRaw = [string](Get-SPTrendVal $meta 'DueDate' '')
+        if (-not [string]::IsNullOrWhiteSpace($dueDateRaw)) {
+            try {
+                $dueDt = [datetime]::Parse($dueDateRaw)
+                $daysUntilDeadline = [int][math]::Floor(($dueDt - $capturedDt).TotalDays)
+            } catch { }
+        }
+
         $metrics = [ordered]@{
             'counts.total'              = [int](Get-SPTrendVal $kpi 'Total' 0)
             'counts.approved'           = [int](Get-SPTrendVal $kpi 'Approved' 0)
@@ -171,6 +221,18 @@ function Save-SPCampaignTrendPoint {
             'completion.byDecisionPct'  = [double](Get-SPTrendVal $kpi 'CompletionPct' 0)
             'completion.byReviewerPct'  = [double](Get-SPTrendVal $kpi 'CompletionPctByReviewer' 0)
             'velocity.decisionsPerHour' = $velocity
+            # Scope change metrics (from Diff, when available)
+            'scope.added'               = $scopeAdded
+            'scope.removed'             = $scopeRemoved
+            'scope.changed'             = $scopeChanged
+            'scope.revokedItems'        = $revokedItemCount
+            'scope.totalSources'        = $sourceNames.Count
+            # Timing metrics
+            'timing.daysSinceStart'     = $daysSinceStart
+            'timing.daysUntilDeadline'  = $daysUntilDeadline
+            # Risk indicators
+            'risk.privilegedApproved'   = [int](Get-SPTrendVal $kpi 'PrivilegedApproved' 0)
+            'risk.privilegedTotal'      = [int](Get-SPTrendVal $kpi 'PrivilegedTotal' 0)
         }
 
         $capturedAt = [string](Get-SPTrendVal $meta 'CapturedAt' '')
