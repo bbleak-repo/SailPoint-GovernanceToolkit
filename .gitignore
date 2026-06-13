@@ -44,3 +44,6 @@ Tests/_pester-*.xml
 docs/loop-runs/
 docs/adaptive-reports-rounds/
 docs/phase7-sdk-gui-rounds/
+
+# Claude Code working state -- loop journals, plans, worktrees, local settings
+.claude/
