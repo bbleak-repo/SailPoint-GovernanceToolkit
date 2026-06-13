@@ -123,7 +123,8 @@ if (-not $scriptRoot) {
 $toolkitRoot = Split-Path -Parent $scriptRoot
 
 $moduleChain = @(
-    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';                        Name = 'SP.Core'             }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Shared\SP.Shared.psd1';                    Name = 'SP.Shared'            }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';                        Name = 'SP.Core'              }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.DisconnectedApps\SP.DisconnectedApps.psd1'; Name = 'SP.DisconnectedApps' }
 )
 

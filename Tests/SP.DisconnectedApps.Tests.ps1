@@ -1663,8 +1663,9 @@ Describe "DA-22-T3: Remediation marked OVERDUE after threshold days" {
             $script:DA22T3AppDir     = Join-Path $script:DA22T3OutputPath 'TestApp22T3'
             New-Item -Path $script:DA22T3AppDir -ItemType Directory -Force | Out-Null
 
-            # Create a tracker with PENDING record from 5 days ago
-            $oldDate = (Get-Date).ToUniversalTime().AddDays(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            # Create a tracker with PENDING record from 5 days ago.
+            # AddDays(-5).AddHours(-1) ensures Floor(TotalDays) >= 5 even with sub-second test latency.
+            $oldDate = (Get-Date).ToUniversalTime().AddDays(-5).AddHours(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
             $tracker = @(
                 [ordered]@{
                     RecordId       = 'rec-002'

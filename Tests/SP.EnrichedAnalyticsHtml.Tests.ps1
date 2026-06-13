@@ -365,12 +365,36 @@ Describe "EA: Reporting + analytics over the enriched dataset -> HTML" {
     Context "EA-10 .. EA-11: analytics HTML + content assertions (offline)" {
 
         It "EA-10 Export-SPCampaignTrendHtml renders a correct trend report" {
-            $path = Export-SPCampaignTrendHtml -TrendData $script:Trends -OutputPath $script:ArtRoot
+            # Export-SPCampaignTrendHtml expects Get-SPCampaignTrend .Data format (not
+            # Measure-SPCampaignTrends output). Build a minimal conforming Trend object.
+            $trendObj = @{
+                CampaignId   = 'camp-ea10'
+                CampaignName = 'Privileged Attestation'
+                Granularity  = 'Monthly'
+                PointCount   = 2
+                Trends       = @{
+                    'rates.approvalRate' = @{
+                        Direction     = 'Up'
+                        ChangePercent = 5
+                        Periods       = @(
+                            @{ Period = '2026-02'; Avg = 78.0; Min = 78.0; Max = 78.0; Latest = 78.0; DataPoints = 1 }
+                            @{ Period = '2026-03'; Avg = 82.0; Min = 82.0; Max = 82.0; Latest = 82.0; DataPoints = 1 }
+                        )
+                    }
+                }
+                Periods      = @(
+                    @{ Period = '2026-02'; Captures = 1 }
+                    @{ Period = '2026-03'; Captures = 1 }
+                )
+            }
+            $result = Export-SPCampaignTrendHtml -Trend $trendObj -OutputPath $script:ArtRoot
+            $result.Success | Should -Be $true
+            $path = $result.Data
             $path | Should -Not -BeNullOrEmpty
             (Test-Path -Path $path -PathType Leaf) | Should -BeTrue
 
             $html = Get-Content -Path $path -Raw
-            $html | Should -Match 'Approval %'
+            $html | Should -Match 'Overall approval rate'
             $html | Should -Match 'Period'
             $html | Should -Match '2026-02'   # a real period label
         }

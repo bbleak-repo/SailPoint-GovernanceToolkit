@@ -165,6 +165,7 @@ if (-not $scriptRoot) {
 $toolkitRoot = Split-Path -Parent $scriptRoot
 
 $moduleChain = @(
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Shared\SP.Shared.psd1';   Name = 'SP.Shared';   Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';       Name = 'SP.Core';     Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1';         Name = 'SP.Api';      Required = $true  }
     @{ Path = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1';     Name = 'SP.Audit';    Required = $true  }

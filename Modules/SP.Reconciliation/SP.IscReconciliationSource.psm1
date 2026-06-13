@@ -321,12 +321,20 @@ function Get-SPIscReconCache {
         $file = Get-SPIscReconCachePath -CacheDir $CacheDir
         if (-not (Test-Path $file)) { return @{ Success = $false; Data = $null; Path = $file; Error = 'no cache' } }
         $obj = Get-Content $file -Raw | ConvertFrom-Json
+        # ConvertFrom-Json in PS 5.1 auto-converts ISO 8601 strings to [datetime].
+        # Re-serialise to the original round-trip format ('o') when that happens.
+        $fetchedAt = $obj.FetchedAtUtc
+        if ($fetchedAt -is [datetime]) {
+            $fetchedAt = $fetchedAt.ToUniversalTime().ToString('o')
+        } else {
+            $fetchedAt = [string]$fetchedAt
+        }
         return @{
             Success = $true
             Data = @{
                 Identities   = @($obj.Identities)
                 AccessGrants = @($obj.AccessGrants)
-                FetchedAtUtc = [string]$obj.FetchedAtUtc
+                FetchedAtUtc = $fetchedAt
             }
             Path = $file
             Error = $null

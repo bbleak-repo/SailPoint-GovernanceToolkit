@@ -1557,21 +1557,30 @@ function Update-SPRemediationStatus {
                 $modified = $true
             }
             else {
-                # Still present -- check if overdue
-                $decisionDateStr = if ($null -ne $rec.DecisionDate) { [string]$rec.DecisionDate } else { '' }
+                # Still present -- check if overdue.
+                # ConvertFrom-Json in PS 5.1 may deserialise ISO 8601 strings as [datetime]
+                # objects. Cast to string via 'o' (round-trip) to preserve timezone info;
+                # otherwise [string] uses local-culture format and loses the UTC offset.
+                $decisionDateRaw = $rec.DecisionDate
+                $decisionDateStr = if ($null -eq $decisionDateRaw) { '' }
+                                   elseif ($decisionDateRaw -is [datetime]) { $decisionDateRaw.ToUniversalTime().ToString('o') }
+                                   else { [string]$decisionDateRaw }
                 $daysElapsed = 0
 
                 if (-not [string]::IsNullOrWhiteSpace($decisionDateStr)) {
                     try {
-                        $decisionDate = [datetime]::Parse($decisionDateStr).ToUniversalTime()
+                        $decisionDate = [datetime]::Parse($decisionDateStr, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                         $daysElapsed  = [int][math]::Floor(($nowUtc - $decisionDate).TotalDays)
                     }
                     catch {
                         # Cannot parse decision date -- use CreatedAt as fallback
-                        $createdAtStr = if ($null -ne $rec.CreatedAt) { [string]$rec.CreatedAt } else { '' }
+                        $createdAtRaw = $rec.CreatedAt
+                        $createdAtStr = if ($null -eq $createdAtRaw) { '' }
+                                        elseif ($createdAtRaw -is [datetime]) { $createdAtRaw.ToUniversalTime().ToString('o') }
+                                        else { [string]$createdAtRaw }
                         if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
                             try {
-                                $createdAt   = [datetime]::Parse($createdAtStr).ToUniversalTime()
+                                $createdAt   = [datetime]::Parse($createdAtStr, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                                 $daysElapsed = [int][math]::Floor(($nowUtc - $createdAt).TotalDays)
                             }
                             catch { }
@@ -1580,10 +1589,13 @@ function Update-SPRemediationStatus {
                 }
                 else {
                     # No decision date -- fall back to CreatedAt
-                    $createdAtStr = if ($null -ne $rec.CreatedAt) { [string]$rec.CreatedAt } else { '' }
+                    $createdAtRaw = $rec.CreatedAt
+                    $createdAtStr = if ($null -eq $createdAtRaw) { '' }
+                                    elseif ($createdAtRaw -is [datetime]) { $createdAtRaw.ToUniversalTime().ToString('o') }
+                                    else { [string]$createdAtRaw }
                     if (-not [string]::IsNullOrWhiteSpace($createdAtStr)) {
                         try {
-                            $createdAt   = [datetime]::Parse($createdAtStr).ToUniversalTime()
+                            $createdAt   = [datetime]::Parse($createdAtStr, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
                             $daysElapsed = [int][math]::Floor(($nowUtc - $createdAt).TotalDays)
                         }
                         catch { }

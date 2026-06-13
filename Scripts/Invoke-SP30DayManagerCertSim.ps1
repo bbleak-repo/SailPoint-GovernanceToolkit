@@ -166,6 +166,7 @@ $toolkitRoot = Split-Path -Parent $scriptRoot
 
 # Same module chain Invoke-SPCampaignAudit.ps1 + Invoke-SPAdaptiveReport.ps1 need.
 $moduleChain = @(
+    'SP.Shared\SP.Shared.psd1'
     'SP.Core\SP.Core.psd1'
     'SP.Api\SP.Api.psd1'
     'SP.Sdk\SP.Sdk.psd1'
