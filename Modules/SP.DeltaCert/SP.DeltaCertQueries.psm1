@@ -24,6 +24,12 @@
     Version: 1.0.0
 #>
 
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 # Module-scope identity cache to avoid redundant API calls within a session.
 $script:IdentityCache = @{}
 
@@ -2962,11 +2968,10 @@ function Export-SPOrgChartHtml {
         return 'E'
     }
 
-    # --- Helper: HTML-encode ---
+    # Thin wrapper -- canonical implementation is ConvertTo-SPHtmlSafe (SP.HtmlHelpers).
     function Encode-Html {
         param([string]$Text)
-        if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
-        return [System.Net.WebUtility]::HtmlEncode($Text)
+        return (ConvertTo-SPHtmlSafe -Text $Text)
     }
 
     # --- Helper: resolve leadership report link for a node ---

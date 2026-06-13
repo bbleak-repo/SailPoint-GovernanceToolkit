@@ -69,9 +69,14 @@ try {
 
     function Invoke-StartupProbe {
         param([string]$ToolkitRoot)
-        $ps = (Get-Command powershell.exe).Source
+        # Cross-platform: prefer pwsh (PS 7+), fall back to powershell.exe (Windows Desktop)
+        $ps = if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+            (Get-Command pwsh).Source
+        } else {
+            (Get-Command powershell.exe).Source
+        }
         $p = Start-Process -FilePath $ps -PassThru -Wait -NoNewWindow `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script:ProbePath`"", '-ToolkitRoot', "`"$ToolkitRoot`"")
+            -ArgumentList @('-NoProfile', '-File', "`"$script:ProbePath`"", '-ToolkitRoot', "`"$ToolkitRoot`"")
         return $p.ExitCode
     }
 }
@@ -134,9 +139,14 @@ exit 0
     }
 
     It "DIST-06: template loads with zero unknown-key warnings and is still first-run" {
-        $ps = (Get-Command powershell.exe).Source
+        # Cross-platform: prefer pwsh (PS 7+), fall back to powershell.exe (Windows Desktop)
+        $ps = if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+            (Get-Command pwsh).Source
+        } else {
+            (Get-Command powershell.exe).Source
+        }
         $p = Start-Process -FilePath $ps -PassThru -Wait -NoNewWindow `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$script:CfgProbe`"", '-RepoRoot', "`"$script:RepoRoot`"")
+            -ArgumentList @('-NoProfile', '-File', "`"$script:CfgProbe`"", '-RepoRoot', "`"$script:RepoRoot`"")
         $p.ExitCode | Should -Be 0
     }
 }

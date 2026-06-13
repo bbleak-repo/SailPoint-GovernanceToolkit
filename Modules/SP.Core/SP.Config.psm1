@@ -270,6 +270,22 @@ function Get-SPConfigDefaults {
                 }
             )
         }
+        DailyEvidence = @{
+            OutputPath          = '.\Audit\daily-evidence'
+            DefaultDaysBack     = 1
+            DefaultSlaHours     = 48
+            HighRiskThreshold   = 70
+            EvidenceDetailLimit = 50
+            Thresholds = @{
+                CompletionRate       = @{ Green = 95; Yellow = 80 }
+                OverdueAttestations  = @{ Green = 0;  Yellow = 2  }
+                RevocationExecution  = @{ Green = 95; Yellow = 80 }
+                RemediationSla       = @{ Green = 95; Yellow = 80 }
+                HighRiskPending      = @{ Green = 0;  Yellow = 3  }
+                ReviewerHealth       = @{ GreenMaxAtRisk = 0; YellowMaxAtRisk = 2 }
+            }
+            ConfidenceScoreGrade = @{ A = 90; B = 80; C = 70; D = 60 }
+        }
     }
 }
 

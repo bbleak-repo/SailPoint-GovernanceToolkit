@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Daily Evidence Report - 2026-06-10 (SAMPLE)</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f9;color:#333;margin:0;padding:20px}
+.container{max-width:1100px;margin:0 auto}
+.header{background:linear-gradient(135deg,#264d73,#336699);color:#fff;padding:24px 32px;border-radius:8px 8px 0 0}
+.header h1{margin:0 0 6px;font-size:22px}.header .meta{font-size:12px;opacity:.85}
+.header .status-line{margin-top:8px;font-size:13px;opacity:.9}
+.section{background:#fff;border:1px solid #e0e0e0;border-top:none;padding:20px 32px}
+.section:last-of-type{border-radius:0 0 8px 8px}
+.section h2{color:#264d73;font-size:16px;border-bottom:2px solid #e8eef5;padding-bottom:8px;margin-top:0}
+.confidence-section{text-align:center;padding:24px 32px}
+.confidence-badge{display:inline-block;font-size:56px;font-weight:700;border:5px solid;border-radius:14px;padding:10px 28px;margin:8px 0}
+.confidence-score{font-size:18px;color:#555;margin-top:4px}
+.confidence-trend{font-size:13px;color:#777;margin-top:4px}
+.domino-section{padding:16px 32px}
+.domino-row{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap;margin:12px 0}
+.domino-box{width:100px;padding:10px 6px;border-radius:6px;text-align:center;border:2px solid transparent}
+.domino-box.cascade{border-style:dashed;opacity:.85}
+.domino-label{font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px}
+.domino-status{font-size:20px;font-weight:700}
+.domino-arrow{font-size:20px;color:#999;padding:0 4px}
+.domino-Green{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7}
+.domino-Yellow{background:#fff3e0;color:#e65100;border-color:#ffcc80}
+.domino-Red{background:#ffebee;color:#c62828;border-color:#ef9a9a}
+.domino-narrative{font-size:13px;color:#555;text-align:center;margin-top:8px;font-style:italic}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:16px 0}
+.kpi-tile{padding:16px;border-radius:6px;border-left:4px solid;position:relative}
+.kpi-title{font-size:12px;font-weight:600;text-transform:uppercase;color:#555;margin-bottom:6px}
+.kpi-value{font-size:28px;font-weight:700;margin-bottom:4px}
+.kpi-trend{font-size:12px;color:#777;margin-bottom:4px}
+.kpi-detail{font-size:12px;color:#666}
+.kpi-Green{border-left-color:#339933;background:#f0f9f0}.kpi-Green .kpi-value{color:#339933}
+.kpi-Yellow{border-left-color:#FF9900;background:#fff8f0}.kpi-Yellow .kpi-value{color:#FF9900}
+.kpi-Red{border-left-color:#CC3333;background:#fdf0f0}.kpi-Red .kpi-value{color:#CC3333}
+.evidence-section{padding:20px 32px}
+.evidence-section h2{color:#264d73;font-size:15px;border-bottom:2px solid #e8eef5;padding-bottom:6px;margin-top:0}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:12px}
+th{background:#e8eef5;padding:8px 10px;text-align:left;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}
+td{padding:7px 10px;border-bottom:1px solid #eee}tr:nth-child(even){background:#fafafa}
+.status-green{color:#339933;font-weight:600}.status-yellow{color:#FF9900;font-weight:600}
+.status-red{color:#CC3333;font-weight:600}.status-gray{color:#777}
+.aging-bar{height:14px;border-radius:3px;display:inline-block;min-width:2px}
+.aging-bar-ok{background:#339933}.aging-bar-warn{background:#FF9900}.aging-bar-crit{background:#CC3333}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
+.badge-green{background:#c8e6c9;color:#1b5e20}.badge-yellow{background:#fff9c4;color:#f57f17}
+.badge-red{background:#ffcdd2;color:#b71c1c}.badge-gray{background:#eee;color:#555}
+.footer{text-align:center;color:#999;font-size:11px;padding:16px;border-top:1px solid #eee;margin-top:0}
+.sample-banner{background:#fff3cd;color:#856404;padding:10px 32px;font-size:13px;font-weight:600;border:1px solid #ffc107;border-top:none}
+@media print{body{background:#fff;padding:0}.container{max-width:100%}.header{border-radius:0}.sample-banner{display:none}}
+@media (max-width:768px){.kpi-grid{grid-template-columns:1fr}.domino-row{flex-direction:column}.domino-arrow{transform:rotate(90deg)}}
+</style></head><body>
+<div class="container">
+<div class="header">
+<h1>Daily Evidence Report</h1>
+<div class="meta">SailPoint ISC Governance Toolkit | 2026-06-10 | Period: Last 1 day(s) | Env: Production</div>
+<div class="status-line">KPIs: 3 Green, 3 Yellow, 0 Red | Confidence: B (82/100)</div>
+</div>
+<div class="sample-banner">SAMPLE REPORT -- Generated with mock data for layout preview. No API connection.</div>
+<div class="section confidence-section">
+<h2>Governance Confidence Score</h2>
+<div class="confidence-badge" style="color:#339933;border-color:#339933">B</div>
+<div class="confidence-score">82 / 100 (Level: 4 - Managed)</div>
+<div class="confidence-trend">&#9650; +1.3 vs prior period</div>
+</div>
+<div class="section domino-section">
+<h2>Cascading Risk Tracker</h2>
+<div class="domino-row">
+<div class="domino-box domino-Green">
+<div class="domino-label">Reviewer</div>
+<div class="domino-status">G</div>
+</div>
+<div class="domino-arrow">&rarr;</div>
+<div class="domino-box domino-Green">
+<div class="domino-label">Complete</div>
+<div class="domino-status">G</div>
+</div>
+<div class="domino-arrow">&rarr;</div>
+<div class="domino-box domino-Yellow">
+<div class="domino-label">Overdue</div>
+<div class="domino-status">Y</div>
+</div>
+<div class="domino-arrow">&rarr;</div>
+<div class="domino-box domino-Yellow cascade">
+<div class="domino-label">Revoke</div>
+<div class="domino-status">Y</div>
+</div>
+<div class="domino-arrow">&rarr;</div>
+<div class="domino-box domino-Yellow cascade">
+<div class="domino-label">Remediate</div>
+<div class="domino-status">Y</div>
+</div>
+<div class="domino-arrow">&rarr;</div>
+<div class="domino-box domino-Green cascade">
+<div class="domino-label">Risk</div>
+<div class="domino-status">G</div>
+</div>
+</div>
+<div class="domino-narrative">Overdue reviews are above target, which may impact downstream Revocations and Remediation performance.</div>
+</div>
+<div class="section">
+<h2>KPI Dashboard</h2>
+<div class="kpi-grid">
+<div class="kpi-tile kpi-Green">
+<div class="kpi-title">Campaign Completion</div>
+<div class="kpi-value">96%</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">482 of 502 decided</div>
+</div>
+<div class="kpi-tile kpi-Yellow">
+<div class="kpi-title">Past-Due Reviews</div>
+<div class="kpi-value">2</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">1 overdue, 1 at-risk</div>
+</div>
+<div class="kpi-tile kpi-Yellow">
+<div class="kpi-title">Revocations Executed</div>
+<div class="kpi-value">93%</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">26 of 28 provisioned</div>
+</div>
+<div class="kpi-tile kpi-Yellow">
+<div class="kpi-title">Remediation Timeliness</div>
+<div class="kpi-value">93%</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">2 pending remediations</div>
+</div>
+<div class="kpi-tile kpi-Green">
+<div class="kpi-title">High-Risk Exposure</div>
+<div class="kpi-value">0</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">0 high-risk pending items</div>
+</div>
+<div class="kpi-tile kpi-Green">
+<div class="kpi-title">Reviewer Health</div>
+<div class="kpi-value">100%</div>
+<div class="kpi-trend">&#9650; +1.2 vs yesterday</div>
+<div class="kpi-detail">12 of 12 in good standing</div>
+</div>
+</div></div>
+<div class="section evidence-section">
+<h2>A. Campaign Completion Evidence</h2>
+<table><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Completion %</th><th>Deadline Status</th><th>Created</th><th>Completed</th></tr></thead><tbody>
+<tr><td>Daily Attestation Manager Campaign - Tuesday, June 10 2026</td><td>COMPLETED</td><td>186</td><td class="status-green">100%</td><td class="status-green">Completed</td><td>2026-06-10T06:00:00Z</td><td>2026-06-10T14:32:00Z</td></tr>
+<tr><td>Daily Attestation Manager Campaign - Monday, June 09 2026</td><td>COMPLETED</td><td>174</td><td class="status-green">100%</td><td class="status-green">Completed</td><td>2026-06-09T06:00:00Z</td><td>2026-06-09T15:12:00Z</td></tr>
+<tr><td>Quarterly Privileged Access Review - Q2 2026</td><td>ACTIVE</td><td>102</td><td class="status-green">80%</td><td class="status-yellow">Due in 4d</td><td>2026-06-01T08:00:00Z</td><td>-</td></tr>
+<tr><td>PEP+ Disconnected App Cert - June 2026</td><td>ACTIVE</td><td>40</td><td class="status-green">100%</td><td class="status-green">Due in 8d</td><td>2026-06-08T10:00:00Z</td><td>-</td></tr>
+</tbody></table></div>
+<div class="section evidence-section">
+<h2>B. Certifier Decision Register</h2>
+<table><thead><tr><th>Identity</th><th>Access</th><th>Decision</th><th>Reviewer</th><th>Date</th><th>Campaign</th></tr></thead><tbody>
+<tr><td>Adams, Sarah</td><td>SG-Finance-ReadWrite</td><td class="status-green">Approved</td><td>Johnson, Michael</td><td>2026-06-10 09:15</td><td>Daily Attestation - Tuesday</td></tr>
+<tr><td>Baker, James</td><td>Domain Admins</td><td class="status-red">Revoked</td><td>Chen, Lisa</td><td>2026-06-10 10:02</td><td>Quarterly Privileged - Q2</td></tr>
+<tr><td>Clark, Emily</td><td>SG-HR-FullControl</td><td class="status-green">Approved</td><td>Williams, Tom</td><td>2026-06-10 08:45</td><td>Daily Attestation - Tuesday</td></tr>
+<tr><td>Davis, Robert</td><td>VPN-Remote-Access</td><td class="status-yellow">Pending</td><td>Martinez, Ana</td><td></td><td>Quarterly Privileged - Q2</td></tr>
+<tr><td>Evans, Michelle</td><td>SG-IT-Admin</td><td class="status-red">Revoked</td><td>Chen, Lisa</td><td>2026-06-10 10:05</td><td>Quarterly Privileged - Q2</td></tr>
+<tr><td>Foster, David</td><td>SAP-Finance-Posting</td><td class="status-green">Approved</td><td>Johnson, Michael</td><td>2026-06-10 09:18</td><td>Daily Attestation - Tuesday</td></tr>
+<tr><td>Garcia, Carlos</td><td>AWS-S3-Admin</td><td class="status-red">Revoked</td><td>Patel, Ravi</td><td>2026-06-09 16:30</td><td>Daily Attestation - Monday</td></tr>
+</tbody></table></div>
+<div class="section evidence-section">
+<h2>C. Revocation &amp; Remediation Register</h2>
+<div style="margin:12px 0 20px 0">
+<p style="font-size:12px;font-weight:600;color:#555;margin-bottom:8px">Remediation Aging</p>
+<div style="display:flex;align-items:center;margin:3px 0"><span style="width:60px;font-size:11px;color:#555">0-24h</span><div class="aging-bar aging-bar-ok" style="width:200px"></div><span style="font-size:11px;color:#777;margin-left:6px">1</span></div>
+<div style="display:flex;align-items:center;margin:3px 0"><span style="width:60px;font-size:11px;color:#555">24-48h</span><div class="aging-bar aging-bar-ok" style="width:200px"></div><span style="font-size:11px;color:#777;margin-left:6px">1</span></div>
+<div style="display:flex;align-items:center;margin:3px 0"><span style="width:60px;font-size:11px;color:#555">2-5d</span><div class="aging-bar aging-bar-warn" style="width:0px"></div><span style="font-size:11px;color:#777;margin-left:6px">0</span></div>
+<div style="display:flex;align-items:center;margin:3px 0"><span style="width:60px;font-size:11px;color:#555">5-10d</span><div class="aging-bar aging-bar-warn" style="width:0px"></div><span style="font-size:11px;color:#777;margin-left:6px">0</span></div>
+<div style="display:flex;align-items:center;margin:3px 0"><span style="width:60px;font-size:11px;color:#555">>10d</span><div class="aging-bar aging-bar-crit" style="width:0px"></div><span style="font-size:11px;color:#777;margin-left:6px">0</span></div>
+</div>
+<table><thead><tr><th>Identity</th><th>Entitlement</th><th>Decision Date</th><th>Status</th><th>Days</th><th>Source</th></tr></thead><tbody>
+<tr><td>Baker, James</td><td>Domain Admins</td><td>2026-06-10 10:02</td><td class="status-green">Provisioned</td><td>0.2</td><td>Active Directory</td></tr>
+<tr><td>Evans, Michelle</td><td>SG-IT-Admin</td><td>2026-06-10 10:05</td><td class="status-yellow">Pending</td><td>0.5</td><td>Active Directory</td></tr>
+<tr><td>Garcia, Carlos</td><td>AWS-S3-Admin</td><td>2026-06-09 16:30</td><td class="status-green">Provisioned</td><td>0.8</td><td>AWS IAM</td></tr>
+<tr><td>Harris, Tom</td><td>DBA-Production</td><td>2026-06-09 08:00</td><td class="status-yellow">Pending</td><td>1.6</td><td>Oracle DB</td></tr>
+</tbody></table></div>
+<div class="section evidence-section">
+<h2>D. Past-Due / At-Risk Campaign Register</h2>
+<table><thead><tr><th>Campaign</th><th>Health Status</th><th>Projected</th><th>Days to Deadline</th><th>Completion %</th><th>Bottleneck Reviewers</th></tr></thead><tbody>
+<tr><td>Quarterly Privileged Access Review - Q2 2026</td><td class="status-yellow">AtRisk</td><td class="status-yellow">AtRisk</td><td>4</td><td>80%</td><td>Martinez, Ana; Park, Jin</td></tr>
+<tr><td>DebtNext Disconnected Cert - May 2026</td><td class="status-red">Overdue</td><td class="status-red">Stalled</td><td>-2</td><td>65%</td><td>Wilson, Kate</td></tr>
+</tbody></table></div>
+<div class="section evidence-section">
+<h2>E. High-Risk Pending Review Register</h2>
+<p style="color:#339933;font-weight:600">No high-risk identities with pending reviews.</p>
+</div>
+<div class="section evidence-section">
+<h2>F. Reviewer Performance Register</h2>
+<table><thead><tr><th>Reviewer</th><th>Score</th><th>Tier</th><th>Avg Response (hrs)</th><th>Rubber-Stamp Count</th></tr></thead><tbody>
+<tr><td>Chen, Lisa</td><td class="status-green">95</td><td><span class="badge badge-green">Excellent</span></td><td>2.1</td><td>0</td></tr>
+<tr><td>Patel, Ravi</td><td class="status-green">91</td><td><span class="badge badge-green">Excellent</span></td><td>3.4</td><td>0</td></tr>
+<tr><td>Johnson, Michael</td><td class="status-green">87</td><td><span class="badge badge-green">Good</span></td><td>4.8</td><td>0</td></tr>
+<tr><td>Williams, Tom</td><td class="status-green">84</td><td><span class="badge badge-green">Good</span></td><td>5.2</td><td>0</td></tr>
+<tr><td>Martinez, Ana</td><td class="status-yellow">72</td><td><span class="badge badge-green">Good</span></td><td>12.3</td><td>1</td></tr>
+<tr><td>Park, Jin</td><td class="status-yellow">68</td><td><span class="badge badge-yellow">Needs Attention</span></td><td>18.7</td><td>2</td></tr>
+</tbody></table></div>
+<div class="footer">
+SailPoint ISC Governance Toolkit - Daily Evidence Report v1.0.0 (SAMPLE)<br>
+CorrelationID: 62ab61a8-5a79-4561-b99e-ee6805f24b50 | Generated: 2026-06-10T11:52:46Z | Duration: 0m 00s
+</div>
+</div></body></html>

@@ -35,24 +35,21 @@
 
 Set-StrictMode -Version 1
 
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 # Contract schema version. Semver; a breaking change requires a coordinated bump with the AD side.
 $script:SPIscReconSchemaVersion = '1.0.0'
 
 #region Internal helpers
 
 function Get-SPReconProp {
-    # Dual-mode property read: works for a hashtable/OrderedDictionary (fixtures, CLI-built) OR a
-    # PSCustomObject (ConvertFrom-Json / API). Returns $Default when absent/null. Uses .Contains
-    # (NOT .ContainsKey) so OrderedDictionary is safe under this repo's PS 5.1 rule.
+    # Thin wrapper -- canonical implementation is Get-SPObjectProperty (SP.HtmlHelpers).
     param([object]$Obj, [string]$Name, $Default = $null)
-    if ($null -eq $Obj) { return $Default }
-    if ($Obj -is [System.Collections.IDictionary]) {
-        if ($Obj.Contains($Name)) { $v = $Obj[$Name]; if ($null -ne $v) { return $v } }
-        return $Default
-    }
-    $p = $Obj.PSObject.Properties[$Name]
-    if ($null -ne $p -and $null -ne $p.Value) { return $p.Value }
-    return $Default
+    return (Get-SPObjectProperty -Object $Obj -Name $Name -Default $Default)
 }
 
 function Resolve-SPIscJoinKey {

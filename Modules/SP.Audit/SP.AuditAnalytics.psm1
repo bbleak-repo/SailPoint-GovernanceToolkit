@@ -20,6 +20,12 @@
         Gray   #777777 - N/A / footer
 #>
 
+# Ensure SP.Shared is loaded (provides Get-SPObjectProperty, ConvertTo-SPHtmlSafe).
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+
 #region Campaign Comparison
 
 function Compare-SPCampaigns {
@@ -3745,8 +3751,8 @@ function Test-SPGovernancePolicy {
         return @{ OverallCompliant = $true; EvaluatedAt = $evaluatedAt; Policies = $skippedPols; Summary = @{ TotalPolicies = $gpPolicies.Count; Passed = 0; Failed = 0; CriticalFailures = 0; WarningFailures = 0; Skipped = $gpPolicies.Count } }
     }
 
-    # Helper to read a property from hashtable or PSCustomObject
-    function Get-PolProp { param($Obj, [string]$Key, $Default = $null); if ($null -eq $Obj) { return $Default }; if ($Obj -is [hashtable]) { if ($Obj.ContainsKey($Key)) { return $Obj[$Key] }; return $Default }; $p = $Obj.PSObject.Properties[$Key]; if ($null -ne $p) { return $p.Value }; return $Default }
+    # Thin wrapper -- canonical implementation is Get-SPObjectProperty (SP.HtmlHelpers).
+    function Get-PolProp { param($Obj, [string]$Key, $Default = $null); return (Get-SPObjectProperty -Object $Obj -Name $Key -Default $Default) }
 
     $policyResults = [System.Collections.Generic.List[hashtable]]::new()
 
