@@ -16,36 +16,101 @@
         Import-SPIdentityCacheFromDisk - Warm-load disk cache once per session
         Save-SPIdentityCacheEntry    - Append a resolved identity to the disk cache
 
+    Storage engine: SP.CacheService provides the in-memory cache stores. Disk
+    persistence uses the original JSONL format (IdentityId/CachedAt/Detail) for
+    backward compatibility. Two SP.CacheService stores are used:
+        - 'SPIdentity'     : identity details keyed by identity ID (with TTL)
+        - 'SPEmailLookup'  : email/attribute search results (no TTL, memory-only)
+
     Dependencies: SP.Core (Get-SPConfig, Write-SPLog) and SP.Api (Invoke-SPApiRequest).
-    These must be loaded before SP.IdentityService. The project pattern is caller-handles-order
-    so RequiredModules is NOT declared here.
+    These must be loaded before SP.IdentityService. SP.CacheService must also be
+    loaded (handled by SP.Shared.psd1 NestedModules ordering).
 
 .NOTES
     Module: SP.Shared / SP.IdentityService
-    Version: 1.0.0
+    Version: 2.0.0
 #>
 
 Set-StrictMode -Version 1
 
 # ---------------------------------------------------------------------------
-# Module-scope identity caches
+# SP.CacheService-backed identity stores
+# ---------------------------------------------------------------------------
+# Stores are initialised lazily (via _EnsureSPIdentityStore) because config is
+# not available at module-load time. Two stores:
+#   SPIdentity    -- identity detail keyed by ID, with TTL, no DiskPath
+#                    (disk persistence uses the legacy JSONL format)
+#   SPEmailLookup -- email/attribute search results, no TTL, memory-only
+#
+# $script:IdentityCache is kept as a compatibility alias pointing at the
+# SP.CacheService store's Items hashtable. External tests that use
+# InModuleScope to poke at $script:IdentityCache will continue to work
+# because they are mutating the same hashtable object.
 # ---------------------------------------------------------------------------
 
-# In-memory identity cache keyed by identity ID -- avoids redundant API calls
-# within a session.
-$script:IdentityCache = @{}
+$script:_SPIdentityStoreReady = $false
+$script:_IdentityDiskLoaded   = $false
 
-# Persistent (disk-backed) identity-cache state. $script:_IdentityCachedAt records
-# the CachedAt timestamp per identity so resolutions can be aged out (org movement)
-# and persisted across runs; the disk warm-load happens once per session. Only
-# successfully resolved (Found=true) identities are persisted -- transient misses
-# stay session-only.
-$script:_IdentityCachedAt   = @{}
-$script:_IdentityDiskLoaded = $false
+# Compatibility aliases -- initialised to empty hashtables; replaced by the
+# SP.CacheService store's Items hashtable once _EnsureSPIdentityStore runs.
+$script:IdentityCache         = @{}
+$script:_IdentityCachedAt     = @{}
+$script:EmailToIdentityCache  = @{}
 
-# In-memory email/attribute-to-identity cache keyed by "field:value" -- avoids
-# duplicate search API calls when multiple records reference the same user.
-$script:EmailToIdentityCache = @{}
+function _EnsureSPIdentityStore {
+    <#
+    .SYNOPSIS
+        Lazily creates the SPIdentity and SPEmailLookup cache stores.
+    .DESCRIPTION
+        Called before any cache access. Creates SP.CacheService stores on first
+        invocation and wires $script:IdentityCache to point at the store Items
+        hashtable for backward-compatible InModuleScope access.
+
+        Any entries that external callers wrote directly to $script:IdentityCache
+        before this function ran are migrated into the new store so they are not
+        lost (this supports InModuleScope test patterns).
+    #>
+    if ($script:_SPIdentityStoreReady) { return }
+
+    # Capture any pre-existing entries (e.g. from InModuleScope in tests)
+    $preExisting      = $script:IdentityCache
+    $preExistingEmail = $script:EmailToIdentityCache
+
+    # Create (or re-create) the SPIdentity store -- no DiskPath because disk
+    # persistence uses the legacy format via Save-SPIdentityCacheEntry.
+    # TtlMinutes=0 (no in-memory expiry) matches the original behavior where
+    # items never expired during a session. TTL is applied only during disk
+    # import (Import-SPIdentityCacheFromDisk prunes entries older than config TTL).
+    $store = New-SPCacheStore -Name 'SPIdentity' -TtlMinutes 0 -TrackStats
+
+    # Migrate any pre-existing entries into the new store
+    if ($null -ne $preExisting -and $preExisting.Count -gt 0) {
+        foreach ($key in @($preExisting.Keys)) {
+            $store.Items[$key]      = $preExisting[$key]
+            $store.Timestamps[$key] = Get-Date
+        }
+    }
+
+    # Wire the compatibility aliases to the store's internal hashtables so
+    # InModuleScope assignments from external tests mutate the right object.
+    $script:IdentityCache     = $store.Items
+    $script:_IdentityCachedAt = $store.Timestamps
+
+    # SPEmailLookup: memory-only, no TTL, no disk
+    $emailStore = New-SPCacheStore -Name 'SPEmailLookup'
+
+    # Migrate pre-existing email entries
+    if ($null -ne $preExistingEmail -and $preExistingEmail.Count -gt 0) {
+        foreach ($key in @($preExistingEmail.Keys)) {
+            $emailStore.Items[$key]      = $preExistingEmail[$key]
+            $emailStore.Timestamps[$key] = Get-Date
+        }
+    }
+
+    $script:EmailToIdentityCache = $emailStore.Items
+
+    $script:_SPIdentityStoreReady = $true
+}
 
 # ---------------------------------------------------------------------------
 # Internal cache helpers
@@ -93,15 +158,22 @@ function Import-SPIdentityCacheFromDisk {
     .SYNOPSIS
         Warms the in-memory identity cache from disk once per session.
     .DESCRIPTION
-        Reads identities.jsonl, keeps the most recent non-expired record per identity ID,
-        then compacts the file (dedupe + prune) in one rewrite. Only runs once per session
-        (guarded by $script:_IdentityDiskLoaded).
+        Reads identities.jsonl (legacy format: IdentityId/CachedAt/Detail per line),
+        keeps the most recent non-expired record per identity ID, then compacts the
+        file (dedupe + prune) in one rewrite. Only runs once per session (guarded by
+        $script:_IdentityDiskLoaded).
+
+        Loaded entries are stored in the SPIdentity cache store via Set-SPCachedItem
+        with -NoPersist (bulk load -- no per-item disk append).
     #>
     [CmdletBinding()]
     param()
 
     if ($script:_IdentityDiskLoaded) { return }
     $script:_IdentityDiskLoaded = $true
+
+    _EnsureSPIdentityStore
+
     $info = Get-SPIdentityCacheInfo
     if ($null -eq $info.File -or -not (Test-Path $info.File)) { return }
     try {
@@ -135,8 +207,8 @@ function Import-SPIdentityCacheFromDisk {
                 Email               = [string]$d.Email
                 JobLevel            = [string]$d.JobLevel
             }
-            $script:IdentityCache[$id]     = $detail
-            $script:_IdentityCachedAt[$id] = $latest[$id].CachedAt
+            # Store in SP.CacheService (NoPersist -- we handle disk compaction below)
+            Set-SPCachedItem -Store 'SPIdentity' -Key $id -Value $detail -NoPersist
             [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
         }
         Write-SPHtmlFile -Path $info.File -Content $sb.ToString()
@@ -150,6 +222,9 @@ function Save-SPIdentityCacheEntry {
     .DESCRIPTION
         Only persists successful (Found=true) resolutions. The warm-load compacts
         and deduplicates per session.
+
+        Disk persistence uses the legacy JSONL format (IdentityId/CachedAt/Detail)
+        for backward compatibility with existing identities.jsonl files.
     .PARAMETER IdentityId
         The SailPoint ISC identity ID.
     .PARAMETER Detail
@@ -169,11 +244,11 @@ function Save-SPIdentityCacheEntry {
     if ($null -eq $info.File) { return }
     try {
         $now = Get-Date
-        $script:_IdentityCachedAt[$IdentityId] = $now
         $dir = Split-Path -Parent $info.File
         if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path $dir)) {
             New-Item -Path $dir -ItemType Directory -Force -WhatIf:$false | Out-Null
         }
+        # Legacy JSONL format for backward compatibility
         $rec = @{ IdentityId = $IdentityId; CachedAt = $now.ToString('o'); Detail = $Detail }
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::AppendAllText($info.File, (($rec | ConvertTo-Json -Depth 6 -Compress) + "`r`n"), $utf8NoBom)
@@ -233,11 +308,14 @@ function Get-SPIdentityDetail {
         JobLevel            = ''
     }
 
-    # Warm the persistent (disk) cache into memory once per session, then check memory.
+    # Ensure SP.CacheService stores exist, then warm from disk once per session.
+    _EnsureSPIdentityStore
     Import-SPIdentityCacheFromDisk
 
-    if ($script:IdentityCache.ContainsKey($IdentityId)) {
-        return $script:IdentityCache[$IdentityId]
+    # Check the SPIdentity cache store (includes TTL awareness)
+    $cached = Get-SPCachedItem -Store 'SPIdentity' -Key $IdentityId
+    if ($null -ne $cached) {
+        return $cached
     }
 
     Write-SPLog -Message "Resolving identity details for '$IdentityId'" `
@@ -253,7 +331,8 @@ function Get-SPIdentityDetail {
             -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {
-            $script:IdentityCache[$IdentityId] = $emptyResult
+            # Transient miss -- cache in memory only, do not persist to disk
+            Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
             return $emptyResult
         }
 
@@ -342,7 +421,8 @@ function Get-SPIdentityDetail {
             JobLevel            = $jobLevel
         }
 
-        $script:IdentityCache[$IdentityId] = $resolved
+        # Store in SP.CacheService (NoPersist -- disk uses legacy format below)
+        Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $resolved -NoPersist
         Save-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $resolved
         return $resolved
     }
@@ -351,7 +431,8 @@ function Get-SPIdentityDetail {
             -Message "Get-SPIdentityDetail failed for '$IdentityId': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Get-SPIdentityDetail' `
             -CorrelationID $CorrelationID
-        $script:IdentityCache[$IdentityId] = $emptyResult
+        # Transient miss -- cache in memory only, do not persist to disk
+        Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
         return $emptyResult
     }
 }
@@ -396,10 +477,13 @@ function Search-SPIdentityByEmail {
         DisplayName = ''
     }
 
-    # Check cache first
+    _EnsureSPIdentityStore
+
+    # Check SPEmailLookup cache store first
     $cacheKey = "${AttributeField}:$($AttributeValue.ToLower())"
-    if ($script:EmailToIdentityCache.ContainsKey($cacheKey)) {
-        return $script:EmailToIdentityCache[$cacheKey]
+    $cached = Get-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey
+    if ($null -ne $cached) {
+        return $cached
     }
 
     Write-SPLog -Message "Searching ISC for identity: $AttributeField='$AttributeValue'" `
@@ -420,14 +504,14 @@ function Search-SPIdentityByEmail {
             -Body $searchBody -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {
-            $script:EmailToIdentityCache[$cacheKey] = $emptyResult
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
             return $emptyResult
         }
 
         # POST /v3/search returns an array
         $hits = @($result.Data)
         if ($hits.Count -eq 0) {
-            $script:EmailToIdentityCache[$cacheKey] = $emptyResult
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
             return $emptyResult
         }
 
@@ -441,7 +525,7 @@ function Search-SPIdentityByEmail {
         }
 
         if ([string]::IsNullOrWhiteSpace($identityId)) {
-            $script:EmailToIdentityCache[$cacheKey] = $emptyResult
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
             return $emptyResult
         }
 
@@ -461,14 +545,14 @@ function Search-SPIdentityByEmail {
             DisplayName = $displayName
         }
 
-        $script:EmailToIdentityCache[$cacheKey] = $found
+        Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $found
         return $found
     }
     catch {
         Write-SPLog -Message "Search-SPIdentityByEmail failed for '$AttributeValue': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Search-SPIdentityByEmail' `
             -CorrelationID $CorrelationID
-        $script:EmailToIdentityCache[$cacheKey] = $emptyResult
+        Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
         return $emptyResult
     }
 }
@@ -478,7 +562,7 @@ function Set-SPIdentityCacheEntry {
     .SYNOPSIS
         Stores an identity detail in the in-memory cache (and optionally disk).
     .DESCRIPTION
-        Unconditionally stores the detail in the in-memory identity cache. If
+        Unconditionally stores the detail in the SPIdentity cache store. If
         Found=true, also appends to the disk cache via Save-SPIdentityCacheEntry.
         This allows both found and not-found results to be cached in memory for
         session-scoped deduplication while only persisting successful resolutions.
@@ -495,7 +579,8 @@ function Set-SPIdentityCacheEntry {
         [Parameter(Mandatory)]
         [hashtable]$Detail
     )
-    $script:IdentityCache[$IdentityId] = $Detail
+    _EnsureSPIdentityStore
+    Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $Detail -NoPersist
     if ($Detail.Found) {
         Save-SPIdentityCacheEntry -IdentityId $IdentityId -Detail $Detail
     }
@@ -506,8 +591,8 @@ function Get-SPIdentityCacheEntry {
     .SYNOPSIS
         Returns a cached identity entry without making an API call.
     .DESCRIPTION
-        Reads from the in-memory identity cache only. Returns $null if the identity
-        has not been resolved yet. Callers use this to peek at cached data (e.g. for
+        Reads from the SPIdentity cache store. Returns $null if the identity has
+        not been resolved yet. Callers use this to peek at cached data (e.g. for
         band attribution, email lookup) without triggering an API call.
     .PARAMETER IdentityId
         The SailPoint ISC identity ID to look up.
@@ -521,10 +606,8 @@ function Get-SPIdentityCacheEntry {
         [ValidateNotNullOrEmpty()]
         [string]$IdentityId
     )
-    if ($script:IdentityCache.ContainsKey($IdentityId)) {
-        return $script:IdentityCache[$IdentityId]
-    }
-    return $null
+    _EnsureSPIdentityStore
+    return Get-SPCachedItem -Store 'SPIdentity' -Key $IdentityId
 }
 
 function Clear-SPIdentityCache {
@@ -545,9 +628,12 @@ function Clear-SPIdentityCache {
         [Parameter()] [switch]$MemoryOnly
     )
     if (-not $DiskOnly) {
-        $script:IdentityCache.Clear()
-        $script:_IdentityCachedAt.Clear()
-        $script:EmailToIdentityCache.Clear()
+        _EnsureSPIdentityStore
+        # Clear-SPCacheStore calls .Clear() on Items/Timestamps in-place,
+        # so $script:IdentityCache / $script:EmailToIdentityCache aliases
+        # (which point at the same hashtable objects) are automatically cleared.
+        Clear-SPCacheStore -Store 'SPIdentity'
+        Clear-SPCacheStore -Store 'SPEmailLookup'
         $script:_IdentityDiskLoaded = $false
         Write-Host "  Identity memory cache cleared." -ForegroundColor DarkGray
     }

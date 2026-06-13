@@ -6,6 +6,7 @@
     SI-02: Search-SPIdentityByEmail    -- search identity by email with API mock
     SI-03: Clear-SPIdentityCache       -- clear memory/disk caches
     SI-04: Caching behavior            -- verify second call returns cached result
+    CM-01..CM-07: SP.CacheService migration tests (Tier 3)
 #>
 #Requires -Modules Pester
 
@@ -23,8 +24,14 @@ BeforeAll {
 Describe "SI-01: Get-SPIdentityDetail" {
 
     BeforeEach {
-        # Clear caches before each test so results are independent
-        & (Get-Module SP.IdentityService) { $script:IdentityCache = @{}; $script:_IdentityDiskLoaded = $true; $script:_IdentityCachedAt = @{} }
+        # Clear caches before each test so results are independent.
+        # Use Clear-SPCacheStore to clear in-place (preserves alias wiring).
+        # Ensure the store exists first, then mark disk as loaded to skip I/O.
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
     }
 
     It "returns resolved identity on successful API response" {
@@ -152,7 +159,9 @@ Describe "SI-01: Get-SPIdentityDetail" {
 Describe "SI-02: Search-SPIdentityByEmail" {
 
     BeforeEach {
-        & (Get-Module SP.IdentityService) { $script:EmailToIdentityCache = @{} }
+        # Clear SPEmailLookup store in-place (preserves alias wiring)
+        & (Get-Module SP.IdentityService) { _EnsureSPIdentityStore }
+        Clear-SPCacheStore -Store 'SPEmailLookup'
     }
 
     It "returns resolved identity on successful search" {
@@ -240,12 +249,13 @@ Describe "SI-02: Search-SPIdentityByEmail" {
 Describe "SI-03: Clear-SPIdentityCache" {
 
     BeforeEach {
+        # Ensure stores exist, then seed data via SP.CacheService
         & (Get-Module SP.IdentityService) {
-            $script:IdentityCache = @{ 'id-1' = @{ Found = $true } }
-            $script:_IdentityCachedAt = @{ 'id-1' = (Get-Date) }
-            $script:EmailToIdentityCache = @{ 'e:test@x.com' = @{ Found = $true } }
+            _EnsureSPIdentityStore
             $script:_IdentityDiskLoaded = $true
         }
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'id-1' -Value @{ Found = $true } -NoPersist
+        Set-SPCachedItem -Store 'SPEmailLookup' -Key 'e:test@x.com' -Value @{ Found = $true }
     }
 
     It "clears all in-memory caches with no switches" {
@@ -295,12 +305,13 @@ Describe "SI-03: Clear-SPIdentityCache" {
 Describe "SI-04: Caching behavior" {
 
     BeforeEach {
+        # Clear all stores in-place, mark disk loaded to skip I/O
         & (Get-Module SP.IdentityService) {
-            $script:IdentityCache = @{}
+            _EnsureSPIdentityStore
             $script:_IdentityDiskLoaded = $true
-            $script:_IdentityCachedAt = @{}
-            $script:EmailToIdentityCache = @{}
         }
+        Clear-SPCacheStore -Store 'SPIdentity'
+        Clear-SPCacheStore -Store 'SPEmailLookup'
     }
 
     It "Get-SPIdentityDetail returns cached result on second call (no API call)" {
@@ -371,5 +382,227 @@ Describe "SI-04: Caching behavior" {
 
         $second.Found | Should -Be $true
         Should -Invoke Invoke-SPApiRequest -ModuleName SP.IdentityService -Times 1
+    }
+}
+
+# ===========================================================================
+# CM: SP.CacheService Migration Tests (Tier 3)
+# ===========================================================================
+
+Describe "CM-01: Identity detail round-trip through SP.CacheService" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
+    }
+
+    It "stores and retrieves identity detail via SP.CacheService" {
+        $detail = @{
+            IdentityId          = 'cm01-id'
+            DisplayName         = 'CM01 User'
+            ManagerId           = 'cm01-mgr'
+            ManagerName         = 'CM01 Manager'
+            IsActive            = $true
+            Found               = $true
+            CloudLifecycleState = 'active'
+            Email               = 'cm01@example.com'
+            JobLevel            = 'L4'
+        }
+
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm01-id' -Value $detail -NoPersist
+
+        $retrieved = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm01-id'
+        $retrieved | Should -Not -BeNullOrEmpty
+        $retrieved.DisplayName | Should -Be 'CM01 User'
+        $retrieved.Email       | Should -Be 'cm01@example.com'
+        $retrieved.Found       | Should -Be $true
+    }
+}
+
+Describe "CM-02: Cache hit returns stored value without API call" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
+    }
+
+    It "Get-SPIdentityDetail returns cached value on second call (no API)" {
+        Mock Invoke-SPApiRequest -ModuleName SP.IdentityService {
+            return @{
+                Success = $true
+                Data    = [PSCustomObject]@{
+                    displayName = 'CM02 Cached'
+                    attributes  = [PSCustomObject]@{ cloudLifecycleState = 'active' }
+                }
+            }
+        }
+        Mock Write-SPLog -ModuleName SP.IdentityService {}
+        Mock Save-SPIdentityCacheEntry -ModuleName SP.IdentityService {}
+
+        $first  = Get-SPIdentityDetail -IdentityId 'cm02-id'
+        $second = Get-SPIdentityDetail -IdentityId 'cm02-id'
+
+        $first.DisplayName  | Should -Be 'CM02 Cached'
+        $second.DisplayName | Should -Be 'CM02 Cached'
+
+        # Verify the value is in SP.CacheService
+        $cached = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm02-id'
+        $cached.DisplayName | Should -Be 'CM02 Cached'
+
+        Should -Invoke Invoke-SPApiRequest -ModuleName SP.IdentityService -Times 1
+    }
+}
+
+Describe "CM-03: Clear-SPIdentityCache clears the SP.CacheService store" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm03-id' -Value @{ Found = $true; DisplayName = 'CM03' } -NoPersist
+    }
+
+    It "clears the SPIdentity store on Clear-SPIdentityCache" {
+        # Verify item exists before clearing
+        $before = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm03-id'
+        $before | Should -Not -BeNullOrEmpty
+
+        Clear-SPIdentityCache -MemoryOnly
+
+        $after = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm03-id'
+        $after | Should -BeNullOrEmpty
+    }
+}
+
+Describe "CM-04: Get-SPIdentityCacheEntry delegates to SP.CacheService" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
+    }
+
+    It "returns value from SPIdentity store" {
+        $detail = @{
+            IdentityId  = 'cm04-id'
+            DisplayName = 'CM04 User'
+            Found       = $true
+        }
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm04-id' -Value $detail -NoPersist
+
+        $result = Get-SPIdentityCacheEntry -IdentityId 'cm04-id'
+        $result | Should -Not -BeNullOrEmpty
+        $result.DisplayName | Should -Be 'CM04 User'
+    }
+
+    It "returns null for missing identity" {
+        $result = Get-SPIdentityCacheEntry -IdentityId 'cm04-missing'
+        $result | Should -BeNullOrEmpty
+    }
+}
+
+Describe "CM-05: Set-SPIdentityCacheEntry delegates to SP.CacheService" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
+    }
+
+    It "stores value in SPIdentity store via Set-SPIdentityCacheEntry" {
+        Mock Save-SPIdentityCacheEntry -ModuleName SP.IdentityService {}
+
+        $detail = @{
+            IdentityId  = 'cm05-id'
+            DisplayName = 'CM05 User'
+            Found       = $true
+        }
+        Set-SPIdentityCacheEntry -IdentityId 'cm05-id' -Detail $detail
+
+        $cached = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm05-id'
+        $cached | Should -Not -BeNullOrEmpty
+        $cached.DisplayName | Should -Be 'CM05 User'
+    }
+}
+
+Describe "CM-06: Email search uses separate SPEmailLookup store" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPEmailLookup'
+    }
+
+    It "stores email search results in SPEmailLookup, not SPIdentity" {
+        Mock Invoke-SPApiRequest -ModuleName SP.IdentityService {
+            return @{
+                Success = $true
+                Data    = @(
+                    [PSCustomObject]@{
+                        id          = 'cm06-id'
+                        displayName = 'CM06 Email User'
+                    }
+                )
+            }
+        }
+        Mock Write-SPLog -ModuleName SP.IdentityService {}
+
+        $result = Search-SPIdentityByEmail -AttributeValue 'cm06@example.com'
+        $result.Found | Should -Be $true
+
+        # Check the SPEmailLookup store has the entry
+        $cached = Get-SPCachedItem -Store 'SPEmailLookup' -Key 'attributes.email:cm06@example.com'
+        $cached | Should -Not -BeNullOrEmpty
+        $cached.IdentityId | Should -Be 'cm06-id'
+
+        # SPIdentity store should NOT have this entry (email search does not populate it)
+        $idCached = Get-SPCachedItem -Store 'SPIdentity' -Key 'cm06-id'
+        $idCached | Should -BeNullOrEmpty
+    }
+}
+
+Describe "CM-07: Get-SPCacheStoreInfo returns identity cache metrics" {
+
+    BeforeEach {
+        & (Get-Module SP.IdentityService) {
+            _EnsureSPIdentityStore
+            $script:_IdentityDiskLoaded = $true
+        }
+        Clear-SPCacheStore -Store 'SPIdentity'
+    }
+
+    It "reports ItemCount and stats for the SPIdentity store" {
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm07-a' -Value @{ Found = $true } -NoPersist
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm07-b' -Value @{ Found = $true } -NoPersist
+
+        $info = Get-SPCacheStoreInfo -Store 'SPIdentity'
+        $info | Should -Not -BeNullOrEmpty
+        $info.Name      | Should -Be 'SPIdentity'
+        $info.ItemCount | Should -Be 2
+    }
+
+    It "tracks hits and misses when TrackStats is enabled" {
+        Set-SPCachedItem -Store 'SPIdentity' -Key 'cm07-hit' -Value @{ Found = $true } -NoPersist
+
+        # Generate hits and misses
+        Get-SPCachedItem -Store 'SPIdentity' -Key 'cm07-hit'  | Out-Null  # hit
+        Get-SPCachedItem -Store 'SPIdentity' -Key 'cm07-miss' | Out-Null  # miss
+
+        $info = Get-SPCacheStoreInfo -Store 'SPIdentity'
+        $info.HitCount  | Should -BeGreaterOrEqual 1
+        $info.MissCount | Should -BeGreaterOrEqual 1
     }
 }
