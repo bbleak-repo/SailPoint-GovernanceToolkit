@@ -11,6 +11,9 @@ Modules must be imported in dependency order. All scripts follow this pattern:
 ```powershell
 $modulesRoot = Join-Path $PSScriptRoot '..\Modules'
 
+# 0. Shared utilities (no dependencies -- load first)
+Import-Module (Join-Path $modulesRoot 'SP.Shared\SP.Shared.psd1') -Force
+
 # 1. Foundation
 Import-Module (Join-Path $modulesRoot 'SP.Core\SP.Core.psd1') -Force
 
@@ -21,13 +24,36 @@ Import-Module (Join-Path $modulesRoot 'SP.Api\SP.Api.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.Testing\SP.Testing.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.Audit\SP.Audit.psd1') -Force
 Import-Module (Join-Path $modulesRoot 'SP.DeltaCert\SP.DeltaCert.psd1') -Force
-Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedApps.psd1') -Force  # requires SP.DeltaCert
+Import-Module (Join-Path $modulesRoot 'SP.DisconnectedApps\SP.DisconnectedApps.psd1') -Force
 
 # 4. GUI (optional, Windows only)
 Import-Module (Join-Path $modulesRoot 'SP.Gui\SP.Gui.psd1') -Force
 ```
 
 Each `.psd1` manifest uses `NestedModules` to load its `.psm1` files. `RequiredModules` is intentionally empty in all manifests to avoid `$env:PSModulePath` resolution failures in non-standard deployment layouts. The caller handles import order.
+
+### SP.Shared -- Shared Utilities Module
+
+`SP.Shared` provides 26 functions across 3 sub-modules. It has **no dependencies** on
+SP.Core, SP.Api, or any other toolkit module and must be loaded first in every script's
+module chain.
+
+| Sub-Module | Functions | Purpose |
+|---|---|---|
+| **SP.HtmlHelpers** | `ConvertTo-SPHtmlSafe`, `Format-SPHtmlDate`, `Get-SPObjectProperty`, `Get-SPHtmlColorPalette`, `New-SPHtmlDocument`, `Write-SPHtmlFile` | HTML encoding, date formatting, polymorphic property access, color palette, HTML document scaffolding, UTF-8 no-BOM file writing |
+| **SP.CacheService** | `New-SPCacheStore`, `Get/Set-SPCachedItem`, `Test-SPCacheValid`, `Clear-SPCacheStore`, `Export/Import-SPCacheStore`, `Add-SPCacheStoreEntry`, `Compress-SPCacheStore`, `Get-SPCacheStoreInfo`, `Get-SPCacheStoreSummary`, `Test-SPCacheStoreIntegrity` | Generic TTL-aware in-memory cache with JSONL disk persistence, hit/miss stats, integrity validation |
+| **SP.IdentityService** | `Get-SPIdentityDetail`, `Search-SPIdentityByEmail`, `Set/Get-SPIdentityCacheEntry`, `Clear-SPIdentityCache`, `Get-SPIdentityCacheInfo`, `Import-SPIdentityCacheFromDisk`, `Save-SPIdentityCacheEntry` | Identity resolution with caching (uses SP.CacheService internally) |
+
+**When adding new functions:** Use `ConvertTo-SPHtmlSafe` instead of inline `WebUtility::HtmlEncode`, `Get-SPObjectProperty` instead of rolling your own hashtable/PSCustomObject dual-mode reader, `Write-SPHtmlFile` instead of inline `UTF8Encoding` + `WriteAllText`, and `Get-SPHtmlColorPalette` for consistent report colors.
+
+**Auto-import guards:** Modules that depend on SP.Shared include a guard block at the top that imports SP.Shared with `-Global` if not already loaded. This ensures SP.Shared is available regardless of which script's module chain loaded the module:
+
+```powershell
+$_spSharedPsd1 = Join-Path (Split-Path -Parent $PSScriptRoot) 'SP.Shared\SP.Shared.psd1'
+if ((Test-Path $_spSharedPsd1) -and -not (Get-Command Get-SPObjectProperty -ErrorAction Ignore)) {
+    Import-Module $_spSharedPsd1 -Global -ErrorAction SilentlyContinue -DisableNameChecking
+}
+```
 
 ---
 

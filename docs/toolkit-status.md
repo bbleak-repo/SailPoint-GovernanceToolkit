@@ -1,7 +1,7 @@
 # SailPoint Governance Toolkit -- Session Restart Context
 
-**Last Updated:** 2026-05-22
-**Status:** IMPLEMENTATION COMPLETE + SP.DeltaCert module + Phase 7 GUI refinement (modal dialogs, tab declutter)
+**Last Updated:** 2026-06-15
+**Status:** SP.Shared modularization COMPLETE + SP.CacheService with JSONL persistence + Governance Trending Dashboard
 
 ---
 
@@ -9,8 +9,10 @@
 
 ```
 Read this file. All production files are implemented.
-Latest addition 2026-05-22: Phase 7 GUI refinement -- modal dialog pattern, DeltaCert/Audit tab declutter, 3 dialog XAML files.
-Open items: Run Pester tests on Windows PS 5.1, WPF GUI smoke test.
+Latest addition 2026-06-13: SP.Shared module (26 functions), SP.CacheService (JSONL persistence,
+inspection, stats), SP.IdentityService, Governance Trend Dashboard (KPI cards, SVG sparklines,
+alerts), Invoke-SPGovernanceHeartbeat.ps1. Test suite: 1869 tests, 0 failures.
+Open items: Run Pester tests on Windows PS 5.1, WPF GUI smoke test, color palette standardization.
 ```
 
 ---
@@ -28,20 +30,28 @@ with JSONL + HTML evidence output. CLI-first with WPF GUI overlay.
 ## Architecture Overview
 
 ```
+SP.Shared (HtmlHelpers, CacheService, IdentityService) -- 26 functions, no dependencies
+    |
+    v
 SP.Core (Config, Logging, Auth, Vault)
     |
     v
 SP.Api (ApiClient, Campaigns, Certifications, Decisions)
     |
-    +----------+----------+
-    v          v          v
-SP.Testing  SP.Audit   SP.DeltaCert (DeltaCertQueries, DeltaCertRunner)
+    +----------+----------+----------+
+    v          v          v          v
+SP.Testing  SP.Audit   SP.DeltaCert  SP.Reconciliation
+             (incl.     (Queries,     (IscReconciliation,
+              Trend      Runner,       Source)
+              Query)     Report)
                              |
                              v
-                        SP.DisconnectedApps (Validator, Snapshot, Delta, Runner)
+                        SP.DisconnectedApps (Validator, Snapshot, Delta, Runner, Analytics, Reports)
+    |
+    +---> SP.ReportComponents (RC00-RC06) ---> SP.AdaptiveReports (BaselineReports B01-B10)
     |
     v
-SP.Gui (MainWindow, GuiBridge)  +  Scripts/ (CLI thin wrappers)
+SP.Gui (MainWindow, GuiBridge, SdkBridge)  +  Scripts/ (CLI thin wrappers)
     |
     v
 Gui/ XAML (MainWindow, 5 tab designs, 3 modal dialogs)

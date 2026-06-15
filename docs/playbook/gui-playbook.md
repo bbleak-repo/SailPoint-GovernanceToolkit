@@ -200,11 +200,17 @@ HTML report has four controls in its header bar:
 - **ISC Reconciliation** -- to verify that the toolkit's local cache and reports match the live ISC tenant state.
 
 **Related CLI:** `Invoke-SPGovernanceHealthCheck.ps1`, `Invoke-SPGovernanceReport.ps1`,
-`Invoke-SPGovernanceMetrics.ps1`, `Invoke-SPDataQualityReport.ps1`,
-`Invoke-SPHierarchicalReport.ps1`, `Invoke-SPCampaignDiff.ps1`,
-`Invoke-SPCertTracker.ps1`, `Invoke-SPDailyEvidenceReportV3.ps1`,
-`Invoke-SPEntitlementHistory.ps1`, `Invoke-SPCacheValidate.ps1`,
-`Invoke-SPIscReconciliation.ps1`.
+`Invoke-SPGovernanceMetrics.ps1` (add `-IncludeDashboard` for trend dashboard),
+`Invoke-SPGovernanceHeartbeat.ps1` (lightweight high-frequency capture),
+`Invoke-SPDataQualityReport.ps1`, `Invoke-SPHierarchicalReport.ps1`,
+`Invoke-SPCampaignDiff.ps1`, `Invoke-SPCertTracker.ps1`,
+`Invoke-SPDailyEvidenceReportV3.ps1`, `Invoke-SPEntitlementHistory.ps1`,
+`Invoke-SPCacheValidate.ps1`, `Invoke-SPIscReconciliation.ps1`.
+
+> **Governance Trend Dashboard:** The CLI command `Invoke-SPGovernanceMetrics.ps1
+> -IncludeDashboard` generates a self-contained HTML dashboard with KPI cards, inline SVG
+> sparklines, direction arrows, and alert callouts. This is currently CLI-only; a dedicated
+> GUI tab for trend visualization is planned.
 
 ---
 

@@ -608,11 +608,60 @@ even after raw audit data is archived.
 | `-AlertOnDecline` / `-AlertRecipients <emails>` | Notify when KPIs decline >5% over 4 periods. |
 | `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Filter captured campaigns by name (see *Campaign filtering & the item cache*). |
 | `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
+| `-IncludeDashboard` | Generate a governance trend dashboard HTML (KPI cards, SVG sparklines, direction arrows, alerts). |
+| `-DashboardPeriod` | `Last7Days`/`Last30Days`/`Last90Days`/`AllTime` (default Last30Days). |
 
 ```powershell
+# Capture + trend + completion forecast
 .\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeCompletionForecast -OutputMode Both
+
+# Capture + governance trend dashboard
+.\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeDashboard -DashboardPeriod Last90Days
 ```
 **Related GUI:** Governance tab → Metrics.
+
+### `Invoke-SPGovernanceHeartbeat.ps1`
+**Purpose:** lightweight governance pulse check -- captures only campaign-level KPIs
+(active/completed/overdue counts, average completion %) via a single API call. No item-
+level fetching, so it runs in seconds. Designed for high-frequency scheduling (every 4
+hours) to produce finer-grained sparkline data.
+
+| Parameter | Description |
+|---|---|
+| `-OutputPath` | Override output directory. |
+| `-IncludeDashboard` | Also generate the trend dashboard HTML. |
+| `-DashboardPeriod` | `Last7Days`/`Last30Days`/`Last90Days` (default Last7Days). |
+| `-DaysBack` | Campaign lookback window (default 90). |
+
+```powershell
+# Quick heartbeat capture
+.\Scripts\Invoke-SPGovernanceHeartbeat.ps1
+
+# Heartbeat + mini dashboard
+.\Scripts\Invoke-SPGovernanceHeartbeat.ps1 -IncludeDashboard -DashboardPeriod Last7Days
+```
+
+### Cache Management Commands
+
+The toolkit caches identity details, account data, and campaign items to reduce API calls.
+All caches support inspection and clearing via `SP.Shared` functions:
+
+```powershell
+# Inspect a specific cache store
+Get-SPCacheStoreInfo -Store 'SPIdentity'
+
+# View all cache stores
+Get-SPCacheStoreSummary
+
+# Validate JSONL integrity
+Test-SPCacheStoreIntegrity -Store 'SPIdentity'
+
+# Clear identity cache (for SOX-critical evidence runs)
+Clear-SPIdentityCache
+
+# Clear campaign item cache
+Clear-SPAuditItemCache -CampaignId 'campaign-id-here'
+```
 
 ### `Invoke-SPGovernanceReport.ps1`
 **Purpose:** the "one report to rule them all" — assembles audit, leadership rollup, policy
@@ -1531,12 +1580,18 @@ code reflects the worst outcome.
 | Parameter | Description |
 |---|---|
 | `-SourceId <ids>` | Sources for the delta-cert steps. |
-| `-Skip*` switches | Skip any step (`-SkipValidation`, `-SkipCleanup`, `-SkipDeltaCert`, `-SkipDeltaReport`, `-SkipEscalation`, `-SkipHealthCheck`, …). |
+| `-Skip*` switches | Skip any step (`-SkipValidation`, `-SkipCleanup`, `-SkipDeltaCert`, `-SkipDeltaReport`, `-SkipEscalation`, `-SkipHealthCheck`, ...). |
+| `-IncludeDashboard` | Generate a governance trend dashboard as Step 11 (after log retention, before daily summary). |
+| `-DashboardPeriod` | `Last7Days`/`Last30Days`/`Last90Days`/`AllTime` (default Last30Days). |
 
 ```powershell
+# Standard daily run
 .\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt
+
+# Daily run with governance dashboard
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt -IncludeDashboard
 ```
-**Related GUI:** *(operational — typically scheduled, not interactive)*.
+**Related GUI:** *(operational -- typically scheduled, not interactive)*.
 
 ### `Invoke-SPScheduledCampaign.ps1`
 **Purpose:** runs campaigns from **saved JSON templates** on a cadence — loads templates from

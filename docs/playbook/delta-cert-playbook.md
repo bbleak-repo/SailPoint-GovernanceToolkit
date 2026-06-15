@@ -777,5 +777,37 @@ the *scope* of each review to a single entitlement.
 
 ---
 
+## 14. Identity Cache Management
+
+Delta cert resolves identity details (name, email, manager, active status) via the ISC
+API and caches results in `identities.jsonl` under the `.cache` directory. The cache
+is backed by `SP.IdentityService` (part of `SP.Shared`) with a configurable TTL
+(default 24 hours via `Audit.IdentityCacheTtlMinutes`).
+
+**When to clear the cache:**
+- After a reorg or bulk termination (stale manager chains produce incorrect escalation targets)
+- Before SOX-critical evidence generation (ensures fresh data from ISC)
+- After manually correcting identity data in ISC
+
+```powershell
+# Clear all identity caches (memory + disk)
+Clear-SPIdentityCache
+
+# Inspect cache health
+Get-SPCacheStoreInfo -Store 'SPIdentity'
+
+# Validate JSONL integrity
+Test-SPCacheStoreIntegrity -Store 'SPIdentity'
+```
+
+**TTL tuning:** The 24-hour default means a termination processed at 9 AM will not be
+reflected until the next day. For same-day termination SLAs, set
+`Audit.IdentityCacheTtlMinutes` to 480 (8 hours) or clear the cache before evidence runs.
+
+**Security:** `identities.jsonl` contains PII (names, emails). Restrict the `.cache`
+directory to the service account. The toolkit warns at startup if ACLs are too permissive.
+
+---
+
 *Related playbooks: [CLI Playbook](cli-playbook.md) · [GUI Playbook](gui-playbook.md) ·
 [Foundations](00-foundations.md)*
