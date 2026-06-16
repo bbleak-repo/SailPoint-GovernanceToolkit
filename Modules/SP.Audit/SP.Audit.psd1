@@ -36,6 +36,7 @@
         'SP.GovernanceTrendQuery.psm1'
         'SP.CampaignVelocity.psm1'
         'SP.CertTracker.psm1'
+        'SP.ReviewerAccountability.psm1'
     )
 
     # Public functions exported by this module
@@ -259,6 +260,10 @@
 
         # SP.AuditReportHtml - Governance Trend Dashboard (Phase 5)
         'Export-SPGovernanceDashboardHtml'
+
+        # SP.ReviewerAccountability - Cross-campaign stalled reviewer detection
+        'Get-SPStalledReviewers'
+        'Export-SPStalledReviewerHtml'
 
         # SP.CampaignVelocity - Opt-in review-velocity advisory (rubber-stamp prompt)
         'Measure-SPReviewerVelocity'
