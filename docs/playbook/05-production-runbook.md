@@ -149,6 +149,10 @@ Perform these checks weekly (suggested: Monday morning).
    maximum level without resolution. These require manual reviewer outreach.
 5. **Disk usage check** -- Verify the toolkit directory is not filling up. If retention
    is disabled, consider enabling it or running `Invoke-SPRetention.ps1` manually.
+6. **Stalled reviewer check** -- The daily orchestrator now runs stalled reviewer detection
+   automatically (Step 11). Review the `stalled-reviewers-*.html` report if generated.
+   A RED alert means a reviewer is stalled across multiple campaigns and likely needs
+   reassignment (PTO, departure). Check with their manager or reassign the certification.
 
 ---
 

@@ -777,7 +777,32 @@ the *scope* of each review to a single entitlement.
 
 ---
 
-## 14. Identity Cache Management
+## 14. Stalled Reviewer Detection
+
+Beyond per-campaign escalation, the toolkit detects reviewers who are **persistently
+non-responsive across ALL their campaigns** over multiple days. This catches the scenario
+where a manager is on PTO, has departed, or is ignoring their entire certification queue.
+
+```powershell
+# Check for chronic stalling (3+ days zero progress)
+$stalled = Get-SPStalledReviewers -ConsecutiveDays 3
+$stalled.Data.StalledReviewers | Format-Table Reviewer, CampaignCount, StalledDays, Severity
+
+# Generate accountability report
+Export-SPStalledReviewerHtml -StalledData $stalled.Data -OutputPath '.\Reports\'
+```
+
+**Severity levels:**
+- **RED (Multi-Campaign):** Reviewer stalled in 2+ campaigns simultaneously. Likely OOO or
+  departed. Campaign reassignment recommended.
+- **Amber (Single-Campaign):** Stalled in one campaign only. May be workload or deprioritization.
+
+The daily orchestrator runs this automatically as Step 11. The weekly digest includes the
+top 3 stalled reviewers in its Governance Summary section.
+
+---
+
+## 15. Identity Cache Management
 
 Delta cert resolves identity details (name, email, manager, active status) via the ISC
 API and caches results in `identities.jsonl` under the `.cache` directory. The cache

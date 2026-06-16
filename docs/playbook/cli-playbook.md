@@ -643,6 +643,24 @@ hours) to produce finer-grained sparkline data.
 
 ### Cache Management Commands
 
+### Stalled Reviewer Detection
+
+Detect reviewers who have made zero progress across campaigns for 3+ consecutive days:
+
+```powershell
+# Detect stalled reviewers
+$stalled = Get-SPStalledReviewers -ConsecutiveDays 3
+$stalled.Data.StalledReviewers | Format-Table Reviewer, CampaignCount, StalledDays, Severity
+
+# Generate accountability HTML report
+Export-SPStalledReviewerHtml -StalledData $stalled.Data -OutputPath '.\Reports\'
+```
+
+Multi-campaign stalls (RED severity) typically indicate a reviewer who is OOO, has departed,
+or whose campaigns need reassignment. The daily orchestrator runs this automatically as Step 11.
+
+### Cache Management Commands
+
 The toolkit caches identity details, account data, and campaign items to reduce API calls.
 All caches support inspection and clearing via `SP.Shared` functions:
 
