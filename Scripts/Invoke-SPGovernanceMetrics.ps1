@@ -863,6 +863,34 @@ if ($IncludeDashboard) {
                 Write-Host "    WARN: Month comparison skipped: $($_.Exception.Message)" -ForegroundColor Yellow
             }
 
+            # Check for stalled reviewers and inject alerts
+            try {
+                Write-Host '    Checking for stalled reviewers...' -ForegroundColor DarkGray
+                $stalledResult = Get-SPStalledReviewers -ConsecutiveDays 3 -CorrelationID $correlationID
+                if ($stalledResult.Success -and $null -ne $stalledResult.Data -and
+                    $null -ne $stalledResult.Data.StalledReviewers -and
+                    $stalledResult.Data.StalledReviewers.Count -gt 0) {
+                    foreach ($rv in $stalledResult.Data.StalledReviewers) {
+                        $severity = if ($rv.Severity -eq 'Red') { 'Red' } else { 'Amber' }
+                        $msg = "$($rv.Reviewer) stalled in $($rv.CampaignCount) campaign(s) for $($rv.StalledDays)+ days"
+                        $dashboardResult.Data.Alerts += @{
+                            Severity   = $severity
+                            Metric     = 'reviewer.stalled'
+                            Message    = $msg
+                            Value      = $rv.StalledDays
+                            PriorValue = 0
+                        }
+                    }
+                    Write-Host "    Injected $($stalledResult.Data.StalledReviewers.Count) stalled reviewer alert(s)" -ForegroundColor DarkGray
+                }
+                else {
+                    Write-Host '    No stalled reviewers detected' -ForegroundColor DarkGray
+                }
+            }
+            catch {
+                Write-Host "    WARN: Stalled reviewer check skipped: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
             # Generate HTML
             $dashboardTimestamp = $startTime.ToString('yyyyMMdd-HHmmss')
             $dashboardPath = Join-Path $effectiveOutputPath "governance-dashboard-${dashboardTimestamp}.html"
