@@ -1263,10 +1263,40 @@ else {
 
 #endregion
 
-#region Step 11: Governance Dashboard (if -IncludeDashboard)
+#region Step 11: Stalled Reviewer Accountability
+
+try {
+    Write-Host '  Step 11: Stalled Reviewer Accountability' -ForegroundColor Cyan
+    $stepStart = Get-Date
+    $stalledResult = Get-SPStalledReviewers -ConsecutiveDays 3 -CorrelationID $correlationID
+    if ($stalledResult.Success -and $null -ne $stalledResult.Data -and $stalledResult.Data.Summary.Total -gt 0) {
+        $stalledCount = $stalledResult.Data.Summary.Total
+        $multiCount   = $stalledResult.Data.Summary.MultiCampaign
+        $stalledHtmlPath = Join-Path $effectiveOutputPath "stalled-reviewers-$($startTime.ToString('yyyyMMdd-HHmmss')).html"
+        $htmlResult = Export-SPStalledReviewerHtml -StalledData $stalledResult.Data -OutputPath $stalledHtmlPath -CorrelationID $correlationID
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        $detail = "$stalledCount stalled reviewer(s) ($multiCount multi-campaign)"
+        if ($htmlResult.Success) { $detail += " -- report: $($htmlResult.Data)" }
+        Write-Host "  Step 11: WARNING - $detail" -ForegroundColor Yellow
+        Write-SPLog -Message "Stalled reviewer accountability: $detail" -Severity WARN -Component 'DailyOrchestrator' -Action 'StalledReviewers' -CorrelationID $correlationID
+    }
+    else {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Write-Host '  Step 11: All reviewers making progress' -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "  Step 11: WARN - Stalled reviewer check failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-SPLog -Message "Stalled reviewer check failed: $($_.Exception.Message)" -Severity WARN -Component 'DailyOrchestrator' -Action 'StalledReviewerError' -CorrelationID $correlationID
+}
+Write-Host ''
+
+#endregion
+
+#region Step 12: Governance Dashboard (if -IncludeDashboard)
 
 if ($IncludeDashboard) {
-    Write-Host '  Step 11: Governance Dashboard' -ForegroundColor Cyan
+    Write-Host '  Step 12: Governance Dashboard' -ForegroundColor Cyan
     $stepStart = Get-Date
 
     try {
@@ -1330,20 +1360,20 @@ if ($IncludeDashboard) {
     catch {
         $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
         Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
-        Write-Host "  Step 11: WARN - Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  Step 12: WARN - Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-SPLog -Message "Dashboard generation exception: $($_.Exception.Message)" `
             -Severity WARN -Component 'DailyOrchestrator' -Action 'DashboardError' -CorrelationID $correlationID
     }
     Write-Host ''
 }
 else {
-    Write-Host '  Step 11: Governance Dashboard [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host '  Step 12: Governance Dashboard [SKIPPED]' -ForegroundColor DarkGray
     Write-Host ''
 }
 
 #endregion
 
-#region Step 12: Daily Summary
+#region Step 13: Daily Summary
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime)

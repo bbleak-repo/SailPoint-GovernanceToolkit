@@ -15,6 +15,7 @@
       4. Reviewer Performance         (Measure-SPReviewerReputation)
       5. Remediation Tracking         (Get-SPRemediationStatus)
       6. Orchestrator Health           (Get-SPOrchestratorHistory)
+      7. Governance Summary            (Get-SPGovernanceMetricsTrend, campaign health)
 
     Each section can be individually skipped. Output supports Console, HTML,
     JSON, or Both (console + HTML) modes.
@@ -47,6 +48,10 @@
     Skip Section 6: Orchestrator Health.
 .PARAMETER SkipRemediationTracking
     Skip Section 5: Remediation Tracking.
+.PARAMETER IncludeGovernanceSummary
+    Include Section 7: Governance Summary showing KPI trends, stale reviewer
+    count, and overall governance health. Default: ON ($true). Pass
+    -IncludeGovernanceSummary:$false to skip.
 .PARAMETER OutputMode
     Console (default): formatted summary to terminal.
     HTML: self-contained HTML report file.
@@ -125,6 +130,9 @@ param(
 
     [Parameter()]
     [switch]$SkipRemediationTracking,
+
+    [Parameter()]
+    [switch]$IncludeGovernanceSummary = $true,
 
     # Output
     [Parameter()]
@@ -304,6 +312,7 @@ $sectionResults = [ordered]@{
     ReviewerPerformance = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     Remediation         = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     OrchestratorHealth  = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    GovernanceSummary   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
 $worstExitCode = 0
@@ -324,6 +333,7 @@ $digestData = [ordered]@{
     ReviewerPerformance = $null
     Remediation         = $null
     OrchestratorHealth  = $null
+    GovernanceSummary   = $null
 }
 
 #endregion
@@ -339,6 +349,7 @@ if ($isWhatIf) {
     if (-not $SkipReviewerAnalysis)    { Write-Host '    4. Reviewer Performance' -ForegroundColor White }
     if (-not $SkipRemediationTracking) { Write-Host '    5. Remediation Tracking' -ForegroundColor White }
     if (-not $SkipOrchestratorHealth)  { Write-Host '    6. Orchestrator Health' -ForegroundColor White }
+    if ($IncludeGovernanceSummary)     { Write-Host '    7. Governance Summary' -ForegroundColor White }
     Write-Host ''
     Write-Host "    Period:  $periodLabel" -ForegroundColor DarkGray
     Write-Host "    Output:  $OutputMode" -ForegroundColor DarkGray
@@ -923,6 +934,173 @@ else {
 
 #endregion
 
+#region Section 7: Governance Summary
+
+if ($IncludeGovernanceSummary) {
+    Write-Host '  Section 7: Governance Summary' -ForegroundColor Cyan
+    $stepStart = Get-Date
+
+    try {
+        # --- KPI trend data (last 7 days, daily granularity) ---
+        $trendResult = Get-SPGovernanceMetricsTrend -DaysBack $DaysBack -Granularity Daily `
+            -CorrelationID $correlationID
+
+        $trendSummary   = $trendResult.Summary
+        $trends         = $trendResult.Trends
+        $metricsTracked = $trendSummary.MetricsTracked
+
+        # Extract key KPI values and directions
+        $kpiList = [System.Collections.Generic.List[hashtable]]::new()
+
+        # Helper: map direction to an ASCII arrow for console output
+        # (no emoji / unicode per project rules -- plain ASCII only)
+        function _DirectionArrow {
+            param([string]$Direction)
+            switch ($Direction) {
+                'Improving' { return '(^)' }
+                'Declining' { return '(v)' }
+                default     { return '(-)' }
+            }
+        }
+
+        $kpiNames = @(
+            @{ Key = 'MaturityScore';          Label = 'Maturity Score' }
+            @{ Key = 'ActiveCampaigns';        Label = 'Active Campaigns' }
+            @{ Key = 'ReviewerCompletionPct';  Label = 'Reviewer Completion %' }
+            @{ Key = 'CompletionPct';          Label = 'Completion %' }
+            @{ Key = 'ApprovalRate';           Label = 'Approval Rate' }
+            @{ Key = 'RevocationRate';         Label = 'Revocation Rate' }
+        )
+
+        foreach ($kpi in $kpiNames) {
+            if ($null -ne $trends -and $trends.ContainsKey($kpi.Key)) {
+                $t = $trends[$kpi.Key]
+                $latestVal = $null
+                if ($null -ne $t.Periods -and @($t.Periods).Count -gt 0) {
+                    $lastPeriod = @($t.Periods)[-1]
+                    $latestVal  = $lastPeriod.Latest
+                }
+                $kpiList.Add(@{
+                    Label     = $kpi.Label
+                    Value     = $latestVal
+                    Direction = $t.OverallDirection
+                    Arrow     = (_DirectionArrow $t.OverallDirection)
+                    ChangePct = $t.ChangePercent
+                })
+            }
+        }
+
+        # --- Stale reviewer data from campaign health (already fetched in Section 2) ---
+        $stalledCount    = 0
+        $topStalled      = @()
+
+        if ($null -ne $digestData.CampaignHealth -and $null -ne $digestData.CampaignHealth.Campaigns) {
+            # Aggregate stale reviewers across all campaigns with severity ranking
+            $reviewerSeverity = [ordered]@{}   # reviewer name -> hashtable with count + campaigns
+
+            foreach ($hc in @($digestData.CampaignHealth.Campaigns)) {
+                if ($null -ne $hc.StaleReviewers -and @($hc.StaleReviewers).Count -gt 0) {
+                    foreach ($reviewer in @($hc.StaleReviewers)) {
+                        if ([string]::IsNullOrWhiteSpace($reviewer)) { continue }
+                        if (-not $reviewerSeverity.Contains($reviewer)) {
+                            $reviewerSeverity[$reviewer] = @{
+                                Name           = $reviewer
+                                CampaignCount  = 0
+                                CampaignNames  = [System.Collections.Generic.List[string]]::new()
+                            }
+                        }
+                        $reviewerSeverity[$reviewer].CampaignCount++
+                        $campName = if ($null -ne $hc.CampaignName) { [string]$hc.CampaignName } else { 'Unknown' }
+                        $reviewerSeverity[$reviewer].CampaignNames.Add($campName)
+                    }
+                }
+            }
+
+            $stalledCount = $reviewerSeverity.Count
+            # Top 3 stalled reviewers by number of campaigns affected
+            $topStalled = @($reviewerSeverity.Values |
+                Sort-Object -Property CampaignCount -Descending |
+                Select-Object -First 3)
+        }
+
+        # --- Overall governance health status ---
+        $healthStatus = 'Healthy'
+        $healthColor  = 'Green'
+        $healthReasons = [System.Collections.Generic.List[string]]::new()
+
+        # Check campaign health Red count
+        if ($null -ne $digestData.CampaignHealth -and $digestData.CampaignHealth.Red -gt 0) {
+            $healthReasons.Add("$($digestData.CampaignHealth.Red) campaign(s) in Red health")
+            if ($digestData.CampaignHealth.Red -ge 2) {
+                $healthStatus = 'At Risk'
+                $healthColor  = 'Red'
+            } else {
+                if ($healthStatus -ne 'At Risk') {
+                    $healthStatus = 'Needs Attention'
+                    $healthColor  = 'Yellow'
+                }
+            }
+        }
+
+        # Check stalled reviewers
+        if ($stalledCount -gt 3) {
+            $healthReasons.Add("$stalledCount stale reviewer(s)")
+            if ($healthStatus -eq 'Healthy') {
+                $healthStatus = 'Needs Attention'
+                $healthColor  = 'Yellow'
+            }
+        }
+
+        # Check declining metrics
+        if ($null -ne $trendSummary -and $trendSummary.DecliningMetrics -gt $trendSummary.ImprovingMetrics) {
+            $healthReasons.Add("$($trendSummary.DecliningMetrics) declining vs $($trendSummary.ImprovingMetrics) improving metric(s)")
+            if ($healthStatus -eq 'Healthy') {
+                $healthStatus = 'Needs Attention'
+                $healthColor  = 'Yellow'
+            }
+        }
+
+        $digestData.GovernanceSummary = @{
+            KPIs           = @($kpiList)
+            StalledCount   = $stalledCount
+            TopStalled     = $topStalled
+            HealthStatus   = $healthStatus
+            HealthReasons  = @($healthReasons)
+            TrendSummary   = $trendSummary
+        }
+
+        # Build detail string
+        $detailParts = [System.Collections.Generic.List[string]]::new()
+        $detailParts.Add("Health: $healthStatus")
+        if ($metricsTracked -gt 0) {
+            $detailParts.Add("$metricsTracked KPIs tracked")
+        }
+        if ($stalledCount -gt 0) {
+            $detailParts.Add("$stalledCount stale reviewer(s)")
+        }
+        $detail = $detailParts -join ' | '
+
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-SectionResult -Section 'GovernanceSummary' -Status 'Success' -Detail $detail -Duration $stepDuration
+        Write-Host "  Section 7: $detail" -ForegroundColor Green
+    }
+    catch {
+        $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-SectionResult -Section 'GovernanceSummary' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        Write-Host "  Section 7: WARN - $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-SPLog -Message "Governance summary section failed: $($_.Exception.Message)" `
+            -Severity WARN -Component 'WeeklyDigest' -Action 'GovernanceSummaryError' -CorrelationID $correlationID
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+    }
+    Write-Host ''
+}
+else {
+    Write-Host '  Section 7: Governance Summary [SKIPPED]' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
+#endregion
+
 #region Output
 
 $endTime       = Get-Date
@@ -1080,6 +1258,54 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
         Write-Host '  --- Orchestrator Health ---' -ForegroundColor Cyan
         $oh = $digestData.OrchestratorHealth
         Write-Host "    Runs: $($oh.SuccessCount)/$($oh.RunCount) successful | Avg: $($oh.AvgDuration) | Trend: $($oh.Trend)"
+        Write-Host ''
+    }
+
+    # Section 7
+    if ($null -ne $digestData.GovernanceSummary) {
+        $gs = $digestData.GovernanceSummary
+        Write-Host '  --- Governance Summary ---' -ForegroundColor Cyan
+        Write-Host "    Overall Health: $($gs.HealthStatus)" -ForegroundColor $(
+            switch ($gs.HealthStatus) {
+                'Healthy'          { 'Green' }
+                'Needs Attention'  { 'Yellow' }
+                'At Risk'          { 'Red' }
+                default            { 'White' }
+            }
+        )
+
+        if ($gs.HealthReasons.Count -gt 0) {
+            foreach ($reason in $gs.HealthReasons) {
+                Write-Host "      - $reason" -ForegroundColor DarkGray
+            }
+        }
+
+        if ($gs.KPIs.Count -gt 0) {
+            Write-Host '    KPI Trends:' -ForegroundColor White
+            foreach ($kpi in $gs.KPIs) {
+                $valStr = if ($null -ne $kpi.Value) { '{0}' -f $kpi.Value } else { 'N/A' }
+                $kpiColor = switch ($kpi.Direction) {
+                    'Improving' { 'Green'  }
+                    'Declining' { 'Red'    }
+                    default     { 'White'  }
+                }
+                Write-Host "      $($kpi.Arrow) $($kpi.Label): $valStr" -ForegroundColor $kpiColor
+            }
+        }
+
+        if ($gs.StalledCount -gt 0) {
+            Write-Host "    Stale Reviewers: $($gs.StalledCount)" -ForegroundColor Yellow
+            if ($gs.TopStalled.Count -gt 0) {
+                Write-Host '    Top Offenders:' -ForegroundColor White
+                foreach ($stalled in $gs.TopStalled) {
+                    $campList = ($stalled.CampaignNames -join ', ')
+                    Write-Host "      $($stalled.Name) ($($stalled.CampaignCount) campaign(s): $campList)" -ForegroundColor Yellow
+                }
+            }
+        }
+        else {
+            Write-Host '    Stale Reviewers: None' -ForegroundColor Green
+        }
         Write-Host ''
     }
 
@@ -1262,6 +1488,63 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         [void]$sb.AppendLine('<div class="kpi"><div class="label">Avg Duration</div><div class="value">' + (ConvertTo-SafeHtml $oh.AvgDuration) + '</div></div>')
         [void]$sb.AppendLine('<div class="kpi"><div class="label">Trend</div><div class="value">' + (ConvertTo-SafeHtml $oh.Trend) + '</div></div>')
         [void]$sb.AppendLine('</div></div>')
+    }
+
+    # Section 7: Governance Summary
+    if ($null -ne $digestData.GovernanceSummary) {
+        $gs = $digestData.GovernanceSummary
+        [void]$sb.AppendLine('<div class="section"><h2>Governance Summary</h2>')
+
+        # Health status badge
+        $healthBadgeClass = switch ($gs.HealthStatus) {
+            'At Risk'          { 'badge-red' }
+            'Needs Attention'  { 'badge-yellow' }
+            default            { 'badge-green' }
+        }
+        [void]$sb.AppendLine('<div class="kpi-row">')
+        [void]$sb.AppendLine('<div class="kpi"><div class="label">Overall Health</div><div class="value"><span class="badge ' + $healthBadgeClass + '">' + (ConvertTo-SafeHtml $gs.HealthStatus) + '</span></div></div>')
+
+        if ($null -ne $gs.TrendSummary -and $gs.TrendSummary.MetricsTracked -gt 0) {
+            [void]$sb.AppendLine('<div class="kpi"><div class="label">Improving</div><div class="value" style="color:#1b5e20">' + $gs.TrendSummary.ImprovingMetrics + '</div></div>')
+            [void]$sb.AppendLine('<div class="kpi"><div class="label">Declining</div><div class="value" style="color:#b71c1c">' + $gs.TrendSummary.DecliningMetrics + '</div></div>')
+            [void]$sb.AppendLine('<div class="kpi"><div class="label">Stable</div><div class="value">' + $gs.TrendSummary.StableMetrics + '</div></div>')
+        }
+        [void]$sb.AppendLine('<div class="kpi"><div class="label">Stale Reviewers</div><div class="value">' + $gs.StalledCount + '</div></div>')
+        [void]$sb.AppendLine('</div>')
+
+        # KPI trend table
+        if ($gs.KPIs.Count -gt 0) {
+            [void]$sb.AppendLine('<table><thead><tr><th>KPI</th><th>Current Value</th><th>Direction</th><th>Change %</th></tr></thead><tbody>')
+            foreach ($kpi in $gs.KPIs) {
+                $valStr = if ($null -ne $kpi.Value) { [string]$kpi.Value } else { 'N/A' }
+                $dirBadge = switch ($kpi.Direction) {
+                    'Improving' { '<span class="badge badge-green">&#x25B2; Improving</span>' }
+                    'Declining' { '<span class="badge badge-red">&#x25BC; Declining</span>' }
+                    default     { '<span class="badge">&#x25AC; Stable</span>' }
+                }
+                $changePctStr = if ($null -ne $kpi.ChangePct) { '{0:+0.0;-0.0;0.0}%' -f $kpi.ChangePct } else { 'N/A' }
+                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $kpi.Label) + '</td><td>' + (ConvertTo-SafeHtml $valStr) + '</td><td>' + $dirBadge + '</td><td>' + (ConvertTo-SafeHtml $changePctStr) + '</td></tr>')
+            }
+            [void]$sb.AppendLine('</tbody></table>')
+        }
+
+        # Top stalled reviewers
+        if ($gs.TopStalled.Count -gt 0) {
+            [void]$sb.AppendLine('<h3 style="font-size:14px;color:#b71c1c;margin-top:16px">Top Stale Reviewers</h3>')
+            [void]$sb.AppendLine('<table><thead><tr><th>Reviewer</th><th>Campaigns Affected</th><th>Campaign Names</th></tr></thead><tbody>')
+            foreach ($stalled in $gs.TopStalled) {
+                $campNames = (($stalled.CampaignNames | ForEach-Object { ConvertTo-SafeHtml $_ }) -join ', ')
+                [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $stalled.Name) + '</td><td>' + $stalled.CampaignCount + '</td><td>' + $campNames + '</td></tr>')
+            }
+            [void]$sb.AppendLine('</tbody></table>')
+        }
+
+        # Health reasons
+        if ($gs.HealthReasons.Count -gt 0) {
+            [void]$sb.AppendLine('<div class="delta">Reasons: ' + (($gs.HealthReasons | ForEach-Object { ConvertTo-SafeHtml $_ }) -join '; ') + '</div>')
+        }
+
+        [void]$sb.AppendLine('</div>')
     }
 
     # Footer
