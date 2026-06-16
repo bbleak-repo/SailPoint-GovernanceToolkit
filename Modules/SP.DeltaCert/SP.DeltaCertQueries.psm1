@@ -1359,7 +1359,8 @@ function Build-SPOrgTree {
         [string[]]$IdentityIds,
 
         [Parameter()]
-        [int]$MaxDepth = 3,
+        [ValidateRange(1, 6)]
+        [int]$MaxDepth = 4,
 
         [Parameter()]
         [string]$CorrelationID
@@ -2303,7 +2304,8 @@ function Show-SPCampaignOrgPreview {
         [string[]]$IdentityIds,
 
         [Parameter()]
-        [int]$MaxDepth = 3,
+        [ValidateRange(1, 6)]
+        [int]$MaxDepth = 4,
 
         [Parameter()]
         [string]$CorrelationID

@@ -56,9 +56,10 @@
     correctly before enabling live escalation.
     Example: -DaysBack 30 -WhatIf
 .PARAMETER MaxEscalationLevels
-    Maximum number of escalation hops from the original reviewer.
+    Maximum number of escalation hops from the original reviewer (1-5).
+    Level 2 = direct manager, 3 = director, 4 = VP, 5 = SVP/executive.
     Defaults to DeltaCert.Escalation.MaxEscalationLevels in settings.json
-    (fallback: 2).
+    (fallback: 4). Maximum allowed: 5.
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to ..\Config\settings.json relative to this script.
 .PARAMETER Token
@@ -220,6 +221,7 @@ param(
     [int]$DaysBack = 0,
 
     [Parameter()]
+    [ValidateRange(0, 5)]
     [int]$MaxEscalationLevels = 0,
 
     [Parameter()]
@@ -418,9 +420,11 @@ if ($effectiveMaxLevels -le 0) {
         $effectiveMaxLevels = [int]$config.DeltaCert.Escalation.MaxEscalationLevels
     }
     else {
-        $effectiveMaxLevels = 2
+        $effectiveMaxLevels = 4
     }
 }
+# Cap at 5 regardless of source (param or config)
+if ($effectiveMaxLevels -gt 5) { $effectiveMaxLevels = 5 }
 
 Write-SPLog -Message "Invoke-SPDeltaCertEscalate started: Prefix='$effectivePrefix' StaleHours=$effectiveStaleHours EscalateBeforeDeadlineHours=$EscalateBeforeDeadlineHours DaysBack=$DaysBack MaxLevels=$effectiveMaxLevels" `
     -Severity INFO -Component 'Invoke-SPDeltaCertEscalate' -Action 'Start' -CorrelationID $correlationID
