@@ -35,22 +35,62 @@ Write-Host '  Escalation Hierarchy -- Sample Report Generator' -ForegroundColor 
 Write-Host '  ================================================' -ForegroundColor Cyan
 Write-Host ''
 
-# 6-level org chain
+# 6-level org with realistic branching at each tier
+# CEO Park
+#   +- SVP Zhang (Engineering)
+#   |    +- VP Yamamoto (Platform)
+#   |    |    +- Dir Xavier (Backend)
+#   |    |    |    +- Mgr Adams (API Team) -- LATE
+#   |    |    |    +- Mgr Baker (Data Team) -- LATE
+#   |    |    +- Dir Walsh (Frontend)
+#   |    |         +- Mgr Clark (UI Team) -- LATE
+#   |    +- VP Rivera (Security)
+#   |         +- Dir Kim (IAM)
+#   |         |    +- Mgr Davis (Access Ops) -- LATE
+#   |         +- Dir Patel (Compliance)
+#   |              +- Mgr Evans (Audit) -- LATE
+#   |              +- Mgr Foster (GRC) -- LATE
+#   +- SVP Chen (Operations)
+#        +- VP Nguyen (Infrastructure)
+#             +- Dir Lopez (Cloud Ops)
+#                  +- Mgr Garcia (SRE) -- LATE
+#                  +- Mgr Harris (NetOps) -- LATE
 $identities = @{
     'id-000' = @{ IdentityId='id-000'; DisplayName='CEO Park'; ManagerId=''; Email='ceo.park@corp.test'; Found=$true }
+    # SVP Zhang branch (Engineering)
     'id-001' = @{ IdentityId='id-001'; DisplayName='SVP Zhang'; ManagerId='id-000'; Email='svp.zhang@corp.test'; Found=$true }
     'id-002' = @{ IdentityId='id-002'; DisplayName='VP Yamamoto'; ManagerId='id-001'; Email='vp.yamamoto@corp.test'; Found=$true }
+    'id-010' = @{ IdentityId='id-010'; DisplayName='VP Rivera'; ManagerId='id-001'; Email='vp.rivera@corp.test'; Found=$true }
     'id-003' = @{ IdentityId='id-003'; DisplayName='Dir Xavier'; ManagerId='id-002'; Email='dir.xavier@corp.test'; Found=$true }
     'id-004' = @{ IdentityId='id-004'; DisplayName='Dir Walsh'; ManagerId='id-002'; Email='dir.walsh@corp.test'; Found=$true }
+    'id-011' = @{ IdentityId='id-011'; DisplayName='Dir Kim'; ManagerId='id-010'; Email='dir.kim@corp.test'; Found=$true }
+    'id-012' = @{ IdentityId='id-012'; DisplayName='Dir Patel'; ManagerId='id-010'; Email='dir.patel@corp.test'; Found=$true }
     'id-006' = @{ IdentityId='id-006'; DisplayName='Mgr Adams'; ManagerId='id-003'; Email='mgr.adams@corp.test'; Found=$true }
     'id-007' = @{ IdentityId='id-007'; DisplayName='Mgr Baker'; ManagerId='id-003'; Email='mgr.baker@corp.test'; Found=$true }
     'id-008' = @{ IdentityId='id-008'; DisplayName='Mgr Clark'; ManagerId='id-004'; Email='mgr.clark@corp.test'; Found=$true }
+    'id-013' = @{ IdentityId='id-013'; DisplayName='Mgr Davis'; ManagerId='id-011'; Email='mgr.davis@corp.test'; Found=$true }
+    'id-014' = @{ IdentityId='id-014'; DisplayName='Mgr Evans'; ManagerId='id-012'; Email='mgr.evans@corp.test'; Found=$true }
+    'id-015' = @{ IdentityId='id-015'; DisplayName='Mgr Foster'; ManagerId='id-012'; Email='mgr.foster@corp.test'; Found=$true }
+    # SVP Chen branch (Operations)
+    'id-020' = @{ IdentityId='id-020'; DisplayName='SVP Chen'; ManagerId='id-000'; Email='svp.chen@corp.test'; Found=$true }
+    'id-021' = @{ IdentityId='id-021'; DisplayName='VP Nguyen'; ManagerId='id-020'; Email='vp.nguyen@corp.test'; Found=$true }
+    'id-022' = @{ IdentityId='id-022'; DisplayName='Dir Lopez'; ManagerId='id-021'; Email='dir.lopez@corp.test'; Found=$true }
+    'id-023' = @{ IdentityId='id-023'; DisplayName='Mgr Garcia'; ManagerId='id-022'; Email='mgr.garcia@corp.test'; Found=$true }
+    'id-024' = @{ IdentityId='id-024'; DisplayName='Mgr Harris'; ManagerId='id-022'; Email='mgr.harris@corp.test'; Found=$true }
 }
 
 $lateRows = @(
+    # VP Yamamoto's branch
     [PSCustomObject]@{ ReviewerName='Mgr Adams'; ReviewerEmail='mgr.adams@corp.test'; ReviewerIdentityId='id-006'; CertSigned=$false; CampaignName='Q2 Entitlement Review'; Total=24; Approved=8; Revoked=3; Pending=13 }
     [PSCustomObject]@{ ReviewerName='Mgr Baker'; ReviewerEmail='mgr.baker@corp.test'; ReviewerIdentityId='id-007'; CertSigned=$false; CampaignName='Q2 Entitlement Review'; Total=18; Approved=4; Revoked=1; Pending=13 }
     [PSCustomObject]@{ ReviewerName='Mgr Clark'; ReviewerEmail='mgr.clark@corp.test'; ReviewerIdentityId='id-008'; CertSigned=$false; CampaignName='AD Manager Certification'; Total=12; Approved=2; Revoked=0; Pending=10 }
+    # VP Rivera's branch
+    [PSCustomObject]@{ ReviewerName='Mgr Davis'; ReviewerEmail='mgr.davis@corp.test'; ReviewerIdentityId='id-013'; CertSigned=$false; CampaignName='IAM Quarterly Review'; Total=30; Approved=12; Revoked=5; Pending=13 }
+    [PSCustomObject]@{ ReviewerName='Mgr Evans'; ReviewerEmail='mgr.evans@corp.test'; ReviewerIdentityId='id-014'; CertSigned=$false; CampaignName='SOX Compliance Cert'; Total=45; Approved=20; Revoked=8; Pending=17 }
+    [PSCustomObject]@{ ReviewerName='Mgr Foster'; ReviewerEmail='mgr.foster@corp.test'; ReviewerIdentityId='id-015'; CertSigned=$false; CampaignName='SOX Compliance Cert'; Total=38; Approved=15; Revoked=4; Pending=19 }
+    # SVP Chen's branch (separate org)
+    [PSCustomObject]@{ ReviewerName='Mgr Garcia'; ReviewerEmail='mgr.garcia@corp.test'; ReviewerIdentityId='id-023'; CertSigned=$false; CampaignName='Cloud Infrastructure Review'; Total=22; Approved=6; Revoked=2; Pending=14 }
+    [PSCustomObject]@{ ReviewerName='Mgr Harris'; ReviewerEmail='mgr.harris@corp.test'; ReviewerIdentityId='id-024'; CertSigned=$false; CampaignName='Cloud Infrastructure Review'; Total=16; Approved=3; Revoked=1; Pending=12 }
 )
 
 Write-Host '  Building escalation chains (4 levels above reviewers)...' -ForegroundColor Gray
