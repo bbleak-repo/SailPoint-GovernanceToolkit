@@ -3976,6 +3976,93 @@ function Invoke-SPGuiIscReconciliation {
 
 #endregion ISC Reconciliation Bridge
 
+#region Governance Dashboard Bridge
+
+function Invoke-SPGuiGovernanceDashboard {
+    <#
+    .SYNOPSIS
+        Generates a governance trend dashboard from the GUI.
+    .PARAMETER Period
+        Lookback period. Default Last30Days.
+    .PARAMETER OutputPath
+        Override output directory.
+    .PARAMETER CorrelationID
+        Unique ID for tracing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [string]$Period = 'Last30Days',
+        [Parameter()] [string]$OutputPath,
+        [Parameter()] [string]$CorrelationID
+    )
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+    try {
+        $dashData = Get-SPGovernanceDashboardData -Period $Period -CorrelationID $CorrelationID
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            try { $OutputPath = (Get-SPConfig).Audit.OutputPath } catch { $OutputPath = '.\Audit' }
+        }
+        $comparison = $null
+        try { $comparison = Compare-SPGovernancePeriods -CorrelationID $CorrelationID } catch { }
+        $exportParams = @{ DashboardData = $dashData; OutputPath = $OutputPath; CorrelationID = $CorrelationID }
+        if ($null -ne $comparison) { $exportParams['PeriodComparison'] = $comparison }
+        $result = Export-SPGovernanceDashboardHtml @exportParams
+        return @{ Success = $true; Data = $result; Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Invoke-SPGuiGovernanceDashboard failed: $($_.Exception.Message)" }
+    }
+}
+
+function Invoke-SPGuiStalledReviewers {
+    <#
+    .SYNOPSIS
+        Runs stalled reviewer detection and generates the accountability report from the GUI.
+    .PARAMETER ConsecutiveDays
+        Days threshold. Default 3.
+    .PARAMETER OutputPath
+        Override output directory.
+    .PARAMETER CorrelationID
+        Unique ID for tracing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [int]$ConsecutiveDays = 3,
+        [Parameter()] [string]$OutputPath,
+        [Parameter()] [string]$CorrelationID
+    )
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+    try {
+        $stalledResult = Get-SPStalledReviewers -ConsecutiveDays $ConsecutiveDays -CorrelationID $CorrelationID
+        if (-not $stalledResult.Success) { return $stalledResult }
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            try { $OutputPath = (Get-SPConfig).Audit.OutputPath } catch { $OutputPath = '.\Audit' }
+        }
+        $htmlResult = Export-SPStalledReviewerHtml -StalledData $stalledResult.Data -OutputPath $OutputPath -CorrelationID $CorrelationID
+        return @{ Success = $true; Data = @{ StalledData = $stalledResult.Data; HtmlPath = $htmlResult.Data }; Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Invoke-SPGuiStalledReviewers failed: $($_.Exception.Message)" }
+    }
+}
+
+function Get-SPGuiCacheHealth {
+    <#
+    .SYNOPSIS
+        Returns cache store health summary for the GUI Settings/Cache panel.
+    #>
+    [CmdletBinding()]
+    param()
+    try {
+        $summary = Get-SPCacheStoreSummary
+        return @{ Success = $true; Data = $summary; Error = $null }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Get-SPGuiCacheHealth failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion Governance Dashboard Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -4002,5 +4089,8 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiDailyEvidence',
     'Invoke-SPGuiEntitlementHistory',
     'Invoke-SPGuiCacheValidate',
-    'Invoke-SPGuiIscReconciliation'
+    'Invoke-SPGuiIscReconciliation',
+    'Invoke-SPGuiGovernanceDashboard',
+    'Invoke-SPGuiStalledReviewers',
+    'Get-SPGuiCacheHealth'
 )
