@@ -714,18 +714,18 @@ foreach ($d in $dailyData) {
 # Build reviewer summary with behavior classification and first-seen tracking
 $reviewers = @()
 foreach ($rn in $reviewerNames.Keys) {
-    $firstComp = $null; $lastComp = $null; $firstSeenIdx = -1
+    [double]$firstComp = -1; [double]$lastComp = 0; $firstSeenIdx = -1
     for ($di = 0; $di -lt $dailyData.Count; $di++) {
         $rvDay = $dailyData[$di].Reviewers | Where-Object { $_.Name -eq $rn }
         if ($null -ne $rvDay) {
-            if ($null -eq $firstComp) { $firstComp = $rvDay.Completion; $firstSeenIdx = $di }
-            $lastComp = $rvDay.Completion
+            $compVal = [double]$rvDay.Completion
+            if ($firstComp -lt 0) { $firstComp = $compVal; $firstSeenIdx = $di }
+            $lastComp = $compVal
         }
     }
-    if ($null -eq $firstComp) { $firstComp = 0 }
-    if ($null -eq $lastComp)  { $lastComp = 0 }
+    if ($firstComp -lt 0) { $firstComp = 0 }
 
-    $delta = $lastComp - $firstComp
+    [double]$delta = $lastComp - $firstComp
     $style = if ($lastComp -ge 100) { 'finishing' }
              elseif ($lastComp -ge 90) { 'finishing' }
              elseif ($delta -lt 1 -and $lastComp -lt 95) { 'stalled' }
@@ -1116,14 +1116,14 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         # Use first-seen data for the "First" column (not day 0 if they weren't in scope)
         $firstRv = if ($rv.FirstSeenIdx -ge 0) { $dailyData[$rv.FirstSeenIdx].Reviewers | Where-Object { $_.Name -eq $rv.Name } } else { $null }
 
-        $todayPct = if ($todayRv) { $todayRv.Completion } else { 0 }
-        $yestPct  = if ($yestRv) { $yestRv.Completion } else { 0 }
-        $firstPct = if ($firstRv) { $firstRv.Completion } else { 0 }
+        [double]$todayPct = if ($todayRv) { [double]$todayRv.Completion } else { 0 }
+        [double]$yestPct  = if ($yestRv) { [double]$yestRv.Completion } else { 0 }
+        [double]$firstPct = if ($firstRv) { [double]$firstRv.Completion } else { 0 }
         $todayPct = [math]::Max(0, [math]::Min(100, $todayPct))
         $yestPct  = [math]::Max(0, [math]::Min(100, $yestPct))
         $firstPct = [math]::Max(0, [math]::Min(100, $firstPct))
 
-        $delta7 = [math]::Round($todayPct - $firstPct, 1)
+        [double]$delta7 = [math]::Round($todayPct - $firstPct, 1)
         $arrow = if ($delta7 -gt 2) { "<span class='up-arrow'></span>" } elseif ($delta7 -lt -2) { "<span class='down-arrow'></span>" } else { "<span class='flat-line'></span>" }
         $dClass = if ($delta7 -gt 2) { 'delta-up' } elseif ($delta7 -lt -2) { 'delta-down' } else { 'delta-flat' }
         $dSign = if ($delta7 -gt 0) { '+' } else { '' }
@@ -1225,8 +1225,8 @@ if ($reviewers.Count -gt 0 -and $today.Reviewers.Count -gt 0) {
 
     $ri = 0
     foreach ($rv in $todayReviewers) {
-        $decided = $rv.Approved + $rv.Revoked
-        $approvalRatio = if ($decided -gt 0) { [math]::Round($rv.Approved / $decided * 100, 1) } else { 0 }
+        [int]$decided = [int]$rv.Approved + [int]$rv.Revoked
+        $approvalRatio = if ($decided -gt 0) { [math]::Round([int]$rv.Approved / $decided * 100, 1) } else { 0 }
         $yPos = 38 + ($ri * 40)
         $rvName = ConvertTo-SPHtmlSafe $rv.Name
 
@@ -1290,10 +1290,10 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         $deltas = @()
         for ($i = 0; $i -lt $dayCount; $i++) {
             $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $todayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
+            $todayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
             if ($i -gt 0) {
                 $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
+                $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = [math]::Max(0, $todayDec - $prevDec)
             } else {
                 $delta = $todayDec
@@ -1477,7 +1477,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
                 [void]$sb.AppendLine("<td><div class='bar-track' style='background:#e8e8e8;'><span class='bar-label' style='color:#aaa;font-style:italic;'>N/A</span></div></td>")
             }
             else {
-                $pct = if ($rvDay) { $rvDay.Completion } else { 0 }
+                $pct = if ($rvDay) { [double]$rvDay.Completion } else { 0 }
                 $pct = [math]::Max(0, [math]::Min(100, $pct))
                 $barColor = if ($pct -ge 95) { $colors.Green } elseif ($rv.Style -eq 'stalled') { $colors.Red } else { '#336699' }
                 [void]$sb.AppendLine("<td><div class='bar-track'><div class='bar-fill' style='width:${pct}%;background:$barColor;'></div><span class='bar-label'>${pct}%</span></div></td>")
@@ -1516,11 +1516,11 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         $firstActive = -1; $lastActive = -1; $halfDay = -1; $doneDay = -1
         for ($i = 0; $i -lt $dayCount; $i++) {
             $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $dayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
-            $dayCompletion = if ($rvDay) { $rvDay.Completion } else { 0 }
+            $dayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
+            $dayCompletion = if ($rvDay) { [double]$rvDay.Completion } else { 0 }
             if ($i -gt 0) {
                 $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
+                $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = $dayDec - $prevDec
             } else {
                 $delta = $dayDec
@@ -1624,10 +1624,10 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         $totalDecisions = 0; $totalAppr = 0; $totalRevk = 0; $activeDays = 0
         for ($i = 0; $i -lt $dayCount; $i++) {
             $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $dayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
+            $dayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
             if ($i -gt 0) {
                 $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
+                $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = [math]::Max(0, $dayDec - $prevDec)
             } else {
                 $delta = $dayDec
