@@ -219,6 +219,74 @@ foreach ($d in $dailyData) {
 }
 [void]$sb.AppendLine("</tbody></table></div>")
 
+# ===== STYLE B2: Vertical Bar Chart -- Items Reviewed % + Reviewer Completion % =====
+[void]$sb.AppendLine("<div class='section'>")
+[void]$sb.AppendLine("<span class='style-label'>Style B2</span>")
+[void]$sb.AppendLine("<div class='section-title'>Completion Progression -- Vertical Bar Chart (Items Reviewed % + Reviewer Completion %)</div>")
+[void]$sb.AppendLine("<p class='note'>Blue bars show the percentage of items reviewed (decided). Green bars show the percentage of reviewers who have fully completed. Height is proportional to 100%.</p>")
+
+# Build the vertical bar chart as an SVG
+$chartWidth = 700
+$chartHeight = 200
+$dayCount = $dailyData.Count
+$groupWidth = [int][math]::Floor(($chartWidth - 40) / $dayCount)
+$barWidth = [int][math]::Floor($groupWidth * 0.35)
+$gap = [int][math]::Floor($groupWidth * 0.08)
+$leftPad = 40
+
+[void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+[void]$sb.AppendLine("<svg width='$chartWidth' height='$($chartHeight + 60)' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+# Y-axis labels and gridlines
+for ($pct = 0; $pct -le 100; $pct += 25) {
+    $y = [int]($chartHeight - ($pct / 100 * $chartHeight) + 10)
+    [void]$sb.AppendLine("<line x1='$leftPad' y1='$y' x2='$chartWidth' y2='$y' stroke='#e3e9f0' stroke-width='1'/>")
+    [void]$sb.AppendLine("<text x='$($leftPad - 5)' y='$($y + 4)' text-anchor='end' font-size='10' fill='#888'>${pct}%</text>")
+}
+
+for ($i = 0; $i -lt $dayCount; $i++) {
+    $d = $dailyData[$i]
+    $xBase = $leftPad + ($i * $groupWidth) + $gap
+
+    # Items reviewed % (blue bar)
+    $itemsPct = $d.CompletionPct
+    $itemsH = [int][math]::Max(2, [math]::Round($itemsPct / 100 * $chartHeight))
+    $itemsY = $chartHeight - $itemsH + 10
+    $itemsOpacity = [math]::Round(0.5 + (0.5 * $i / [math]::Max(1, $dayCount - 1)), 2)
+    [void]$sb.AppendLine("<rect x='$xBase' y='$itemsY' width='$barWidth' height='$itemsH' fill='#336699' opacity='$itemsOpacity' rx='2'/>")
+    # Value label on top of bar
+    if ($itemsH -gt 15) {
+        [void]$sb.AppendLine("<text x='$($xBase + [int]($barWidth/2))' y='$($itemsY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='#336699'>$($itemsPct)%</text>")
+    }
+
+    # Reviewer completion % (green bar) -- compute from per-reviewer data
+    $rvCompleted = @($d.Reviewers | Where-Object { $_.Completion -ge 100 }).Count
+    $rvTotal = $d.Reviewers.Count
+    $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvCompleted / $rvTotal * 100, 0) } else { 0 }
+    $rvH = [int][math]::Max(2, [math]::Round($rvPct / 100 * $chartHeight))
+    $rvY = $chartHeight - $rvH + 10
+    $rvX = $xBase + $barWidth + $gap
+    [void]$sb.AppendLine("<rect x='$rvX' y='$rvY' width='$barWidth' height='$rvH' fill='$($colors.Green)' opacity='$itemsOpacity' rx='2'/>")
+    if ($rvH -gt 15) {
+        [void]$sb.AppendLine("<text x='$($rvX + [int]($barWidth/2))' y='$($rvY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='$($colors.Green)'>$($rvPct)%</text>")
+    }
+
+    # Day label below
+    $labelX = $xBase + $barWidth + [int]($gap / 2)
+    $labelY = $chartHeight + 25
+    [void]$sb.AppendLine("<text x='$labelX' y='$labelY' text-anchor='middle' font-size='10' fill='#566'>$($d.DayLabel)</text>")
+}
+
+# Legend
+$legendY = $chartHeight + 45
+[void]$sb.AppendLine("<rect x='$($leftPad + 20)' y='$legendY' width='12' height='12' fill='#336699' rx='2'/>")
+[void]$sb.AppendLine("<text x='$($leftPad + 37)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Items Reviewed %</text>")
+[void]$sb.AppendLine("<rect x='$($leftPad + 170)' y='$legendY' width='12' height='12' fill='$($colors.Green)' rx='2'/>")
+[void]$sb.AppendLine("<text x='$($leftPad + 187)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Reviewers Completed %</text>")
+
+[void]$sb.AppendLine("</svg>")
+[void]$sb.AppendLine("</div></div>")
+
 # ===== STYLE C: Sparkline Mini-Charts (SVG) =====
 [void]$sb.AppendLine("<div class='section'>")
 [void]$sb.AppendLine("<span class='style-label'>Style C</span>")
