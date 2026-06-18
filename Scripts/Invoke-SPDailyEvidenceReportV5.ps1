@@ -652,7 +652,7 @@ foreach ($dayKey in $dayMap.Keys) {
 
     $dailyData += @{
         Date          = $ts.ToString('yyyy-MM-dd')
-        DayLabel      = $ts.ToString('ddd MM/dd')
+        DayLabel      = $ts.ToString('MM/dd')
         Reviewers     = $dayReviewers
         Total         = $total
         Approved      = $approved
@@ -960,12 +960,7 @@ if ($dayCount -ge 3) {
 }
 
 
-# ===== STYLE C: Sparkline Mini-Charts (SVG) =====
-[void]$sb.AppendLine("<div class='section'>")
-
-[void]$sb.AppendLine("<div class='section-title'>Metric Trends -- Compact Sparklines</div>")
-[void]$sb.AppendLine("<p class='note'>${dayCount}-day sparklines for key metrics. Each bar represents one day; height is proportional to the value. The latest day is fully opaque.</p>")
-
+# ===== Build-Sparkline helper (used by multiple styles) =====
 function Build-Sparkline {
     param([double[]]$Values, [string]$Color = '#1f3a5f', [int]$Width = 140, [int]$Height = 28)
     if ($Values.Count -eq 0) { return "<svg width='$Width' height='$Height'></svg>" }
@@ -984,30 +979,76 @@ function Build-Sparkline {
     return $svgParts
 }
 
-$metrics = @(
-    @{ Label = 'Overall Completion %'; Values = @($dailyData | ForEach-Object { $_.CompletionPct }); Color = '#336699'; HighIsGood = $true }
-    @{ Label = 'Approved Items';       Values = @($dailyData | ForEach-Object { $_.Approved });      Color = $colors.Green; HighIsGood = $true }
-    @{ Label = 'Revoked Items';        Values = @($dailyData | ForEach-Object { $_.Revoked });       Color = $colors.Red; HighIsGood = $false }
-    @{ Label = 'Pending Items';        Values = @($dailyData | ForEach-Object { $_.Pending });       Color = $colors.Amber; HighIsGood = $false }
-    @{ Label = 'Scope Added';          Values = @($dailyData | ForEach-Object { $_.ScopeAdded });    Color = '#336699'; HighIsGood = $false }
-    @{ Label = 'Scope Removed';        Values = @($dailyData | ForEach-Object { $_.ScopeRemoved });  Color = $colors.Gray; HighIsGood = $true }
+# ===== Build-MetricBarChart helper (individual vertical bar chart with value labels) =====
+function Build-MetricBarChart {
+    param([string]$Title, [double[]]$Values, [string[]]$Labels, [string]$Color, [string]$Unit = '',
+          [int]$ChartW = 600, [int]$ChartH = 160, [bool]$HighIsGood = $true)
+    $leftPad = 45; $topPad = 10; $bottomPad = 40
+    $drawH = $ChartH - $topPad - $bottomPad
+    $cnt = $Values.Count
+    if ($cnt -eq 0) { return '' }
+    $barW = [int][math]::Floor(($ChartW - $leftPad - 10) / $cnt * 0.65)
+    $gapW = [int][math]::Floor(($ChartW - $leftPad - 10) / $cnt * 0.35)
+    $maxVal = [math]::Max(1, ($Values | Measure-Object -Maximum).Maximum)
+
+    # Delta for header
+    $first = $Values[0]; $last = $Values[$cnt - 1]; $delta = [math]::Round($last - $first, 1)
+    $dSign = if ($delta -gt 0) { '+' } else { '' }
+    $dColor = if ($HighIsGood) { if ($delta -gt 0) { '#0a7d2c' } elseif ($delta -lt 0) { '#b00020' } else { '#9a6700' } } else { if ($delta -gt 0) { '#b00020' } elseif ($delta -lt 0) { '#0a7d2c' } else { '#9a6700' } }
+
+    $svgH = $ChartH + 10
+    $svg = "<div style='margin:8px 0;'>"
+    $svg += "<div style='font-size:13px;font-weight:600;color:#1f3a5f;margin-bottom:4px;'>$Title <span style='font-size:12px;color:$dColor;margin-left:8px;'>${dSign}${delta}${Unit} vs first capture</span></div>"
+    $svg += "<svg width='$ChartW' height='$svgH' style='font-family:Segoe UI,Arial,sans-serif;'>"
+
+    # Y-axis gridlines (4 lines)
+    for ($g = 0; $g -le 4; $g++) {
+        $gVal = [math]::Round($maxVal * $g / 4, 0)
+        $gy = $topPad + $drawH - [int]($drawH * $g / 4)
+        $svg += "<line x1='$leftPad' y1='$gy' x2='$ChartW' y2='$gy' stroke='#e3e9f0' stroke-width='1'/>"
+        $svg += "<text x='$($leftPad - 4)' y='$($gy + 4)' text-anchor='end' font-size='9' fill='#888'>${gVal}${Unit}</text>"
+    }
+
+    # Bars with value labels
+    for ($i = 0; $i -lt $cnt; $i++) {
+        $v = $Values[$i]
+        $bH = [int][math]::Max(2, [math]::Round($v / $maxVal * $drawH))
+        $bX = $leftPad + $i * ($barW + $gapW) + [int]($gapW / 2)
+        $bY = $topPad + $drawH - $bH
+        $opacity = [math]::Round(0.4 + (0.6 * $i / [math]::Max(1, $cnt - 1)), 2)
+        $svg += "<rect x='$bX' y='$bY' width='$barW' height='$bH' fill='$Color' opacity='$opacity' rx='2'/>"
+        # Value label on top of bar
+        $svg += "<text x='$($bX + [int]($barW/2))' y='$($bY - 3)' text-anchor='middle' font-size='10' font-weight='600' fill='$Color'>$([math]::Round($v,0))${Unit}</text>"
+        # Date label below
+        $labelY = $topPad + $drawH + 14
+        $svg += "<text x='$($bX + [int]($barW/2))' y='$labelY' text-anchor='middle' font-size='9' fill='#566'>$($Labels[$i])</text>"
+    }
+
+    $svg += "</svg></div>"
+    return $svg
+}
+
+# ===== STYLE C: Metric Trend Bar Charts (individual per metric) =====
+[void]$sb.AppendLine("<div class='section'>")
+
+[void]$sb.AppendLine("<div class='section-title'>Metric Trends -- Day-by-Day Detail</div>")
+[void]$sb.AppendLine("<p class='note'>Individual bar charts for key metrics showing the exact value per capture day. Each bar represents one business day of data.</p>")
+
+$dayLabels = @($dailyData | ForEach-Object { $_.DayLabel })
+
+$metricCharts = @(
+    @{ Title = 'Overall Completion'; Values = @($dailyData | ForEach-Object { $_.CompletionPct }); Color = '#336699'; Unit = '%'; HighIsGood = $true }
+    @{ Title = 'Approved Items';     Values = @($dailyData | ForEach-Object { $_.Approved });      Color = $colors.Green; Unit = ''; HighIsGood = $true }
+    @{ Title = 'Revoked Items';      Values = @($dailyData | ForEach-Object { $_.Revoked });       Color = $colors.Red; Unit = ''; HighIsGood = $false }
+    @{ Title = 'Pending Items';      Values = @($dailyData | ForEach-Object { $_.Pending });       Color = $colors.Amber; Unit = ''; HighIsGood = $false }
 )
 
-[void]$sb.AppendLine("<table><thead><tr><th style='width:180px;'>Metric</th><th style='width:160px;'>${dayCount}-Day Trend</th><th style='width:80px;text-align:right;'>Current</th><th style='width:80px;text-align:right;'>First</th><th style='width:80px;text-align:right;'>Change</th></tr></thead><tbody>")
-foreach ($m in $metrics) {
-    $current = $m.Values[$m.Values.Count - 1]
-    $prior   = $m.Values[0]
-    $delta   = [math]::Round($current - $prior, 1)
-    $dClass  = if ($m.HighIsGood) {
-        if ($delta -gt 0) { 'delta-up' } elseif ($delta -lt 0) { 'delta-down' } else { 'delta-flat' }
-    } else {
-        if ($delta -gt 0) { 'delta-down' } elseif ($delta -lt 0) { 'delta-up' } else { 'delta-flat' }
-    }
-    $dSign   = if ($delta -gt 0) { '+' } else { '' }
-    $spark   = Build-Sparkline -Values $m.Values -Color $m.Color
-    [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $m.Label)</td><td>$spark</td><td style='text-align:right;'>$current</td><td style='text-align:right;color:#888;'>$prior</td><td style='text-align:right;' class='$dClass'>${dSign}$delta</td></tr>")
+foreach ($mc in $metricCharts) {
+    $chart = Build-MetricBarChart -Title $mc.Title -Values $mc.Values -Labels $dayLabels -Color $mc.Color -Unit $mc.Unit -HighIsGood $mc.HighIsGood
+    [void]$sb.AppendLine($chart)
 }
-[void]$sb.AppendLine("</tbody></table></div>")
+
+[void]$sb.AppendLine("</div>")
 
 # ===== STYLE D: Table with Delta Arrows =====
 if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
@@ -1072,65 +1113,32 @@ if ($dayCount -ge 2) {
     [void]$sb.AppendLine("</tbody></table></div>")
 }
 
-# ===== STYLE E: Privileged Access Exposure Gauge =====
+# ===== STYLE E: Privileged Access Trend =====
 [void]$sb.AppendLine("<div class='section'>")
 
-[void]$sb.AppendLine("<div class='section-title'>Privileged Access Exposure Gauge</div>")
-[void]$sb.AppendLine("<p class='note'>Semicircular gauge showing percentage of pending items that are privileged. Zones: 0-10% green, 10-25% amber, 25%+ red. Below: sparkline of privileged pending count.</p>")
+[void]$sb.AppendLine("<div class='section-title'>Privileged Access -- Pending Review Trend</div>")
 
-$todayPrivPending = $today.PrivPending
-$todayPending = [math]::Max(1, $today.Pending)
-$privExposurePct = [math]::Round($todayPrivPending / $todayPending * 100, 1)
-$gaugeColor = if ($privExposurePct -lt 10) { $colors.Green } elseif ($privExposurePct -lt 25) { $colors.Amber } else { $colors.Red }
+$todayPrivPending = [int]$today.PrivPending
+$todayPrivTotal   = [int]$today.PrivTotal
+$privReviewedPct  = if ($todayPrivTotal -gt 0) { [math]::Round(($todayPrivTotal - $todayPrivPending) / $todayPrivTotal * 100, 1) } else { 0 }
+$privStatusColor  = if ($todayPrivPending -eq 0) { $colors.Green } elseif ($todayPrivPending -le 3) { $colors.Amber } else { $colors.Red }
 
-$gaugeW = 300; $gaugeH = 180; $cx = 150; $cy = 150; $r = 120
-$angleRad = [math]::PI - ($privExposurePct / 100 * [math]::PI)
-$needleX = [int]($cx + $r * [math]::Cos($angleRad))
-$needleY = [int]($cy - $r * [math]::Abs([math]::Sin($angleRad)))
+[void]$sb.AppendLine("<p class='note'>Tracks privileged entitlements still awaiting review. These items carry higher risk and should be prioritized.</p>")
 
-[void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-[void]$sb.AppendLine("<svg width='$gaugeW' height='$gaugeH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-$zones = @(
-    @{ StartPct = 0;  EndPct = 10;  Color = $colors.Green }
-    @{ StartPct = 10; EndPct = 25;  Color = $colors.Amber }
-    @{ StartPct = 25; EndPct = 100; Color = $colors.Red }
-)
-foreach ($z in $zones) {
-    $a1 = [math]::PI - ($z.StartPct / 100 * [math]::PI)
-    $a2 = [math]::PI - ($z.EndPct / 100 * [math]::PI)
-    $x1 = [math]::Round($cx + $r * [math]::Cos($a1), 1)
-    $y1 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a1)), 1)
-    $x2 = [math]::Round($cx + $r * [math]::Cos($a2), 1)
-    $y2 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a2)), 1)
-    $largeArc = if (($z.EndPct - $z.StartPct) -gt 50) { 1 } else { 0 }
-    [void]$sb.AppendLine("<path d='M $x1 $y1 A $r $r 0 $largeArc 1 $x2 $y2' stroke='$($z.Color)' stroke-width='24' fill='none' opacity='0.25'/>")
-}
-
-$valAngle = [math]::PI - ($privExposurePct / 100 * [math]::PI)
-$vx = [math]::Round($cx + $r * [math]::Cos($valAngle), 1)
-$vy = [math]::Round($cy - [math]::Abs($r * [math]::Sin($valAngle)), 1)
-$startX = [math]::Round($cx - $r, 1); $startY = $cy
-$valLargeArc = if ($privExposurePct -gt 50) { 1 } else { 0 }
-[void]$sb.AppendLine("<path d='M $startX $startY A $r $r 0 $valLargeArc 1 $vx $vy' stroke='$gaugeColor' stroke-width='24' fill='none' stroke-linecap='round'/>")
-
-[void]$sb.AppendLine("<line x1='$cx' y1='$cy' x2='$needleX' y2='$needleY' stroke='#1c2b3a' stroke-width='3' stroke-linecap='round'/>")
-[void]$sb.AppendLine("<circle cx='$cx' cy='$cy' r='6' fill='#1c2b3a'/>")
-
-[void]$sb.AppendLine("<text x='$cx' y='$($cy - 30)' text-anchor='middle' font-size='28' font-weight='700' fill='$gaugeColor'>$todayPrivPending</text>")
-[void]$sb.AppendLine("<text x='$cx' y='$($cy - 12)' text-anchor='middle' font-size='11' fill='#566'>privileged pending</text>")
-[void]$sb.AppendLine("<text x='$cx' y='$($cy + 5)' text-anchor='middle' font-size='13' font-weight='600' fill='$gaugeColor'>${privExposurePct}% exposure</text>")
-
-[void]$sb.AppendLine("<text x='$($cx - $r - 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Green)'>0%</text>")
-[void]$sb.AppendLine("<text x='$($cx + $r + 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Red)'>100%</text>")
-[void]$sb.AppendLine("</svg>")
-
-$privValues = @($dailyData | ForEach-Object { [double]$_.PrivPending })
-$privSparkline = Build-Sparkline -Values $privValues -Color $gaugeColor -Width 200 -Height 30
-[void]$sb.AppendLine("<div style='margin-top:8px;'>")
-[void]$sb.AppendLine("<span style='font-size:11px;color:#566;margin-right:8px;'>${dayCount}-Day Privileged Pending:</span>$privSparkline")
+# KPI row for privileged
+[void]$sb.AppendLine("<div style='margin:8px 0 16px 0;'>")
+$kpiS = "display:inline-block;min-width:120px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid $($colors.Border);border-radius:6px;background:$($colors.LightGrayBg);text-align:center;"
+[void]$sb.AppendLine("<span style='$kpiS'><span style='font-size:20px;font-weight:700;color:$privStatusColor;display:block;'>$todayPrivPending</span><span style='font-size:10px;color:#566;text-transform:uppercase;'>Priv Pending</span></span>")
+[void]$sb.AppendLine("<span style='$kpiS'><span style='font-size:20px;font-weight:700;color:$($colors.Dark);display:block;'>$todayPrivTotal</span><span style='font-size:10px;color:#566;text-transform:uppercase;'>Priv Total</span></span>")
+[void]$sb.AppendLine("<span style='$kpiS'><span style='font-size:20px;font-weight:700;color:$($colors.Dark);display:block;'>${privReviewedPct}%</span><span style='font-size:10px;color:#566;text-transform:uppercase;'>Priv Reviewed</span></span>")
 [void]$sb.AppendLine("</div>")
-[void]$sb.AppendLine("</div></div>")
+
+# Bar chart of privileged pending over time
+$privPendingValues = @($dailyData | ForEach-Object { [double]$_.PrivPending })
+$privChart = Build-MetricBarChart -Title 'Privileged Items Pending Review' -Values $privPendingValues -Labels $dayLabels -Color '#7b2d8e' -HighIsGood $false
+[void]$sb.AppendLine($privChart)
+
+[void]$sb.AppendLine("</div>")
 
 
 # ===== STYLE G: Rubber-Stamp Risk Detector =====
