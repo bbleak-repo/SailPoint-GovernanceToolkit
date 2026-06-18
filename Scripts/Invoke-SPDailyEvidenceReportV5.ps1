@@ -812,7 +812,36 @@ if ($dayCount -ge 2) {
     $dLabel = if ($dayCount -ge 7) { "${dayCount}-Day Change" } else { "${dayCount}-Day Change" }
     [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$dColor;'>${dSign}${weekDelta}%</span><span class='l'>$dLabel</span></span>")
 }
+# SLA Countdown KPI
+$effectiveDeadlineDaysKPI = $DeadlineDays
+if (-not [string]::IsNullOrWhiteSpace($campaignDueDate)) {
+    try {
+        $dueDtKPI = [datetime]::Parse($campaignDueDate)
+        $daysToDeadlineKPI = [int][math]::Floor(($dueDtKPI - (Get-Date)).TotalDays)
+        if ($daysToDeadlineKPI -ge 0) { $effectiveDeadlineDaysKPI = $daysToDeadlineKPI }
+    } catch { }
+}
+$dlKpiColor = if ($effectiveDeadlineDaysKPI -le 3) { $colors.Red } elseif ($effectiveDeadlineDaysKPI -le 7) { $colors.Amber } else { $colors.Green }
+[void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$dlKpiColor;'>$effectiveDeadlineDaysKPI</span><span class='l'>Days to Deadline</span></span>")
 [void]$sb.AppendLine("</div>")
+
+# Executive summary paragraph
+$stalledRvCount = @($reviewers | Where-Object { $_.Style -eq 'stalled' }).Count
+$privPendCount = $today.PrivPending
+$velocityPerDay = if ($dayCount -ge 2) { [math]::Round(($today.CompletionPct - $weekAgo.CompletionPct) / [math]::Max(1, $dayCount - 1), 1) } else { 0 }
+$projectedCompletion = [math]::Min(100, $today.CompletionPct + ($velocityPerDay * $effectiveDeadlineDaysKPI))
+$willComplete = if ($projectedCompletion -ge 99.5) { 'will' } else { 'will NOT' }
+$summaryText = "Campaign is $($today.CompletionPct)% complete with $effectiveDeadlineDaysKPI business days until deadline."
+if ($stalledRvCount -gt 0) {
+    $summaryText += " $stalledRvCount reviewer(s) have made zero progress (stalled)."
+}
+if ($privPendCount -gt 0) {
+    $summaryText += " $privPendCount privileged access items remain pending review."
+}
+if ($dayCount -ge 2) {
+    $summaryText += " Current velocity (${velocityPerDay}%/day) suggests the campaign $willComplete complete on time."
+}
+[void]$sb.AppendLine("<p style='font-size:13px;color:#1c2b3a;line-height:1.6;margin:12px 0 16px 0;padding:10px 14px;background:#f6f9fc;border-left:4px solid $dlKpiColor;border-radius:4px;'>$summaryText</p>")
 
 # Insufficient data banner
 if ($insufficientData) {
@@ -822,537 +851,10 @@ if ($insufficientData) {
     [void]$sb.AppendLine("</div>")
 }
 
-# ===== STYLE A: Horizontal Bar Charts (SVG) -- Reviewer Completion =====
-if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style A</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Reviewer Completion -- ${dayCount}-Day Progression (Horizontal Bar Charts)</div>")
-    [void]$sb.AppendLine("<p class='note'>Each bar shows the reviewer's completion percentage. The rightmost bar is today; color indicates status (green=complete, blue=progressing, red=stalled).</p>")
-
-    [void]$sb.AppendLine("<table><thead><tr><th style='width:120px;'>Reviewer</th>")
-    foreach ($d in $dailyData) { [void]$sb.AppendLine("<th style='width:100px;text-align:center;font-size:10px;'>$($d.DayLabel)</th>") }
-    [void]$sb.AppendLine("</tr></thead><tbody>")
-
-    foreach ($rv in $reviewers) {
-        [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td>")
-        foreach ($d in $dailyData) {
-            $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $pct = if ($rvDay) { $rvDay.Completion } else { 0 }
-            $barColor = if ($pct -ge 95) { $colors.Green } elseif ($rv.Style -eq 'stalled') { $colors.Red } else { '#336699' }
-            [void]$sb.AppendLine("<td><div class='bar-track'><div class='bar-fill' style='width:${pct}%;background:$barColor;'></div><span class='bar-label'>${pct}%</span></div></td>")
-        }
-        [void]$sb.AppendLine("</tr>")
-    }
-    [void]$sb.AppendLine("</tbody></table></div>")
-}
-
-# ===== STYLE B: Stacked Progress Bars (CSS) =====
-if ($dayCount -ge 2) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style B</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Decision Distribution -- Day-by-Day Stacked Bars</div>")
-    [void]$sb.AppendLine("<p class='note'>Green=Approved, Red=Revoked, Gray=Pending. The width of each segment shows the proportion of total items.</p>")
-
-    [void]$sb.AppendLine("<table><thead><tr><th style='width:100px;'>Day</th><th>Decision Distribution</th><th style='width:70px;text-align:right;'>Completion</th></tr></thead><tbody>")
-    foreach ($d in $dailyData) {
-        $aPct = [math]::Round($d.Approved / [math]::Max(1, $d.Total) * 100, 0)
-        $rPct = [math]::Round($d.Revoked / [math]::Max(1, $d.Total) * 100, 0)
-        $pPct = 100 - $aPct - $rPct
-        if ($pPct -lt 0) { $pPct = 0 }
-        [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$($d.DayLabel)</td>")
-        [void]$sb.AppendLine("<td><div class='stacked-bar'>")
-        if ($aPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${aPct}%;background:$($colors.Green);'>$(if($aPct -ge 8){"${aPct}%"})</div>") }
-        if ($rPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${rPct}%;background:$($colors.Red);'>$(if($rPct -ge 8){"${rPct}%"})</div>") }
-        if ($pPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${pPct}%;background:#ccc;color:#555;'>$(if($pPct -ge 8){"${pPct}%"})</div>") }
-        [void]$sb.AppendLine("</div></td>")
-        [void]$sb.AppendLine("<td style='text-align:right;font-weight:600;'>$($d.CompletionPct)%</td></tr>")
-    }
-    [void]$sb.AppendLine("</tbody></table></div>")
-}
-
-# ===== STYLE B2: Vertical Bar Chart -- Items Reviewed % + Reviewer Completion % =====
-if ($dayCount -ge 2) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style B2</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Completion Progression -- Vertical Bar Chart (Items Reviewed % + Reviewer Completion %)</div>")
-    [void]$sb.AppendLine("<p class='note'>Blue bars show the percentage of items reviewed (decided). Green bars show the percentage of reviewers who have fully completed. Height is proportional to 100%.</p>")
-
-    $chartWidth = 700
-    $chartHeight = 200
-    $groupWidth = [int][math]::Floor(($chartWidth - 40) / $dayCount)
-    $barWidth = [int][math]::Floor($groupWidth * 0.35)
-    $gap = [int][math]::Floor($groupWidth * 0.08)
-    $leftPad = 40
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-    [void]$sb.AppendLine("<svg width='$chartWidth' height='$($chartHeight + 60)' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    for ($pct = 0; $pct -le 100; $pct += 25) {
-        $y = [int]($chartHeight - ($pct / 100 * $chartHeight) + 10)
-        [void]$sb.AppendLine("<line x1='$leftPad' y1='$y' x2='$chartWidth' y2='$y' stroke='#e3e9f0' stroke-width='1'/>")
-        [void]$sb.AppendLine("<text x='$($leftPad - 5)' y='$($y + 4)' text-anchor='end' font-size='10' fill='#888'>${pct}%</text>")
-    }
-
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $d = $dailyData[$i]
-        $xBase = $leftPad + ($i * $groupWidth) + $gap
-
-        $itemsPct = $d.CompletionPct
-        $itemsH = [int][math]::Max(2, [math]::Round($itemsPct / 100 * $chartHeight))
-        $itemsY = $chartHeight - $itemsH + 10
-        $itemsOpacity = [math]::Round(0.5 + (0.5 * $i / [math]::Max(1, $dayCount - 1)), 2)
-        [void]$sb.AppendLine("<rect x='$xBase' y='$itemsY' width='$barWidth' height='$itemsH' fill='#336699' opacity='$itemsOpacity' rx='2'/>")
-        if ($itemsH -gt 15) {
-            [void]$sb.AppendLine("<text x='$($xBase + [int]($barWidth/2))' y='$($itemsY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='#336699'>$($itemsPct)%</text>")
-        }
-
-        $rvCompleted = @($d.Reviewers | Where-Object { $_.Completion -ge 100 }).Count
-        $rvTotal = $d.Reviewers.Count
-        $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvCompleted / $rvTotal * 100, 0) } else { 0 }
-        $rvH = [int][math]::Max(2, [math]::Round($rvPct / 100 * $chartHeight))
-        $rvY = $chartHeight - $rvH + 10
-        $rvX = $xBase + $barWidth + $gap
-        [void]$sb.AppendLine("<rect x='$rvX' y='$rvY' width='$barWidth' height='$rvH' fill='$($colors.Green)' opacity='$itemsOpacity' rx='2'/>")
-        if ($rvH -gt 15) {
-            [void]$sb.AppendLine("<text x='$($rvX + [int]($barWidth/2))' y='$($rvY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='$($colors.Green)'>$($rvPct)%</text>")
-        }
-
-        $labelX = $xBase + $barWidth + [int]($gap / 2)
-        $labelY = $chartHeight + 25
-        [void]$sb.AppendLine("<text x='$labelX' y='$labelY' text-anchor='middle' font-size='10' fill='#566'>$($d.DayLabel)</text>")
-    }
-
-    $legendY = $chartHeight + 45
-    [void]$sb.AppendLine("<rect x='$($leftPad + 20)' y='$legendY' width='12' height='12' fill='#336699' rx='2'/>")
-    [void]$sb.AppendLine("<text x='$($leftPad + 37)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Items Reviewed %</text>")
-    [void]$sb.AppendLine("<rect x='$($leftPad + 170)' y='$legendY' width='12' height='12' fill='$($colors.Green)' rx='2'/>")
-    [void]$sb.AppendLine("<text x='$($leftPad + 187)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Reviewers Completed %</text>")
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-# ===== STYLE C: Sparkline Mini-Charts (SVG) =====
-[void]$sb.AppendLine("<div class='section'>")
-[void]$sb.AppendLine("<span class='style-label'>Style C</span>")
-[void]$sb.AppendLine("<div class='section-title'>Metric Trends -- Compact Sparklines</div>")
-[void]$sb.AppendLine("<p class='note'>${dayCount}-day sparklines for key metrics. Each bar represents one day; height is proportional to the value. The latest day is fully opaque.</p>")
-
-function Build-Sparkline {
-    param([double[]]$Values, [string]$Color = '#1f3a5f', [int]$Width = 140, [int]$Height = 28)
-    if ($Values.Count -eq 0) { return "<svg width='$Width' height='$Height'></svg>" }
-    $max = ($Values | Measure-Object -Maximum).Maximum
-    if ($max -eq 0) { $max = 1 }
-    $barW = [int][math]::Floor(($Width - ($Values.Count - 1) * 2) / [math]::Max(1, $Values.Count))
-    $svgParts = "<svg width='$Width' height='$Height' style='vertical-align:middle;'>"
-    for ($i = 0; $i -lt $Values.Count; $i++) {
-        $h = [math]::Max(2, [int][math]::Round($Values[$i] / $max * ($Height - 2)))
-        $x = $i * ($barW + 2)
-        $y = $Height - $h
-        $opacity = [math]::Round(0.3 + (0.7 * $i / [math]::Max(1, $Values.Count - 1)), 2)
-        $svgParts += "<rect x='$x' y='$y' width='$barW' height='$h' fill='$Color' opacity='$opacity'/>"
-    }
-    $svgParts += "</svg>"
-    return $svgParts
-}
-
-$metrics = @(
-    @{ Label = 'Overall Completion %'; Values = @($dailyData | ForEach-Object { $_.CompletionPct }); Color = '#336699' }
-    @{ Label = 'Approved Items';       Values = @($dailyData | ForEach-Object { $_.Approved });      Color = $colors.Green }
-    @{ Label = 'Revoked Items';        Values = @($dailyData | ForEach-Object { $_.Revoked });       Color = $colors.Red }
-    @{ Label = 'Pending Items';        Values = @($dailyData | ForEach-Object { $_.Pending });       Color = $colors.Amber }
-    @{ Label = 'Scope Added';          Values = @($dailyData | ForEach-Object { $_.ScopeAdded });    Color = '#336699' }
-    @{ Label = 'Scope Removed';        Values = @($dailyData | ForEach-Object { $_.ScopeRemoved });  Color = $colors.Gray }
-)
-
-[void]$sb.AppendLine("<table><thead><tr><th style='width:180px;'>Metric</th><th style='width:160px;'>${dayCount}-Day Trend</th><th style='width:80px;text-align:right;'>Current</th><th style='width:80px;text-align:right;'>First</th><th style='width:80px;text-align:right;'>Change</th></tr></thead><tbody>")
-foreach ($m in $metrics) {
-    $current = $m.Values[$m.Values.Count - 1]
-    $prior   = $m.Values[0]
-    $delta   = [math]::Round($current - $prior, 1)
-    $dClass  = if ($delta -gt 0) { 'delta-up' } elseif ($delta -lt 0) { 'delta-down' } else { 'delta-flat' }
-    $dSign   = if ($delta -gt 0) { '+' } else { '' }
-    $spark   = Build-Sparkline -Values $m.Values -Color $m.Color
-    [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $m.Label)</td><td>$spark</td><td style='text-align:right;'>$current</td><td style='text-align:right;color:#888;'>$prior</td><td style='text-align:right;' class='$dClass'>${dSign}$delta</td></tr>")
-}
-[void]$sb.AppendLine("</tbody></table></div>")
-
-# ===== STYLE D: Table with Delta Arrows =====
-if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style D</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Per-Reviewer Accountability -- Numeric Comparison with Direction</div>")
-    [void]$sb.AppendLine("<p class='note'>Shows each reviewer's completion today vs first capture, with direction arrows. Stalled reviewers (zero change) are highlighted.</p>")
-
-    [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th></tr></thead><tbody>")
-    $rvIdx = 0
-    foreach ($rv in $reviewers) {
-        $todayRv = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-        $yestRv  = $dailyData[$dayCount - 2].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-        $weekRv  = $dailyData[0].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-
-        $todayPct = if ($todayRv) { $todayRv.Completion } else { 0 }
-        $yestPct  = if ($yestRv) { $yestRv.Completion } else { 0 }
-        $weekPct  = if ($weekRv) { $weekRv.Completion } else { 0 }
-
-        $delta7 = [math]::Round($todayPct - $weekPct, 1)
-        $arrow = if ($delta7 -gt 2) { "<span class='up-arrow'></span>" } elseif ($delta7 -lt -2) { "<span class='down-arrow'></span>" } else { "<span class='flat-line'></span>" }
-        $dClass = if ($delta7 -gt 2) { 'delta-up' } elseif ($delta7 -lt -2) { 'delta-down' } else { 'delta-flat' }
-        $dSign = if ($delta7 -gt 0) { '+' } else { '' }
-
-        $status = if ($todayPct -ge 100) { "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
-                  elseif ($delta7 -lt 1 -and $todayPct -lt 95) { "<span style='color:$($colors.Red);font-weight:600;'>STALLED</span>" }
-                  elseif ($delta7 -lt 5) { "<span style='color:$($colors.Amber);'>Slow</span>" }
-                  else { "<span style='color:$($colors.Green);'>On Track</span>" }
-
-        $bg = if ($delta7 -lt 1 -and $todayPct -lt 95) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
-        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${weekPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$status</td></tr>")
-        $rvIdx++
-    }
-    [void]$sb.AppendLine("</tbody></table></div>")
-}
-
-# ===== STYLE E: Privileged Access Exposure Gauge =====
-[void]$sb.AppendLine("<div class='section'>")
-[void]$sb.AppendLine("<span class='style-label'>Style E</span>")
-[void]$sb.AppendLine("<div class='section-title'>Privileged Access Exposure Gauge</div>")
-[void]$sb.AppendLine("<p class='note'>Semicircular gauge showing percentage of pending items that are privileged. Zones: 0-10% green, 10-25% amber, 25%+ red. Below: sparkline of privileged pending count.</p>")
-
-$todayPrivPending = $today.PrivPending
-$todayPending = [math]::Max(1, $today.Pending)
-$privExposurePct = [math]::Round($todayPrivPending / $todayPending * 100, 1)
-$gaugeColor = if ($privExposurePct -lt 10) { $colors.Green } elseif ($privExposurePct -lt 25) { $colors.Amber } else { $colors.Red }
-
-$gaugeW = 300; $gaugeH = 180; $cx = 150; $cy = 150; $r = 120
-$angleRad = [math]::PI - ($privExposurePct / 100 * [math]::PI)
-$needleX = [int]($cx + $r * [math]::Cos($angleRad))
-$needleY = [int]($cy - $r * [math]::Abs([math]::Sin($angleRad)))
-
-[void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-[void]$sb.AppendLine("<svg width='$gaugeW' height='$gaugeH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-$zones = @(
-    @{ StartPct = 0;  EndPct = 10;  Color = $colors.Green }
-    @{ StartPct = 10; EndPct = 25;  Color = $colors.Amber }
-    @{ StartPct = 25; EndPct = 100; Color = $colors.Red }
-)
-foreach ($z in $zones) {
-    $a1 = [math]::PI - ($z.StartPct / 100 * [math]::PI)
-    $a2 = [math]::PI - ($z.EndPct / 100 * [math]::PI)
-    $x1 = [math]::Round($cx + $r * [math]::Cos($a1), 1)
-    $y1 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a1)), 1)
-    $x2 = [math]::Round($cx + $r * [math]::Cos($a2), 1)
-    $y2 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a2)), 1)
-    $largeArc = if (($z.EndPct - $z.StartPct) -gt 50) { 1 } else { 0 }
-    [void]$sb.AppendLine("<path d='M $x1 $y1 A $r $r 0 $largeArc 1 $x2 $y2' stroke='$($z.Color)' stroke-width='24' fill='none' opacity='0.25'/>")
-}
-
-$valAngle = [math]::PI - ($privExposurePct / 100 * [math]::PI)
-$vx = [math]::Round($cx + $r * [math]::Cos($valAngle), 1)
-$vy = [math]::Round($cy - [math]::Abs($r * [math]::Sin($valAngle)), 1)
-$startX = [math]::Round($cx - $r, 1); $startY = $cy
-$valLargeArc = if ($privExposurePct -gt 50) { 1 } else { 0 }
-[void]$sb.AppendLine("<path d='M $startX $startY A $r $r 0 $valLargeArc 1 $vx $vy' stroke='$gaugeColor' stroke-width='24' fill='none' stroke-linecap='round'/>")
-
-[void]$sb.AppendLine("<line x1='$cx' y1='$cy' x2='$needleX' y2='$needleY' stroke='#1c2b3a' stroke-width='3' stroke-linecap='round'/>")
-[void]$sb.AppendLine("<circle cx='$cx' cy='$cy' r='6' fill='#1c2b3a'/>")
-
-[void]$sb.AppendLine("<text x='$cx' y='$($cy - 30)' text-anchor='middle' font-size='28' font-weight='700' fill='$gaugeColor'>$todayPrivPending</text>")
-[void]$sb.AppendLine("<text x='$cx' y='$($cy - 12)' text-anchor='middle' font-size='11' fill='#566'>privileged pending</text>")
-[void]$sb.AppendLine("<text x='$cx' y='$($cy + 5)' text-anchor='middle' font-size='13' font-weight='600' fill='$gaugeColor'>${privExposurePct}% exposure</text>")
-
-[void]$sb.AppendLine("<text x='$($cx - $r - 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Green)'>0%</text>")
-[void]$sb.AppendLine("<text x='$($cx + $r + 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Red)'>100%</text>")
-[void]$sb.AppendLine("</svg>")
-
-$privValues = @($dailyData | ForEach-Object { [double]$_.PrivPending })
-$privSparkline = Build-Sparkline -Values $privValues -Color $gaugeColor -Width 200 -Height 30
-[void]$sb.AppendLine("<div style='margin-top:8px;'>")
-[void]$sb.AppendLine("<span style='font-size:11px;color:#566;margin-right:8px;'>${dayCount}-Day Privileged Pending:</span>$privSparkline")
-[void]$sb.AppendLine("</div>")
-[void]$sb.AppendLine("</div></div>")
-
-
-# ===== STYLE F: Scope Drift Monitor =====
-if ($dayCount -ge 2) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style F</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Scope Drift Monitor -- Decisions vs Scope Growth</div>")
-    [void]$sb.AppendLine("<p class='note'>Overlays cumulative decisions made against cumulative scope growth. If scope grows faster than decisions, the gap is highlighted in red.</p>")
-
-    $cumDecisions = @(); $cumScope = @()
-    $runDecisions = 0; $runScope = 0
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $d = $dailyData[$i]
-        if ($i -gt 0) {
-            $prevD = $dailyData[$i - 1]
-            $dailyDecided = ($d.Approved + $d.Revoked) - ($prevD.Approved + $prevD.Revoked)
-            if ($dailyDecided -lt 0) { $dailyDecided = 0 }
-            $runDecisions += $dailyDecided
-            $runScope += ($d.ScopeAdded - $d.ScopeRemoved)
-        }
-        $cumDecisions += $runDecisions
-        $cumScope += $runScope
-    }
-
-    $fW = 640; $fH = 200; $fPadL = 50; $fPadR = 20; $fPadT = 10; $fPadB = 40
-    $fPlotW = $fW - $fPadL - $fPadR; $fPlotH = $fH - $fPadT - $fPadB
-    $allVals = $cumDecisions + $cumScope
-    $fMax = [math]::Max(1, ($allVals | Measure-Object -Maximum).Maximum)
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-    [void]$sb.AppendLine("<svg width='$fW' height='$fH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    for ($g = 0; $g -le 4; $g++) {
-        $gVal = [int]($fMax * $g / 4)
-        $gy = [int]($fPadT + $fPlotH - ($g / 4 * $fPlotH))
-        [void]$sb.AppendLine("<line x1='$fPadL' y1='$gy' x2='$($fW - $fPadR)' y2='$gy' stroke='#e3e9f0' stroke-width='1'/>")
-        [void]$sb.AppendLine("<text x='$($fPadL - 5)' y='$($gy + 4)' text-anchor='end' font-size='9' fill='#888'>$gVal</text>")
-    }
-
-    $decPts = @(); $scopePts = @()
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $px = [int]($fPadL + ($i / [math]::Max(1, $dayCount - 1)) * $fPlotW)
-        $decY = [int]($fPadT + $fPlotH - ($cumDecisions[$i] / $fMax * $fPlotH))
-        $scopeY = [int]($fPadT + $fPlotH - ($cumScope[$i] / $fMax * $fPlotH))
-        $decPts += "$px,$decY"
-        $scopePts += "$px,$scopeY"
-    }
-
-    $gapFill = "M $($scopePts[0] -replace ',',' ')"
-    for ($i = 1; $i -lt $scopePts.Count; $i++) { $gapFill += " L $($scopePts[$i] -replace ',',' ')" }
-    for ($i = $decPts.Count - 1; $i -ge 0; $i--) { $gapFill += " L $($decPts[$i] -replace ',',' ')" }
-    $gapFill += " Z"
-    [void]$sb.AppendLine("<path d='$gapFill' fill='$($colors.Red)' opacity='0.1'/>")
-
-    $decArea = "M $fPadL $($fPadT + $fPlotH)"
-    for ($i = 0; $i -lt $decPts.Count; $i++) { $decArea += " L $($decPts[$i] -replace ',',' ')" }
-    $decArea += " L $($fW - $fPadR) $($fPadT + $fPlotH) Z"
-    [void]$sb.AppendLine("<path d='$decArea' fill='$($colors.Green)' opacity='0.12'/>")
-    [void]$sb.AppendLine("<polyline points='$($decPts -join ' ')' stroke='$($colors.Green)' stroke-width='2.5' fill='none'/>")
-
-    $scopeArea = "M $fPadL $($fPadT + $fPlotH)"
-    for ($i = 0; $i -lt $scopePts.Count; $i++) { $scopeArea += " L $($scopePts[$i] -replace ',',' ')" }
-    $scopeArea += " L $($fW - $fPadR) $($fPadT + $fPlotH) Z"
-    [void]$sb.AppendLine("<path d='$scopeArea' fill='$($colors.Amber)' opacity='0.1'/>")
-    [void]$sb.AppendLine("<polyline points='$($scopePts -join ' ')' stroke='$($colors.Amber)' stroke-width='2.5' fill='none' stroke-dasharray='6,3'/>")
-
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $parts = $decPts[$i] -split ','
-        [void]$sb.AppendLine("<circle cx='$($parts[0])' cy='$($parts[1])' r='3' fill='$($colors.Green)'/>")
-        $parts2 = $scopePts[$i] -split ','
-        [void]$sb.AppendLine("<circle cx='$($parts2[0])' cy='$($parts2[1])' r='3' fill='$($colors.Amber)'/>")
-    }
-
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $lx = [int]($fPadL + ($i / [math]::Max(1, $dayCount - 1)) * $fPlotW)
-        [void]$sb.AppendLine("<text x='$lx' y='$($fH - 5)' text-anchor='middle' font-size='9' fill='#566'>$($dailyData[$i].DayLabel)</text>")
-    }
-
-    [void]$sb.AppendLine("<line x1='$($fPadL + 10)' y1='$($fPadT + 3)' x2='$($fPadL + 30)' y2='$($fPadT + 3)' stroke='$($colors.Green)' stroke-width='2.5'/>")
-    [void]$sb.AppendLine("<text x='$($fPadL + 34)' y='$($fPadT + 7)' font-size='10' fill='#1c2b3a'>Cumulative Decisions</text>")
-    [void]$sb.AppendLine("<line x1='$($fPadL + 180)' y1='$($fPadT + 3)' x2='$($fPadL + 200)' y2='$($fPadT + 3)' stroke='$($colors.Amber)' stroke-width='2.5' stroke-dasharray='6,3'/>")
-    [void]$sb.AppendLine("<text x='$($fPadL + 204)' y='$($fPadT + 7)' font-size='10' fill='#1c2b3a'>Cumulative Scope Drift</text>")
-
-    $finalDec = $cumDecisions[$cumDecisions.Count - 1]
-    $finalScope = $cumScope[$cumScope.Count - 1]
-    $driftStatus = if ($finalScope -gt $finalDec) { 'SCOPE OUTPACING DECISIONS' } else { 'Decisions keeping pace' }
-    $driftColor = if ($finalScope -gt $finalDec) { $colors.Red } else { $colors.Green }
-    [void]$sb.AppendLine("<text x='$($fW - $fPadR)' y='$($fPadT + 20)' text-anchor='end' font-size='10' font-weight='600' fill='$driftColor'>$driftStatus</text>")
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-
-# ===== STYLE G: Rubber-Stamp Risk Detector =====
-if ($reviewers.Count -gt 0 -and $today.Reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style G</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Rubber-Stamp Risk Detector -- Approval Ratio Analysis</div>")
-    [void]$sb.AppendLine("<p class='note'>Horizontal lollipop chart per reviewer. Dot position = approval ratio (Approved / Decided * 100). Circle size = items decided. Dashed threshold at 95%.</p>")
-
-    $todayReviewers = $today.Reviewers
-    $gW = 700; $gH = 30 + ($todayReviewers.Count * 40); $gPadL = 120; $gPadR = 120; $gPlotW = $gW - $gPadL - $gPadR
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-    [void]$sb.AppendLine("<svg width='$gW' height='$gH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    [void]$sb.AppendLine("<text x='$($gPadL + $gPlotW / 2)' y='14' text-anchor='middle' font-size='10' fill='#888'>Approval Ratio (%)</text>")
-
-    $scaleVals = @(0, 25, 50, 75, 95, 100)
-    foreach ($sv in $scaleVals) {
-        $sx = [int]($gPadL + ($sv / 100 * $gPlotW))
-        [void]$sb.AppendLine("<line x1='$sx' y1='20' x2='$sx' y2='$($gH - 5)' stroke='#e3e9f0' stroke-width='1'/>")
-        [void]$sb.AppendLine("<text x='$sx' y='28' text-anchor='middle' font-size='8' fill='#aaa'>${sv}%</text>")
-    }
-
-    $thresh95x = [int]($gPadL + (95 / 100 * $gPlotW))
-    [void]$sb.AppendLine("<line x1='$thresh95x' y1='20' x2='$thresh95x' y2='$($gH - 5)' stroke='$($colors.Red)' stroke-width='1.5' stroke-dasharray='5,3'/>")
-    [void]$sb.AppendLine("<text x='$($thresh95x + 3)' y='28' font-size='8' fill='$($colors.Red)'>95% threshold</text>")
-
-    $ri = 0
-    foreach ($rv in $todayReviewers) {
-        $decided = $rv.Approved + $rv.Revoked
-        $approvalRatio = if ($decided -gt 0) { [math]::Round($rv.Approved / $decided * 100, 1) } else { 0 }
-        $yPos = 38 + ($ri * 40)
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
-
-        [void]$sb.AppendLine("<text x='$($gPadL - 8)' y='$($yPos + 5)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
-
-        $dotX = [int]($gPadL + ($approvalRatio / 100 * $gPlotW))
-        [void]$sb.AppendLine("<line x1='$gPadL' y1='$yPos' x2='$dotX' y2='$yPos' stroke='#ccc' stroke-width='2'/>")
-
-        $dotR = [math]::Max(6, [math]::Min(16, [int]($decided / 2)))
-        $dotColor = if ($approvalRatio -ge 100) { $colors.Red } elseif ($approvalRatio -ge 95) { $colors.Amber } else { $colors.Green }
-        [void]$sb.AppendLine("<circle cx='$dotX' cy='$yPos' r='$dotR' fill='$dotColor' opacity='0.85'/>")
-        [void]$sb.AppendLine("<text x='$dotX' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>$decided</text>")
-
-        $badgeX = $gW - $gPadR + 10
-        if ($decided -eq 0) {
-            [void]$sb.AppendLine("<text x='$badgeX' y='$($yPos + 4)' font-size='9' fill='#888'>NO DECISIONS</text>")
-        } elseif ($approvalRatio -ge 100) {
-            [void]$sb.AppendLine("<rect x='$badgeX' y='$($yPos - 8)' width='90' height='16' rx='8' fill='$($colors.Red)'/>")
-            [void]$sb.AppendLine("<text x='$($badgeX + 45)' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>RUBBER STAMP</text>")
-        } elseif ($approvalRatio -ge 95) {
-            [void]$sb.AppendLine("<rect x='$badgeX' y='$($yPos - 8)' width='62' height='16' rx='8' fill='$($colors.Amber)'/>")
-            [void]$sb.AppendLine("<text x='$($badgeX + 31)' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>WARNING</text>")
-        } else {
-            [void]$sb.AppendLine("<text x='$badgeX' y='$($yPos + 4)' font-size='9' fill='$($colors.Green)'>$($approvalRatio)%</text>")
-        }
-        $ri++
-    }
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-
-# ===== STYLE H: Reviewer Activity Heatmap =====
-if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style H</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Reviewer Activity Heatmap -- ${dayCount}-Day Decision Intensity</div>")
-    [void]$sb.AppendLine("<p class='note'>Rows = reviewers, Columns = days. Cell color intensity = decisions made that day (daily delta). Five-level blue scale. Inactive reviewers highlighted in light red.</p>")
-
-    $hCellW = [math]::Min(70, [int](560 / [math]::Max(1, $dayCount)))
-    $hCellH = 32; $hLabelW = 120
-    $hTotalW = $hLabelW + ($dayCount * $hCellW) + 10
-    $hTotalH = 30 + ($reviewers.Count * $hCellH) + 5
-    $heatColors = @('#f0f2f5', '#c6dbef', '#6baed6', '#2171b5', '#084594')
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;overflow-x:auto;'>")
-    [void]$sb.AppendLine("<svg width='$hTotalW' height='$hTotalH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $hx = $hLabelW + ($i * $hCellW) + ($hCellW / 2)
-        [void]$sb.AppendLine("<text x='$hx' y='16' text-anchor='middle' font-size='9' font-weight='600' fill='#566'>$($dailyData[$i].DayLabel)</text>")
-    }
-
-    $rvIdx = 0
-    foreach ($rv in $reviewers) {
-        $hy = 24 + ($rvIdx * $hCellH)
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
-        $totalActivity = 0
-
-        $deltas = @()
-        for ($i = 0; $i -lt $dayCount; $i++) {
-            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $todayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
-            if ($i -gt 0) {
-                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
-                $delta = [math]::Max(0, $todayDec - $prevDec)
-            } else {
-                $delta = $todayDec
-            }
-            $deltas += $delta
-            $totalActivity += $delta
-        }
-
-        if ($totalActivity -eq 0) {
-            [void]$sb.AppendLine("<rect x='0' y='$hy' width='$hTotalW' height='$hCellH' fill='#fdecec' opacity='0.5'/>")
-        }
-
-        [void]$sb.AppendLine("<text x='$($hLabelW - 8)' y='$($hy + $hCellH / 2 + 4)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
-
-        $maxDelta = ($deltas | Measure-Object -Maximum).Maximum
-        if ($maxDelta -eq 0) { $maxDelta = 1 }
-        for ($i = 0; $i -lt $deltas.Count; $i++) {
-            $hcx = $hLabelW + ($i * $hCellW)
-            $val = $deltas[$i]
-            $level = [math]::Min(4, [int][math]::Floor($val / $maxDelta * 4.99))
-            if ($val -eq 0) { $level = 0 }
-            $cellColor = $heatColors[$level]
-            [void]$sb.AppendLine("<rect x='$($hcx + 2)' y='$($hy + 2)' width='$($hCellW - 4)' height='$($hCellH - 4)' rx='3' fill='$cellColor' stroke='#e3e9f0' stroke-width='1'/>")
-            if ($val -gt 0) {
-                $textColor = if ($level -ge 3) { '#fff' } else { '#1c2b3a' }
-                [void]$sb.AppendLine("<text x='$($hcx + $hCellW / 2)' y='$($hy + $hCellH / 2 + 4)' text-anchor='middle' font-size='10' font-weight='600' fill='$textColor'>$val</text>")
-            }
-        }
-        $rvIdx++
-    }
-
-    $legY = $hTotalH - 2
-    [void]$sb.AppendLine("<text x='$hLabelW' y='$($legY)' font-size='9' fill='#888'>Intensity:</text>")
-    for ($lv = 0; $lv -lt 5; $lv++) {
-        $lx = $hLabelW + 55 + ($lv * 22)
-        [void]$sb.AppendLine("<rect x='$lx' y='$($legY - 10)' width='18' height='12' rx='2' fill='$($heatColors[$lv])' stroke='#d4dce6' stroke-width='0.5'/>")
-    }
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-
-# ===== STYLE I: Workload Distribution Treemap =====
-if ($today.Reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style I</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Workload Distribution Treemap -- Reviewer Item Volume</div>")
-    [void]$sb.AppendLine("<p class='note'>Each rectangle = a reviewer, area proportional to their total items. Color by completion: green >=90%, amber 50-89%, red &lt;50%.</p>")
-
-    $iW = 700; $iH = 200
-    $todayRvs = @($today.Reviewers | Sort-Object { -$_.Total })
-    $totalAllItems = ($todayRvs | Measure-Object -Property Total -Sum).Sum
-    if ($totalAllItems -eq 0) { $totalAllItems = 1 }
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-    [void]$sb.AppendLine("<svg width='$iW' height='$iH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    $xPos = 0; $yPos = 0; $rowH = $iH
-    foreach ($rv in $todayRvs) {
-        $fraction = $rv.Total / $totalAllItems
-        $rectW = [int][math]::Max(40, [math]::Round($fraction * $iW))
-        if ($xPos + $rectW -gt $iW) { $rectW = $iW - $xPos }
-        if ($rectW -le 0) { continue }
-
-        $tmColor = if ($rv.Completion -ge 90) { $colors.Green } elseif ($rv.Completion -ge 50) { $colors.Amber } else { $colors.Red }
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
-
-        [void]$sb.AppendLine("<rect x='$xPos' y='$yPos' width='$rectW' height='$rowH' fill='$tmColor' opacity='0.2' stroke='#fff' stroke-width='2'/>")
-        [void]$sb.AppendLine("<rect x='$xPos' y='$yPos' width='$rectW' height='$rowH' fill='$tmColor' opacity='0.65' stroke='#fff' stroke-width='2' rx='4'/>")
-
-        $labelFontSize = if ($rectW -gt 100) { 12 } else { 10 }
-        $midX = $xPos + ($rectW / 2)
-        $midY = $yPos + ($rowH / 2)
-        [void]$sb.AppendLine("<text x='$midX' y='$($midY - 10)' text-anchor='middle' font-size='$labelFontSize' font-weight='700' fill='#fff'>$rvName</text>")
-        [void]$sb.AppendLine("<text x='$midX' y='$($midY + 8)' text-anchor='middle' font-size='11' fill='#fff'>$($rv.Total) items</text>")
-        [void]$sb.AppendLine("<text x='$midX' y='$($midY + 24)' text-anchor='middle' font-size='10' fill='#fff'>$($rv.Completion)%</text>")
-
-        $xPos += $rectW
-    }
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-
 # ===== STYLE J: Completion Projection vs Deadline =====
 if ($dayCount -ge 3) {
     [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style J</span>")
+
     [void]$sb.AppendLine("<div class='section-title'>Completion Projection vs Deadline</div>")
     [void]$sb.AppendLine("<p class='note'>Solid line = actual completion %. Dashed = linear projection from last 3 days velocity. Vertical red line = deadline. Green fill if on track, red if shortfall projected.</p>")
 
@@ -1445,7 +947,8 @@ if ($dayCount -ge 3) {
     $projRounded = [math]::Round($projAtDeadline, 1)
     $calloutText = if ($hitsTarget) { "ON TRACK: projected $($projRounded)% at deadline" } else { "AT RISK: projected only $($projRounded)% at deadline (velocity: $([math]::Round($vel3,1))%/day)" }
     $calloutColor = if ($hitsTarget) { $colors.Green } else { $colors.Red }
-    [void]$sb.AppendLine("<text x='$($jW - $jPadR)' y='$($jH - 8)' text-anchor='end' font-size='10' font-weight='600' fill='$calloutColor'>$calloutText</text>")
+    # Place callout at top-right of chart to avoid overlap with projection labels
+    [void]$sb.AppendLine("<text x='$($jW - $jPadR)' y='$($jPadT + 14)' text-anchor='end' font-size='10' font-weight='600' fill='$calloutColor'>$calloutText</text>")
 
     [void]$sb.AppendLine("<line x1='$($jPadL + 5)' y1='$($jPadT + 5)' x2='$($jPadL + 25)' y2='$($jPadT + 5)' stroke='#336699' stroke-width='2.5'/>")
     [void]$sb.AppendLine("<text x='$($jPadL + 29)' y='$($jPadT + 9)' font-size='9' fill='#1c2b3a'>Actual</text>")
@@ -1457,10 +960,591 @@ if ($dayCount -ge 3) {
 }
 
 
+# ===== STYLE C: Sparkline Mini-Charts (SVG) =====
+[void]$sb.AppendLine("<div class='section'>")
+
+[void]$sb.AppendLine("<div class='section-title'>Metric Trends -- Compact Sparklines</div>")
+[void]$sb.AppendLine("<p class='note'>${dayCount}-day sparklines for key metrics. Each bar represents one day; height is proportional to the value. The latest day is fully opaque.</p>")
+
+function Build-Sparkline {
+    param([double[]]$Values, [string]$Color = '#1f3a5f', [int]$Width = 140, [int]$Height = 28)
+    if ($Values.Count -eq 0) { return "<svg width='$Width' height='$Height'></svg>" }
+    $max = ($Values | Measure-Object -Maximum).Maximum
+    if ($max -eq 0) { $max = 1 }
+    $barW = [int][math]::Floor(($Width - ($Values.Count - 1) * 2) / [math]::Max(1, $Values.Count))
+    $svgParts = "<svg width='$Width' height='$Height' style='vertical-align:middle;'>"
+    for ($i = 0; $i -lt $Values.Count; $i++) {
+        $h = [math]::Max(2, [int][math]::Round($Values[$i] / $max * ($Height - 2)))
+        $x = $i * ($barW + 2)
+        $y = $Height - $h
+        $opacity = [math]::Round(0.3 + (0.7 * $i / [math]::Max(1, $Values.Count - 1)), 2)
+        $svgParts += "<rect x='$x' y='$y' width='$barW' height='$h' fill='$Color' opacity='$opacity'/>"
+    }
+    $svgParts += "</svg>"
+    return $svgParts
+}
+
+$metrics = @(
+    @{ Label = 'Overall Completion %'; Values = @($dailyData | ForEach-Object { $_.CompletionPct }); Color = '#336699'; HighIsGood = $true }
+    @{ Label = 'Approved Items';       Values = @($dailyData | ForEach-Object { $_.Approved });      Color = $colors.Green; HighIsGood = $true }
+    @{ Label = 'Revoked Items';        Values = @($dailyData | ForEach-Object { $_.Revoked });       Color = $colors.Red; HighIsGood = $false }
+    @{ Label = 'Pending Items';        Values = @($dailyData | ForEach-Object { $_.Pending });       Color = $colors.Amber; HighIsGood = $false }
+    @{ Label = 'Scope Added';          Values = @($dailyData | ForEach-Object { $_.ScopeAdded });    Color = '#336699'; HighIsGood = $false }
+    @{ Label = 'Scope Removed';        Values = @($dailyData | ForEach-Object { $_.ScopeRemoved });  Color = $colors.Gray; HighIsGood = $true }
+)
+
+[void]$sb.AppendLine("<table><thead><tr><th style='width:180px;'>Metric</th><th style='width:160px;'>${dayCount}-Day Trend</th><th style='width:80px;text-align:right;'>Current</th><th style='width:80px;text-align:right;'>First</th><th style='width:80px;text-align:right;'>Change</th></tr></thead><tbody>")
+foreach ($m in $metrics) {
+    $current = $m.Values[$m.Values.Count - 1]
+    $prior   = $m.Values[0]
+    $delta   = [math]::Round($current - $prior, 1)
+    $dClass  = if ($m.HighIsGood) {
+        if ($delta -gt 0) { 'delta-up' } elseif ($delta -lt 0) { 'delta-down' } else { 'delta-flat' }
+    } else {
+        if ($delta -gt 0) { 'delta-down' } elseif ($delta -lt 0) { 'delta-up' } else { 'delta-flat' }
+    }
+    $dSign   = if ($delta -gt 0) { '+' } else { '' }
+    $spark   = Build-Sparkline -Values $m.Values -Color $m.Color
+    [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $m.Label)</td><td>$spark</td><td style='text-align:right;'>$current</td><td style='text-align:right;color:#888;'>$prior</td><td style='text-align:right;' class='$dClass'>${dSign}$delta</td></tr>")
+}
+[void]$sb.AppendLine("</tbody></table></div>")
+
+# ===== STYLE D: Table with Delta Arrows =====
+if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Per-Reviewer Accountability -- Numeric Comparison with Direction</div>")
+    [void]$sb.AppendLine("<p class='note'>Shows each reviewer's completion today vs first capture, with direction arrows. Stalled reviewers (zero change) are highlighted.</p>")
+
+    [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th></tr></thead><tbody>")
+    $rvIdx = 0
+    foreach ($rv in $reviewers) {
+        $todayRv = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+        $yestRv  = $dailyData[$dayCount - 2].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+        $weekRv  = $dailyData[0].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+
+        $todayPct = if ($todayRv) { $todayRv.Completion } else { 0 }
+        $yestPct  = if ($yestRv) { $yestRv.Completion } else { 0 }
+        $weekPct  = if ($weekRv) { $weekRv.Completion } else { 0 }
+        $todayPct = [math]::Max(0, [math]::Min(100, $todayPct))
+        $yestPct  = [math]::Max(0, [math]::Min(100, $yestPct))
+        $weekPct  = [math]::Max(0, [math]::Min(100, $weekPct))
+
+        $delta7 = [math]::Round($todayPct - $weekPct, 1)
+        $arrow = if ($delta7 -gt 2) { "<span class='up-arrow'></span>" } elseif ($delta7 -lt -2) { "<span class='down-arrow'></span>" } else { "<span class='flat-line'></span>" }
+        $dClass = if ($delta7 -gt 2) { 'delta-up' } elseif ($delta7 -lt -2) { 'delta-down' } else { 'delta-flat' }
+        $dSign = if ($delta7 -gt 0) { '+' } else { '' }
+
+        $status = if ($todayPct -ge 100) { "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
+                  elseif ($delta7 -lt 1 -and $todayPct -lt 95) { "<span style='color:$($colors.Red);font-weight:600;'>STALLED</span>" }
+                  elseif ($delta7 -lt 5) { "<span style='color:$($colors.Amber);'>Slow</span>" }
+                  else { "<span style='color:$($colors.Green);'>On Track</span>" }
+
+        $bg = if ($delta7 -lt 1 -and $todayPct -lt 95) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
+        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${weekPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$status</td></tr>")
+        $rvIdx++
+    }
+    [void]$sb.AppendLine("</tbody></table></div>")
+}
+
+# ===== STYLE B: Stacked Progress Bars (CSS) =====
+if ($dayCount -ge 2) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Decision Distribution -- Day-by-Day Stacked Bars</div>")
+    [void]$sb.AppendLine("<p class='note'>Green=Approved, Red=Revoked, Gray=Pending. The width of each segment shows the proportion of total items.</p>")
+
+    [void]$sb.AppendLine("<table><thead><tr><th style='width:100px;'>Day</th><th>Decision Distribution</th><th style='width:70px;text-align:right;'>Completion</th></tr></thead><tbody>")
+    foreach ($d in $dailyData) {
+        $aPct = [math]::Round($d.Approved / [math]::Max(1, $d.Total) * 100, 0)
+        $rPct = [math]::Round($d.Revoked / [math]::Max(1, $d.Total) * 100, 0)
+        $pPct = 100 - $aPct - $rPct
+        if ($pPct -lt 0) { $pPct = 0 }
+        [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$($d.DayLabel)</td>")
+        [void]$sb.AppendLine("<td><div class='stacked-bar'>")
+        if ($aPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${aPct}%;background:$($colors.Green);'>$(if($aPct -ge 8){"${aPct}%"})</div>") }
+        if ($rPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${rPct}%;background:$($colors.Red);'>$(if($rPct -ge 8){"${rPct}%"})</div>") }
+        if ($pPct -gt 0) { [void]$sb.AppendLine("<div class='stacked-seg' style='width:${pPct}%;background:#ccc;color:#555;'>$(if($pPct -ge 8){"${pPct}%"})</div>") }
+        [void]$sb.AppendLine("</div></td>")
+        [void]$sb.AppendLine("<td style='text-align:right;font-weight:600;'>$($d.CompletionPct)%</td></tr>")
+    }
+    [void]$sb.AppendLine("</tbody></table></div>")
+}
+
+# ===== STYLE E: Privileged Access Exposure Gauge =====
+[void]$sb.AppendLine("<div class='section'>")
+
+[void]$sb.AppendLine("<div class='section-title'>Privileged Access Exposure Gauge</div>")
+[void]$sb.AppendLine("<p class='note'>Semicircular gauge showing percentage of pending items that are privileged. Zones: 0-10% green, 10-25% amber, 25%+ red. Below: sparkline of privileged pending count.</p>")
+
+$todayPrivPending = $today.PrivPending
+$todayPending = [math]::Max(1, $today.Pending)
+$privExposurePct = [math]::Round($todayPrivPending / $todayPending * 100, 1)
+$gaugeColor = if ($privExposurePct -lt 10) { $colors.Green } elseif ($privExposurePct -lt 25) { $colors.Amber } else { $colors.Red }
+
+$gaugeW = 300; $gaugeH = 180; $cx = 150; $cy = 150; $r = 120
+$angleRad = [math]::PI - ($privExposurePct / 100 * [math]::PI)
+$needleX = [int]($cx + $r * [math]::Cos($angleRad))
+$needleY = [int]($cy - $r * [math]::Abs([math]::Sin($angleRad)))
+
+[void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+[void]$sb.AppendLine("<svg width='$gaugeW' height='$gaugeH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+$zones = @(
+    @{ StartPct = 0;  EndPct = 10;  Color = $colors.Green }
+    @{ StartPct = 10; EndPct = 25;  Color = $colors.Amber }
+    @{ StartPct = 25; EndPct = 100; Color = $colors.Red }
+)
+foreach ($z in $zones) {
+    $a1 = [math]::PI - ($z.StartPct / 100 * [math]::PI)
+    $a2 = [math]::PI - ($z.EndPct / 100 * [math]::PI)
+    $x1 = [math]::Round($cx + $r * [math]::Cos($a1), 1)
+    $y1 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a1)), 1)
+    $x2 = [math]::Round($cx + $r * [math]::Cos($a2), 1)
+    $y2 = [math]::Round($cy - [math]::Abs($r * [math]::Sin($a2)), 1)
+    $largeArc = if (($z.EndPct - $z.StartPct) -gt 50) { 1 } else { 0 }
+    [void]$sb.AppendLine("<path d='M $x1 $y1 A $r $r 0 $largeArc 1 $x2 $y2' stroke='$($z.Color)' stroke-width='24' fill='none' opacity='0.25'/>")
+}
+
+$valAngle = [math]::PI - ($privExposurePct / 100 * [math]::PI)
+$vx = [math]::Round($cx + $r * [math]::Cos($valAngle), 1)
+$vy = [math]::Round($cy - [math]::Abs($r * [math]::Sin($valAngle)), 1)
+$startX = [math]::Round($cx - $r, 1); $startY = $cy
+$valLargeArc = if ($privExposurePct -gt 50) { 1 } else { 0 }
+[void]$sb.AppendLine("<path d='M $startX $startY A $r $r 0 $valLargeArc 1 $vx $vy' stroke='$gaugeColor' stroke-width='24' fill='none' stroke-linecap='round'/>")
+
+[void]$sb.AppendLine("<line x1='$cx' y1='$cy' x2='$needleX' y2='$needleY' stroke='#1c2b3a' stroke-width='3' stroke-linecap='round'/>")
+[void]$sb.AppendLine("<circle cx='$cx' cy='$cy' r='6' fill='#1c2b3a'/>")
+
+[void]$sb.AppendLine("<text x='$cx' y='$($cy - 30)' text-anchor='middle' font-size='28' font-weight='700' fill='$gaugeColor'>$todayPrivPending</text>")
+[void]$sb.AppendLine("<text x='$cx' y='$($cy - 12)' text-anchor='middle' font-size='11' fill='#566'>privileged pending</text>")
+[void]$sb.AppendLine("<text x='$cx' y='$($cy + 5)' text-anchor='middle' font-size='13' font-weight='600' fill='$gaugeColor'>${privExposurePct}% exposure</text>")
+
+[void]$sb.AppendLine("<text x='$($cx - $r - 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Green)'>0%</text>")
+[void]$sb.AppendLine("<text x='$($cx + $r + 5)' y='$($cy + 18)' text-anchor='middle' font-size='9' fill='$($colors.Red)'>100%</text>")
+[void]$sb.AppendLine("</svg>")
+
+$privValues = @($dailyData | ForEach-Object { [double]$_.PrivPending })
+$privSparkline = Build-Sparkline -Values $privValues -Color $gaugeColor -Width 200 -Height 30
+[void]$sb.AppendLine("<div style='margin-top:8px;'>")
+[void]$sb.AppendLine("<span style='font-size:11px;color:#566;margin-right:8px;'>${dayCount}-Day Privileged Pending:</span>$privSparkline")
+[void]$sb.AppendLine("</div>")
+[void]$sb.AppendLine("</div></div>")
+
+
+# ===== STYLE G: Rubber-Stamp Risk Detector =====
+if ($reviewers.Count -gt 0 -and $today.Reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Rubber-Stamp Risk Detector -- Approval Ratio Analysis</div>")
+    [void]$sb.AppendLine("<p class='note'>Horizontal lollipop chart per reviewer. Dot position = approval ratio (Approved / Decided * 100). Circle size = items decided. Dashed threshold at 95%.</p>")
+
+    $todayReviewers = $today.Reviewers
+    $gW = 700; $gH = 30 + ($todayReviewers.Count * 40); $gPadL = 120; $gPadR = 120; $gPlotW = $gW - $gPadL - $gPadR
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+    [void]$sb.AppendLine("<svg width='$gW' height='$gH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    [void]$sb.AppendLine("<text x='$($gPadL + $gPlotW / 2)' y='14' text-anchor='middle' font-size='10' fill='#888'>Approval Ratio (%)</text>")
+
+    $scaleVals = @(0, 25, 50, 75, 95, 100)
+    foreach ($sv in $scaleVals) {
+        $sx = [int]($gPadL + ($sv / 100 * $gPlotW))
+        [void]$sb.AppendLine("<line x1='$sx' y1='20' x2='$sx' y2='$($gH - 5)' stroke='#e3e9f0' stroke-width='1'/>")
+        [void]$sb.AppendLine("<text x='$sx' y='28' text-anchor='middle' font-size='8' fill='#aaa'>${sv}%</text>")
+    }
+
+    $thresh95x = [int]($gPadL + (95 / 100 * $gPlotW))
+    [void]$sb.AppendLine("<line x1='$thresh95x' y1='20' x2='$thresh95x' y2='$($gH - 5)' stroke='$($colors.Red)' stroke-width='1.5' stroke-dasharray='5,3'/>")
+    [void]$sb.AppendLine("<text x='$($thresh95x + 3)' y='28' font-size='8' fill='$($colors.Red)'>95% threshold</text>")
+
+    $ri = 0
+    foreach ($rv in $todayReviewers) {
+        $decided = $rv.Approved + $rv.Revoked
+        $approvalRatio = if ($decided -gt 0) { [math]::Round($rv.Approved / $decided * 100, 1) } else { 0 }
+        $yPos = 38 + ($ri * 40)
+        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+
+        [void]$sb.AppendLine("<text x='$($gPadL - 8)' y='$($yPos + 5)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
+
+        $dotX = [int]($gPadL + ($approvalRatio / 100 * $gPlotW))
+        [void]$sb.AppendLine("<line x1='$gPadL' y1='$yPos' x2='$dotX' y2='$yPos' stroke='#ccc' stroke-width='2'/>")
+
+        $dotR = [math]::Max(6, [math]::Min(16, [int]($decided / 2)))
+        $dotColor = if ($approvalRatio -ge 100) { $colors.Red } elseif ($approvalRatio -ge 95) { $colors.Amber } else { $colors.Green }
+        [void]$sb.AppendLine("<circle cx='$dotX' cy='$yPos' r='$dotR' fill='$dotColor' opacity='0.85'/>")
+        [void]$sb.AppendLine("<text x='$dotX' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>$decided</text>")
+
+        $badgeX = $gW - $gPadR + 10
+        if ($decided -eq 0) {
+            [void]$sb.AppendLine("<text x='$badgeX' y='$($yPos + 4)' font-size='9' fill='#888'>NO DECISIONS</text>")
+        } elseif ($approvalRatio -ge 100) {
+            [void]$sb.AppendLine("<rect x='$badgeX' y='$($yPos - 8)' width='90' height='16' rx='8' fill='$($colors.Red)'/>")
+            [void]$sb.AppendLine("<text x='$($badgeX + 45)' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>RUBBER STAMP</text>")
+        } elseif ($approvalRatio -ge 95) {
+            [void]$sb.AppendLine("<rect x='$badgeX' y='$($yPos - 8)' width='62' height='16' rx='8' fill='$($colors.Amber)'/>")
+            [void]$sb.AppendLine("<text x='$($badgeX + 31)' y='$($yPos + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#fff'>WARNING</text>")
+        } else {
+            [void]$sb.AppendLine("<text x='$badgeX' y='$($yPos + 4)' font-size='9' fill='$($colors.Green)'>$($approvalRatio)%</text>")
+        }
+        $ri++
+    }
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+
+# ===== STYLE H: Reviewer Activity Heatmap =====
+if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Reviewer Activity Heatmap -- ${dayCount}-Day Decision Intensity</div>")
+    [void]$sb.AppendLine("<p class='note'>Rows = reviewers, Columns = days. Cell color intensity = decisions made that day (daily delta). Five-level blue scale. Inactive reviewers highlighted in light red.</p>")
+
+    $hCellW = [math]::Min(70, [int](560 / [math]::Max(1, $dayCount)))
+    $hCellH = 32; $hLabelW = 120
+    $hTotalW = $hLabelW + ($dayCount * $hCellW) + 10
+    $hTotalH = 30 + ($reviewers.Count * $hCellH) + 5
+    $heatColors = @('#f0f2f5', '#c6dbef', '#6baed6', '#2171b5', '#084594')
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;overflow-x:auto;'>")
+    [void]$sb.AppendLine("<svg width='$hTotalW' height='$hTotalH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $hx = $hLabelW + ($i * $hCellW) + ($hCellW / 2)
+        [void]$sb.AppendLine("<text x='$hx' y='16' text-anchor='middle' font-size='9' font-weight='600' fill='#566'>$($dailyData[$i].DayLabel)</text>")
+    }
+
+    $rvIdx = 0
+    foreach ($rv in $reviewers) {
+        $hy = 24 + ($rvIdx * $hCellH)
+        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+        $totalActivity = 0
+
+        $deltas = @()
+        for ($i = 0; $i -lt $dayCount; $i++) {
+            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $todayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
+            if ($i -gt 0) {
+                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
+                $delta = [math]::Max(0, $todayDec - $prevDec)
+            } else {
+                $delta = $todayDec
+            }
+            $deltas += $delta
+            $totalActivity += $delta
+        }
+
+        if ($totalActivity -eq 0) {
+            [void]$sb.AppendLine("<rect x='0' y='$hy' width='$hTotalW' height='$hCellH' fill='#fdecec' opacity='0.5'/>")
+        }
+
+        [void]$sb.AppendLine("<text x='$($hLabelW - 8)' y='$($hy + $hCellH / 2 + 4)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
+
+        $maxDelta = ($deltas | Measure-Object -Maximum).Maximum
+        if ($maxDelta -eq 0) { $maxDelta = 1 }
+        for ($i = 0; $i -lt $deltas.Count; $i++) {
+            $hcx = $hLabelW + ($i * $hCellW)
+            $val = $deltas[$i]
+            $level = [math]::Min(4, [int][math]::Floor($val / $maxDelta * 4.99))
+            if ($val -eq 0) { $level = 0 }
+            $cellColor = $heatColors[$level]
+            [void]$sb.AppendLine("<rect x='$($hcx + 2)' y='$($hy + 2)' width='$($hCellW - 4)' height='$($hCellH - 4)' rx='3' fill='$cellColor' stroke='#e3e9f0' stroke-width='1'/>")
+            if ($val -gt 0) {
+                $textColor = if ($level -ge 3) { '#fff' } else { '#1c2b3a' }
+                [void]$sb.AppendLine("<text x='$($hcx + $hCellW / 2)' y='$($hy + $hCellH / 2 + 4)' text-anchor='middle' font-size='10' font-weight='600' fill='$textColor'>$val</text>")
+            }
+        }
+        $rvIdx++
+    }
+
+    $legY = $hTotalH - 2
+    [void]$sb.AppendLine("<text x='$hLabelW' y='$($legY)' font-size='9' fill='#888'>Intensity:</text>")
+    for ($lv = 0; $lv -lt 5; $lv++) {
+        $lx = $hLabelW + 55 + ($lv * 22)
+        [void]$sb.AppendLine("<rect x='$lx' y='$($legY - 10)' width='18' height='12' rx='2' fill='$($heatColors[$lv])' stroke='#d4dce6' stroke-width='0.5'/>")
+    }
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+
+# ===== STYLE N: Cross-Campaign Risk Matrix =====
+if ($allCampaignLatest.Count -gt 0) {
+    $campaigns = @()
+    foreach ($rec in $allCampaignLatest) {
+        $m = $rec.metrics
+        $cn     = [string]$rec.campaignName
+        $total  = [int](Get-V5MetricVal $m 'counts.total' 0)
+        $appr   = [int](Get-V5MetricVal $m 'counts.approved' 0)
+        $rev    = [int](Get-V5MetricVal $m 'counts.revoked' 0)
+        $pend   = [int](Get-V5MetricVal $m 'counts.pending' 0)
+        $compPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
+        $privPend = [int](Get-V5MetricVal $m 'counts.privPending' 0)
+        $rvTotal = [int](Get-V5MetricVal $m 'counts.reviewersTotal' 0)
+        $rvSigned = [int](Get-V5MetricVal $m 'counts.reviewersSigned' 0)
+
+        # Compute deadline days from dueDate
+        $dlDays = 999
+        $dueDateStr = [string]$rec.dueDate
+        if (-not [string]::IsNullOrWhiteSpace($dueDateStr)) {
+            try {
+                $dueDt = [datetime]::Parse($dueDateStr)
+                $dlDays = [int][math]::Floor(($dueDt - (Get-Date)).TotalDays)
+                if ($dlDays -lt 0) { $dlDays = 0 }
+            } catch { }
+        }
+
+        # Count stalled reviewers from the reviewers array
+        $stalledCount = 0
+        $reviewerArr = $null
+        try {
+            if ($null -ne $rec.PSObject.Properties['reviewers'] -and $null -ne $rec.reviewers) {
+                $reviewerArr = @($rec.reviewers)
+            }
+        } catch { }
+        if ($null -ne $reviewerArr) {
+            foreach ($rvr in $reviewerArr) {
+                $rvComp = [double](Get-V5Prop $rvr 'completion' 0)
+                if ($rvComp -lt 5) { $stalledCount++ }
+            }
+        }
+
+        $campaigns += @{
+            Name = $cn
+            Completion = $compPct
+            Deadline = $dlDays
+            Pending = $pend
+            PrivPending = $privPend
+            StalledReviewers = $stalledCount
+            TotalReviewers = $rvTotal
+            Approved = $appr
+            Revoked = $rev
+            Total = $total
+            RiskScore = 0
+        }
+    }
+
+    # Compute risk scores
+    foreach ($c in $campaigns) {
+        $timeRisk = if ($c.Deadline -le 2) { 40 } elseif ($c.Deadline -le 5) { 25 } else { 10 }
+        $completionRisk = [math]::Max(0, [int]((100 - $c.Completion) * 0.4))
+        $privRisk = [math]::Min(25, [int]($c.PrivPending * 1.5))
+        $stalledRisk = $c.StalledReviewers * 8
+        $c.RiskScore = [math]::Min(100, $timeRisk + $completionRisk + $privRisk + $stalledRisk)
+    }
+
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Cross-Campaign Risk Matrix</div>")
+    [void]$sb.AppendLine("<p class='note'>Multi-campaign view with composite risk scoring. Risk = f(deadline proximity, completion gap, privileged pending, stalled reviewers).</p>")
+
+    [void]$sb.AppendLine("<table class='risk-matrix'><thead><tr>")
+    [void]$sb.AppendLine("<th>Campaign</th><th style='text-align:center;'>Completion</th><th style='text-align:center;'>Progress</th><th style='text-align:center;'>Deadline</th><th style='text-align:center;'>Priv. Pending</th><th style='text-align:center;'>Stalled</th><th style='text-align:center;'>Risk Score</th>")
+    [void]$sb.AppendLine("</tr></thead><tbody>")
+
+    foreach ($c in $campaigns) {
+        $cName = ConvertTo-SPHtmlSafe $c.Name
+
+        $donutR = 14; $donutCx = 20; $donutCy = 20; $donutStroke = 6
+        $circumference = [math]::Round(2 * [math]::PI * $donutR, 1)
+        $dashLen = [math]::Round($circumference * $c.Completion / 100, 1)
+        $gapLen = [math]::Round($circumference - $dashLen, 1)
+        $donutColor = if ($c.Completion -ge 80) { $colors.Green } elseif ($c.Completion -ge 50) { $colors.Amber } else { $colors.Red }
+        $donutSvg = "<svg width='40' height='40' style='vertical-align:middle;'>"
+        $donutSvg += "<circle cx='$donutCx' cy='$donutCy' r='$donutR' fill='none' stroke='#e3e9f0' stroke-width='$donutStroke'/>"
+        $donutSvg += "<circle cx='$donutCx' cy='$donutCy' r='$donutR' fill='none' stroke='$donutColor' stroke-width='$donutStroke' stroke-dasharray='$dashLen $gapLen' stroke-dashoffset='$([math]::Round($circumference * 0.25, 1))' stroke-linecap='round'/>"
+        $donutSvg += "<text x='$donutCx' y='$($donutCy + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#1c2b3a'>$([math]::Round($c.Completion,0))%</text>"
+        $donutSvg += "</svg>"
+
+        $thermColor = if ($c.Completion -ge 80) { $colors.Green } elseif ($c.Completion -ge 50) { $colors.Amber } else { $colors.Red }
+        $thermBar = "<span class='thermometer'><span class='thermometer-fill' style='width:$($c.Completion)%;background:$thermColor;display:inline-block;'></span></span>"
+
+        $dlColor = if ($c.Deadline -le 2) { $colors.Red } elseif ($c.Deadline -le 5) { $colors.Amber } else { $colors.Green }
+        $dlLabel = if ($c.Deadline -ge 999) { 'N/A' } else { "$($c.Deadline)d" }
+        $dlSvg = "<svg width='16' height='16' style='vertical-align:middle;'><circle cx='8' cy='8' r='6' fill='$dlColor'/></svg>"
+        $dlText = "$dlSvg <span style='font-weight:600;'>$dlLabel</span>"
+
+        $riskColor = if ($c.RiskScore -ge 60) { $colors.Red } elseif ($c.RiskScore -ge 35) { $colors.Amber } else { $colors.Green }
+        $riskW = $c.RiskScore
+        $riskBar = "<div style='display:inline-block;width:100px;height:14px;background:#e3e9f0;border-radius:7px;overflow:hidden;vertical-align:middle;'>"
+        $riskBar += "<div style='width:${riskW}%;height:14px;background:$riskColor;border-radius:7px;display:inline-block;'></div></div>"
+        $riskBar += " <span style='font-size:11px;font-weight:600;color:$riskColor;'>$($c.RiskScore)</span>"
+
+        $privColor = if ($c.PrivPending -gt 10) { $colors.Red } elseif ($c.PrivPending -gt 5) { $colors.Amber } else { '#1c2b3a' }
+        $stalledColor = if ($c.StalledReviewers -gt 0) { $colors.Red } else { $colors.Green }
+
+        [void]$sb.AppendLine("<tr>")
+        [void]$sb.AppendLine("<td style='font-weight:600;'>$cName</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;'>$donutSvg</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;'>$thermBar</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;'>$dlText</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;font-weight:600;color:$privColor;'>$($c.PrivPending)</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;font-weight:600;color:$stalledColor;'>$($c.StalledReviewers) / $($c.TotalReviewers)</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;'>$riskBar</td>")
+        [void]$sb.AppendLine("</tr>")
+    }
+
+    [void]$sb.AppendLine("</tbody></table></div>")
+}
+
+# ===== STYLE A: Horizontal Bar Charts (SVG) -- Reviewer Completion =====
+if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Reviewer Completion -- ${dayCount}-Day Progression (Horizontal Bar Charts)</div>")
+    [void]$sb.AppendLine("<p class='note'>Each bar shows the reviewer's completion percentage. The rightmost bar is today; color indicates status (green=complete, blue=progressing, red=stalled).</p>")
+
+    [void]$sb.AppendLine("<table><thead><tr><th style='width:120px;'>Reviewer</th>")
+    foreach ($d in $dailyData) { [void]$sb.AppendLine("<th style='width:100px;text-align:center;font-size:10px;'>$($d.DayLabel)</th>") }
+    [void]$sb.AppendLine("</tr></thead><tbody>")
+
+    foreach ($rv in $reviewers) {
+        [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td>")
+        foreach ($d in $dailyData) {
+            $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $pct = if ($rvDay) { $rvDay.Completion } else { 0 }
+            $pct = [math]::Max(0, [math]::Min(100, $pct))
+            $barColor = if ($pct -ge 95) { $colors.Green } elseif ($rv.Style -eq 'stalled') { $colors.Red } else { '#336699' }
+            [void]$sb.AppendLine("<td><div class='bar-track'><div class='bar-fill' style='width:${pct}%;background:$barColor;'></div><span class='bar-label'>${pct}%</span></div></td>")
+        }
+        [void]$sb.AppendLine("</tr>")
+    }
+    [void]$sb.AppendLine("</tbody></table></div>")
+}
+
+# ===== STYLE M: Reviewer Engagement Timeline =====
+if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Reviewer Engagement Timeline -- Gantt-Style Activity Map</div>")
+    [void]$sb.AppendLine("<p class='note'>Per reviewer: gray baseline = ${dayCount}-day window. Blue bar = first-to-last active day. Markers: circle=first decision, diamond=50% completion, star=100% completion.</p>")
+
+    $mW = 700; $mRowH = 40; $mPadL = 140; $mPadR = 100
+    $mH = 40 + ($reviewers.Count * $mRowH)
+    $mPlotW = $mW - $mPadL - $mPadR
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+    [void]$sb.AppendLine("<svg width='$mW' height='$mH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $dx = [int]($mPadL + ($i / [math]::Max(1, $dayCount - 1)) * $mPlotW)
+        [void]$sb.AppendLine("<line x1='$dx' y1='20' x2='$dx' y2='$($mH - 5)' stroke='#f0f2f5' stroke-width='1'/>")
+        [void]$sb.AppendLine("<text x='$dx' y='14' text-anchor='middle' font-size='9' fill='#888'>$($dailyData[$i].DayLabel)</text>")
+    }
+
+    $ri = 0
+    foreach ($rv in $reviewers) {
+        $yCenter = 35 + ($ri * $mRowH)
+        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+
+        $firstActive = -1; $lastActive = -1; $halfDay = -1; $doneDay = -1
+        for ($i = 0; $i -lt $dayCount; $i++) {
+            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $dayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
+            $dayCompletion = if ($rvDay) { $rvDay.Completion } else { 0 }
+            if ($i -gt 0) {
+                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
+                $delta = $dayDec - $prevDec
+            } else {
+                $delta = $dayDec
+            }
+            if ($delta -gt 0) {
+                if ($firstActive -eq -1) { $firstActive = $i }
+                $lastActive = $i
+            }
+            if ($dayCompletion -ge 50 -and $halfDay -eq -1) { $halfDay = $i }
+            if ($dayCompletion -ge 100 -and $doneDay -eq -1) { $doneDay = $i }
+        }
+
+        [void]$sb.AppendLine("<text x='$($mPadL - 8)' y='$($yCenter + 4)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
+
+        $lineX1 = $mPadL; $lineX2 = $mPadL + $mPlotW
+        [void]$sb.AppendLine("<line x1='$lineX1' y1='$yCenter' x2='$lineX2' y2='$yCenter' stroke='#e3e9f0' stroke-width='6' stroke-linecap='round'/>")
+
+        if ($firstActive -ge 0 -and $lastActive -ge 0) {
+            $actX1 = [int]($mPadL + ($firstActive / [math]::Max(1, $dayCount - 1)) * $mPlotW)
+            $actX2 = [int]($mPadL + ($lastActive / [math]::Max(1, $dayCount - 1)) * $mPlotW)
+            # Ensure minimum bar width when firstActive == lastActive
+            if ($actX2 -le $actX1) { $actX2 = $actX1 + 6 }
+            [void]$sb.AppendLine("<line x1='$actX1' y1='$yCenter' x2='$actX2' y2='$yCenter' stroke='#336699' stroke-width='8' stroke-linecap='round'/>")
+            [void]$sb.AppendLine("<circle cx='$actX1' cy='$yCenter' r='6' fill='#336699' stroke='#fff' stroke-width='1.5'/>")
+        }
+
+        if ($halfDay -ge 0) {
+            $hx = [int]($mPadL + ($halfDay / [math]::Max(1, $dayCount - 1)) * $mPlotW)
+            [void]$sb.AppendLine("<polygon points='$hx,$($yCenter - 7) $($hx + 6),$yCenter $hx,$($yCenter + 7) $($hx - 6),$yCenter' fill='$($colors.Amber)' stroke='#fff' stroke-width='1'/>")
+        }
+
+        if ($doneDay -ge 0) {
+            $stx = [int]($mPadL + ($doneDay / [math]::Max(1, $dayCount - 1)) * $mPlotW)
+            $sr = 7; $sir = 3
+            $starPts = ''
+            for ($s = 0; $s -lt 5; $s++) {
+                $outerAngle = [math]::PI / 2 + ($s * 2 * [math]::PI / 5)
+                $innerAngle = $outerAngle + [math]::PI / 5
+                $ox = [math]::Round($stx + $sr * [math]::Cos($outerAngle), 1)
+                $oy = [math]::Round($yCenter - $sr * [math]::Sin($outerAngle), 1)
+                $ix = [math]::Round($stx + $sir * [math]::Cos($innerAngle), 1)
+                $iy = [math]::Round($yCenter - $sir * [math]::Sin($innerAngle), 1)
+                $starPts += "$ox,$oy $ix,$iy "
+            }
+            [void]$sb.AppendLine("<polygon points='$($starPts.Trim())' fill='$($colors.Green)' stroke='#fff' stroke-width='1'/>")
+        }
+
+        # Get last known completion for this reviewer
+        $lastCompletion = 0
+        for ($ci = $dayCount - 1; $ci -ge 0; $ci--) {
+            $rvCheck = $dailyData[$ci].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            if ($rvCheck) { $lastCompletion = $rvCheck.Completion; break }
+        }
+        # Don't flag as stalled if completion >= 90%
+        $statusText = if ($firstActive -eq -1) { '(not started)' }
+                      elseif ($lastCompletion -ge 90) { '(finishing)' }
+                      elseif ($lastActive -lt ($dayCount - 3) -and $doneDay -eq -1) { '(stalled)' }
+                      else { '(steady)' }
+        $statusColor = if ($statusText -eq '(not started)') { $colors.Red }
+                       elseif ($statusText -eq '(stalled)') { $colors.Amber }
+                       elseif ($statusText -eq '(finishing)') { $colors.Green }
+                       else { '#888' }
+        [void]$sb.AppendLine("<text x='$($mW - $mPadR + 10)' y='$($yCenter + 4)' font-size='9' fill='$statusColor'>$statusText</text>")
+
+        $ri++
+    }
+
+    $legY = $mH - 5
+    [void]$sb.AppendLine("<circle cx='$($mPadL + 5)' cy='$($legY - 4)' r='4' fill='#336699'/>")
+    [void]$sb.AppendLine("<text x='$($mPadL + 14)' y='$legY' font-size='9' fill='#1c2b3a'>First Decision</text>")
+    [void]$sb.AppendLine("<polygon points='$($mPadL + 100),$($legY - 8) $($mPadL + 105),$($legY - 4) $($mPadL + 100),$legY $($mPadL + 95),$($legY - 4)' fill='$($colors.Amber)'/>")
+    [void]$sb.AppendLine("<text x='$($mPadL + 112)' y='$legY' font-size='9' fill='#1c2b3a'>50% Complete</text>")
+    $ssx = $mPadL + 200; $ssy = $legY - 4
+    $starLegPts = ''
+    for ($s = 0; $s -lt 5; $s++) {
+        $outerAngle = [math]::PI / 2 + ($s * 2 * [math]::PI / 5)
+        $innerAngle = $outerAngle + [math]::PI / 5
+        $ox = [math]::Round($ssx + 5 * [math]::Cos($outerAngle), 1)
+        $oy = [math]::Round($ssy - 5 * [math]::Sin($outerAngle), 1)
+        $ix = [math]::Round($ssx + 2 * [math]::Cos($innerAngle), 1)
+        $iy = [math]::Round($ssy - 2 * [math]::Sin($innerAngle), 1)
+        $starLegPts += "$ox,$oy $ix,$iy "
+    }
+    [void]$sb.AppendLine("<polygon points='$($starLegPts.Trim())' fill='$($colors.Green)'/>")
+    [void]$sb.AppendLine("<text x='$($mPadL + 210)' y='$legY' font-size='9' fill='#1c2b3a'>100% Complete</text>")
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+
 # ===== STYLE K: Decision Velocity Leaderboard =====
 if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style K</span>")
+
     [void]$sb.AppendLine("<div class='section-title'>Decision Velocity Leaderboard</div>")
     [void]$sb.AppendLine("<p class='note'>Horizontal bar per reviewer: average items decided per active day. Bars segmented green=approved, red=revoked. Rank badges for top 3. Dashed line = team average.</p>")
 
@@ -1481,10 +1565,15 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
             $totalDecisions += $delta
         }
 
-        $rvToday = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-        $todayTotal = if ($rvToday) { $rvToday.Approved + $rvToday.Revoked } else { 1 }
-        if ($todayTotal -eq 0) { $todayTotal = 1 }
-        $apprRatio = if ($rvToday) { $rvToday.Approved / $todayTotal } else { 0.8 }
+        # Compute approval ratio from cumulative data across ALL days
+        $totalAppr = 0; $totalRevk = 0
+        foreach ($day in $dailyData) {
+            $rvDay2 = $day.Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            if ($rvDay2) { $totalAppr += $rvDay2.Approved; $totalRevk += $rvDay2.Revoked }
+        }
+        # Use cumulative ratio to split the velocity decisions
+        $totalDec2 = $totalAppr + $totalRevk
+        $apprRatio = if ($totalDec2 -gt 0) { $totalAppr / $totalDec2 } else { 0.8 }
         $totalAppr = [int]($totalDecisions * $apprRatio)
         $totalRevk = $totalDecisions - $totalAppr
 
@@ -1557,10 +1646,208 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
 }
 
 
+# ===== STYLE B2: Vertical Bar Chart -- Items Reviewed % + Reviewer Completion % =====
+if ($dayCount -ge 2) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Completion Progression -- Vertical Bar Chart (Items Reviewed % + Reviewer Completion %)</div>")
+    [void]$sb.AppendLine("<p class='note'>Blue bars show the percentage of items reviewed (decided). Green bars show the percentage of reviewers who have fully completed. Height is proportional to 100%.</p>")
+
+    $chartWidth = 700
+    $chartHeight = 200
+    $groupWidth = [int][math]::Floor(($chartWidth - 40) / $dayCount)
+    $barWidth = [int][math]::Floor($groupWidth * 0.35)
+    $gap = [int][math]::Floor($groupWidth * 0.08)
+    $leftPad = 40
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+    [void]$sb.AppendLine("<svg width='$chartWidth' height='$($chartHeight + 60)' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    for ($pct = 0; $pct -le 100; $pct += 25) {
+        $y = [int]($chartHeight - ($pct / 100 * $chartHeight) + 10)
+        [void]$sb.AppendLine("<line x1='$leftPad' y1='$y' x2='$chartWidth' y2='$y' stroke='#e3e9f0' stroke-width='1'/>")
+        [void]$sb.AppendLine("<text x='$($leftPad - 5)' y='$($y + 4)' text-anchor='end' font-size='10' fill='#888'>${pct}%</text>")
+    }
+
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $d = $dailyData[$i]
+        $xBase = $leftPad + ($i * $groupWidth) + $gap
+
+        $itemsPct = [math]::Max(0, [math]::Min(100, $d.CompletionPct))
+        $itemsH = [int][math]::Max(2, [math]::Round($itemsPct / 100 * $chartHeight))
+        $itemsY = $chartHeight - $itemsH + 10
+        $itemsOpacity = [math]::Round(0.5 + (0.5 * $i / [math]::Max(1, $dayCount - 1)), 2)
+        [void]$sb.AppendLine("<rect x='$xBase' y='$itemsY' width='$barWidth' height='$itemsH' fill='#336699' opacity='$itemsOpacity' rx='2'/>")
+        if ($itemsH -gt 15) {
+            [void]$sb.AppendLine("<text x='$($xBase + [int]($barWidth/2))' y='$($itemsY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='#336699'>$($itemsPct)%</text>")
+        }
+
+        $rvCompleted = @($d.Reviewers | Where-Object { $_.Completion -ge 100 }).Count
+        $rvTotal = $d.Reviewers.Count
+        $rvPct = if ($rvTotal -gt 0) { [math]::Max(0, [math]::Min(100, [math]::Round($rvCompleted / $rvTotal * 100, 0))) } else { 0 }
+        $rvH = [int][math]::Max(2, [math]::Round($rvPct / 100 * $chartHeight))
+        $rvY = $chartHeight - $rvH + 10
+        $rvX = $xBase + $barWidth + $gap
+        [void]$sb.AppendLine("<rect x='$rvX' y='$rvY' width='$barWidth' height='$rvH' fill='$($colors.Green)' opacity='$itemsOpacity' rx='2'/>")
+        if ($rvH -gt 15) {
+            [void]$sb.AppendLine("<text x='$($rvX + [int]($barWidth/2))' y='$($rvY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='$($colors.Green)'>$($rvPct)%</text>")
+        }
+
+        $labelX = $xBase + $barWidth + [int]($gap / 2)
+        $labelY = $chartHeight + 25
+        [void]$sb.AppendLine("<text x='$labelX' y='$labelY' text-anchor='middle' font-size='10' fill='#566'>$($d.DayLabel)</text>")
+    }
+
+    $legendY = $chartHeight + 45
+    [void]$sb.AppendLine("<rect x='$($leftPad + 20)' y='$legendY' width='12' height='12' fill='#336699' rx='2'/>")
+    [void]$sb.AppendLine("<text x='$($leftPad + 37)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Items Reviewed %</text>")
+    [void]$sb.AppendLine("<rect x='$($leftPad + 170)' y='$legendY' width='12' height='12' fill='$($colors.Green)' rx='2'/>")
+    [void]$sb.AppendLine("<text x='$($leftPad + 187)' y='$($legendY + 10)' font-size='11' fill='#1c2b3a'>Reviewers Completed %</text>")
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+# ===== STYLE F: Scope Drift Monitor =====
+if ($dayCount -ge 2) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Scope Drift Monitor -- Decisions vs Scope Growth</div>")
+    [void]$sb.AppendLine("<p class='note'>Overlays cumulative decisions made against cumulative scope growth. If scope grows faster than decisions, the gap is highlighted in red.</p>")
+
+    $cumDecisions = @(); $cumScope = @()
+    $runDecisions = 0; $runScope = 0
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $d = $dailyData[$i]
+        if ($i -gt 0) {
+            $prevD = $dailyData[$i - 1]
+            $dailyDecided = ($d.Approved + $d.Revoked) - ($prevD.Approved + $prevD.Revoked)
+            if ($dailyDecided -lt 0) { $dailyDecided = 0 }
+            $runDecisions += $dailyDecided
+            $runScope += ($d.ScopeAdded - $d.ScopeRemoved)
+        }
+        $cumDecisions += $runDecisions
+        $cumScope += $runScope
+    }
+
+    $fW = 640; $fH = 200; $fPadL = 50; $fPadR = 20; $fPadT = 10; $fPadB = 40
+    $fPlotW = $fW - $fPadL - $fPadR; $fPlotH = $fH - $fPadT - $fPadB
+    $allVals = $cumDecisions + $cumScope
+    $fMax = [math]::Max(1, ($allVals | Measure-Object -Maximum).Maximum)
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+    [void]$sb.AppendLine("<svg width='$fW' height='$fH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    for ($g = 0; $g -le 4; $g++) {
+        $gVal = [int]($fMax * $g / 4)
+        $gy = [int]($fPadT + $fPlotH - ($g / 4 * $fPlotH))
+        [void]$sb.AppendLine("<line x1='$fPadL' y1='$gy' x2='$($fW - $fPadR)' y2='$gy' stroke='#e3e9f0' stroke-width='1'/>")
+        [void]$sb.AppendLine("<text x='$($fPadL - 5)' y='$($gy + 4)' text-anchor='end' font-size='9' fill='#888'>$gVal</text>")
+    }
+
+    $decPts = @(); $scopePts = @()
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $px = [int]($fPadL + ($i / [math]::Max(1, $dayCount - 1)) * $fPlotW)
+        $decY = [int]($fPadT + $fPlotH - ($cumDecisions[$i] / $fMax * $fPlotH))
+        $scopeY = [int]($fPadT + $fPlotH - ($cumScope[$i] / $fMax * $fPlotH))
+        $decPts += "$px,$decY"
+        $scopePts += "$px,$scopeY"
+    }
+
+    $gapFill = "M $($scopePts[0] -replace ',',' ')"
+    for ($i = 1; $i -lt $scopePts.Count; $i++) { $gapFill += " L $($scopePts[$i] -replace ',',' ')" }
+    for ($i = $decPts.Count - 1; $i -ge 0; $i--) { $gapFill += " L $($decPts[$i] -replace ',',' ')" }
+    $gapFill += " Z"
+    [void]$sb.AppendLine("<path d='$gapFill' fill='$($colors.Red)' opacity='0.1'/>")
+
+    $decArea = "M $fPadL $($fPadT + $fPlotH)"
+    for ($i = 0; $i -lt $decPts.Count; $i++) { $decArea += " L $($decPts[$i] -replace ',',' ')" }
+    $decArea += " L $($fW - $fPadR) $($fPadT + $fPlotH) Z"
+    [void]$sb.AppendLine("<path d='$decArea' fill='$($colors.Green)' opacity='0.12'/>")
+    [void]$sb.AppendLine("<polyline points='$($decPts -join ' ')' stroke='$($colors.Green)' stroke-width='2.5' fill='none'/>")
+
+    $scopeArea = "M $fPadL $($fPadT + $fPlotH)"
+    for ($i = 0; $i -lt $scopePts.Count; $i++) { $scopeArea += " L $($scopePts[$i] -replace ',',' ')" }
+    $scopeArea += " L $($fW - $fPadR) $($fPadT + $fPlotH) Z"
+    [void]$sb.AppendLine("<path d='$scopeArea' fill='$($colors.Amber)' opacity='0.1'/>")
+    [void]$sb.AppendLine("<polyline points='$($scopePts -join ' ')' stroke='$($colors.Amber)' stroke-width='2.5' fill='none' stroke-dasharray='6,3'/>")
+
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $parts = $decPts[$i] -split ','
+        [void]$sb.AppendLine("<circle cx='$($parts[0])' cy='$($parts[1])' r='3' fill='$($colors.Green)'/>")
+        $parts2 = $scopePts[$i] -split ','
+        [void]$sb.AppendLine("<circle cx='$($parts2[0])' cy='$($parts2[1])' r='3' fill='$($colors.Amber)'/>")
+    }
+
+    for ($i = 0; $i -lt $dayCount; $i++) {
+        $lx = [int]($fPadL + ($i / [math]::Max(1, $dayCount - 1)) * $fPlotW)
+        [void]$sb.AppendLine("<text x='$lx' y='$($fH - 5)' text-anchor='middle' font-size='9' fill='#566'>$($dailyData[$i].DayLabel)</text>")
+    }
+
+    [void]$sb.AppendLine("<line x1='$($fPadL + 10)' y1='$($fPadT + 3)' x2='$($fPadL + 30)' y2='$($fPadT + 3)' stroke='$($colors.Green)' stroke-width='2.5'/>")
+    [void]$sb.AppendLine("<text x='$($fPadL + 34)' y='$($fPadT + 7)' font-size='10' fill='#1c2b3a'>Cumulative Decisions</text>")
+    [void]$sb.AppendLine("<line x1='$($fPadL + 180)' y1='$($fPadT + 3)' x2='$($fPadL + 200)' y2='$($fPadT + 3)' stroke='$($colors.Amber)' stroke-width='2.5' stroke-dasharray='6,3'/>")
+    [void]$sb.AppendLine("<text x='$($fPadL + 204)' y='$($fPadT + 7)' font-size='10' fill='#1c2b3a'>Cumulative Scope Drift</text>")
+
+    $finalDec = $cumDecisions[$cumDecisions.Count - 1]
+    $finalScope = $cumScope[$cumScope.Count - 1]
+    $driftStatus = if ($finalScope -gt $finalDec) { 'SCOPE OUTPACING DECISIONS' } else { 'Decisions keeping pace' }
+    $driftColor = if ($finalScope -gt $finalDec) { $colors.Red } else { $colors.Green }
+    [void]$sb.AppendLine("<text x='$($fW - $fPadR)' y='$($fPadT + 20)' text-anchor='end' font-size='10' font-weight='600' fill='$driftColor'>$driftStatus</text>")
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+
+# ===== STYLE I: Workload Distribution Treemap =====
+if ($today.Reviewers.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+
+    [void]$sb.AppendLine("<div class='section-title'>Workload Distribution Treemap -- Reviewer Item Volume</div>")
+    [void]$sb.AppendLine("<p class='note'>Each rectangle = a reviewer, area proportional to their total items. Color by completion: green >=90%, amber 50-89%, red &lt;50%.</p>")
+
+    $iW = 700; $iH = 200
+    $todayRvs = @($today.Reviewers | Sort-Object { -$_.Total })
+    $totalAllItems = ($todayRvs | Measure-Object -Property Total -Sum).Sum
+    if ($totalAllItems -eq 0) { $totalAllItems = 1 }
+
+    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+    [void]$sb.AppendLine("<svg width='$iW' height='$iH' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+    $xPos = 0; $yPos = 0; $rowH = $iH
+    foreach ($rv in $todayRvs) {
+        $fraction = $rv.Total / $totalAllItems
+        $rectW = [int][math]::Max(40, [math]::Round($fraction * $iW))
+        if ($xPos + $rectW -gt $iW) { $rectW = $iW - $xPos }
+        if ($rectW -le 0) { continue }
+
+        $rvCompClamped = [math]::Max(0, [math]::Min(100, $rv.Completion))
+        $tmColor = if ($rvCompClamped -ge 90) { $colors.Green } elseif ($rvCompClamped -ge 50) { $colors.Amber } else { $colors.Red }
+        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+
+        [void]$sb.AppendLine("<rect x='$xPos' y='$yPos' width='$rectW' height='$rowH' fill='$tmColor' opacity='0.2' stroke='#fff' stroke-width='2'/>")
+        [void]$sb.AppendLine("<rect x='$xPos' y='$yPos' width='$rectW' height='$rowH' fill='$tmColor' opacity='0.65' stroke='#fff' stroke-width='2' rx='4'/>")
+
+        $labelFontSize = if ($rectW -gt 100) { 12 } else { 10 }
+        $midX = $xPos + ($rectW / 2)
+        $midY = $yPos + ($rowH / 2)
+        [void]$sb.AppendLine("<text x='$midX' y='$($midY - 10)' text-anchor='middle' font-size='$labelFontSize' font-weight='700' fill='#fff'>$rvName</text>")
+        [void]$sb.AppendLine("<text x='$midX' y='$($midY + 8)' text-anchor='middle' font-size='11' fill='#fff'>$($rv.Total) items</text>")
+        [void]$sb.AppendLine("<text x='$midX' y='$($midY + 24)' text-anchor='middle' font-size='10' fill='#fff'>$($rvCompClamped)%</text>")
+
+        $xPos += $rectW
+    }
+
+    [void]$sb.AppendLine("</svg>")
+    [void]$sb.AppendLine("</div></div>")
+}
+
+
 # ===== STYLE L: Scope Waterfall =====
 if ($dayCount -ge 2) {
     [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style L</span>")
+
     [void]$sb.AppendLine("<div class='section-title'>Scope Waterfall -- Daily Changes to Pending Items</div>")
     [void]$sb.AppendLine("<p class='note'>Waterfall chart: starting bar = Day 1 pending. Each subsequent day shows scope added (green up), scope removed (red down), and items decided (blue down). Final bar = today's pending.</p>")
 
@@ -1670,234 +1957,6 @@ if ($dayCount -ge 2) {
     [void]$sb.AppendLine("</div></div>")
 }
 
-
-# ===== STYLE M: Reviewer Engagement Timeline =====
-if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style M</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Reviewer Engagement Timeline -- Gantt-Style Activity Map</div>")
-    [void]$sb.AppendLine("<p class='note'>Per reviewer: gray baseline = ${dayCount}-day window. Blue bar = first-to-last active day. Markers: circle=first decision, diamond=50% completion, star=100% completion.</p>")
-
-    $mW = 700; $mRowH = 40; $mPadL = 140; $mPadR = 100
-    $mH = 40 + ($reviewers.Count * $mRowH)
-    $mPlotW = $mW - $mPadL - $mPadR
-
-    [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
-    [void]$sb.AppendLine("<svg width='$mW' height='$mH' style='font-family:Segoe UI,Arial,sans-serif;'>")
-
-    for ($i = 0; $i -lt $dayCount; $i++) {
-        $dx = [int]($mPadL + ($i / [math]::Max(1, $dayCount - 1)) * $mPlotW)
-        [void]$sb.AppendLine("<line x1='$dx' y1='20' x2='$dx' y2='$($mH - 5)' stroke='#f0f2f5' stroke-width='1'/>")
-        [void]$sb.AppendLine("<text x='$dx' y='14' text-anchor='middle' font-size='9' fill='#888'>$($dailyData[$i].DayLabel)</text>")
-    }
-
-    $ri = 0
-    foreach ($rv in $reviewers) {
-        $yCenter = 35 + ($ri * $mRowH)
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
-
-        $firstActive = -1; $lastActive = -1; $halfDay = -1; $doneDay = -1
-        for ($i = 0; $i -lt $dayCount; $i++) {
-            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $dayDec = if ($rvDay) { $rvDay.Approved + $rvDay.Revoked } else { 0 }
-            $dayCompletion = if ($rvDay) { $rvDay.Completion } else { 0 }
-            if ($i -gt 0) {
-                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-                $prevDec = if ($rvPrev) { $rvPrev.Approved + $rvPrev.Revoked } else { 0 }
-                $delta = $dayDec - $prevDec
-            } else {
-                $delta = $dayDec
-            }
-            if ($delta -gt 0) {
-                if ($firstActive -eq -1) { $firstActive = $i }
-                $lastActive = $i
-            }
-            if ($dayCompletion -ge 50 -and $halfDay -eq -1) { $halfDay = $i }
-            if ($dayCompletion -ge 100 -and $doneDay -eq -1) { $doneDay = $i }
-        }
-
-        [void]$sb.AppendLine("<text x='$($mPadL - 8)' y='$($yCenter + 4)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
-
-        $lineX1 = $mPadL; $lineX2 = $mPadL + $mPlotW
-        [void]$sb.AppendLine("<line x1='$lineX1' y1='$yCenter' x2='$lineX2' y2='$yCenter' stroke='#e3e9f0' stroke-width='6' stroke-linecap='round'/>")
-
-        if ($firstActive -ge 0 -and $lastActive -ge 0) {
-            $actX1 = [int]($mPadL + ($firstActive / [math]::Max(1, $dayCount - 1)) * $mPlotW)
-            $actX2 = [int]($mPadL + ($lastActive / [math]::Max(1, $dayCount - 1)) * $mPlotW)
-            [void]$sb.AppendLine("<line x1='$actX1' y1='$yCenter' x2='$actX2' y2='$yCenter' stroke='#336699' stroke-width='8' stroke-linecap='round'/>")
-            [void]$sb.AppendLine("<circle cx='$actX1' cy='$yCenter' r='6' fill='#336699' stroke='#fff' stroke-width='1.5'/>")
-        }
-
-        if ($halfDay -ge 0) {
-            $hx = [int]($mPadL + ($halfDay / [math]::Max(1, $dayCount - 1)) * $mPlotW)
-            [void]$sb.AppendLine("<polygon points='$hx,$($yCenter - 7) $($hx + 6),$yCenter $hx,$($yCenter + 7) $($hx - 6),$yCenter' fill='$($colors.Amber)' stroke='#fff' stroke-width='1'/>")
-        }
-
-        if ($doneDay -ge 0) {
-            $stx = [int]($mPadL + ($doneDay / [math]::Max(1, $dayCount - 1)) * $mPlotW)
-            $sr = 7; $sir = 3
-            $starPts = ''
-            for ($s = 0; $s -lt 5; $s++) {
-                $outerAngle = [math]::PI / 2 + ($s * 2 * [math]::PI / 5)
-                $innerAngle = $outerAngle + [math]::PI / 5
-                $ox = [math]::Round($stx + $sr * [math]::Cos($outerAngle), 1)
-                $oy = [math]::Round($yCenter - $sr * [math]::Sin($outerAngle), 1)
-                $ix = [math]::Round($stx + $sir * [math]::Cos($innerAngle), 1)
-                $iy = [math]::Round($yCenter - $sir * [math]::Sin($innerAngle), 1)
-                $starPts += "$ox,$oy $ix,$iy "
-            }
-            [void]$sb.AppendLine("<polygon points='$($starPts.Trim())' fill='$($colors.Green)' stroke='#fff' stroke-width='1'/>")
-        }
-
-        $statusText = if ($firstActive -eq -1) { '(not started)' } elseif ($lastActive -lt ($dayCount - 3) -and $doneDay -eq -1) { '(stalled)' } else { '(steady)' }
-        $statusColor = if ($statusText -eq '(not started)') { $colors.Red } elseif ($statusText -eq '(stalled)') { $colors.Amber } else { '#888' }
-        [void]$sb.AppendLine("<text x='$($mW - $mPadR + 10)' y='$($yCenter + 4)' font-size='9' fill='$statusColor'>$statusText</text>")
-
-        $ri++
-    }
-
-    $legY = $mH - 5
-    [void]$sb.AppendLine("<circle cx='$($mPadL + 5)' cy='$($legY - 4)' r='4' fill='#336699'/>")
-    [void]$sb.AppendLine("<text x='$($mPadL + 14)' y='$legY' font-size='9' fill='#1c2b3a'>First Decision</text>")
-    [void]$sb.AppendLine("<polygon points='$($mPadL + 100),$($legY - 8) $($mPadL + 105),$($legY - 4) $($mPadL + 100),$legY $($mPadL + 95),$($legY - 4)' fill='$($colors.Amber)'/>")
-    [void]$sb.AppendLine("<text x='$($mPadL + 112)' y='$legY' font-size='9' fill='#1c2b3a'>50% Complete</text>")
-    $ssx = $mPadL + 200; $ssy = $legY - 4
-    $starLegPts = ''
-    for ($s = 0; $s -lt 5; $s++) {
-        $outerAngle = [math]::PI / 2 + ($s * 2 * [math]::PI / 5)
-        $innerAngle = $outerAngle + [math]::PI / 5
-        $ox = [math]::Round($ssx + 5 * [math]::Cos($outerAngle), 1)
-        $oy = [math]::Round($ssy - 5 * [math]::Sin($outerAngle), 1)
-        $ix = [math]::Round($ssx + 2 * [math]::Cos($innerAngle), 1)
-        $iy = [math]::Round($ssy - 2 * [math]::Sin($innerAngle), 1)
-        $starLegPts += "$ox,$oy $ix,$iy "
-    }
-    [void]$sb.AppendLine("<polygon points='$($starLegPts.Trim())' fill='$($colors.Green)'/>")
-    [void]$sb.AppendLine("<text x='$($mPadL + 210)' y='$legY' font-size='9' fill='#1c2b3a'>100% Complete</text>")
-
-    [void]$sb.AppendLine("</svg>")
-    [void]$sb.AppendLine("</div></div>")
-}
-
-
-# ===== STYLE N: Cross-Campaign Risk Matrix =====
-if ($allCampaignLatest.Count -gt 0) {
-    $campaigns = @()
-    foreach ($rec in $allCampaignLatest) {
-        $m = $rec.metrics
-        $cn     = [string]$rec.campaignName
-        $total  = [int](Get-V5MetricVal $m 'counts.total' 0)
-        $appr   = [int](Get-V5MetricVal $m 'counts.approved' 0)
-        $rev    = [int](Get-V5MetricVal $m 'counts.revoked' 0)
-        $pend   = [int](Get-V5MetricVal $m 'counts.pending' 0)
-        $compPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
-        $privPend = [int](Get-V5MetricVal $m 'counts.privPending' 0)
-        $rvTotal = [int](Get-V5MetricVal $m 'counts.reviewersTotal' 0)
-        $rvSigned = [int](Get-V5MetricVal $m 'counts.reviewersSigned' 0)
-
-        # Compute deadline days from dueDate
-        $dlDays = 999
-        $dueDateStr = [string]$rec.dueDate
-        if (-not [string]::IsNullOrWhiteSpace($dueDateStr)) {
-            try {
-                $dueDt = [datetime]::Parse($dueDateStr)
-                $dlDays = [int][math]::Floor(($dueDt - (Get-Date)).TotalDays)
-                if ($dlDays -lt 0) { $dlDays = 0 }
-            } catch { }
-        }
-
-        # Count stalled reviewers from the reviewers array
-        $stalledCount = 0
-        $reviewerArr = $null
-        try {
-            if ($null -ne $rec.PSObject.Properties['reviewers'] -and $null -ne $rec.reviewers) {
-                $reviewerArr = @($rec.reviewers)
-            }
-        } catch { }
-        if ($null -ne $reviewerArr) {
-            foreach ($rvr in $reviewerArr) {
-                $rvComp = [double](Get-V5Prop $rvr 'completion' 0)
-                if ($rvComp -lt 5) { $stalledCount++ }
-            }
-        }
-
-        $campaigns += @{
-            Name = $cn
-            Completion = $compPct
-            Deadline = $dlDays
-            Pending = $pend
-            PrivPending = $privPend
-            StalledReviewers = $stalledCount
-            TotalReviewers = $rvTotal
-            Approved = $appr
-            Revoked = $rev
-            Total = $total
-            RiskScore = 0
-        }
-    }
-
-    # Compute risk scores
-    foreach ($c in $campaigns) {
-        $timeRisk = if ($c.Deadline -le 2) { 40 } elseif ($c.Deadline -le 5) { 25 } else { 10 }
-        $completionRisk = [math]::Max(0, [int]((100 - $c.Completion) * 0.4))
-        $privRisk = [math]::Min(25, [int]($c.PrivPending * 1.5))
-        $stalledRisk = $c.StalledReviewers * 8
-        $c.RiskScore = [math]::Min(100, $timeRisk + $completionRisk + $privRisk + $stalledRisk)
-    }
-
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<span class='style-label'>Style N</span>")
-    [void]$sb.AppendLine("<div class='section-title'>Cross-Campaign Risk Matrix</div>")
-    [void]$sb.AppendLine("<p class='note'>Multi-campaign view with composite risk scoring. Risk = f(deadline proximity, completion gap, privileged pending, stalled reviewers).</p>")
-
-    [void]$sb.AppendLine("<table class='risk-matrix'><thead><tr>")
-    [void]$sb.AppendLine("<th>Campaign</th><th style='text-align:center;'>Completion</th><th style='text-align:center;'>Progress</th><th style='text-align:center;'>Deadline</th><th style='text-align:center;'>Priv. Pending</th><th style='text-align:center;'>Stalled</th><th style='text-align:center;'>Risk Score</th>")
-    [void]$sb.AppendLine("</tr></thead><tbody>")
-
-    foreach ($c in $campaigns) {
-        $cName = ConvertTo-SPHtmlSafe $c.Name
-
-        $donutR = 14; $donutCx = 20; $donutCy = 20; $donutStroke = 6
-        $circumference = [math]::Round(2 * [math]::PI * $donutR, 1)
-        $dashLen = [math]::Round($circumference * $c.Completion / 100, 1)
-        $gapLen = [math]::Round($circumference - $dashLen, 1)
-        $donutColor = if ($c.Completion -ge 80) { $colors.Green } elseif ($c.Completion -ge 50) { $colors.Amber } else { $colors.Red }
-        $donutSvg = "<svg width='40' height='40' style='vertical-align:middle;'>"
-        $donutSvg += "<circle cx='$donutCx' cy='$donutCy' r='$donutR' fill='none' stroke='#e3e9f0' stroke-width='$donutStroke'/>"
-        $donutSvg += "<circle cx='$donutCx' cy='$donutCy' r='$donutR' fill='none' stroke='$donutColor' stroke-width='$donutStroke' stroke-dasharray='$dashLen $gapLen' stroke-dashoffset='$([math]::Round($circumference * 0.25, 1))' stroke-linecap='round'/>"
-        $donutSvg += "<text x='$donutCx' y='$($donutCy + 4)' text-anchor='middle' font-size='8' font-weight='700' fill='#1c2b3a'>$([math]::Round($c.Completion,0))%</text>"
-        $donutSvg += "</svg>"
-
-        $thermColor = if ($c.Completion -ge 80) { $colors.Green } elseif ($c.Completion -ge 50) { $colors.Amber } else { $colors.Red }
-        $thermBar = "<span class='thermometer'><span class='thermometer-fill' style='width:$($c.Completion)%;background:$thermColor;display:inline-block;'></span></span>"
-
-        $dlColor = if ($c.Deadline -le 2) { $colors.Red } elseif ($c.Deadline -le 5) { $colors.Amber } else { $colors.Green }
-        $dlLabel = if ($c.Deadline -ge 999) { 'N/A' } else { "$($c.Deadline)d" }
-        $dlSvg = "<svg width='16' height='16' style='vertical-align:middle;'><circle cx='8' cy='8' r='6' fill='$dlColor'/></svg>"
-        $dlText = "$dlSvg <span style='font-weight:600;'>$dlLabel</span>"
-
-        $riskColor = if ($c.RiskScore -ge 60) { $colors.Red } elseif ($c.RiskScore -ge 35) { $colors.Amber } else { $colors.Green }
-        $riskW = $c.RiskScore
-        $riskBar = "<div style='display:inline-block;width:100px;height:14px;background:#e3e9f0;border-radius:7px;overflow:hidden;vertical-align:middle;'>"
-        $riskBar += "<div style='width:${riskW}%;height:14px;background:$riskColor;border-radius:7px;display:inline-block;'></div></div>"
-        $riskBar += " <span style='font-size:11px;font-weight:600;color:$riskColor;'>$($c.RiskScore)</span>"
-
-        $privColor = if ($c.PrivPending -gt 10) { $colors.Red } elseif ($c.PrivPending -gt 5) { $colors.Amber } else { '#1c2b3a' }
-        $stalledColor = if ($c.StalledReviewers -gt 0) { $colors.Red } else { $colors.Green }
-
-        [void]$sb.AppendLine("<tr>")
-        [void]$sb.AppendLine("<td style='font-weight:600;'>$cName</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;'>$donutSvg</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;'>$thermBar</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;'>$dlText</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;font-weight:600;color:$privColor;'>$($c.PrivPending)</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;font-weight:600;color:$stalledColor;'>$($c.StalledReviewers) / $($c.TotalReviewers)</td>")
-        [void]$sb.AppendLine("<td style='text-align:center;'>$riskBar</td>")
-        [void]$sb.AppendLine("</tr>")
-    }
-
-    [void]$sb.AppendLine("</tbody></table></div>")
-}
 
 # Footer
 $envFooter = if (-not [string]::IsNullOrWhiteSpace($envName)) { " | Env: $envName" } else { '' }
