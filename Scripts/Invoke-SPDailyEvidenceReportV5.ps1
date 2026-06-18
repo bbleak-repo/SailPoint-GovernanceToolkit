@@ -46,12 +46,22 @@
     Campaign name contains this substring.
 .PARAMETER CampaignId
     Specific campaign ID to report on.
+.PARAMETER Status
+    Campaign status filter. One or more of: STAGED, ACTIVE, COMPLETING, COMPLETED.
+    Applied to both live API campaign fetching (capture mode) and trend JSONL record
+    filtering (NoCapture mode). If omitted, all statuses are included.
 .PARAMETER ConfigPath
     Path to settings.json. Auto-resolved if omitted.
 .PARAMETER Token
     Browser/PAT token for ISC API authentication (used only if capturing new snapshot).
 .PARAMETER TokenExpiryMinutes
     Token validity window in minutes. Default 10.
+.PARAMETER SourceId
+    Source IDs to scope analytics. If omitted, uses configured sources.
+.PARAMETER SlaHours
+    Hours before a revocation is considered overdue. Default 48.
+.PARAMETER HighRiskThreshold
+    Risk score threshold for high-risk classification. Default 70.
 .PARAMETER OutputMode
     Console: formatted summary to terminal.
     HTML: self-contained HTML report file.
@@ -95,6 +105,10 @@ param(
     [string]$CampaignId,
 
     [Parameter()]
+    [ValidateSet('STAGED', 'ACTIVE', 'COMPLETING', 'COMPLETED')]
+    [string[]]$Status,
+
+    [Parameter()]
     [string]$ConfigPath,
 
     [Parameter()]
@@ -102,6 +116,15 @@ param(
 
     [Parameter()]
     [int]$TokenExpiryMinutes = 10,
+
+    [Parameter()]
+    [string[]]$SourceId,
+
+    [Parameter()]
+    [int]$SlaHours = 48,
+
+    [Parameter()]
+    [int]$HighRiskThreshold = 70,
 
     [Parameter()]
     [ValidateSet('Console', 'HTML', 'JSON', 'Both')]
@@ -386,6 +409,8 @@ if (-not $NoCapture) {
         if ($CampaignName)           { $campaignParams['CampaignName']           = $CampaignName }
         if ($CampaignNameStartsWith) { $campaignParams['CampaignNameStartsWith'] = $CampaignNameStartsWith }
         if ($CampaignNameContains)   { $campaignParams['CampaignNameContains']   = $CampaignNameContains }
+        if ($Status)                 { $campaignParams['Status']                 = $Status }
+        if ($SourceId)               { $campaignParams['SourceId']               = $SourceId }
 
         $campaignResult = Get-SPAuditCampaigns @campaignParams
         $currentCampaigns = @()
@@ -549,7 +574,13 @@ if (Test-Path $trendDir) {
                 try {
                     $rec = $ln | ConvertFrom-Json
                     $ts = [datetime]::Parse([string]$rec.timestamp).ToUniversalTime()
-                    if ($ts -ge $cutoff) { $trendRecords.Add($rec) }
+                    if ($ts -lt $cutoff) { continue }
+                    # Apply Status filter to trend records (if specified)
+                    if ($Status -and $Status.Count -gt 0) {
+                        $recStatus = [string]$rec.status
+                        if ($recStatus -notin $Status) { continue }
+                    }
+                    $trendRecords.Add($rec)
                 } catch { }
             }
         } catch { }
