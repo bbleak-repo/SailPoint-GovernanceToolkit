@@ -680,15 +680,14 @@ foreach ($d in $dailyData) {
     }
 }
 
-# Build reviewer summary with behavior classification
+# Build reviewer summary with behavior classification and first-seen tracking
 $reviewers = @()
 foreach ($rn in $reviewerNames.Keys) {
-    # Get first and last capture completion
-    $firstComp = $null; $lastComp = $null
-    foreach ($d in $dailyData) {
-        $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rn }
+    $firstComp = $null; $lastComp = $null; $firstSeenIdx = -1
+    for ($di = 0; $di -lt $dailyData.Count; $di++) {
+        $rvDay = $dailyData[$di].Reviewers | Where-Object { $_.Name -eq $rn }
         if ($null -ne $rvDay) {
-            if ($null -eq $firstComp) { $firstComp = $rvDay.Completion }
+            if ($null -eq $firstComp) { $firstComp = $rvDay.Completion; $firstSeenIdx = $di }
             $lastComp = $rvDay.Completion
         }
     }
@@ -697,6 +696,7 @@ foreach ($rn in $reviewerNames.Keys) {
 
     $delta = $lastComp - $firstComp
     $style = if ($lastComp -ge 100) { 'finishing' }
+             elseif ($lastComp -ge 90) { 'finishing' }
              elseif ($delta -lt 1 -and $lastComp -lt 95) { 'stalled' }
              elseif ($delta -lt 5) { 'slow' }
              else { 'steady' }
@@ -706,6 +706,8 @@ foreach ($rn in $reviewerNames.Keys) {
         StartCompletion = $firstComp
         LastCompletion  = $lastComp
         Style           = $style
+        FirstSeenIdx    = $firstSeenIdx
+        FirstSeenDate   = if ($firstSeenIdx -ge 0) { $dailyData[$firstSeenIdx].DayLabel } else { 'N/A' }
     }
 }
 
@@ -812,34 +814,51 @@ if ($dayCount -ge 2) {
     $dLabel = if ($dayCount -ge 7) { "${dayCount}-Day Change" } else { "${dayCount}-Day Change" }
     [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$dColor;'>${dSign}${weekDelta}%</span><span class='l'>$dLabel</span></span>")
 }
-# SLA Countdown KPI
+# SLA Countdown KPI -- handles overdue (negative days)
 $effectiveDeadlineDaysKPI = $DeadlineDays
+$isOverdue = $false
 if (-not [string]::IsNullOrWhiteSpace($campaignDueDate)) {
     try {
         $dueDtKPI = [datetime]::Parse($campaignDueDate)
         $daysToDeadlineKPI = [int][math]::Floor(($dueDtKPI - (Get-Date)).TotalDays)
-        if ($daysToDeadlineKPI -ge 0) { $effectiveDeadlineDaysKPI = $daysToDeadlineKPI }
+        $effectiveDeadlineDaysKPI = $daysToDeadlineKPI
+        if ($daysToDeadlineKPI -lt 0) { $isOverdue = $true }
     } catch { }
 }
-$dlKpiColor = if ($effectiveDeadlineDaysKPI -le 3) { $colors.Red } elseif ($effectiveDeadlineDaysKPI -le 7) { $colors.Amber } else { $colors.Green }
-[void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$dlKpiColor;'>$effectiveDeadlineDaysKPI</span><span class='l'>Days to Deadline</span></span>")
+if ($isOverdue) {
+    $overdueDays = [math]::Abs($effectiveDeadlineDaysKPI)
+    $dlKpiColor = $colors.Red
+    [void]$sb.AppendLine("<span class='kpi' style='border-color:$($colors.Red);background:$($colors.LightRedBg);'><span class='n' style='color:$($colors.Red);'>OVERDUE</span><span class='l'>by $overdueDays day(s)</span></span>")
+} else {
+    $dlKpiColor = if ($effectiveDeadlineDaysKPI -le 3) { $colors.Red } elseif ($effectiveDeadlineDaysKPI -le 7) { $colors.Amber } else { $colors.Green }
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$dlKpiColor;'>$effectiveDeadlineDaysKPI</span><span class='l'>Days to Deadline</span></span>")
+}
 [void]$sb.AppendLine("</div>")
 
 # Executive summary paragraph
 $stalledRvCount = @($reviewers | Where-Object { $_.Style -eq 'stalled' }).Count
 $privPendCount = $today.PrivPending
 $velocityPerDay = if ($dayCount -ge 2) { [math]::Round(($today.CompletionPct - $weekAgo.CompletionPct) / [math]::Max(1, $dayCount - 1), 1) } else { 0 }
-$projectedCompletion = [math]::Min(100, $today.CompletionPct + ($velocityPerDay * $effectiveDeadlineDaysKPI))
-$willComplete = if ($projectedCompletion -ge 99.5) { 'will' } else { 'will NOT' }
-$summaryText = "Campaign is $($today.CompletionPct)% complete with $effectiveDeadlineDaysKPI business days until deadline."
+if ($isOverdue) {
+    $summaryText = "Campaign is $($today.CompletionPct)% complete and OVERDUE by $([math]::Abs($effectiveDeadlineDaysKPI)) day(s)."
+} else {
+    $projectedCompletion = [math]::Min(100, $today.CompletionPct + ($velocityPerDay * $effectiveDeadlineDaysKPI))
+    $willComplete = if ($projectedCompletion -ge 99.5) { 'will' } else { 'will NOT' }
+    $summaryText = "Campaign is $($today.CompletionPct)% complete with $effectiveDeadlineDaysKPI business days until deadline."
+}
 if ($stalledRvCount -gt 0) {
     $summaryText += " $stalledRvCount reviewer(s) have made zero progress (stalled)."
 }
 if ($privPendCount -gt 0) {
     $summaryText += " $privPendCount privileged access items remain pending review."
 }
-if ($dayCount -ge 2) {
+if ($dayCount -ge 2 -and -not $isOverdue) {
     $summaryText += " Current velocity (${velocityPerDay}%/day) suggests the campaign $willComplete complete on time."
+}
+elseif ($dayCount -ge 2 -and $isOverdue) {
+    $remaining = 100 - $today.CompletionPct
+    $daysNeeded = if ($velocityPerDay -gt 0) { [int][math]::Ceiling($remaining / $velocityPerDay) } else { 999 }
+    $summaryText += " Current velocity (${velocityPerDay}%/day). Estimated $daysNeeded more business day(s) needed to complete."
 }
 [void]$sb.AppendLine("<p style='font-size:13px;color:#1c2b3a;line-height:1.6;margin:12px 0 16px 0;padding:10px 14px;background:#f6f9fc;border-left:4px solid $dlKpiColor;border-radius:4px;'>$summaryText</p>")
 
@@ -866,18 +885,18 @@ if ($dayCount -ge 3) {
     $vel3 = ($completionVals[$dayCount - 1] - $completionVals[[math]::Max(0, $dayCount - 3)]) / [math]::Min(2, [math]::Max(1, $dayCount - 1))
     if ($vel3 -lt 0) { $vel3 = 0 }
 
-    # Resolve deadline days: from JSONL dueDate or parameter
+    # Resolve deadline days: from JSONL dueDate or parameter (handles overdue = negative)
     $effectiveDeadlineDays = $DeadlineDays
     if (-not [string]::IsNullOrWhiteSpace($campaignDueDate)) {
         try {
             $dueDt = [datetime]::Parse($campaignDueDate)
             $daysToDeadline = [int][math]::Floor(($dueDt - (Get-Date)).TotalDays)
-            if ($daysToDeadline -ge 0) { $effectiveDeadlineDays = $daysToDeadline }
+            $effectiveDeadlineDays = $daysToDeadline  # can be negative (overdue)
         } catch { }
     }
 
-    $projectionDays = [math]::Max(3, $effectiveDeadlineDays + 2)
-    $deadlineDayIdx = $effectiveDeadlineDays
+    $projectionDays = if ($effectiveDeadlineDays -ge 0) { [math]::Max(3, $effectiveDeadlineDays + 2) } else { 5 }
+    $deadlineDayIdx = $effectiveDeadlineDays  # negative = deadline is in the past
     $totalDays = $dayCount + $projectionDays
 
     [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
@@ -1057,21 +1076,23 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section-title'>Per-Reviewer Accountability -- Numeric Comparison with Direction</div>")
     [void]$sb.AppendLine("<p class='note'>Shows each reviewer's completion today vs first capture, with direction arrows. Stalled reviewers (zero change) are highlighted.</p>")
 
-    [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th></tr></thead><tbody>")
+    [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th><th style='font-size:10px;'>In Scope Since</th></tr></thead><tbody>")
     $rvIdx = 0
     foreach ($rv in $reviewers) {
         $todayRv = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
         $yestRv  = $dailyData[$dayCount - 2].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-        $weekRv  = $dailyData[0].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+
+        # Use first-seen data for the "First" column (not day 0 if they weren't in scope)
+        $firstRv = if ($rv.FirstSeenIdx -ge 0) { $dailyData[$rv.FirstSeenIdx].Reviewers | Where-Object { $_.Name -eq $rv.Name } } else { $null }
 
         $todayPct = if ($todayRv) { $todayRv.Completion } else { 0 }
         $yestPct  = if ($yestRv) { $yestRv.Completion } else { 0 }
-        $weekPct  = if ($weekRv) { $weekRv.Completion } else { 0 }
+        $firstPct = if ($firstRv) { $firstRv.Completion } else { 0 }
         $todayPct = [math]::Max(0, [math]::Min(100, $todayPct))
         $yestPct  = [math]::Max(0, [math]::Min(100, $yestPct))
-        $weekPct  = [math]::Max(0, [math]::Min(100, $weekPct))
+        $firstPct = [math]::Max(0, [math]::Min(100, $firstPct))
 
-        $delta7 = [math]::Round($todayPct - $weekPct, 1)
+        $delta7 = [math]::Round($todayPct - $firstPct, 1)
         $arrow = if ($delta7 -gt 2) { "<span class='up-arrow'></span>" } elseif ($delta7 -lt -2) { "<span class='down-arrow'></span>" } else { "<span class='flat-line'></span>" }
         $dClass = if ($delta7 -gt 2) { 'delta-up' } elseif ($delta7 -lt -2) { 'delta-down' } else { 'delta-flat' }
         $dSign = if ($delta7 -gt 0) { '+' } else { '' }
@@ -1081,9 +1102,13 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
                   elseif ($delta7 -lt 5) { "<span style='color:$($colors.Amber);'>Slow</span>" }
                   else { "<span style='color:$($colors.Green);'>On Track</span>" }
 
+        # "In Scope Since" column -- shows when reviewer first appeared
+        $scopeSince = if ($rv.FirstSeenIdx -eq 0) { 'Day 1' } elseif ($rv.FirstSeenIdx -gt 0) { $rv.FirstSeenDate } else { 'N/A' }
+        $scopeStyle = if ($rv.FirstSeenIdx -gt 0) { "color:$($colors.Amber);font-weight:600;" } else { 'color:#888;' }
+
         $bg = if ($delta7 -lt 1 -and $todayPct -lt 95) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
         $rvName = ConvertTo-SPHtmlSafe $rv.Name
-        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${weekPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$status</td></tr>")
+        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${firstPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$status</td><td style='font-size:10px;$scopeStyle'>$scopeSince</td></tr>")
         $rvIdx++
     }
     [void]$sb.AppendLine("</tbody></table></div>")
@@ -1413,12 +1438,19 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
 
     foreach ($rv in $reviewers) {
         [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td>")
-        foreach ($d in $dailyData) {
+        for ($dIdx = 0; $dIdx -lt $dailyData.Count; $dIdx++) {
+            $d = $dailyData[$dIdx]
             $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rv.Name }
-            $pct = if ($rvDay) { $rvDay.Completion } else { 0 }
-            $pct = [math]::Max(0, [math]::Min(100, $pct))
-            $barColor = if ($pct -ge 95) { $colors.Green } elseif ($rv.Style -eq 'stalled') { $colors.Red } else { '#336699' }
-            [void]$sb.AppendLine("<td><div class='bar-track'><div class='bar-fill' style='width:${pct}%;background:$barColor;'></div><span class='bar-label'>${pct}%</span></div></td>")
+            if ($null -eq $rvDay -and $dIdx -lt $rv.FirstSeenIdx) {
+                # Reviewer was not yet in scope -- show gray N/A cell
+                [void]$sb.AppendLine("<td><div class='bar-track' style='background:#e8e8e8;'><span class='bar-label' style='color:#aaa;font-style:italic;'>N/A</span></div></td>")
+            }
+            else {
+                $pct = if ($rvDay) { $rvDay.Completion } else { 0 }
+                $pct = [math]::Max(0, [math]::Min(100, $pct))
+                $barColor = if ($pct -ge 95) { $colors.Green } elseif ($rv.Style -eq 'stalled') { $colors.Red } else { '#336699' }
+                [void]$sb.AppendLine("<td><div class='bar-track'><div class='bar-fill' style='width:${pct}%;background:$barColor;'></div><span class='bar-label'>${pct}%</span></div></td>")
+            }
         }
         [void]$sb.AppendLine("</tr>")
     }
