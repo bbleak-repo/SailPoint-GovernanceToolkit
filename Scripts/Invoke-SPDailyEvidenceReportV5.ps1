@@ -690,10 +690,25 @@ foreach ($dayKey in $dayMap.Keys) {
         Revoked       = $revoked
         Pending       = $pending
         CompletionPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
-        ScopeAdded    = [int](Get-V5MetricVal $m 'scope.added' 0)
+        ScopeAdded    = $null  # set below after baseline detection
         ScopeRemoved  = [int](Get-V5MetricVal $m 'scope.removed' 0)
         PrivPending   = [int](Get-V5MetricVal $m 'counts.privPending' 0)
         PrivTotal     = [int](Get-V5MetricVal $m 'risk.privilegedTotal' 0)
+    }
+}
+
+# Baseline detection: when scope.added equals total items, it's a first capture (no prior
+# snapshot), not real scope growth. Suppress misleading "99 newly added" counts by setting
+# ScopeAdded to 0 for baseline captures. This handles the scenario where a failed run
+# (e.g., reassignment error) causes the retry to have no valid prior snapshot.
+foreach ($d in $dailyData) {
+    $rawScopeAdded = [int](Get-V5MetricVal ($trendRecords[$dailyData.IndexOf($d)].metrics) 'scope.added' 0)
+    if ($rawScopeAdded -ge $d.Total -and $d.Total -gt 0) {
+        # Scope.added >= total items = baseline capture (no valid prior snapshot)
+        $d.ScopeAdded = 0
+    }
+    else {
+        $d.ScopeAdded = $rawScopeAdded
     }
 }
 
