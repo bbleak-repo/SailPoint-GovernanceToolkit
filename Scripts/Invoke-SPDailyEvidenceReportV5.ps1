@@ -676,7 +676,7 @@ foreach ($rec in $trendRecords) {
     $dayKey = $dateForPoint.ToString('yyyy-MM-dd')
     # For cross-campaign: one record per day. If two campaigns map to the same day,
     # keep the one with the most items (most representative).
-    if ($dayMap.ContainsKey($dayKey)) {
+    if ($dayMap.Contains($dayKey)) {
         $existingTotal = 0; $newTotal = 0
         try { $existingTotal = [int]$dayMap[$dayKey].metrics.PSObject.Properties['counts.total'].Value } catch { }
         try { $newTotal = [int]$rec.metrics.PSObject.Properties['counts.total'].Value } catch { }
