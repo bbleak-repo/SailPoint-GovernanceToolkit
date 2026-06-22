@@ -675,7 +675,51 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
     $lvlLabel    = ''
 
     if ($wantEmail -or $wantEmailHtml -or $wantManagerHtml) {
-        $lateRows = @($csvRows | Where-Object { -not [bool]$_.CertSigned })
+        $lateRowsRaw = @($csvRows | Where-Object { -not [bool]$_.CertSigned })
+
+        # Dedup late reviewers by ReviewerIdentityId -- a reviewer with multiple certs
+        # (own + reassigned) should appear ONCE in escalation reports and receive ONE email.
+        # Merge cert data: sum totals, combine campaign names, keep first cert's metadata.
+        $lateRowDedup = [ordered]@{}
+        foreach ($lr in $lateRowsRaw) {
+            $rid = [string]$lr.ReviewerIdentityId
+            if ([string]::IsNullOrWhiteSpace($rid)) { $rid = [string]$lr.ReviewerName }
+            if ($lateRowDedup.Contains($rid)) {
+                # Already seen -- note the additional cert but don't duplicate
+                $existing = $lateRowDedup[$rid]
+                $existing.CertCount++
+                if (-not [string]::IsNullOrWhiteSpace($lr.CampaignName) -and
+                    $existing.CampaignName -notmatch [regex]::Escape($lr.CampaignName)) {
+                    $existing.CampaignName = "$($existing.CampaignName); $($lr.CampaignName)"
+                }
+            }
+            else {
+                # First occurrence -- clone to avoid mutating the CSV row
+                $lateRowDedup[$rid] = [PSCustomObject]@{
+                    CampaignName         = [string]$lr.CampaignName
+                    CampaignStatus       = [string]$lr.CampaignStatus
+                    CertificationId      = [string]$lr.CertificationId
+                    ReviewerName         = [string]$lr.ReviewerName
+                    ReviewerEmail        = [string]$lr.ReviewerEmail
+                    ReviewerIdentityId   = [string]$lr.ReviewerIdentityId
+                    Classification       = [string]$lr.Classification
+                    ReassignedFrom       = [string]$lr.ReassignedFrom
+                    SkipLevelName        = [string]$lr.SkipLevelName
+                    SkipLevelEmail       = [string]$lr.SkipLevelEmail
+                    SkipLevelIdentityId  = [string]$lr.SkipLevelIdentityId
+                    SkipLevelResolved    = [bool]$lr.SkipLevelResolved
+                    HoursOpen            = $lr.HoursOpen
+                    HoursUntilDeadline   = $lr.HoursUntilDeadline
+                    EscalationReason     = [string]$lr.EscalationReason
+                    CertSigned           = $lr.CertSigned
+                    Outcome              = [string]$lr.Outcome
+                    CertCount            = 1
+                }
+            }
+        }
+        $lateRows = @($lateRowDedup.Values)
+
+        Write-Host "    Late reviewers: $($lateRowsRaw.Count) cert(s) -> $($lateRows.Count) unique reviewer(s)" -ForegroundColor DarkGray
 
         # Late reviewers themselves (managers who have not completed their attestation).
         $mgrEmails = @($lateRows | ForEach-Object { [string]$_.ReviewerEmail } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
