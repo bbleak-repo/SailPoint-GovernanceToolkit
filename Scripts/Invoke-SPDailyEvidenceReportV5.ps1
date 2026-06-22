@@ -631,12 +631,28 @@ if ($trendRecords.Count -eq 0) {
 
 # Resolve campaign metadata from the latest record
 $latestRecord = $trendRecords[$trendRecords.Count - 1]
-$campaignNameResolved = [string]$latestRecord.campaignName
+if ($isCrossCampaign) {
+    # Cross-campaign: show the series name (common prefix) + date range, not a single campaign name
+    $allNames = @($trendRecords | ForEach-Object { [string]$_.campaignName } | Sort-Object -Unique)
+    # Try to find a common prefix (e.g., "Daily Privileged Role Attestation" from "Daily... Monday", "Daily... Tuesday")
+    $first = $allNames[0]; $prefix = $first
+    foreach ($n in $allNames) {
+        while ($prefix.Length -gt 0 -and -not $n.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $prefix = $prefix.Substring(0, $prefix.Length - 1)
+        }
+    }
+    $prefix = $prefix.TrimEnd(' ', '-', '_')
+    if ($prefix.Length -lt 5) { $prefix = $allNames[0] }  # fallback
+    $campaignNameResolved = "$prefix ($($distinctCampIds.Count) campaigns)"
+}
+else {
+    $campaignNameResolved = [string]$latestRecord.campaignName
+}
 $campaignIdResolved   = [string]$latestRecord.campaignId
 $campaignDueDate      = [string]$latestRecord.dueDate
 $campaignStatus       = [string]$latestRecord.status
 
-Write-Host "    Campaign: $campaignNameResolved ($campaignIdResolved)" -ForegroundColor DarkGray
+Write-Host "    Campaign: $campaignNameResolved" -ForegroundColor DarkGray
 Write-Host "    Status: $campaignStatus" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -1290,11 +1306,10 @@ $privChart = Build-MetricBarChart -Title 'Privileged Items Pending Review' -Valu
 [void]$sb.AppendLine("</div>")
 
 
-# ===== STYLE G: Rubber-Stamp Risk Detector =====
-if ($reviewers.Count -gt 0) {
+# ===== STYLE G: (Removed -- rubber-stamp detector not meaningful for daily campaigns) =====
+if ($false) {  # Disabled: daily campaigns show binary approve/no-decision, making the chart useless
     [void]$sb.AppendLine("<div class='section'>")
-
-    [void]$sb.AppendLine("<div class='section-title'>Rubber-Stamp Risk Detector -- Approval Ratio Analysis</div>")
+    [void]$sb.AppendLine("<div class='section-title'>Rubber-Stamp Risk Detector</div>")
     [void]$sb.AppendLine("<p class='note'>Approval ratio aggregated across all captured days. Dot position = cumulative (Approved / Decided * 100). Circle size = total items decided. Sorted: reviewers with decisions first (alphabetical), then no-decisions (alphabetical).</p>")
 
     # Aggregate approval ratio across ALL days per reviewer (not just today)
@@ -1492,6 +1507,7 @@ if ($allCampaignLatest.Count -gt 0) {
 
         $campaigns += @{
             Name = $cn
+            Timestamp = [string]$rec.timestamp
             Completion = $compPct
             Deadline = $dlDays
             Pending = $pend
@@ -1505,8 +1521,10 @@ if ($allCampaignLatest.Count -gt 0) {
         }
     }
 
-    # Sort campaigns by name descending (newest daily campaign first)
-    $campaigns = @($campaigns | Sort-Object { $_.Name } -Descending)
+    # Sort campaigns by timestamp descending (newest first), then by name
+    $campaigns = @($campaigns | Sort-Object @{ Expression = {
+        try { [datetime]::Parse([string]$_.Timestamp) } catch { [datetime]::MinValue }
+    } } -Descending)
 
     # Compute risk scores
     foreach ($c in $campaigns) {
