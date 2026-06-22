@@ -98,7 +98,7 @@
     When set, produces a self-contained HTML escalation report alongside the text file.
     Groups late reviewers by manager with formatted tables and color-coded
     status indicators. Designed for attaching to or embedding in an escalation email.
-    Output: {DeltaCert.OutputPath}\escalation-report-YYYYMMDD-HHmmss.html
+    Output: {DeltaCert.OutputPath}\Escalations_Attestations_YYYYMMDD_HPM.html
 .PARAMETER EmailHtmlPath
     Override the auto-generated HTML report path. Implies -EmailHtml.
 .PARAMETER EmailHtmlManagers
@@ -820,7 +820,12 @@ if (($wantCsv -or $wantEmail -or $wantEmailHtml -or $wantManagerHtml) -and $stal
     # --- HTML escalation report: self-contained, email-friendly HTML with per-manager tables. ---
     if ($wantEmailHtml) {
         if ([string]::IsNullOrWhiteSpace($effectiveEmailHtmlPath)) {
-            $effectiveEmailHtmlPath = Join-Path $reportOutputDir "escalation-report-$reportStamp.html"
+            # Friendly filename: Escalations_Attestations_20260622_1PM.html
+            $dtNow = Get-Date
+            $friendlyDate = $dtNow.ToString('yyyyMMdd')
+            $friendlyHour = "$($dtNow.Hour % 12)$(if ($dtNow.Hour -lt 12) { 'AM' } else { 'PM' })"
+            if ($friendlyHour.StartsWith('0')) { $friendlyHour = "12$($friendlyHour.Substring(1))" }
+            $effectiveEmailHtmlPath = Join-Path $reportOutputDir "Escalations_Attestations_${friendlyDate}_${friendlyHour}.html"
         }
 
         # Count distinct campaigns among late rows
