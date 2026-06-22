@@ -1699,9 +1699,10 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         }
     }
 
-    $rvVelocities = @($rvVelocities | Sort-Object { -$_.Velocity })
-    $maxVel = [math]::Max(1, ($rvVelocities | Measure-Object -Property Velocity -Maximum).Maximum)
-    $teamAvg = [math]::Round(($rvVelocities | Measure-Object -Property Velocity -Average).Average, 1)
+    $rvVelocities = @($rvVelocities | Sort-Object { -[double]$_.Velocity })
+    $maxVel = 1; $velSum = 0; $velCount = 0
+    foreach ($vr in $rvVelocities) { $v = [double]$vr.Velocity; if ($v -gt $maxVel) { $maxVel = $v }; $velSum += $v; $velCount++ }
+    $teamAvg = if ($velCount -gt 0) { [math]::Round($velSum / $velCount, 1) } else { 0 }
 
     $kW = 700; $kBarH = 32; $kH = 40 + ($rvVelocities.Count * ($kBarH + 12)); $kPadL = 140; $kPadR = 80
     $kPlotW = $kW - $kPadL - $kPadR
@@ -1919,8 +1920,8 @@ if ($today.Reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<p class='note'>Each rectangle = a reviewer, area proportional to their total items. Color by completion: green >=90%, amber 50-89%, red &lt;50%.</p>")
 
     $iW = 700; $iH = 200
-    $todayRvs = @($today.Reviewers | Sort-Object { -$_.Total })
-    $totalAllItems = ($todayRvs | Measure-Object -Property Total -Sum).Sum
+    $todayRvs = @($today.Reviewers | Sort-Object { -[int]$_.Total })
+    $totalAllItems = 0; foreach ($trv in $todayRvs) { $totalAllItems += [int]$trv.Total }
     if ($totalAllItems -eq 0) { $totalAllItems = 1 }
 
     [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
