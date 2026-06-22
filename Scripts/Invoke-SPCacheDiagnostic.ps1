@@ -408,6 +408,121 @@ if (Test-Path $snapshotDir) {
 }
 else { Add-Finding 'INFO' 'Snapshots' $snapshotDir 'Snapshot directory does not exist' }
 
+# --- Cross-Campaign Key Stability (for daily campaigns) ---
+# Compare the two most recent campaigns to detect items that exist by IdentityId+AccessName
+# in both but have different Keys (AccessId changed between campaigns = false "newly added")
+if (Test-Path $snapshotDir) {
+    $allLatestSnaps = [System.Collections.Generic.List[object]]::new()
+    foreach ($cd in @(Get-ChildItem -Path $snapshotDir -Directory -ErrorAction SilentlyContinue)) {
+        $sf = @(Get-ChildItem -Path $cd.FullName -Filter '*.json' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\.sha256$' })
+        if ($sf.Count -eq 0) { continue }
+        $latest = $sf | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        try {
+            $snapData = Get-Content $latest.FullName -Raw | ConvertFrom-Json
+            $startDate = $null
+            if ($null -ne $snapData.Meta -and $null -ne $snapData.Meta.PSObject.Properties['StartDate']) {
+                try { $startDate = [datetime]::Parse([string]$snapData.Meta.StartDate) } catch { }
+            }
+            if ($null -eq $startDate) { $startDate = $latest.LastWriteTime }
+            $allLatestSnaps.Add(@{ Dir = $cd.Name; StartDate = $startDate; Snapshot = $snapData; Path = $latest.FullName })
+        } catch { }
+    }
+
+    if ($allLatestSnaps.Count -ge 2) {
+        Write-Host '  [4b] Cross-Campaign Key Stability' -ForegroundColor White
+        [void]$logSb.AppendLine('')
+        [void]$logSb.AppendLine('=== 4b. CROSS-CAMPAIGN KEY STABILITY ===')
+
+        $sorted = @($allLatestSnaps | Sort-Object { $_.StartDate } -Descending)
+        $newest = $sorted[0]; $previous = $sorted[1]
+        $nName = if ($null -ne $newest.Snapshot.Meta) { $newest.Snapshot.Meta.CampaignName } else { $newest.Dir }
+        $pName = if ($null -ne $previous.Snapshot.Meta) { $previous.Snapshot.Meta.CampaignName } else { $previous.Dir }
+
+        Add-Finding 'INFO' 'CrossCampaign' '' "Comparing newest ($nName) vs previous ($pName)"
+
+        $nItems = @($newest.Snapshot.Items)
+        $pItems = @($previous.Snapshot.Items)
+
+        # Build lookup by IdentityId+AccessName (the SEMANTIC key -- same person, same entitlement)
+        $nByNameKey = @{}
+        foreach ($it in $nItems) {
+            $iid = if ($null -ne $it.PSObject.Properties['IdentityId']) { [string]$it.IdentityId } else { '' }
+            $aname = if ($null -ne $it.PSObject.Properties['AccessName']) { [string]$it.AccessName } else { '' }
+            $aid = if ($null -ne $it.PSObject.Properties['AccessId']) { [string]$it.AccessId } else { '' }
+            $key = if ($null -ne $it.PSObject.Properties['Key']) { [string]$it.Key } else { '' }
+            $nameKey = "$iid|$aname"
+            if (-not [string]::IsNullOrWhiteSpace($iid)) { $nByNameKey[$nameKey] = @{ AccessId = $aid; Key = $key; IdentityName = $(if ($null -ne $it.PSObject.Properties['IdentityName']) { [string]$it.IdentityName } else { '' }) } }
+        }
+
+        $pByNameKey = @{}
+        $pByKey = @{}
+        foreach ($it in $pItems) {
+            $iid = if ($null -ne $it.PSObject.Properties['IdentityId']) { [string]$it.IdentityId } else { '' }
+            $aname = if ($null -ne $it.PSObject.Properties['AccessName']) { [string]$it.AccessName } else { '' }
+            $aid = if ($null -ne $it.PSObject.Properties['AccessId']) { [string]$it.AccessId } else { '' }
+            $key = if ($null -ne $it.PSObject.Properties['Key']) { [string]$it.Key } else { '' }
+            $nameKey = "$iid|$aname"
+            if (-not [string]::IsNullOrWhiteSpace($iid)) { $pByNameKey[$nameKey] = @{ AccessId = $aid; Key = $key } }
+            if (-not [string]::IsNullOrWhiteSpace($key)) { $pByKey[$key] = $true }
+        }
+
+        # Items in newest that the DIFF engine would see as "newly added" (key not in previous)
+        $diffAdded = 0; $falseAdded = 0; $accessIdChurn = 0
+        $falseAddedIdentities = @{}
+        foreach ($it in $nItems) {
+            $key = if ($null -ne $it.PSObject.Properties['Key']) { [string]$it.Key } else { '' }
+            if ([string]::IsNullOrWhiteSpace($key)) { continue }
+            if ($pByKey.ContainsKey($key)) { continue }  # key matches -- not "added"
+
+            $diffAdded++  # diff engine would call this "added"
+
+            # But is it SEMANTICALLY the same item? (same person + same entitlement name)
+            $iid = if ($null -ne $it.PSObject.Properties['IdentityId']) { [string]$it.IdentityId } else { '' }
+            $aname = if ($null -ne $it.PSObject.Properties['AccessName']) { [string]$it.AccessName } else { '' }
+            $nameKey = "$iid|$aname"
+            if ($pByNameKey.ContainsKey($nameKey)) {
+                # SAME person + entitlement EXISTS in previous -- this is a FALSE "newly added"
+                $falseAdded++
+                $iname = if ($null -ne $it.PSObject.Properties['IdentityName']) { [string]$it.IdentityName } else { $iid }
+                if (-not $falseAddedIdentities.ContainsKey($iid)) { $falseAddedIdentities[$iid] = @{ Name = $iname; Count = 0 } }
+                $falseAddedIdentities[$iid].Count++
+
+                # Check if AccessId changed
+                $prevAid = $pByNameKey[$nameKey].AccessId
+                $curAid = if ($null -ne $it.PSObject.Properties['AccessId']) { [string]$it.AccessId } else { '' }
+                if ($curAid -ne $prevAid -and -not [string]::IsNullOrWhiteSpace($prevAid) -and -not [string]::IsNullOrWhiteSpace($curAid)) {
+                    $accessIdChurn++
+                }
+            }
+        }
+
+        Add-Finding 'INFO' 'CrossCampaign' '' "Newest: $($nItems.Count) items | Previous: $($pItems.Count) items"
+        Add-Finding 'INFO' 'CrossCampaign' '' "Items diff engine would mark as 'newly added': $diffAdded"
+
+        if ($falseAdded -gt 0) {
+            Add-Finding 'ERROR' 'CrossCampaign' '' "$falseAdded items would show as 'newly added' but the SAME IdentityId+AccessName exists in the previous campaign -- these are FALSE scope additions"
+            Add-Finding 'WARN' 'CrossCampaign' '' "Affected identities:"
+            foreach ($iid in $falseAddedIdentities.Keys) {
+                $fi = $falseAddedIdentities[$iid]
+                Add-Finding 'WARN' 'CrossCampaign' '' "  $($fi.Name) ($iid): $($fi.Count) false 'newly added' items"
+            }
+            if ($accessIdChurn -gt 0) {
+                Add-Finding 'ERROR' 'CrossCampaign' '' "$accessIdChurn of these have DIFFERENT AccessId between campaigns -- ISC is regenerating access IDs per campaign, causing key instability"
+                Add-Finding 'WARN' 'CrossCampaign' '' "ROOT CAUSE: The diff key uses AccessId which changes between daily campaigns for reassigned certifications. The diff engine should fall back to IdentityId+AccessName matching when AccessId changes."
+            }
+            else {
+                Add-Finding 'WARN' 'CrossCampaign' '' "AccessId is STABLE but keys still don't match -- check if SourceId changed or if items are genuinely from a different source"
+            }
+        }
+        elseif ($diffAdded -gt 0) {
+            Add-Finding 'INFO' 'CrossCampaign' '' "All $diffAdded 'newly added' items are genuinely new (identity+access not in previous campaign)"
+        }
+        else {
+            Add-Finding 'INFO' 'CrossCampaign' '' 'No key drift detected -- all items in newest campaign match the previous campaign by key'
+        }
+    }
+}
+
 [void]$logSb.AppendLine('')
 #endregion
 
