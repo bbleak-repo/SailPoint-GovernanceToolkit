@@ -239,6 +239,8 @@ function Save-SPCampaignTrendPoint {
         $tsUtc = if ($capturedAt) { try { ([datetime]::Parse($capturedAt)).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } catch { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
 
         # --- Per-reviewer decision summaries (compact, only reviewers with total > 0) ---
+        # Build per-reviewer summaries, DEDUPED by reviewer name.
+        # A reviewer with multiple certifications (own + reassigned) gets merged totals.
         $reviewerSummaries = @()
         $certs = @(Get-SPTrendVal $Snapshot 'Certs' @())
         if ($certs.Count -gt 0) {
@@ -256,19 +258,43 @@ function Save-SPCampaignTrendPoint {
                     default   { $revCounts[$rid].Pending++ }
                 }
             }
+            # Merge certs by reviewer name (handles multiple certs per reviewer)
+            $rvMerge = [ordered]@{}
             foreach ($cert in $certs) {
                 $total = [int](Get-SPTrendVal $cert 'DecisionsTotal' 0)
                 if ($total -eq 0) { continue }
-                $rid = [string](Get-SPTrendVal $cert 'ReviewerId' '')
-                $rc  = if ($revCounts.ContainsKey($rid)) { $revCounts[$rid] } else { $null }
+                $rid  = [string](Get-SPTrendVal $cert 'ReviewerId' '')
+                $rName = [string](Get-SPTrendVal $cert 'ReviewerName' '')
+                if ([string]::IsNullOrWhiteSpace($rName)) { $rName = $rid }
+                $rc   = if ($revCounts.ContainsKey($rid)) { $revCounts[$rid] } else { $null }
                 $made = [int](Get-SPTrendVal $cert 'DecisionsMade' 0)
-                $compPct = if ($total -gt 0) { [math]::Round($made * 100.0 / $total, 1) } else { 0.0 }
+                if ($rvMerge.Contains($rName)) {
+                    $existing = $rvMerge[$rName]
+                    $existing.total    += $total
+                    $existing.made     += $made
+                    $existing.approved += if ($null -ne $rc) { [int]$rc.Approved } else { 0 }
+                    $existing.revoked  += if ($null -ne $rc) { [int]$rc.Revoked }  else { 0 }
+                    $existing.pending  += if ($null -ne $rc) { [int]$rc.Pending }  else { 0 }
+                }
+                else {
+                    $rvMerge[$rName] = @{
+                        total    = $total
+                        made     = $made
+                        approved = if ($null -ne $rc) { [int]$rc.Approved } else { 0 }
+                        revoked  = if ($null -ne $rc) { [int]$rc.Revoked }  else { 0 }
+                        pending  = if ($null -ne $rc) { [int]$rc.Pending }  else { 0 }
+                    }
+                }
+            }
+            foreach ($rName in $rvMerge.Keys) {
+                $rv = $rvMerge[$rName]
+                $compPct = if ($rv.total -gt 0) { [math]::Round($rv.made * 100.0 / $rv.total, 1) } else { 0.0 }
                 $reviewerSummaries += [ordered]@{
-                    reviewer   = [string](Get-SPTrendVal $cert 'ReviewerName' '')
-                    total      = $total
-                    approved   = if ($null -ne $rc) { [int]$rc.Approved } else { 0 }
-                    revoked    = if ($null -ne $rc) { [int]$rc.Revoked }  else { 0 }
-                    pending    = if ($null -ne $rc) { [int]$rc.Pending }  else { 0 }
+                    reviewer   = $rName
+                    total      = $rv.total
+                    approved   = $rv.approved
+                    revoked    = $rv.revoked
+                    pending    = $rv.pending
                     completion = [double]$compPct
                 }
             }
