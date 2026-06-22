@@ -553,7 +553,10 @@ try {
         }
     }
 
-    $campaignAudits = $auditList.ToArray()
+    # Sort campaigns by created date descending (newest first) for consistent report ordering
+    $campaignAudits = @($auditList.ToArray() | Sort-Object @{ Expression = {
+        $c = [string]$_['Created']; if ([string]::IsNullOrWhiteSpace($c)) { [datetime]::MinValue } else { try { [datetime]::Parse($c) } catch { [datetime]::MinValue } }
+    } } -Descending)
     Write-Host "    Built audit data for $($campaignAudits.Count) campaign(s)." -ForegroundColor DarkGray
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
