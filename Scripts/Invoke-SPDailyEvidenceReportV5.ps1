@@ -701,10 +701,15 @@ foreach ($rec in $trendRecords) {
     }
 }
 
+# In cross-campaign mode, filter dayMap by DaysBack against the DERIVED dates
+# (not the capture timestamp, which was already filtered in Step 3)
+$derivedCutoff = (Get-Date).AddDays(-$effectiveDaysBack)
+$filteredKeys = @($dayMap.Keys | Sort-Object | Where-Object { [datetime]::Parse($_) -ge $derivedCutoff })
+if ($filteredKeys.Count -eq 0) { $filteredKeys = @($dayMap.Keys | Sort-Object) }  # fallback: show all if filter removes everything
+
 $dailyData = @()
-foreach ($dayKey in ($dayMap.Keys | Sort-Object)) {
+foreach ($dayKey in $filteredKeys) {
     $rec = $dayMap[$dayKey]
-    # Use the dayKey (campaign start date) for display, not the capture timestamp
     $ts = [datetime]::Parse($dayKey)
     $m = $rec.metrics
 
