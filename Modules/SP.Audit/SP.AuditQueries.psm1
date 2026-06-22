@@ -6925,8 +6925,9 @@ function Get-SPCachedCampaignItems {
     if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
         try {
             $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
-            $cachedAt  = [datetime]::Parse($meta.CachedAt)
-            $ageMinutes = [math]::Round(((Get-Date) - $cachedAt).TotalMinutes, 1)
+            # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly
+            $cachedAt  = [datetime]::Parse([string]$meta.CachedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+            $ageMinutes = [math]::Round(((Get-Date) - $cachedAt.ToLocalTime()).TotalMinutes, 1)
             $diskValid = $meta.IsPermanent -or ($ageMinutes -lt $effectiveTtl)
             Write-Host "  [Cache-Check] CachedAt=$($cachedAt.ToString('HH:mm:ss')) | Age=${ageMinutes}min | TTL=${effectiveTtl}min | Permanent=$($meta.IsPermanent) | Valid=$diskValid" -ForegroundColor DarkGray
             if ($diskValid) {
@@ -7079,7 +7080,7 @@ function Get-SPCachedCampaignItems {
                 CampaignName = $campName
                 Status       = $status
                 IsPermanent  = $isPermanent
-                CachedAt     = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                CachedAt     = (Get-Date).ToString('o')
                 CertCount    = $certs.Count
                 ItemCount    = $allItems.Count
             }
