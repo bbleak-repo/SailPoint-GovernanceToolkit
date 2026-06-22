@@ -1168,7 +1168,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         $dClass = if ($delta7 -gt 2) { 'delta-up' } elseif ($delta7 -lt -2) { 'delta-down' } else { 'delta-flat' }
         $dSign = if ($delta7 -gt 0) { '+' } else { '' }
 
-        $status = if ($todayPct -ge 100) { "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
+        $rvStatus = if ($todayPct -ge 100) { "<span style='color:$($colors.Green);font-weight:600;'>Complete</span>" }
                   elseif ($delta7 -lt 1 -and $todayPct -lt 95) { "<span style='color:$($colors.Red);font-weight:600;'>STALLED</span>" }
                   elseif ($delta7 -lt 5) { "<span style='color:$($colors.Amber);'>Slow</span>" }
                   else { "<span style='color:$($colors.Green);'>On Track</span>" }
@@ -1179,7 +1179,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
 
         $bg = if ($delta7 -lt 1 -and $todayPct -lt 95) { " style='background:#fdecec;'" } elseif ($rvIdx % 2 -eq 1) { " style='background:#f6f9fc;'" } else { '' }
         $rvName = ConvertTo-SPHtmlSafe $rv.Name
-        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${firstPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$status</td><td style='font-size:10px;$scopeStyle'>$scopeSince</td></tr>")
+        [void]$sb.AppendLine("<tr$bg><td style='font-weight:600;'>$rvName</td><td style='text-align:right;color:#888;'>${firstPct}%</td><td style='text-align:right;'>${yestPct}%</td><td style='text-align:right;font-weight:600;'>${todayPct}%</td><td style='text-align:center;'>$arrow</td><td style='text-align:right;' class='$dClass'>${dSign}${delta7}%</td><td>$rvStatus</td><td style='font-size:10px;$scopeStyle'>$scopeSince</td></tr>")
         $rvIdx++
     }
     [void]$sb.AppendLine("</tbody></table></div>")
