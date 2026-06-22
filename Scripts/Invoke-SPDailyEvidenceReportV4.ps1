@@ -618,6 +618,9 @@ try {
         if (-not $NoCapture) {
             try { $sv = Save-SPCampaignSnapshot -Snapshot $todaySnap; if (-not $sv.Success) { Write-Host "    WARN: snapshot save: $($sv.Error)" -ForegroundColor Yellow } }
             catch { Write-Host "    WARN: snapshot save failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+            # Write trend point for V5 trend charts (lightweight, no extra API calls)
+            try { Save-SPCampaignTrendPoint -Snapshot $todaySnap | Out-Null }
+            catch { Write-Host "    WARN: trend point save failed: $($_.Exception.Message)" -ForegroundColor Yellow }
         }
     }
 
