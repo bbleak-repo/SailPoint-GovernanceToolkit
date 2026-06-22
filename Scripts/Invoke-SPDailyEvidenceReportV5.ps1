@@ -1272,19 +1272,37 @@ $privChart = Build-MetricBarChart -Title 'Privileged Items Pending Review' -Valu
 
 
 # ===== STYLE G: Rubber-Stamp Risk Detector =====
-if ($reviewers.Count -gt 0 -and $today.Reviewers.Count -gt 0) {
+if ($reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<div class='section'>")
 
     [void]$sb.AppendLine("<div class='section-title'>Rubber-Stamp Risk Detector -- Approval Ratio Analysis</div>")
-    [void]$sb.AppendLine("<p class='note'>Horizontal lollipop chart per reviewer. Dot position = approval ratio (Approved / Decided * 100). Circle size = items decided. Dashed threshold at 95%.</p>")
+    [void]$sb.AppendLine("<p class='note'>Approval ratio aggregated across all captured days. Dot position = cumulative (Approved / Decided * 100). Circle size = total items decided. Sorted: reviewers with decisions first (alphabetical), then no-decisions (alphabetical).</p>")
 
-    $todayReviewers = $today.Reviewers
-    $gW = 700; $gH = 30 + ($todayReviewers.Count * 40); $gPadL = 120; $gPadR = 120; $gPlotW = $gW - $gPadL - $gPadR
+    # Aggregate approval ratio across ALL days per reviewer (not just today)
+    $gReviewerAgg = [ordered]@{}
+    foreach ($d in $dailyData) {
+        foreach ($rv in $d.Reviewers) {
+            $rn = [string]$rv.Name
+            if ([string]::IsNullOrWhiteSpace($rn)) { continue }
+            if (-not $gReviewerAgg.Contains($rn)) { $gReviewerAgg[$rn] = @{ Approved = 0; Revoked = 0; Decided = 0 } }
+            $gReviewerAgg[$rn].Approved += [int]$rv.Approved
+            $gReviewerAgg[$rn].Revoked  += [int]$rv.Revoked
+            $gReviewerAgg[$rn].Decided  += ([int]$rv.Approved + [int]$rv.Revoked)
+        }
+    }
+
+    # Build sorted list: reviewers with decisions first (alphabetical), then no-decisions (alphabetical)
+    $gSorted = @()
+    $withDecisions = @($gReviewerAgg.Keys | Where-Object { $gReviewerAgg[$_].Decided -gt 0 } | Sort-Object)
+    $noDecisions   = @($gReviewerAgg.Keys | Where-Object { $gReviewerAgg[$_].Decided -eq 0 } | Sort-Object)
+    $gSorted = @($withDecisions) + @($noDecisions)
+
+    $gW = 700; $gH = 30 + ($gSorted.Count * 40); $gPadL = 120; $gPadR = 120; $gPlotW = $gW - $gPadL - $gPadR
 
     [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
     [void]$sb.AppendLine("<svg width='$gW' height='$gH' style='font-family:Segoe UI,Arial,sans-serif;'>")
 
-    [void]$sb.AppendLine("<text x='$($gPadL + $gPlotW / 2)' y='14' text-anchor='middle' font-size='10' fill='#888'>Approval Ratio (%)</text>")
+    [void]$sb.AppendLine("<text x='$($gPadL + $gPlotW / 2)' y='14' text-anchor='middle' font-size='10' fill='#888'>Cumulative Approval Ratio (%)</text>")
 
     $scaleVals = @(0, 25, 50, 75, 95, 100)
     foreach ($sv in $scaleVals) {
@@ -1298,11 +1316,12 @@ if ($reviewers.Count -gt 0 -and $today.Reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<text x='$($thresh95x + 3)' y='28' font-size='8' fill='$($colors.Red)'>95% threshold</text>")
 
     $ri = 0
-    foreach ($rv in $todayReviewers) {
-        [int]$decided = [int]$rv.Approved + [int]$rv.Revoked
-        $approvalRatio = if ($decided -gt 0) { [math]::Round([int]$rv.Approved / $decided * 100, 1) } else { 0 }
+    foreach ($rn in $gSorted) {
+        $agg = $gReviewerAgg[$rn]
+        [int]$decided = $agg.Decided
+        $approvalRatio = if ($decided -gt 0) { [math]::Round($agg.Approved / $decided * 100, 1) } else { 0 }
         $yPos = 38 + ($ri * 40)
-        $rvName = ConvertTo-SPHtmlSafe $rv.Name
+        $rvName = ConvertTo-SPHtmlSafe $rn
 
         [void]$sb.AppendLine("<text x='$($gPadL - 8)' y='$($yPos + 5)' text-anchor='end' font-size='11' font-weight='600' fill='#1c2b3a'>$rvName</text>")
 
@@ -1466,6 +1485,9 @@ if ($allCampaignLatest.Count -gt 0) {
             RiskScore = 0
         }
     }
+
+    # Sort campaigns by name descending (newest daily campaign first)
+    $campaigns = @($campaigns | Sort-Object { $_.Name } -Descending)
 
     # Compute risk scores
     foreach ($c in $campaigns) {
