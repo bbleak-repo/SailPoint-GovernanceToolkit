@@ -743,7 +743,7 @@ for ($lv = 0; $lv -lt 5; $lv++) {
 
 $iW = 700; $iH = 200
 $todayRvs = $dailyData[6].Reviewers | Sort-Object { -$_.Total }
-$totalAllItems = ($todayRvs | Measure-Object -Property Total -Sum).Sum
+$totalAllItems = 0; foreach ($trv in $todayRvs) { $totalAllItems += [int]$trv.Total }
 if ($totalAllItems -eq 0) { $totalAllItems = 1 }
 
 [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
@@ -938,8 +938,9 @@ foreach ($rv in $reviewers) {
 
 # Sort by velocity descending
 $rvVelocities = @($rvVelocities | Sort-Object { -$_.Velocity })
-$maxVel = [math]::Max(1, ($rvVelocities | Measure-Object -Property Velocity -Maximum).Maximum)
-$teamAvg = [math]::Round(($rvVelocities | Measure-Object -Property Velocity -Average).Average, 1)
+$maxVel = 1; $velSum = 0; $velCount = 0
+foreach ($vr in $rvVelocities) { $v = [double]$vr.Velocity; if ($v -gt $maxVel) { $maxVel = $v }; $velSum += $v; $velCount++ }
+$teamAvg = if ($velCount -gt 0) { [math]::Round($velSum / $velCount, 1) } else { 0 }
 
 $kW = 700; $kBarH = 32; $kH = 40 + ($rvVelocities.Count * ($kBarH + 12)); $kPadL = 140; $kPadR = 80
 $kPlotW = $kW - $kPadL - $kPadR

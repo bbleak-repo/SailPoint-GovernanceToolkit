@@ -32,8 +32,8 @@ function New-RCTopNComponent {
     }
 
     $top = if ($totalGroups -gt $n) { $sorted[0..($n - 1)] } else { $sorted }
-    $maxCount = ($top | Measure-Object -Property Count -Maximum).Maximum
-    if ($null -eq $maxCount -or $maxCount -le 0) { $maxCount = 1 }
+    # Manual max to avoid Measure-Object -Property on hashtables (fails on PS 5.1)
+    $maxCount = 1; foreach ($t in $top) { $c = [int]$t.Count; if ($c -gt $maxCount) { $maxCount = $c } }
 
     $body = New-Object System.Text.StringBuilder
     foreach ($it in $top) {

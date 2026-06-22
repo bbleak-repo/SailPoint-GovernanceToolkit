@@ -66,8 +66,8 @@ function New-RCGroupTableComponent {
     # Sum only enumerated (non-skipped) groups so the estate total agrees with the
     # rest of the RC family (kpi-cards/heatmap/top-n all exclude skipped). Skipped
     # groups are still shown as rows, flagged.
-    $totalMembers = (($sorted | Where-Object { -not $_.Skipped }) | Measure-Object -Property Count -Sum).Sum
-    if ($null -eq $totalMembers) { $totalMembers = 0 }
+    # Manual sum to avoid Measure-Object -Property on hashtables (fails on PS 5.1)
+    $totalMembers = 0; foreach ($s in @($sorted | Where-Object { -not $_.Skipped })) { $totalMembers += [int]$s.Count }
 
     return @"
 <section class="rc-section">
