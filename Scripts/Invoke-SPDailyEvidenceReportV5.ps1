@@ -646,37 +646,51 @@ Write-Host ''
 
 Write-Host '  Step 4: Build daily data from trend records' -ForegroundColor Cyan
 
-# Deduplicate: keep only the LATEST record per calendar day.
-# For CROSS-CAMPAIGN daily mode (multiple campaigns each representing a different day),
-# use the campaign's start date as the data point date, not the capture timestamp.
-# This way "Daily Monday" contributes a data point on Monday, "Daily Tuesday" on Tuesday, etc.
+# Detect mode: cross-campaign (multiple campaignIds) or within-campaign (same campaign, multiple captures)
+$distinctCampIds = @{}
+foreach ($rec in $trendRecords) {
+    $cid = [string]$rec.campaignId
+    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
+}
+$isCrossCampaign = ($distinctCampIds.Count -gt 1)
+
+if ($isCrossCampaign) {
+    Write-Host "    Mode: Cross-campaign ($($distinctCampIds.Count) campaigns -> 1 data point each)" -ForegroundColor DarkGray
+}
+else {
+    Write-Host "    Mode: Within-campaign (1 campaign, $($trendRecords.Count) captures)" -ForegroundColor DarkGray
+}
+
+# Deduplicate: keep one record per calendar day.
+# Cross-campaign: use campaign start date (capture timestamp - daysSinceStart)
+#   so "Daily Monday" maps to Monday, "Daily Tuesday" to Tuesday.
+# Within-campaign: use capture timestamp (each capture is a different day).
 $dayMap = [ordered]@{}
 foreach ($rec in $trendRecords) {
-    # Prefer the campaign's own date over the capture timestamp
-    $dateForPoint = $null
-    # Try campaign start date from the record (most meaningful for daily campaigns)
-    $startDateStr = $null
-    if ($null -ne $rec.PSObject.Properties['dueDate']) { }  # skip dueDate
-    if ($null -ne $rec.PSObject.Properties['metrics']) {
-        $tds = $null
-        try { $p = $rec.metrics.PSObject.Properties['timing.daysSinceStart']; if ($null -ne $p) { $tds = $p.Value } } catch { }
-        if ($null -ne $tds -and [int]$tds -gt 0) {
-            # Derive start date: capture timestamp minus daysSinceStart
-            try {
+    if ($isCrossCampaign) {
+        # Cross-campaign: derive campaign start date from daysSinceStart
+        $dateForPoint = $null
+        try {
+            $tds = $null
+            $p = $rec.metrics.PSObject.Properties['timing.daysSinceStart']
+            if ($null -ne $p -and $null -ne $p.Value) { $tds = [int]$p.Value }
+            if ($null -ne $tds -and $tds -gt 0) {
                 $capTs = [datetime]::Parse([string]$rec.timestamp)
-                $dateForPoint = $capTs.AddDays(-[int]$tds)
-            } catch { }
+                $dateForPoint = $capTs.AddDays(-$tds)
+            }
+        } catch { }
+        if ($null -eq $dateForPoint) {
+            $dateForPoint = [datetime]::Parse([string]$rec.timestamp)
         }
     }
-    # If we couldn't derive start date, check if multiple campaigns share the same capture date
-    # (cross-campaign mode indicator: different campaignId with same timestamp)
-    if ($null -eq $dateForPoint) {
+    else {
+        # Within-campaign: use capture timestamp directly
         $dateForPoint = [datetime]::Parse([string]$rec.timestamp)
     }
+
     $dayKey = $dateForPoint.ToString('yyyy-MM-dd')
-    # For cross-campaign: one record per day. If two campaigns map to the same day,
-    # keep the one with the most items (most representative).
     if ($dayMap.Contains($dayKey)) {
+        # Collision: keep the record with the most items
         $existingTotal = 0; $newTotal = 0
         try { $existingTotal = [int]$dayMap[$dayKey].metrics.PSObject.Properties['counts.total'].Value } catch { }
         try { $newTotal = [int]$rec.metrics.PSObject.Properties['counts.total'].Value } catch { }
