@@ -1684,7 +1684,7 @@ if (-not $v3HasPrior) {
 else {
     # (a) Newly added access -- net-new to SailPoint, approved or pending (not revoked-on-arrival).
     $newAccess = @($v3NetNewItems | Where-Object { ([string](Get-V3Prop $_ 'Decision' '')).ToUpperInvariant() -in @('APPROVE', 'PENDING', '') })
-    [void]$sb.AppendLine('<details open><summary class="s-green" style="font-size:13px;margin:12px 0 6px">Newly added access &mdash; net-new to SailPoint (' + $newAccess.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary class="s-green" style="font-size:13px;margin:12px 0 6px">Newly added access &mdash; net-new to SailPoint (' + $newAccess.Count + ')</summary>')
     [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:0 0 6px">The identity was NOT in this entitlement in the prior campaign. Status is the current decision (approved or still pending).</p>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision</th><th>Decision Date</th></tr></thead><tbody>')
     if ($newAccess.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
@@ -1714,7 +1714,7 @@ else {
     # (removal FAILED) from disconnected/other (queued, awaiting manual fulfilment).
     $stuckAD    = @($v3Persisted | Where-Object { [bool](Get-V3Prop $_ 'IsConnectedAD' $false) })
     $stuckOther = @($v3Persisted | Where-Object { -not [bool](Get-V3Prop $_ 'IsConnectedAD' $false) })
-    [void]$sb.AppendLine('<details open><summary class="s-red" style="font-size:13px;margin:12px 0 6px">Revoked but still present &mdash; not getting removed (' + $v3Persisted.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary class="s-red" style="font-size:13px;margin:12px 0 6px">Revoked but still present &mdash; not getting removed (' + $v3Persisted.Count + ')</summary>')
     [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:0 0 6px">The manager revoked this in the prior campaign and it is STILL in SailPoint.</p>')
     # Render closure for a stuck-revoke table.
     $renderStuck = {
@@ -1758,14 +1758,14 @@ else {
         '<tr><td>' + (ConvertTo-SafeHtml (& $bReviewer $it)) + '</td><td>' + (ConvertTo-SafeHtml ([string](Get-V3Prop $it 'IdentityName' ''))) + '</td><td>' + (ConvertTo-SafeHtml ([string](Get-V3Prop $it 'AccessName' ''))) + '</td><td>' + (ConvertTo-SafeHtml ([string](Get-V3Prop $it 'SourceName' ''))) + '</td><td class="' + $decCls + '">' + (ConvertTo-SafeHtml $dec) + '</td><td>' + (ConvertTo-SafeHtml $dd) + '</td></tr>'
     }
     $bDecided = @($v3NetNewItems | Where-Object { ([string](Get-V3Prop $_ 'Decision' '')).ToUpperInvariant() -in @('APPROVE', 'REVOKE') } | Sort-Object @{Expression={& $bReviewer $_}}, @{Expression={[string](Get-V3Prop $_ 'IdentityName' '')}})
-    [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Completed &mdash; net-new items decided (' + $bDecided.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Completed &mdash; net-new items decided (' + $bDecided.Count + ')</summary>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Decision</th><th>Decision Date</th></tr></thead><tbody>')
     if ($bDecided.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No net-new items have been decided yet.</td></tr>') }
     else { foreach ($it in $bDecided) { [void]$sb.AppendLine((& $bRow $it)) } }
     [void]$sb.AppendLine('</tbody></table></details>')
 
     $bPending = @($v3NewPending | Sort-Object @{Expression={& $bReviewer $_}}, @{Expression={[string](Get-V3Prop $_ 'IdentityName' '')}})
-    [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Pending &mdash; net-new items not yet decided (' + $bPending.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Pending &mdash; net-new items not yet decided (' + $bPending.Count + ')</summary>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Identity</th><th>Access Name</th><th>Source</th><th>Decision</th><th>Decision Date</th></tr></thead><tbody>')
     if ($bPending.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No net-new items pending.</td></tr>') }
     else { foreach ($it in $bPending) { [void]$sb.AppendLine((& $bRow $it)) } }
@@ -1904,7 +1904,7 @@ foreach ($cat in $cats) {
 }
 # Changed register -- existing access whose decision flipped APPROVE<->REVOKE (a legitimate change).
 $chCount = $v3Changed.Count
-[void]$sb.AppendLine("<details open><summary class='s-amber' style='font-size:13px;margin:12px 0 6px'>Changed &mdash; decision flipped on existing access ($chCount)</summary>")
+[void]$sb.AppendLine("<details><summary class='s-amber' style='font-size:13px;margin:12px 0 6px'>Changed &mdash; decision flipped on existing access ($chCount)</summary>")
 [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:0 0 6px">Existing grants (NOT net-new) whose decision changed between campaigns &mdash; e.g. previously approved, now revoked. A legitimate change in access; the user acted in the prior campaign and the decision then flipped.</p>')
 [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Was</th><th>Now</th><th>Prev Date</th><th>Curr Date</th></tr></thead><tbody>')
 if ($chCount -eq 0) { [void]$sb.AppendLine('<tr><td colspan="8" style="color:#777;font-style:italic">No decision changes since the prior campaign.</td></tr>') }

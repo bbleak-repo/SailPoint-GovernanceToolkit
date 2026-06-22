@@ -1553,7 +1553,7 @@ foreach ($audit in $campaignAudits) {
     if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
     $anyRev = $true
     [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
-    [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Pending (' + $pendingR.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Pending (' + $pendingR.Count + ')</summary>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
     if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
     else { foreach ($rr in $pendingR) {
@@ -1582,10 +1582,15 @@ if (-not $anyRev) { [void]$sb.AppendLine('<p style="color:#777">No pending revie
 
 # -- Revoked subsection (kept as-is from v2) --
 $revItems = @($allRevoked); $revCnt = $revItems.Count
-[void]$sb.AppendLine("<details open><summary class='s-red' style='font-size:13px;margin:12px 0 6px'>Revoked ($revCnt items)</summary>")
+[void]$sb.AppendLine("<details><summary class='s-red' style='font-size:13px;margin:12px 0 6px'>Revoked ($revCnt items)</summary>")
 [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Account</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Justification</th><th>Remediation</th></tr></thead><tbody>')
 if ($revCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="8" style="color:#777;font-style:italic">None.</td></tr>') }
 else {
+    # Sort revoked items by DecisionDate descending (most recent first)
+    $revItems = @($revItems | Sort-Object @{ Expression = {
+        $dd = if ($_.PSObject.Properties['DecisionDate']) { [string]$_.DecisionDate } else { '' }
+        if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
+    } } -Descending)
     foreach ($it in $revItems) {
         $cid = if ($it.PSObject.Properties['CertificationId']) { [string]$it.CertificationId } else { '' }
         $just = 'N/A'
@@ -1615,14 +1620,19 @@ else {
 # -- Newly Approved Access subsection (from scope-diff engine) --
 $naCnt = $v4NewlyApproved.Count
 $naLabel = if ($v4HasPrior) { "Newly Approved Access ($naCnt items)" } else { "Newly Approved Access ($naCnt items) -- no prior campaign snapshot available" }
-[void]$sb.AppendLine("<details open><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$naLabel</summary>")
+[void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$naLabel</summary>")
 if (-not $v4HasPrior) {
     [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic;margin:4px 0 8px">No prior campaign snapshot was found for comparison. Run the report again after a second campaign to see newly approved access.</p>')
 }
 [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Privileged</th></tr></thead><tbody>')
 if ($naCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
 else {
-    foreach ($na in $v4NewlyApproved) {
+    # Sort by DecisionDate descending (most recent approvals first)
+    $naSorted = @($v4NewlyApproved | Sort-Object @{ Expression = {
+        $dd = [string](Get-V4Prop $_ 'DecisionDate' '')
+        if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
+    } } -Descending)
+    foreach ($na in $naSorted) {
         $naIdent  = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'IdentityName' ''))
         $naAccess = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'AccessName' ''))
         $naSource = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'SourceName' ''))

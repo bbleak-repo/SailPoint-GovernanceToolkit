@@ -1456,7 +1456,7 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         }
 
         # Signed Off Reviewers
-        [void]$sb.AppendLine('<details open>')
+        [void]$sb.AppendLine('<details>')
         [void]$sb.AppendLine('<summary style="font-weight:bold;font-size:12px;margin-bottom:4px;cursor:pointer">Signed Off (' + $signedOff.Count + ')</summary>')
         if ($signedOff.Count -eq 0) {
             [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic">No reviewers have signed off yet.</p>')
@@ -1472,7 +1472,7 @@ if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
         [void]$sb.AppendLine('</details>')
 
         # Active Reviewers
-        [void]$sb.AppendLine('<details open>')
+        [void]$sb.AppendLine('<details>')
         [void]$sb.AppendLine('<summary style="font-weight:bold;font-size:12px;margin-bottom:4px;margin-top:8px;cursor:pointer">Active (' + $active.Count + ')</summary>')
         if ($active.Count -eq 0) {
             [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic">No active reviewers.</p>')

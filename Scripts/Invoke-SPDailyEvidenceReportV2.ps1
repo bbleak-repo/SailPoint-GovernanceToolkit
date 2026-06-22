@@ -1447,7 +1447,7 @@ foreach ($audit in $campaignAudits) {
     [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
     $completedR = @($primary | Where-Object { $_.Phase -eq 'SIGNED' } | Sort-Object Name)
     $pendingR = @($primary | Where-Object { $_.Phase -ne 'SIGNED' } | Sort-Object Name)
-    [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Completed (' + $completedR.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Completed (' + $completedR.Count + ')</summary>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
     if ($completedR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No reviewers have signed off yet.</td></tr>') }
     else { foreach ($rr in $completedR) {
@@ -1455,7 +1455,7 @@ foreach ($audit in $campaignAudits) {
         [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $rr.DecisionsMade + '</td><td>' + (ConvertTo-SafeHtml $so) + '</td><td class="s-green">' + (ConvertTo-SafeHtml $rr.Phase) + '</td></tr>')
     } }
     [void]$sb.AppendLine('</tbody></table></details>')
-    [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Pending (' + $pendingR.Count + ')</summary>')
+    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Pending (' + $pendingR.Count + ')</summary>')
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
     if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
     else { foreach ($rr in $pendingR) {
