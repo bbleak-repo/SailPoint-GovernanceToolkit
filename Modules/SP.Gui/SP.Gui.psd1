@@ -90,7 +90,8 @@
         'Invoke-SPGuiReportDistribution',
         'Invoke-SPGuiGovernanceDashboard',
         'Invoke-SPGuiStalledReviewers',
-        'Get-SPGuiCacheHealth'
+        'Get-SPGuiCacheHealth',
+        'Complete-SPGuiCampaigns'
     )
 
     # Cmdlets to export from this module

@@ -4063,6 +4063,116 @@ function Get-SPGuiCacheHealth {
 
 #endregion Governance Dashboard Bridge
 
+#region Campaign Completion Bridge
+
+function Complete-SPGuiCampaigns {
+    <#
+    .SYNOPSIS
+        Closes past-due ACTIVE campaigns from the GUI.
+    .DESCRIPTION
+        Lists ACTIVE campaigns that are past their deadline, then completes them
+        via POST /campaigns/{id}/complete. Uses the browser token already set in
+        the GUI session -- no additional PAT scopes required.
+
+        Requires Safety.AllowCompleteCampaign = true in settings.json.
+    .PARAMETER DaysBack
+        How far back to look for past-due campaigns. Default 30.
+    .PARAMETER MaxCampaigns
+        Maximum campaigns to close in one call. Default 10 (safety cap).
+    .PARAMETER DryRun
+        When set, lists campaigns that WOULD be closed but does not call the API.
+    .PARAMETER CorrelationID
+        Unique ID for tracing.
+    .OUTPUTS
+        @{ Success; Data=@{ Closed; Skipped; Errors; Campaigns }; Error }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()] [int]$DaysBack = 30,
+        [Parameter()] [int]$MaxCampaigns = 10,
+        [Parameter()] [switch]$DryRun,
+        [Parameter()] [string]$CorrelationID
+    )
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
+    try {
+        # Safety check
+        $config = Get-SPConfig
+        if (-not $config.Safety.AllowCompleteCampaign) {
+            return @{ Success = $false; Data = $null; Error = 'Safety.AllowCompleteCampaign is false. Set to true in settings.json to enable campaign closure.' }
+        }
+
+        # Find past-due ACTIVE campaigns
+        $campResult = Get-SPAuditCampaigns -Status @('ACTIVE') -DaysBack $DaysBack -CorrelationID $CorrelationID
+        if (-not $campResult.Success) { return @{ Success = $false; Data = $null; Error = "Failed to fetch campaigns: $($campResult.Error)" } }
+
+        $now = Get-Date
+        $pastDue = @($campResult.Data | Where-Object {
+            $dl = $null
+            if ($null -ne $_.PSObject.Properties['deadline'] -and $null -ne $_.deadline) {
+                try { $dl = [datetime]::Parse([string]$_.deadline) } catch { }
+            }
+            if ($null -eq $dl -and $null -ne $_.PSObject.Properties['due'] -and $null -ne $_.due) {
+                try { $dl = [datetime]::Parse([string]$_.due) } catch { }
+            }
+            $null -ne $dl -and $dl -lt $now
+        })
+
+        if ($pastDue.Count -eq 0) {
+            return @{ Success = $true; Data = @{ Closed = 0; Skipped = 0; Errors = 0; Campaigns = @() }; Error = $null }
+        }
+
+        # Cap at MaxCampaigns
+        $toClose = @($pastDue | Select-Object -First $MaxCampaigns)
+        $results = [System.Collections.Generic.List[object]]::new()
+        $closed = 0; $errors = 0
+
+        foreach ($c in $toClose) {
+            $cId = [string]$c.id
+            $cName = [string]$c.name
+            $cDeadline = if ($null -ne $c.deadline) { [string]$c.deadline } elseif ($null -ne $c.due) { [string]$c.due } else { '' }
+
+            if ($DryRun) {
+                $results.Add(@{ CampaignId = $cId; CampaignName = $cName; Deadline = $cDeadline; Action = 'WOULD_CLOSE'; Result = 'DryRun' })
+                continue
+            }
+
+            try {
+                $cr = Complete-SPCampaign -CampaignId $cId -CorrelationID $CorrelationID
+                if ($cr.Success) {
+                    $closed++
+                    $results.Add(@{ CampaignId = $cId; CampaignName = $cName; Deadline = $cDeadline; Action = 'CLOSED'; Result = 'Success' })
+                }
+                else {
+                    $errors++
+                    $results.Add(@{ CampaignId = $cId; CampaignName = $cName; Deadline = $cDeadline; Action = 'FAILED'; Result = $cr.Error })
+                }
+            }
+            catch {
+                $errors++
+                $results.Add(@{ CampaignId = $cId; CampaignName = $cName; Deadline = $cDeadline; Action = 'ERROR'; Result = $_.Exception.Message })
+            }
+        }
+
+        $skipped = $pastDue.Count - $toClose.Count
+        return @{
+            Success = $true
+            Data = @{
+                Closed = $closed
+                Skipped = $skipped
+                Errors = $errors
+                TotalPastDue = $pastDue.Count
+                Campaigns = @($results)
+            }
+            Error = $null
+        }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Complete-SPGuiCampaigns failed: $($_.Exception.Message)" }
+    }
+}
+
+#endregion Campaign Completion Bridge
+
 Export-ModuleMember -Function @(
     'Invoke-SPGuiTest',
     'Get-SPGuiCampaignList',
@@ -4092,5 +4202,6 @@ Export-ModuleMember -Function @(
     'Invoke-SPGuiIscReconciliation',
     'Invoke-SPGuiGovernanceDashboard',
     'Invoke-SPGuiStalledReviewers',
-    'Get-SPGuiCacheHealth'
+    'Get-SPGuiCacheHealth',
+    'Complete-SPGuiCampaigns'
 )
