@@ -646,18 +646,52 @@ Write-Host ''
 
 Write-Host '  Step 4: Build daily data from trend records' -ForegroundColor Cyan
 
-# Deduplicate: keep only the LATEST record per calendar day
+# Deduplicate: keep only the LATEST record per calendar day.
+# For CROSS-CAMPAIGN daily mode (multiple campaigns each representing a different day),
+# use the campaign's start date as the data point date, not the capture timestamp.
+# This way "Daily Monday" contributes a data point on Monday, "Daily Tuesday" on Tuesday, etc.
 $dayMap = [ordered]@{}
 foreach ($rec in $trendRecords) {
-    $ts = [datetime]::Parse([string]$rec.timestamp)
-    $dayKey = $ts.ToString('yyyy-MM-dd')
-    $dayMap[$dayKey] = $rec
+    # Prefer the campaign's own date over the capture timestamp
+    $dateForPoint = $null
+    # Try campaign start date from the record (most meaningful for daily campaigns)
+    $startDateStr = $null
+    if ($null -ne $rec.PSObject.Properties['dueDate']) { }  # skip dueDate
+    if ($null -ne $rec.PSObject.Properties['metrics']) {
+        $tds = $null
+        try { $p = $rec.metrics.PSObject.Properties['timing.daysSinceStart']; if ($null -ne $p) { $tds = $p.Value } } catch { }
+        if ($null -ne $tds -and [int]$tds -gt 0) {
+            # Derive start date: capture timestamp minus daysSinceStart
+            try {
+                $capTs = [datetime]::Parse([string]$rec.timestamp)
+                $dateForPoint = $capTs.AddDays(-[int]$tds)
+            } catch { }
+        }
+    }
+    # If we couldn't derive start date, check if multiple campaigns share the same capture date
+    # (cross-campaign mode indicator: different campaignId with same timestamp)
+    if ($null -eq $dateForPoint) {
+        $dateForPoint = [datetime]::Parse([string]$rec.timestamp)
+    }
+    $dayKey = $dateForPoint.ToString('yyyy-MM-dd')
+    # For cross-campaign: one record per day. If two campaigns map to the same day,
+    # keep the one with the most items (most representative).
+    if ($dayMap.ContainsKey($dayKey)) {
+        $existingTotal = 0; $newTotal = 0
+        try { $existingTotal = [int]$dayMap[$dayKey].metrics.PSObject.Properties['counts.total'].Value } catch { }
+        try { $newTotal = [int]$rec.metrics.PSObject.Properties['counts.total'].Value } catch { }
+        if ($newTotal -gt $existingTotal) { $dayMap[$dayKey] = $rec }
+    }
+    else {
+        $dayMap[$dayKey] = $rec
+    }
 }
 
 $dailyData = @()
-foreach ($dayKey in $dayMap.Keys) {
+foreach ($dayKey in ($dayMap.Keys | Sort-Object)) {
     $rec = $dayMap[$dayKey]
-    $ts = [datetime]::Parse([string]$rec.timestamp)
+    # Use the dayKey (campaign start date) for display, not the capture timestamp
+    $ts = [datetime]::Parse($dayKey)
     $m = $rec.metrics
 
     # Map per-reviewer data
