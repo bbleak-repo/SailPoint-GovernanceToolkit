@@ -327,15 +327,22 @@ function Get-V5Prop {
 function Get-V5MetricVal {
     # Read a flat metric from a JSONL record's .metrics object.
     # Handles both hashtable and PSCustomObject (ConvertFrom-Json returns PSCustomObject).
+    # Returns a SCALAR value -- if the value is an array, takes the first element.
     param([object]$Metrics, [string]$Name, $Default = 0)
     if ($null -eq $Metrics) { return $Default }
     try {
+        $v = $null
         if ($Metrics -is [System.Collections.IDictionary]) {
-            if ($Metrics.Contains($Name)) { $v = $Metrics[$Name]; if ($null -ne $v) { return $v } }
-            return $Default
+            if ($Metrics.Contains($Name)) { $v = $Metrics[$Name] }
         }
-        $p = $Metrics.PSObject.Properties[$Name]
-        if ($null -ne $p -and $null -ne $p.Value) { return $p.Value }
+        else {
+            $p = $Metrics.PSObject.Properties[$Name]
+            if ($null -ne $p) { $v = $p.Value }
+        }
+        if ($null -eq $v) { return $Default }
+        # Safety: if ConvertFrom-Json produced an array, take first element
+        if ($v -is [System.Array]) { $v = $v[0] }
+        return $v
     } catch { }
     return $Default
 }
@@ -663,17 +670,35 @@ foreach ($dayKey in $dayMap.Keys) {
     } catch { }
 
     if ($null -ne $reviewerArray) {
+        # Dedup reviewers by name -- if the same reviewer appears in multiple certs
+        # within the same campaign, sum their counts to avoid array-return from Where-Object
+        $rvDedup = [ordered]@{}
         foreach ($rv in $reviewerArray) {
             if ($null -eq $rv) { continue }
-            $dayReviewers += @{
-                Name       = [string](Get-V5Prop $rv 'reviewer' '')
-                Total      = [int](Get-V5Prop $rv 'total' 0)
-                Approved   = [int](Get-V5Prop $rv 'approved' 0)
-                Revoked    = [int](Get-V5Prop $rv 'revoked' 0)
-                Pending    = [int](Get-V5Prop $rv 'pending' 0)
-                Completion = [double](Get-V5Prop $rv 'completion' 0)
+            $rvName = [string](Get-V5Prop $rv 'reviewer' '')
+            if ([string]::IsNullOrWhiteSpace($rvName)) { continue }
+            if ($rvDedup.Contains($rvName)) {
+                $existing = $rvDedup[$rvName]
+                $existing.Total    += [int](Get-V5Prop $rv 'total' 0)
+                $existing.Approved += [int](Get-V5Prop $rv 'approved' 0)
+                $existing.Revoked  += [int](Get-V5Prop $rv 'revoked' 0)
+                $existing.Pending  += [int](Get-V5Prop $rv 'pending' 0)
+                # Recalculate completion from merged totals
+                $decMerged = $existing.Approved + $existing.Revoked
+                $existing.Completion = if ($existing.Total -gt 0) { [math]::Round($decMerged / $existing.Total * 100, 1) } else { 0 }
+            }
+            else {
+                $rvDedup[$rvName] = @{
+                    Name       = $rvName
+                    Total      = [int](Get-V5Prop $rv 'total' 0)
+                    Approved   = [int](Get-V5Prop $rv 'approved' 0)
+                    Revoked    = [int](Get-V5Prop $rv 'revoked' 0)
+                    Pending    = [int](Get-V5Prop $rv 'pending' 0)
+                    Completion = [double](Get-V5Prop $rv 'completion' 0)
+                }
             }
         }
+        $dayReviewers = @($rvDedup.Values)
     }
 
     $total    = [int](Get-V5MetricVal $m 'counts.total' 0)
@@ -731,7 +756,7 @@ $reviewers = @()
 foreach ($rn in $reviewerNames.Keys) {
     [double]$firstComp = -1; [double]$lastComp = 0; $firstSeenIdx = -1
     for ($di = 0; $di -lt $dailyData.Count; $di++) {
-        $rvDay = $dailyData[$di].Reviewers | Where-Object { $_.Name -eq $rn }
+        $rvDay = $dailyData[$di].Reviewers | Where-Object { $_.Name -eq $rn } | Select-Object -First 1
         if ($null -ne $rvDay) {
             $compVal = [double]$rvDay.Completion
             if ($firstComp -lt 0) { $firstComp = $compVal; $firstSeenIdx = $di }
@@ -1125,11 +1150,11 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
     [void]$sb.AppendLine("<table><thead><tr><th>Reviewer</th><th style='text-align:right;'>First</th><th style='text-align:right;'>Yesterday</th><th style='text-align:right;'>Today</th><th style='text-align:center;'>Direction</th><th style='text-align:right;'>Change</th><th>Status</th><th style='font-size:10px;'>In Scope Since</th></tr></thead><tbody>")
     $rvIdx = 0
     foreach ($rv in $reviewers) {
-        $todayRv = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
-        $yestRv  = $dailyData[$dayCount - 2].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+        $todayRv = $dailyData[$dayCount - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
+        $yestRv  = $dailyData[$dayCount - 2].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
 
         # Use first-seen data for the "First" column (not day 0 if they weren't in scope)
-        $firstRv = if ($rv.FirstSeenIdx -ge 0) { $dailyData[$rv.FirstSeenIdx].Reviewers | Where-Object { $_.Name -eq $rv.Name } } else { $null }
+        $firstRv = if ($rv.FirstSeenIdx -ge 0) { $dailyData[$rv.FirstSeenIdx].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1 } else { $null }
 
         [double]$todayPct = if ($todayRv) { [double]$todayRv.Completion } else { 0 }
         [double]$yestPct  = if ($yestRv) { [double]$yestRv.Completion } else { 0 }
@@ -1304,10 +1329,10 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
 
         $deltas = @()
         for ($i = 0; $i -lt $dayCount; $i++) {
-            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             $todayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
             if ($i -gt 0) {
-                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
                 $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = [math]::Max(0, $todayDec - $prevDec)
             } else {
@@ -1486,7 +1511,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td>")
         for ($dIdx = 0; $dIdx -lt $dailyData.Count; $dIdx++) {
             $d = $dailyData[$dIdx]
-            $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvDay = $d.Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             if ($null -eq $rvDay -and $dIdx -lt $rv.FirstSeenIdx) {
                 # Reviewer was not yet in scope -- show gray N/A cell
                 [void]$sb.AppendLine("<td><div class='bar-track' style='background:#e8e8e8;'><span class='bar-label' style='color:#aaa;font-style:italic;'>N/A</span></div></td>")
@@ -1530,11 +1555,11 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
 
         $firstActive = -1; $lastActive = -1; $halfDay = -1; $doneDay = -1
         for ($i = 0; $i -lt $dayCount; $i++) {
-            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             $dayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
             $dayCompletion = if ($rvDay) { [double]$rvDay.Completion } else { 0 }
             if ($i -gt 0) {
-                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
                 $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = $dayDec - $prevDec
             } else {
@@ -1586,7 +1611,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         # Get last known completion for this reviewer
         $lastCompletion = 0
         for ($ci = $dayCount - 1; $ci -ge 0; $ci--) {
-            $rvCheck = $dailyData[$ci].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvCheck = $dailyData[$ci].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             if ($rvCheck) { $lastCompletion = $rvCheck.Completion; break }
         }
         # Don't flag as stalled if completion >= 90%
@@ -1638,10 +1663,10 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
     foreach ($rv in $reviewers) {
         $totalDecisions = 0; $totalAppr = 0; $totalRevk = 0; $activeDays = 0
         for ($i = 0; $i -lt $dayCount; $i++) {
-            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvDay = $dailyData[$i].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             $dayDec = if ($rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
             if ($i -gt 0) {
-                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name }
+                $rvPrev = $dailyData[$i - 1].Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
                 $prevDec = if ($rvPrev) { [int]$rvPrev.Approved + [int]$rvPrev.Revoked } else { 0 }
                 $delta = [math]::Max(0, $dayDec - $prevDec)
             } else {
@@ -1654,7 +1679,7 @@ if ($dayCount -ge 2 -and $reviewers.Count -gt 0) {
         # Compute approval ratio from cumulative data across ALL days
         $totalAppr = 0; $totalRevk = 0
         foreach ($day in $dailyData) {
-            $rvDay2 = $day.Reviewers | Where-Object { $_.Name -eq $rv.Name }
+            $rvDay2 = $day.Reviewers | Where-Object { $_.Name -eq $rv.Name } | Select-Object -First 1
             if ($rvDay2) { $totalAppr += $rvDay2.Approved; $totalRevk += $rvDay2.Revoked }
         }
         # Use cumulative ratio to split the velocity decisions
