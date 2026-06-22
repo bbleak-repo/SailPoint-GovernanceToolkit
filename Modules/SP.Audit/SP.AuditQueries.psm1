@@ -6918,18 +6918,13 @@ function Get-SPCachedCampaignItems {
     # ---------------------------------------------------------------------------
     # Layer 2: disk cache check
     # ---------------------------------------------------------------------------
-    # Diagnostic: show what the cache check is evaluating
-    Write-Host "  [Cache-Check] CampId=$campId | File=$itemsFile" -ForegroundColor DarkGray
-    Write-Host "  [Cache-Check] NoCache=$NoCache | Cacheable=$isCacheable | ItemsExists=$(Test-Path $itemsFile) | MetaExists=$(Test-Path $metaFile)" -ForegroundColor DarkGray
-
     if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
         try {
             $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
-            # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly
+            # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly on PS 5.1
             $cachedAt  = [datetime]::Parse([string]$meta.CachedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
             $ageMinutes = [math]::Round(((Get-Date) - $cachedAt.ToLocalTime()).TotalMinutes, 1)
             $diskValid = $meta.IsPermanent -or ($ageMinutes -lt $effectiveTtl)
-            Write-Host "  [Cache-Check] CachedAt=$($cachedAt.ToString('HH:mm:ss')) | Age=${ageMinutes}min | TTL=${effectiveTtl}min | Permanent=$($meta.IsPermanent) | Valid=$diskValid" -ForegroundColor DarkGray
             if ($diskValid) {
                 Write-SPLog -Message "Cache HIT (disk): campaign '$campName' ($($meta.ItemCount) items, cached $($cachedAt.ToString('yyyy-MM-dd HH:mm')))" `
                     -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `

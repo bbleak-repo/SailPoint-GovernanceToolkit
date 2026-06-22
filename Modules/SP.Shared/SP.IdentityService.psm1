@@ -166,7 +166,8 @@ function _WarnIfCacheDirectoryInsecure {
     param([string]$DirPath)
     if ([string]::IsNullOrWhiteSpace($DirPath) -or -not (Test-Path $DirPath)) { return }
     try {
-        if ($IsWindows -or [System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+        # PS 5.1: $IsWindows is undefined ($null). Fall back to OSVersion.Platform.
+        if (($null -ne $IsWindows -and $IsWindows) -or [System.Environment]::OSVersion.Platform -eq 'Win32NT') {
             # On Windows: check if Everyone or Users has access
             $acl = Get-Acl $DirPath
             foreach ($rule in $acl.Access) {
