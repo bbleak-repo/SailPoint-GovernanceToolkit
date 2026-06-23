@@ -7014,7 +7014,9 @@ function Get-SPCachedCampaignItems {
     }
 
     # Ensure the cache dir exists; drop a stale/unreadable partial so we append cleanly.
-    if ($isCacheable) {
+    # When -NoCache is set, do NOT touch existing cache files at all.
+    $writeToCache = $isCacheable -and -not $NoCache
+    if ($writeToCache) {
         try {
             if (-not (Test-Path $effectiveCachePath)) {
                 New-Item -Path $effectiveCachePath -ItemType Directory -Force -WhatIf:$false | Out-Null
@@ -7049,11 +7051,11 @@ function Get-SPCachedCampaignItems {
                     CampaignName      = $campName
                 }
                 $allItems.Add($wi)
-                if ($isCacheable) { [void]$certLines.AppendLine(($wi | ConvertTo-Json -Depth 12 -Compress)) }
+                if ($writeToCache) { [void]$certLines.AppendLine(($wi | ConvertTo-Json -Depth 12 -Compress)) }
             }
             # Flush this cert's items immediately so a kill mid-pull keeps everything
             # fetched up to the last completed certification.
-            if ($isCacheable -and $certLines.Length -gt 0) {
+            if ($writeToCache -and $certLines.Length -gt 0) {
                 try { [System.IO.File]::AppendAllText($itemsFile, $certLines.ToString(), $utf8NoBom) }
                 catch {
                     Write-SPLog -Message "Incremental cache append failed for '$campName' cert '$certId2': $($_.Exception.Message)" `
@@ -7067,8 +7069,13 @@ function Get-SPCachedCampaignItems {
 
     # ---------------------------------------------------------------------------
     # Finalize cache: items were streamed to disk above; write meta to mark complete.
+    # When -NoCache was specified, skip writing back so the existing cache is preserved
+    # for comparison or rollback. The fresh data is only used for this run.
     # ---------------------------------------------------------------------------
-    if ($isCacheable -and $allItems.Count -gt 0) {
+    if ($NoCache) {
+        Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
+    }
+    elseif ($writeToCache -and $allItems.Count -gt 0) {
         try {
             $meta2 = [ordered]@{
                 CampaignId   = $campId
@@ -7092,7 +7099,7 @@ function Get-SPCachedCampaignItems {
                 -CorrelationID $CorrelationID
         }
     }
-    elseif ($isCacheable -and $allItems.Count -eq 0 -and (Test-Path $itemsFile)) {
+    elseif ($writeToCache -and $allItems.Count -eq 0 -and (Test-Path $itemsFile)) {
         # Nothing fetched -- remove the empty partial so it is not mistaken for a resume.
         try { [System.IO.File]::Delete($itemsFile) } catch { }
     }

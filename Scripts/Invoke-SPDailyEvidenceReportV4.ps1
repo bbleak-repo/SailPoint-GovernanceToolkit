@@ -747,17 +747,43 @@ try {
     $dailyMetricsFile = Join-Path $metricsPath 'daily-metrics.jsonl'
     $captureTs = (Get-Date).ToString('o')
 
+    # Pre-load existing JSONL records to avoid overwriting ACTIVE-state data with
+    # COMPLETED-state data. An ACTIVE record captured honest reviewer metrics; a
+    # COMPLETED record has inflated numbers from ISC auto-approving remaining items.
+    $existingRecords = @{}
+    if (Test-Path $dailyMetricsFile) {
+        try {
+            $utf8Read = New-Object System.Text.UTF8Encoding($false)
+            foreach ($ln in [System.IO.File]::ReadAllLines($dailyMetricsFile, $utf8Read)) {
+                if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+                try {
+                    $existing = $ln | ConvertFrom-Json
+                    $eKey = "$([string]$existing.captureDate)|$([string]$existing.campaign.id)"
+                    $existingRecords[$eKey] = [string]$existing.campaign.status
+                } catch { }
+            }
+        } catch { }
+    }
+
     foreach ($audit in $campaignAudits) {
         # captureDate = the campaign's own date (from created), NOT the run date.
-        # For daily campaigns, each campaign represents a different day's attestation.
-        # Using the run date would make all 11 campaigns share the same captureDate,
-        # and V6's dedup would collapse them to 1 data point.
         $campaignCreated = [string]$audit['Created']
         $captureDate = (Get-Date).ToString('yyyy-MM-dd')
         if (-not [string]::IsNullOrWhiteSpace($campaignCreated)) {
             try { $captureDate = ([datetime]::Parse($campaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
             catch { }
         }
+        # Don't overwrite an ACTIVE-state JSONL record with COMPLETED data.
+        # ACTIVE records have honest reviewer metrics; COMPLETED records are inflated by auto-approve.
+        $metricsStatus = ([string]$audit['Status']).ToUpperInvariant()
+        $metricsDedupKey = "${captureDate}|$([string]$audit['CampaignId'])"
+        if ($metricsStatus -in @('COMPLETED', 'COMPLETING') -and
+            $existingRecords.ContainsKey($metricsDedupKey) -and
+            $existingRecords[$metricsDedupKey] -eq 'ACTIVE') {
+            Write-Host "    [Metrics] Skipping $($audit['CampaignName']) -- ACTIVE record already exists" -ForegroundColor DarkGray
+            continue
+        }
+
         $d = $audit['Decisions']
         $apprItems = @($d['Approved']); $revItems2 = @($d['Revoked']); $pendItems = @($d['Pending'])
         $apprCount = $apprItems.Count; $revCount2 = $revItems2.Count; $pendCount = $pendItems.Count
