@@ -687,6 +687,177 @@ Write-Host ''
 
 #endregion
 
+#region Write daily-metrics.jsonl for V6 visualization
+
+try {
+    $metricsPath = '.\Audit\metrics'
+    try {
+        $mcfg = Get-SPConfig
+        if ($null -ne $mcfg.PSObject.Properties['Metrics'] -and
+            $null -ne $mcfg.Metrics.PSObject.Properties['Path'] -and
+            -not [string]::IsNullOrWhiteSpace($mcfg.Metrics.Path)) {
+            $metricsPath = [string]$mcfg.Metrics.Path
+        }
+    } catch { }
+    if (-not [System.IO.Path]::IsPathRooted($metricsPath)) {
+        $metricsPath = [System.IO.Path]::GetFullPath((Join-Path $toolkitRoot $metricsPath))
+    }
+    if (-not (Test-Path $metricsPath)) { New-Item -ItemType Directory -Path $metricsPath -Force -WhatIf:$false | Out-Null }
+
+    $dailyMetricsFile = Join-Path $metricsPath 'daily-metrics.jsonl'
+    $captureDate = (Get-Date).ToString('yyyy-MM-dd')
+    $captureTs   = (Get-Date).ToString('o')
+
+    foreach ($audit in $campaignAudits) {
+        $d = $audit['Decisions']
+        $apprItems = @($d['Approved']); $revItems2 = @($d['Revoked']); $pendItems = @($d['Pending'])
+        $apprCount = $apprItems.Count; $revCount2 = $revItems2.Count; $pendCount = $pendItems.Count
+        $totalCount = $apprCount + $revCount2 + $pendCount
+        $decidedCount = $apprCount + $revCount2
+        $compPct = if ($totalCount -gt 0) { [math]::Round($decidedCount / $totalCount * 100, 1) } else { 0 }
+
+        # Reviewer breakdown
+        $ra = $audit['ReviewerActions']
+        $primary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
+        $reassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
+        $allReviewers = @($primary) + @($reassigned)
+        $signedCount = @($allReviewers | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+        $notStartedCount = @($allReviewers | Where-Object { $_.Phase -eq 'NOT_STARTED' -or $_.DecisionsMade -eq 0 }).Count
+        $rvCompPct = if ($allReviewers.Count -gt 0) { [math]::Round($signedCount / $allReviewers.Count * 100, 1) } else { 0 }
+
+        # Per-reviewer detail
+        $reviewerRecords = [System.Collections.Generic.List[object]]::new()
+        foreach ($rv in $allReviewers) {
+            $rvTotal = [int]$rv.Total
+            $rvAppr = [int]$rv.Approved
+            $rvRev = [int]$rv.Revoked
+            $rvPend = $rvTotal - $rvAppr - $rvRev; if ($rvPend -lt 0) { $rvPend = 0 }
+            $rvComp = if ($rvTotal -gt 0) { [math]::Round(($rvAppr + $rvRev) / $rvTotal * 100, 1) } else { 0 }
+            $rvClass = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { [string]$rv.Classification } else { 'Primary' }
+            $reviewerRecords.Add([ordered]@{
+                name           = [string]$rv.Name
+                identityId     = if ($rv.PSObject.Properties['ReviewerId']) { [string]$rv.ReviewerId } else { '' }
+                email          = if ($rv.PSObject.Properties['Email']) { [string]$rv.Email } else { '' }
+                classification = $rvClass
+                total          = $rvTotal
+                approved       = $rvAppr
+                revoked        = $rvRev
+                pending        = $rvPend
+                completionPct  = $rvComp
+                signed         = ($rv.Phase -eq 'SIGNED')
+                phase          = [string]$rv.Phase
+            })
+        }
+
+        # Per-source breakdown
+        $sourceRecords = [System.Collections.Generic.List[object]]::new()
+        $sourceMap = @{}
+        foreach ($item in @($apprItems) + @($revItems2) + @($pendItems)) {
+            $sn = if ($item.PSObject.Properties['SourceName']) { [string]$item.SourceName } else { 'Unknown' }
+            if (-not $sourceMap.ContainsKey($sn)) { $sourceMap[$sn] = @{ total = 0; approved = 0; revoked = 0; pending = 0 } }
+            $sourceMap[$sn].total++
+            $dec = if ($item.PSObject.Properties['Decision']) { [string]$item.Decision } else { '' }
+            switch ($dec.ToUpperInvariant()) {
+                'APPROVE'  { $sourceMap[$sn].approved++ }
+                'APPROVED' { $sourceMap[$sn].approved++ }
+                'REVOKE'   { $sourceMap[$sn].revoked++ }
+                'REVOKED'  { $sourceMap[$sn].revoked++ }
+                default    { $sourceMap[$sn].pending++ }
+            }
+        }
+        foreach ($sn in ($sourceMap.Keys | Sort-Object)) {
+            $s = $sourceMap[$sn]
+            $sourceRecords.Add([ordered]@{ name = $sn; total = $s.total; approved = $s.approved; revoked = $s.revoked; pending = $s.pending })
+        }
+
+        # Privileged counts
+        $privTotal = 0; $privAppr = 0; $privRev = 0; $privPend = 0
+        foreach ($item in @($apprItems) + @($revItems2) + @($pendItems)) {
+            $isPriv = $false
+            try { if ($item.PSObject.Properties['Privileged']) { $isPriv = [bool]$item.Privileged } } catch { }
+            if ($isPriv) {
+                $privTotal++
+                $dec = if ($item.PSObject.Properties['Decision']) { [string]$item.Decision } else { '' }
+                switch ($dec.ToUpperInvariant()) {
+                    'APPROVE'  { $privAppr++ }
+                    'APPROVED' { $privAppr++ }
+                    'REVOKE'   { $privRev++ }
+                    'REVOKED'  { $privRev++ }
+                    default    { $privPend++ }
+                }
+            }
+        }
+
+        # Distinct identities
+        $identSet = @{}
+        foreach ($item in @($apprItems) + @($revItems2) + @($pendItems)) {
+            $iid = if ($item.PSObject.Properties['IdentityId']) { [string]$item.IdentityId } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($iid)) { $identSet[$iid] = $true }
+        }
+
+        # Diff data
+        $diffData = [ordered]@{ hasPrior = $v4HasPrior; priorCampaignName = ''; scopeAdded = 0; scopeRemoved = 0; scopeChanged = 0; newlyApprovedCount = 0 }
+        if ($null -ne $audit['Diff']) {
+            $df = $audit['Diff']
+            if ($null -ne $df.Scope) {
+                $diffData.scopeAdded   = [int]$df.Scope.AddedCount
+                $diffData.scopeRemoved = [int]$df.Scope.RemovedCount
+                $diffData.scopeChanged = [int]$df.Scope.ChangedCount
+            }
+            if ($null -ne $df.Meta -and $null -ne $df.Meta.PSObject.Properties['PreviousCampaignName']) {
+                $diffData.priorCampaignName = [string]$df.Meta.PreviousCampaignName
+            }
+        }
+        $diffData.newlyApprovedCount = $v4NewlyApproved.Count
+
+        $metricsRecord = [ordered]@{
+            captureDate      = $captureDate
+            captureTimestamp  = $captureTs
+            correlationId    = $correlationID
+            campaign         = [ordered]@{
+                id        = [string]$audit['CampaignId']
+                name      = [string]$audit['CampaignName']
+                status    = [string]$audit['Status']
+                created   = [string]$audit['Created']
+                deadline  = [string]$audit['Deadline']
+                completed = [string]$audit['Completed']
+            }
+            summary          = [ordered]@{
+                totalItems              = $totalCount
+                approved                = $apprCount
+                revoked                 = $revCount2
+                pending                 = $pendCount
+                completionPct           = $compPct
+                completionPctByReviewer = $rvCompPct
+                reviewersTotal          = $allReviewers.Count
+                reviewersSigned         = $signedCount
+                reviewersNotStarted     = $notStartedCount
+                reviewersInProgress     = $allReviewers.Count - $signedCount - $notStartedCount
+                privilegedTotal         = $privTotal
+                privilegedApproved      = $privAppr
+                privilegedRevoked       = $privRev
+                privilegedPending       = $privPend
+                distinctIdentities      = $identSet.Count
+                distinctSources         = $sourceMap.Count
+            }
+            reviewers        = @($reviewerRecords)
+            sources          = @($sourceRecords)
+            diff             = $diffData
+        }
+
+        $jsonLine = $metricsRecord | ConvertTo-Json -Depth 5 -Compress
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($dailyMetricsFile, "$jsonLine`n", $utf8NoBom)
+    }
+
+    Write-Host "  [Metrics] Wrote $($campaignAudits.Count) record(s) to daily-metrics.jsonl" -ForegroundColor DarkGreen
+}
+catch {
+    Write-Host "  [Metrics] WARN: daily-metrics write failed: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+#endregion
+
 #region Step 2: KPI 1 - Campaign Completion
 
 Write-Host '  Step 2: KPI 1 - Campaign Completion' -ForegroundColor Cyan
