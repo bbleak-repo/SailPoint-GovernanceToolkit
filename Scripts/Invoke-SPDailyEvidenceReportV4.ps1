@@ -1732,10 +1732,13 @@ foreach ($audit in $campaignAudits) {
     $pc = if ($t -gt 0) { [math]::Round($dec / $t * 100, 0) } else { 0 }
     $pcCls = if ($pc -ge 80) { 's-green' } elseif ($pc -ge 50) { 's-amber' } else { 's-red' }
     # Reviewer completion: % of primary reviewers who have SIGNED
+    # Reviewer completion: match executive summary -- Primary + Reassigned
     $rvPct = 0; $rvLabel = '-'
     $ra = $audit['ReviewerActions']
-    if ($null -ne $ra -and $null -ne $ra['Primary']) {
-        $rvAll = @($ra['Primary'])
+    if ($null -ne $ra) {
+        $rvPrimary = if ($null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
+        $rvReassigned = if ($null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
+        $rvAll = @($rvPrimary) + @($rvReassigned)
         $rvSigned = @($rvAll | Where-Object { $_.Phase -eq 'SIGNED' })
         if ($rvAll.Count -gt 0) {
             $rvPct = [math]::Round($rvSigned.Count / $rvAll.Count * 100, 0)
