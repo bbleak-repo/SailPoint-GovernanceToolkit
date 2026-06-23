@@ -677,7 +677,9 @@ try {
             }
         }
 
-        # Collect truly-new scope items (Added = in current but NOT in prior campaign)
+        # Collect truly-new scope items (Added = in current but NOT in prior campaign).
+        # For COMPLETED campaigns, new scope items with APPROVE may be auto-decided.
+        # Still collect them (scope change is real) but the decision may not be genuine.
         foreach ($a in @($diff.Scope.Added)) {
             $aKey = [string](Get-V4Prop $a 'Key' '')
             if (-not [string]::IsNullOrWhiteSpace($aKey) -and $v4SeenKeys.ContainsKey($aKey)) { continue }
@@ -692,19 +694,23 @@ try {
             }
         }
 
-        # Collect newly-decided items (existed in both campaigns, was PENDING, now decided)
-        foreach ($nd in @($diff.Scope.NewlyDecided)) {
-            $ndKey = [string](Get-V4Prop $nd 'Key' '')
-            if (-not [string]::IsNullOrWhiteSpace($ndKey) -and $v4SeenKeys.ContainsKey($ndKey)) { continue }
-            $ndDec = [string](Get-V4Prop $nd 'CurrDecision' '')
-            if ($ndDec -eq 'APPROVE' -or $ndDec -eq 'Approved') {
-                # Ensure DecisionDate from current snapshot; fall back to campaign date
-                $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
-                if ([string]::IsNullOrWhiteSpace($ndDate)) {
-                    $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+        # Collect newly-decided items (existed in both campaigns, was PENDING, now decided).
+        # Skip COMPLETED campaigns: ISC auto-approves remaining items on force-completion,
+        # so PENDING->APPROVE transitions are artifacts of closing, not genuine reviewer decisions.
+        $campStatus = ([string]$audit['Status']).ToUpperInvariant()
+        if ($campStatus -notin @('COMPLETED', 'COMPLETING')) {
+            foreach ($nd in @($diff.Scope.NewlyDecided)) {
+                $ndKey = [string](Get-V4Prop $nd 'Key' '')
+                if (-not [string]::IsNullOrWhiteSpace($ndKey) -and $v4SeenKeys.ContainsKey($ndKey)) { continue }
+                $ndDec = [string](Get-V4Prop $nd 'CurrDecision' '')
+                if ($ndDec -eq 'APPROVE' -or $ndDec -eq 'Approved') {
+                    $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
+                    if ([string]::IsNullOrWhiteSpace($ndDate)) {
+                        $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                    }
+                    $v4NewlyDecided.Add($nd)
+                    if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
                 }
-                $v4NewlyDecided.Add($nd)
-                if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
             }
         }
     }
