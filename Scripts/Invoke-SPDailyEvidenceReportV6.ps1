@@ -394,6 +394,8 @@ foreach ($dayKey in $sortedKeys) {
         PrivPending     = [int](Get-V6NumericProp $sm 'privilegedPending' 0)
         ScopeAdded      = 0
         ScopeRemoved    = 0
+        NewlyApproved   = 0
+        NewlyDecided    = 0
         CampaignName    = [string]$rec.campaign.name
         CampaignId      = [string]$rec.campaign.id
         CampaignStatus  = [string]$rec.campaign.status
@@ -413,6 +415,8 @@ foreach ($dayKey in $sortedKeys) {
             $dailyData[$dailyData.Count - 1].DiffData = $rec.diff
             $dailyData[$dailyData.Count - 1].ScopeAdded = [int](Get-V6NumericProp $rec.diff 'scopeAdded' 0)
             $dailyData[$dailyData.Count - 1].ScopeRemoved = [int](Get-V6NumericProp $rec.diff 'scopeRemoved' 0)
+            $dailyData[$dailyData.Count - 1].NewlyApproved = [int](Get-V6NumericProp $rec.diff 'newlyApprovedCount' 0)
+            $dailyData[$dailyData.Count - 1].NewlyDecided = [int](Get-V6NumericProp $rec.diff 'newlyDecidedCount' 0)
         }
     } catch { }
 }
@@ -1224,6 +1228,183 @@ if ($dayCount -ge 1) {
     }
 
     [void]$sb.AppendLine("</tbody></table></div>")
+}
+
+#endregion
+
+#region Chart 10: Decision Activity Trending -- Day-by-Day Table
+
+if ($dayCount -ge 2) {
+    # Check if any day has diff data worth showing
+    $hasAnyDiff = $false
+    foreach ($d in $dailyData) {
+        if ([int]$d.Revoked -gt 0 -or [int]$d.NewlyDecided -gt 0 -or [int]$d.NewlyApproved -gt 0 -or [int]$d.ScopeAdded -gt 0) {
+            $hasAnyDiff = $true; break
+        }
+    }
+
+    if ($hasAnyDiff) {
+        [void]$sb.AppendLine("<div class='section'>")
+        [void]$sb.AppendLine("<div class='section-title'>Decision Activity Trending -- Day-by-Day Table</div>")
+        [void]$sb.AppendLine("<p class='note'>Option A: Tabular view. Each row is one day's delta vs the prior campaign. Cumulative row shows the full-window aggregate. Revoked = items with REVOKE decision. Newly Decided = was PENDING in prior campaign, now APPROVED. New Scope = items not in the prior campaign, approved.</p>")
+
+        [void]$sb.AppendLine("<table><thead><tr><th>Day</th><th>Campaign</th><th style='text-align:right;'>Revoked</th><th style='text-align:right;'>Newly Decided</th><th style='text-align:right;'>New Scope</th><th style='text-align:right;'>Scope Added</th><th style='text-align:right;'>Scope Removed</th><th style='text-align:right;'>Completion</th></tr></thead><tbody>")
+
+        $cumRevoked = 0; $cumDecided = 0; $cumNewScope = 0; $cumScopeAdd = 0; $cumScopeRem = 0
+        foreach ($d in $dailyData) {
+            $dayRev   = [int]$d.Revoked
+            $dayND    = [int]$d.NewlyDecided
+            $dayNS    = [int]$d.NewlyApproved
+            $daySA    = [int]$d.ScopeAdded
+            $daySR    = [int]$d.ScopeRemoved
+            $cumRevoked  += $dayRev
+            $cumDecided  += $dayND
+            $cumNewScope += $dayNS
+            $cumScopeAdd += $daySA
+            $cumScopeRem += $daySR
+
+            $campShort = ConvertTo-SPHtmlSafe $d.CampaignName
+            if ($campShort.Length -gt 50) { $campShort = $campShort.Substring(0, 47) + '...' }
+            $revStyle = if ($dayRev -gt 0) { " style='color:$($colors.Red);font-weight:600;'" } else { '' }
+            $ndStyle  = if ($dayND -gt 0) { " style='color:$($colors.Green);font-weight:600;'" } else { '' }
+            $nsStyle  = if ($dayNS -gt 0) { " style='color:$($colors.Blue);font-weight:600;'" } else { '' }
+
+            [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$($d.DayLabel)</td><td style='font-size:11px;color:#566;'>$campShort</td><td style='text-align:right;'$revStyle>$dayRev</td><td style='text-align:right;'$ndStyle>$dayND</td><td style='text-align:right;'$nsStyle>$dayNS</td><td style='text-align:right;'>$daySA</td><td style='text-align:right;'>$daySR</td><td style='text-align:right;font-weight:600;'>$($d.CompletionPct)%</td></tr>")
+        }
+
+        # Cumulative row
+        [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'><td colspan='2'>CUMULATIVE ($dayCount days)</td><td style='text-align:right;color:$($colors.Red);'>$cumRevoked</td><td style='text-align:right;color:$($colors.Green);'>$cumDecided</td><td style='text-align:right;color:$($colors.Blue);'>$cumNewScope</td><td style='text-align:right;'>$cumScopeAdd</td><td style='text-align:right;'>$cumScopeRem</td><td style='text-align:right;'>$($dailyData[$dayCount - 1].CompletionPct)%</td></tr>")
+
+        [void]$sb.AppendLine("</tbody></table></div>")
+    }
+}
+
+#endregion
+
+#region Chart 11: Decision Activity Trending -- Stacked Bar Chart
+
+if ($dayCount -ge 2) {
+    $hasAnyDiff2 = $false
+    foreach ($d in $dailyData) {
+        if ([int]$d.Revoked -gt 0 -or [int]$d.NewlyDecided -gt 0 -or [int]$d.NewlyApproved -gt 0) {
+            $hasAnyDiff2 = $true; break
+        }
+    }
+
+    if ($hasAnyDiff2) {
+        [void]$sb.AppendLine("<div class='section'>")
+        [void]$sb.AppendLine("<div class='section-title'>Decision Activity Trending -- Stacked Bar Chart</div>")
+        [void]$sb.AppendLine("<p class='note'>Option B: Visual view. Each day shows a stacked bar of Revoked (red) + Newly Decided (green) + New Scope (blue). Bar height proportional to total activity. Running cumulative line overlaid.</p>")
+
+        $chartW = 700; $chartH = 200; $padL = 50; $padR = 20; $padT = 20; $padB = 50
+        $plotW = $chartW - $padL - $padR; $plotH = $chartH - $padT - $padB
+
+        # Find max daily total for scaling
+        $maxDayTotal = 1
+        foreach ($d in $dailyData) {
+            $dayTotal = [int]$d.Revoked + [int]$d.NewlyDecided + [int]$d.NewlyApproved
+            if ($dayTotal -gt $maxDayTotal) { $maxDayTotal = $dayTotal }
+        }
+
+        $barW = [int][math]::Floor($plotW / $dayCount * 0.7)
+        $gapW = [int][math]::Floor($plotW / $dayCount * 0.3)
+
+        [void]$sb.AppendLine("<div style='text-align:center;margin:12px 0;'>")
+        [void]$sb.AppendLine("<svg width='$chartW' height='$($chartH + 10)' style='font-family:Segoe UI,Arial,sans-serif;'>")
+
+        # Grid lines
+        for ($g = 0; $g -le 4; $g++) {
+            $gVal = [math]::Round($maxDayTotal * $g / 4, 0)
+            $gy = $padT + $plotH - [int]($plotH * $g / 4)
+            [void]$sb.AppendLine("<line x1='$padL' y1='$gy' x2='$($chartW - $padR)' y2='$gy' stroke='#e3e9f0' stroke-width='1'/>")
+            [void]$sb.AppendLine("<text x='$($padL - 4)' y='$($gy + 4)' text-anchor='end' font-size='9' fill='#888'>$gVal</text>")
+        }
+
+        # Cumulative line points
+        $cumPts = @()
+        $cumTotal = 0
+
+        for ($i = 0; $i -lt $dayCount; $i++) {
+            $d = $dailyData[$i]
+            $dRev = [int]$d.Revoked
+            $dND  = [int]$d.NewlyDecided
+            $dNS  = [int]$d.NewlyApproved
+            $dayTotal = $dRev + $dND + $dNS
+            $cumTotal += $dayTotal
+
+            $bX = $padL + $i * ($barW + $gapW) + [int]($gapW / 2)
+            $baseY = $padT + $plotH
+
+            # Stack: Revoked (bottom, red), Newly Decided (middle, green), New Scope (top, blue)
+            $rH = if ($maxDayTotal -gt 0) { [int][math]::Max(0, [math]::Round($dRev / $maxDayTotal * $plotH)) } else { 0 }
+            $ndH = if ($maxDayTotal -gt 0) { [int][math]::Max(0, [math]::Round($dND / $maxDayTotal * $plotH)) } else { 0 }
+            $nsH = if ($maxDayTotal -gt 0) { [int][math]::Max(0, [math]::Round($dNS / $maxDayTotal * $plotH)) } else { 0 }
+
+            $curY = $baseY
+            if ($rH -gt 0) {
+                $curY -= $rH
+                [void]$sb.AppendLine("<rect x='$bX' y='$curY' width='$barW' height='$rH' fill='$($colors.Red)' rx='2' opacity='0.85'/>")
+                if ($rH -gt 12) { [void]$sb.AppendLine("<text x='$($bX + [int]($barW/2))' y='$($curY + [int]($rH/2) + 4)' text-anchor='middle' font-size='9' font-weight='600' fill='#fff'>$dRev</text>") }
+            }
+            if ($ndH -gt 0) {
+                $curY -= $ndH
+                [void]$sb.AppendLine("<rect x='$bX' y='$curY' width='$barW' height='$ndH' fill='$($colors.Green)' rx='2' opacity='0.85'/>")
+                if ($ndH -gt 12) { [void]$sb.AppendLine("<text x='$($bX + [int]($barW/2))' y='$($curY + [int]($ndH/2) + 4)' text-anchor='middle' font-size='9' font-weight='600' fill='#fff'>$dND</text>") }
+            }
+            if ($nsH -gt 0) {
+                $curY -= $nsH
+                [void]$sb.AppendLine("<rect x='$bX' y='$curY' width='$barW' height='$nsH' fill='$($colors.Blue)' rx='2' opacity='0.85'/>")
+                if ($nsH -gt 12) { [void]$sb.AppendLine("<text x='$($bX + [int]($barW/2))' y='$($curY + [int]($nsH/2) + 4)' text-anchor='middle' font-size='9' font-weight='600' fill='#fff'>$dNS</text>") }
+            }
+
+            # Day total label above bar
+            if ($dayTotal -gt 0) {
+                $topY = $baseY - $rH - $ndH - $nsH
+                [void]$sb.AppendLine("<text x='$($bX + [int]($barW/2))' y='$($topY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='#1c2b3a'>$dayTotal</text>")
+            }
+
+            # Day label
+            $labelY = $padT + $plotH + 16
+            [void]$sb.AppendLine("<text x='$($bX + [int]($barW/2))' y='$labelY' text-anchor='middle' font-size='9' fill='#566'>$($d.DayLabel)</text>")
+
+            # Cumulative line point
+            $cumPts += "$($bX + [int]($barW/2)),$($padT + $plotH - 3)"
+        }
+
+        # Cumulative line (scaled to a secondary axis showing running total)
+        if ($cumTotal -gt 0 -and $cumPts.Count -ge 2) {
+            $cumRunning = 0; $cumLinePts = @()
+            for ($i = 0; $i -lt $dayCount; $i++) {
+                $d = $dailyData[$i]
+                $cumRunning += [int]$d.Revoked + [int]$d.NewlyDecided + [int]$d.NewlyApproved
+                $cx = $padL + $i * ($barW + $gapW) + [int]($gapW / 2) + [int]($barW / 2)
+                $cy = [int]($padT + $plotH - ($cumRunning / [math]::Max(1, $cumTotal) * $plotH))
+                $cumLinePts += "$cx,$cy"
+            }
+            [void]$sb.AppendLine("<polyline points='$($cumLinePts -join ' ')' stroke='#1f3a5f' stroke-width='2' fill='none' stroke-dasharray='4,3'/>")
+            foreach ($pt in $cumLinePts) {
+                $parts = $pt -split ','
+                [void]$sb.AppendLine("<circle cx='$($parts[0])' cy='$($parts[1])' r='3' fill='#1f3a5f'/>")
+            }
+            # Label last point
+            $lastParts = $cumLinePts[$cumLinePts.Count - 1] -split ','
+            [void]$sb.AppendLine("<text x='$([int]$lastParts[0] + 8)' y='$([int]$lastParts[1] + 4)' font-size='10' font-weight='700' fill='#1f3a5f'>$cumTotal total</text>")
+        }
+
+        # Legend
+        $legY = $chartH
+        [void]$sb.AppendLine("<rect x='$($padL + 5)' y='$legY' width='10' height='10' fill='$($colors.Red)' rx='1'/>")
+        [void]$sb.AppendLine("<text x='$($padL + 19)' y='$($legY + 9)' font-size='10' fill='#1c2b3a'>Revoked</text>")
+        [void]$sb.AppendLine("<rect x='$($padL + 85)' y='$legY' width='10' height='10' fill='$($colors.Green)' rx='1'/>")
+        [void]$sb.AppendLine("<text x='$($padL + 99)' y='$($legY + 9)' font-size='10' fill='#1c2b3a'>Newly Decided</text>")
+        [void]$sb.AppendLine("<rect x='$($padL + 200)' y='$legY' width='10' height='10' fill='$($colors.Blue)' rx='1'/>")
+        [void]$sb.AppendLine("<text x='$($padL + 214)' y='$($legY + 9)' font-size='10' fill='#1c2b3a'>New Scope</text>")
+        [void]$sb.AppendLine("<line x1='$($padL + 290)' y1='$($legY + 5)' x2='$($padL + 310)' y2='$($legY + 5)' stroke='#1f3a5f' stroke-width='2' stroke-dasharray='4,3'/>")
+        [void]$sb.AppendLine("<text x='$($padL + 314)' y='$($legY + 9)' font-size='10' fill='#1c2b3a'>Cumulative</text>")
+
+        [void]$sb.AppendLine("</svg>")
+        [void]$sb.AppendLine("</div></div>")
+    }
 }
 
 #endregion
