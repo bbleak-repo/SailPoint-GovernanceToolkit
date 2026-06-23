@@ -59,6 +59,10 @@ param(
     [string]$CampaignNameContains,
 
     [Parameter()]
+    [ValidateSet('ACTIVE', 'COMPLETED', 'COMPLETING', '')]
+    [string]$Status,
+
+    [Parameter()]
     [string]$OutputPath,
 
     [Parameter()]
@@ -284,6 +288,14 @@ foreach ($ln in $rawLines) {
             }
         }
 
+        # Filter by Status
+        if (-not [string]::IsNullOrWhiteSpace($Status)) {
+            $recStatus = [string]$rec.campaign.status
+            if ($recStatus.ToUpperInvariant() -ne $Status.ToUpperInvariant()) {
+                continue
+            }
+        }
+
         $allRecords.Add($rec)
     } catch { }
 }
@@ -310,32 +322,36 @@ Write-Host ''
 
 Write-Host '  Step 2: Deduplicate and sort records' -ForegroundColor Cyan
 
-# Deduplicate: one record per captureDate. If multiple campaigns match on the same day,
-# keep the latest by captureTimestamp.
+# Deduplicate: one record per campaignId per captureDate. If V4 ran multiple
+# times for the same campaign on the same day, keep the latest captureTimestamp.
+# For daily campaigns, each day has a DIFFERENT campaignId, so each gets its own slot.
 $dayMap = [ordered]@{}
 foreach ($rec in $allRecords) {
     $dayKey = [string]$rec.captureDate
-    if ($dayMap.Contains($dayKey)) {
-        # Keep the one with the later timestamp
-        $existingTs = [string]$dayMap[$dayKey].captureTimestamp
+    $campId = ''
+    try { $campId = [string]$rec.campaign.id } catch { }
+    $dedupKey = "${dayKey}|${campId}"
+    if ($dayMap.Contains($dedupKey)) {
+        $existingTs = [string]$dayMap[$dedupKey].captureTimestamp
         $newTs = [string]$rec.captureTimestamp
         if ($newTs -gt $existingTs) {
-            $dayMap[$dayKey] = $rec
+            $dayMap[$dedupKey] = $rec
         }
     }
     else {
-        $dayMap[$dayKey] = $rec
+        $dayMap[$dedupKey] = $rec
     }
 }
 
-# Sort by captureDate ascending
+# Sort by captureDate ascending (compound key is "date|campaignId", sort works lexicographically)
 $sortedKeys = @($dayMap.Keys | Sort-Object)
 
 # Build $dailyData array
 $dailyData = @()
 foreach ($dayKey in $sortedKeys) {
     $rec = $dayMap[$dayKey]
-    $ts = [datetime]::Parse([string]$dayKey)
+    $dateStr = [string]$rec.captureDate
+    $ts = [datetime]::Parse($dateStr)
     $sm = $rec.summary
 
     # Map per-reviewer data from the reviewers array

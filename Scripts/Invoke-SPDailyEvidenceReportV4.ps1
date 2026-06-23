@@ -726,10 +726,19 @@ try {
     if (-not (Test-Path $metricsPath)) { New-Item -ItemType Directory -Path $metricsPath -Force -WhatIf:$false | Out-Null }
 
     $dailyMetricsFile = Join-Path $metricsPath 'daily-metrics.jsonl'
-    $captureDate = (Get-Date).ToString('yyyy-MM-dd')
-    $captureTs   = (Get-Date).ToString('o')
+    $captureTs = (Get-Date).ToString('o')
 
     foreach ($audit in $campaignAudits) {
+        # captureDate = the campaign's own date (from created), NOT the run date.
+        # For daily campaigns, each campaign represents a different day's attestation.
+        # Using the run date would make all 11 campaigns share the same captureDate,
+        # and V6's dedup would collapse them to 1 data point.
+        $campaignCreated = [string]$audit['Created']
+        $captureDate = (Get-Date).ToString('yyyy-MM-dd')
+        if (-not [string]::IsNullOrWhiteSpace($campaignCreated)) {
+            try { $captureDate = ([datetime]::Parse($campaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
+            catch { }
+        }
         $d = $audit['Decisions']
         $apprItems = @($d['Approved']); $revItems2 = @($d['Revoked']); $pendItems = @($d['Pending'])
         $apprCount = $apprItems.Count; $revCount2 = $revItems2.Count; $pendCount = $pendItems.Count
