@@ -1894,6 +1894,95 @@ else {
 
 [void]$sb.AppendLine('</div>')
 
+# ---- Post-Completion Forensics (only for COMPLETED campaigns) ----
+$completedAudits = @($campaignAudits | Where-Object { ([string]$_['Status']).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING') })
+if ($completedAudits.Count -gt 0) {
+    [void]$sb.AppendLine('<div class="section"><h2>Post-Completion Review Forensics</h2>')
+    [void]$sb.AppendLine('<p style="color:#777;font-size:12px;margin:0 0 12px">Analysis of completed campaigns: identifies items still PENDING (never reviewed), items auto-decided at close, and reviewers with incomplete reviews.</p>')
+
+    foreach ($cAudit in $completedAudits) {
+        $cName = ConvertTo-SafeHtml $cAudit['CampaignName']
+        $d = $cAudit['Decisions']
+        $completionDateStr = [string]$cAudit['Completed']
+        $completionDt = $null
+        if (-not [string]::IsNullOrWhiteSpace($completionDateStr)) {
+            try { $completionDt = [datetime]::Parse($completionDateStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        }
+
+        # Pending items in a COMPLETED campaign = never reviewed
+        $pendingItems = @($d['Pending'])
+        # Auto-decided: approved items whose DecisionDate is within 120 seconds of campaign completion
+        $autoDecided = @()
+        if ($null -ne $completionDt) {
+            foreach ($item in @($d['Approved'])) {
+                $ddStr = [string]$item.DecisionDate
+                if ([string]::IsNullOrWhiteSpace($ddStr)) { $autoDecided += $item; continue }
+                try {
+                    $ddParsed = [datetime]::Parse($ddStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+                    if ([math]::Abs(($ddParsed - $completionDt).TotalSeconds) -le 120) { $autoDecided += $item }
+                } catch { }
+            }
+        }
+
+        # Group pending + auto-decided by reviewer
+        $reviewerGaps = @{}
+        foreach ($item in $pendingItems) {
+            $rvn = [string]$item.ReviewerName
+            if ([string]::IsNullOrWhiteSpace($rvn)) { $rvn = '(Unassigned)' }
+            if (-not $reviewerGaps.ContainsKey($rvn)) { $reviewerGaps[$rvn] = @{ Pending = 0; AutoDecided = 0 } }
+            $reviewerGaps[$rvn].Pending++
+        }
+        foreach ($item in $autoDecided) {
+            $rvn = [string]$item.ReviewerName
+            if ([string]::IsNullOrWhiteSpace($rvn)) { $rvn = '(Unassigned)' }
+            if (-not $reviewerGaps.ContainsKey($rvn)) { $reviewerGaps[$rvn] = @{ Pending = 0; AutoDecided = 0 } }
+            $reviewerGaps[$rvn].AutoDecided++
+        }
+
+        $totalGapItems = $pendingItems.Count + $autoDecided.Count
+        $allItems = @($d['Approved']).Count + @($d['Revoked']).Count + $pendingItems.Count
+        $genuinelyReviewed = $allItems - $totalGapItems
+        $genuinePct = if ($allItems -gt 0) { [math]::Round($genuinelyReviewed / $allItems * 100, 0) } else { 0 }
+
+        [void]$sb.AppendLine("<div class='subhead'>$cName</div>")
+
+        if ($totalGapItems -eq 0) {
+            [void]$sb.AppendLine('<p style="color:#339933;font-weight:600;margin:4px 0 12px">All items were genuinely reviewed before completion.</p>')
+        }
+        else {
+            $completionNote = if ($null -ne $completionDt) { "Completed: $(& $fmtDt $completionDateStr)" } else { 'Completion date unknown' }
+            [void]$sb.AppendLine("<p style='color:#777;font-size:11px;margin:2px 0 6px'>$completionNote | Genuinely reviewed: $genuinelyReviewed of $allItems ($genuinePct%) | Still pending: $($pendingItems.Count) | Auto-decided at close: $($autoDecided.Count)</p>")
+
+            # Reviewer gap table
+            if ($reviewerGaps.Count -gt 0) {
+                [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Reviewer Review Gaps (' + $reviewerGaps.Count + ' reviewer(s) with gaps)</summary>')
+                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th style="text-align:right">Still Pending</th><th style="text-align:right">Auto-Decided at Close</th><th style="text-align:right">Total Gap</th></tr></thead><tbody>')
+                foreach ($rvn in ($reviewerGaps.Keys | Sort-Object)) {
+                    $g = $reviewerGaps[$rvn]
+                    $gapTotal = $g.Pending + $g.AutoDecided
+                    $pClass = if ($g.Pending -gt 0) { "class='s-red'" } else { '' }
+                    $aClass = if ($g.AutoDecided -gt 0) { "class='s-amber'" } else { '' }
+                    [void]$sb.AppendLine("<tr><td style='font-weight:600'>$(ConvertTo-SafeHtml $rvn)</td><td style='text-align:right' $pClass>$($g.Pending)</td><td style='text-align:right' $aClass>$($g.AutoDecided)</td><td style='text-align:right;font-weight:600'>$gapTotal</td></tr>")
+                }
+                [void]$sb.AppendLine('</tbody></table></details>')
+            }
+
+            # Pending items detail table
+            if ($pendingItems.Count -gt 0) {
+                [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px;color:#CC3333">Items Still Pending (' + $pendingItems.Count + ') -- Never Reviewed</summary>')
+                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Privileged</th></tr></thead><tbody>')
+                foreach ($pi in @($pendingItems | Sort-Object @{ Expression = { [string]$_.ReviewerName } })) {
+                    $piPriv = $false; try { $piPriv = [bool]$pi.Privileged } catch { }
+                    $piPrivBadge = if ($piPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
+                    [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml ([string]$pi.IdentityName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.AccessName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.SourceName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.ReviewerName)) + '</td><td>' + $piPrivBadge + '</td></tr>')
+                }
+                [void]$sb.AppendLine('</tbody></table></details>')
+            }
+        }
+    }
+    [void]$sb.AppendLine('</div>')
+}
+
 # ---- Footer ----
 [void]$sb.AppendLine('<div class="footer">SailPoint ISC Governance Toolkit &middot; Daily Evidence Report v4 &middot; Generated: ' + (ConvertTo-SafeHtml $genStr) + ' &middot; CorrelationID: ' + (ConvertTo-SafeHtml $correlationID) + ' &middot; ' + $campaignAudits.Count + ' campaign(s)</div>')
 [void]$sb.AppendLine('</div></body></html>')
