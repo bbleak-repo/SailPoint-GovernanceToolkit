@@ -1819,19 +1819,37 @@ foreach ($audit in $campaignAudits) {
     if ($primary.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
     $isCompleted = ([string]$audit['Status']).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING')
     # Build a set of names whose certs were reassigned away -- they legitimately
-    # show DecisionsMade=0 because their items moved to the reassignee.
+    # show as signed because their items moved to the reassignee.
     $reassignedAwayNames = @{}
     foreach ($rr in $reassigned) {
         $rfName = ''
         if ($null -ne $rr.PSObject.Properties['ReassignedFrom']) { $rfName = [string]$rr.ReassignedFrom }
         if (-not [string]::IsNullOrWhiteSpace($rfName)) { $reassignedAwayNames[$rfName] = $true }
     }
-    # For ACTIVE campaigns: pending = not yet signed.
-    # For COMPLETED campaigns: also include force-signed reviewers (DecisionsMade = 0),
-    # UNLESS their cert was reassigned to someone else (they're not delinquent).
+    # For COMPLETED campaigns: detect force-signed reviewers by comparing their
+    # SignOffDate to campaign.completed. If they signed at/after completion (within
+    # 5 min), ISC force-signed them -- they didn't finish their review.
+    $completionDt = $null
+    if ($isCompleted) {
+        $compStr = [string]$audit['Completed']
+        if (-not [string]::IsNullOrWhiteSpace($compStr)) {
+            try { $completionDt = [datetime]::Parse($compStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        }
+    }
     $pendingR = @($primary | Where-Object {
+        # ACTIVE campaign: pending = not yet signed
         if ($_.Phase -ne 'SIGNED') { return $true }
-        if ($isCompleted -and [int]$_.DecisionsMade -eq 0 -and -not $reassignedAwayNames.ContainsKey([string]$_.Name)) { return $true }
+        # Skip reviewers whose certs were reassigned away
+        if ($reassignedAwayNames.ContainsKey([string]$_.Name)) { return $false }
+        # COMPLETED campaign: force-signed = SignOffDate at/after campaign completion
+        if ($isCompleted -and $null -ne $completionDt) {
+            $soStr = [string]$_.SignOffDate
+            if ([string]::IsNullOrWhiteSpace($soStr)) { return $true }  # no sign-off date = suspect
+            try {
+                $soDt = [datetime]::Parse($soStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+                if (($soDt - $completionDt).TotalSeconds -ge -300) { return $true }  # signed at/after completion
+            } catch { return $true }
+        }
         return $false
     } | Sort-Object Name)
     if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
@@ -1845,7 +1863,7 @@ foreach ($audit in $campaignAudits) {
         $decMade = [int]$rr.DecisionsMade
         $phCls = if ($decMade -gt 0) { 's-amber' } else { 's-red' }
         $phaseLabel = [string]$rr.Phase
-        if ($isCompleted -and $rr.Phase -eq 'SIGNED' -and $decMade -eq 0) { $phaseLabel = 'FORCE-SIGNED (0 decisions)' }
+        if ($isCompleted -and $rr.Phase -eq 'SIGNED') { $phaseLabel = "FORCE-SIGNED ($decMade decisions)" }
         [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $decMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml $phaseLabel) + '</td></tr>')
     } }
     [void]$sb.AppendLine('</tbody></table></details>')
