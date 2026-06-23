@@ -74,6 +74,11 @@
     # Dry run -- shows what steps would execute.
 .PARAMETER NoCapture
     Re-render from existing snapshots without capturing a new one (offline mode).
+.PARAMETER NoCache
+    Bypass the items cache and fetch fresh data from ISC for all campaigns in scope.
+    Does NOT clear existing cache files -- other scripts and future runs still benefit
+    from the cache. Use this when you need real-time item counts (e.g., reviewers have
+    been signing off and you want the latest decided items).
 .NOTES
     Script:  Invoke-SPDailyEvidenceReportV4.ps1
     Version: 1.0.0
@@ -132,6 +137,9 @@ param(
 
     [Parameter()]
     [switch]$NoCapture,
+
+    [Parameter()]
+    [switch]$NoCache,
 
     [Parameter()]
     [Alias('?')]
@@ -242,6 +250,7 @@ Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
 Write-Host '  Daily Evidence Report (v4)' -ForegroundColor Cyan
 Write-Host "  Date:          $todayLabel" -ForegroundColor DarkGray
 Write-Host "  Period:        Last $effectiveDaysBack day(s)" -ForegroundColor DarkGray
+Write-Host "  Item Cache:    $(if ($NoCache) { 'DISABLED (fresh fetch)' } else { 'Enabled (use -NoCache for fresh data)' })" -ForegroundColor $(if ($NoCache) { 'Yellow' } else { 'DarkGray' })
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -515,10 +524,13 @@ try {
             }
 
             $wrappedItems = [System.Collections.Generic.List[object]]::new()
-            $cacheResult = Get-SPCachedCampaignItems -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+            $itemParams = @{ Campaign = $campaign; Certifications = $certifications; CorrelationID = $correlationID }
+            if ($NoCache) { $itemParams['NoCache'] = $true }
+            $cacheResult = Get-SPCachedCampaignItems @itemParams
             if ($cacheResult.Success) {
                 foreach ($wi in $cacheResult.Data) { $wrappedItems.Add($wi) }
             }
+            $itemsFromCache = if ($cacheResult.ContainsKey('FromCache')) { [bool]$cacheResult.FromCache } else { $false }
 
             $campaignMetadata = @{
                 StartDate      = if ($null -ne $campaign.created)   { [string]$campaign.created }   else { '' }
@@ -549,6 +561,7 @@ try {
                 WrappedItems    = $wrappedItems.ToArray()
                 Certifications  = $certifications
                 ReviewerActions = $reviewerActions
+                ItemsFromCache  = $itemsFromCache
             }
             $auditList.Add($campaignAudit)
         }
@@ -1617,7 +1630,9 @@ summary{cursor:pointer}
 [void]$sb.AppendLine('<div class="header">')
 [void]$sb.AppendLine('<h1>Daily Evidence Report</h1>')
 [void]$sb.AppendLine('<div class="meta">SailPoint ISC Governance Toolkit | Report generated: ' + (ConvertTo-SafeHtml $genStr) + ' | Period: Last ' + $effectiveDaysBack + ' day(s)' + $envName2 + '</div>')
-[void]$sb.AppendLine('<div class="status-line">' + ('{0:N0}' -f $aggDecided) + ' / ' + ('{0:N0}' -f $aggTotal) + ' decisions made (' + $aggPct + '%) &middot; ' + $activeCount + ' active campaign(s)</div>')
+$cachedCampaigns = @($campaignAudits | Where-Object { $_['ItemsFromCache'] -eq $true })
+$cacheNote = if ($NoCache) { ' | Items: fresh (no-cache mode)' } elseif ($cachedCampaigns.Count -gt 0) { " | Items: $($cachedCampaigns.Count) of $($campaignAudits.Count) from cache" } else { ' | Items: all fresh' }
+[void]$sb.AppendLine('<div class="status-line">' + ('{0:N0}' -f $aggDecided) + ' / ' + ('{0:N0}' -f $aggTotal) + ' decisions made (' + $aggPct + '%) &middot; ' + $activeCount + ' active campaign(s)' + (ConvertTo-SafeHtml $cacheNote) + '</div>')
 [void]$sb.AppendLine('</div>')
 
 # ---- Certification Scope ----
@@ -1731,7 +1746,7 @@ $remBlock
 
 # ---- A. Campaign Completion Evidence ----
 [void]$sb.AppendLine('<div class="section"><h2>A. Campaign Completion Evidence</h2>')
-[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Pending</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Pending</th><th>Items Decided %</th><th>Reviewer %</th><th>Data</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
 foreach ($audit in $campaignAudits) {
     $cn = ConvertTo-SafeHtml $audit['CampaignName']
     $cs = ConvertTo-SafeHtml ([string]$audit['Status'])
@@ -1757,7 +1772,8 @@ foreach ($audit in $campaignAudits) {
     $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
     $cr = & $fmtDt ([string]$audit['Created'])
     $cmp = & $fmtDt ([string]$audit['Completed'])
-    [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td>$cr</td><td>$cmp</td></tr>")
+    $dataLabel = if ($audit['ItemsFromCache']) { '<span style="color:#9a6700;font-size:10px;">Cached</span>' } else { '<span style="color:#0a7d2c;font-size:10px;">Fresh</span>' }
+    [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td style='text-align:center;'>$dataLabel</td><td>$cr</td><td>$cmp</td></tr>")
 }
 [void]$sb.AppendLine('</tbody></table></div>')
 
