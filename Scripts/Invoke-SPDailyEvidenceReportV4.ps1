@@ -1818,10 +1818,21 @@ foreach ($audit in $campaignAudits) {
     $reassigned = if ($null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
     if ($primary.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
     $isCompleted = ([string]$audit['Status']).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING')
+    # Build a set of names whose certs were reassigned away -- they legitimately
+    # show DecisionsMade=0 because their items moved to the reassignee.
+    $reassignedAwayNames = @{}
+    foreach ($rr in $reassigned) {
+        $rfName = ''
+        if ($null -ne $rr.PSObject.Properties['ReassignedFrom']) { $rfName = [string]$rr.ReassignedFrom }
+        if (-not [string]::IsNullOrWhiteSpace($rfName)) { $reassignedAwayNames[$rfName] = $true }
+    }
     # For ACTIVE campaigns: pending = not yet signed.
-    # For COMPLETED campaigns: also include force-signed reviewers (DecisionsMade = 0).
+    # For COMPLETED campaigns: also include force-signed reviewers (DecisionsMade = 0),
+    # UNLESS their cert was reassigned to someone else (they're not delinquent).
     $pendingR = @($primary | Where-Object {
-        $_.Phase -ne 'SIGNED' -or ($isCompleted -and [int]$_.DecisionsMade -eq 0)
+        if ($_.Phase -ne 'SIGNED') { return $true }
+        if ($isCompleted -and [int]$_.DecisionsMade -eq 0 -and -not $reassignedAwayNames.ContainsKey([string]$_.Name)) { return $true }
+        return $false
     } | Sort-Object Name)
     if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
     $anyRev = $true
