@@ -24,7 +24,7 @@ headlessly (scheduled tasks, pipelines, ad-hoc admin).
 
 ## Contents
 1. [Setup & diagnostics](#1-setup--diagnostics) — `New-SPVault`, `Test-SPConnectivity`, `Show-SPDashboard`
-2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`
+2. [Campaign testing & audit](#2-campaign-testing--audit) — **creating/activating campaigns**, `Invoke-GovernanceTest`, `Invoke-SPCampaignAudit`, `Invoke-SPCampaignSearch`, **`Invoke-SPCampaignClose`**
 3. [Delta certification](#3-delta-certification) — `Invoke-SPADDeltaCert`, `Invoke-SPDeltaCertEscalate`, `Invoke-SPDeltaReport`
 4. [Disconnected applications](#4-disconnected-applications) — `Invoke-SPDisconnectedAppCert`, `Invoke-SPDisconnectedAppBatch`, `Invoke-SPDisconnectedAppRegistry`
 5. [Governance & reporting](#5-governance--reporting) — health check, metrics, report, data quality, distribution, **campaign diff (day-over-day + cross-campaign decision dates)**, **cache/snapshot validator**, **per-entitlement decision history**, **campaign KPI trend / program trend**, **executive cert tracker + attestation evidence**, **daily evidence report (audit/IAG; + lean v2)**, weekly digest, **AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)**, ~~adaptive reports~~ (deprecated)
@@ -210,6 +210,57 @@ workload, or find source coverage gaps.
 .\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode CSV
 ```
 **Related GUI:** Audit tab (campaign query dialog).
+
+### `Invoke-SPCampaignClose.ps1`
+**Purpose:** find and optionally **complete** certification campaigns from the command line.
+Safe by default -- without `-SetCompleted` it is purely a read-only listing. Designed for
+closing out daily attestation campaigns that have run their course.
+
+**When to use:** end-of-day or next-morning cleanup of completed daily campaigns. Also useful
+for closing stale campaigns that reviewers have finished but ISC hasn't auto-completed.
+
+| Parameter | Description |
+|---|---|
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Campaign name filters (same precedence as all toolkit scripts). |
+| `-Status <list>` | Filter by status (default: all statuses). Example: `-Status ACTIVE`. |
+| `-DaysBack <n>` | Look-back window (default 1). |
+| `-SetCompleted` | Actually complete the matching campaigns. Without this, the script only lists them. |
+| `-Force` | Skip the confirmation prompt when completing more than 5 campaigns. |
+
+**Safety:**
+- Without `-SetCompleted`: read-only listing -- no API writes
+- With `-WhatIf -SetCompleted`: shows what would be completed without doing it
+- More than 5 matches: requires typing "YES" to confirm (or `-Force`)
+- Requires `Safety.AllowCompleteCampaign = true` in `settings.json`
+- Pending (undecided) items maintain current access when a campaign is completed
+
+```powershell
+# List active daily campaigns from the last day (read-only)
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation' -Status ACTIVE -DaysBack 1 -Token $token
+
+# Dry run -- see what would be completed
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation Monday' -Status ACTIVE -DaysBack 1 -SetCompleted -WhatIf -Token $token
+
+# Complete a specific day's campaign
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation Monday' -Status ACTIVE -DaysBack 1 -SetCompleted -Token $token
+
+# Close all daily campaigns from the last 7 days (skip confirmation)
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily' -Status ACTIVE -DaysBack 7 -SetCompleted -Force -Token $token
+```
+
+> **WARNING:** Completing a campaign makes all undecided items maintain current access.
+> Always run without `-SetCompleted` first to review what will be closed and how many
+> items are still pending. The script shows pending item counts in both listing and
+> WhatIf modes.
+
+*Exit codes:* 0 success | 1 no matches | 2 parameter | 3 auth | 4 config | 5 completion failed.
+
+> **Least-privilege PAT scopes:**
+> - **Read-only listing** (without `-SetCompleted`): `idn:campaign:read` + `idn:campaign-report:read`
+> - **Complete campaigns** (with `-SetCompleted`): `idn:campaign:manage` (includes read)
+> - **Browser token** (`-Token`): works for both -- browser tokens carry full admin scope.
+> - The PAT user must have **ORG_ADMIN** or **CERT_ADMIN** user level. A standard user
+>   will receive 403 even with the correct scopes.
 
 ---
 
