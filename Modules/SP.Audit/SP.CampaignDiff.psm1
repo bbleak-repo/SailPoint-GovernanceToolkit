@@ -274,6 +274,7 @@ function Compare-SPCampaignSnapshots {
         $added = [System.Collections.Generic.List[object]]::new()
         $removed = [System.Collections.Generic.List[object]]::new()
         $changed = [System.Collections.Generic.List[object]]::new()
+        $newlyDecided = [System.Collections.Generic.List[object]]::new()
         foreach ($k in $curMap.Keys) {
             $ci = $curMap[$k]
             if (-not $prevMap.ContainsKey($k)) {
@@ -327,6 +328,32 @@ function Compare-SPCampaignSnapshots {
                         # change to the reviewer (manager) who owns the cert it belongs to.
                         ReviewerId   = $crid
                         ReviewerName = $crname
+                    })
+                }
+                # Newly decided: item was PENDING in the prior campaign and is now
+                # APPROVE or REVOKE in the current. These are first-time reviewer
+                # actions -- not decision flips -- and are surfaced separately so V4
+                # can show "what got decided since the last campaign."
+                elseif ($pd -eq 'PENDING' -and ($decided -contains $cd)) {
+                    $ndrid = [string](Get-SPDiffProp $ci 'ReviewerId' '')
+                    $ndrname = if ($ndrid -and $curRevName.ContainsKey($ndrid)) { $curRevName[$ndrid] } else { '' }
+                    $newlyDecided.Add([ordered]@{
+                        Key              = $k
+                        IdentityName     = [string](Get-SPDiffProp $ci 'IdentityName' '')
+                        IdentityId       = [string](Get-SPDiffProp $ci 'IdentityId' '')
+                        AccessName       = [string](Get-SPDiffProp $ci 'AccessName' '')
+                        AccessId         = [string](Get-SPDiffProp $ci 'AccessId' '')
+                        AccessType       = [string](Get-SPDiffProp $ci 'AccessType' '')
+                        SourceName       = [string](Get-SPDiffProp $ci 'SourceName' '')
+                        SourceId         = [string](Get-SPDiffProp $ci 'SourceId' '')
+                        Privileged       = [bool](Get-SPDiffProp $ci 'Privileged' $false)
+                        PrevDecision     = $pd
+                        CurrDecision     = $cd
+                        Transition       = "$pd->$cd"
+                        PrevDecisionDate = [string](Get-SPDiffProp $pi 'DecisionDate' '')
+                        CurrDecisionDate = [string](Get-SPDiffProp $ci 'DecisionDate' '')
+                        ReviewerId       = $ndrid
+                        ReviewerName     = $ndrname
                     })
                 }
             }
@@ -493,6 +520,8 @@ function Compare-SPCampaignSnapshots {
                 PersistedRevokes      = $persistedRevokes.ToArray()
                 PersistedRevokeCount  = $persistedRevokes.Count
                 PersistedRevokeADCount = $persistedRevokeAD
+                NewlyDecided          = $newlyDecided.ToArray()
+                NewlyDecidedCount     = $newlyDecided.Count
             }
             Compliance = [ordered]@{
                 NewlyAddedPrivileged = $newPriv.ToArray()

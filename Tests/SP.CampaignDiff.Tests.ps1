@@ -402,6 +402,55 @@ Describe "CDF-11: decision-change is APPROVE-to-REVOKE only (PENDING transitions
     }
 }
 
+Describe "CDF-11b: NewlyDecided captures PENDING-to-APPROVE/REVOKE transitions" {
+    # Re-uses the CDF-11 fixture: i3 transitions PENDING->APPROVE, i1 transitions APPROVE->REVOKE.
+    # NewlyDecided should capture i3 (PENDING->APPROVE) but NOT i1 (APPROVE->REVOKE, which is in Changed).
+    BeforeAll {
+        $camp = [PSCustomObject]@{ id = 'camp-cdf11b'; name = 'Daily'; status = 'ACTIVE' }
+        $prevDec = @{
+            Approved = @(
+                [PSCustomObject]@{ IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessId = 'eA'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-10T09:00:00Z' }
+            )
+            Revoked  = @()
+            Pending  = @(
+                [PSCustomObject]@{ IdentityId = 'i3'; IdentityName = 'U3'; AccessName = 'AppC'; AccessId = 'eC'; SourceName = 'AD'; SourceId = 's1'; Decision = 'PENDING'; DecisionDate = '' }
+                [PSCustomObject]@{ IdentityId = 'i5'; IdentityName = 'U5'; AccessName = 'AppE'; AccessId = 'eE'; SourceName = 'AD'; SourceId = 's1'; Decision = 'PENDING'; DecisionDate = '' }
+            )
+        }
+        $curDec = @{
+            Approved = @(
+                [PSCustomObject]@{ IdentityId = 'i3'; IdentityName = 'U3'; AccessName = 'AppC'; AccessId = 'eC'; SourceName = 'AD'; SourceId = 's1'; Decision = 'APPROVE'; DecisionDate = '2026-06-11T09:00:00Z' }
+            )
+            Revoked  = @(
+                [PSCustomObject]@{ IdentityId = 'i1'; IdentityName = 'U1'; AccessName = 'AppA'; AccessId = 'eA'; SourceName = 'AD'; SourceId = 's1'; Decision = 'REVOKE'; DecisionDate = '2026-06-11T11:00:00Z' }
+                [PSCustomObject]@{ IdentityId = 'i5'; IdentityName = 'U5'; AccessName = 'AppE'; AccessId = 'eE'; SourceName = 'AD'; SourceId = 's1'; Decision = 'REVOKE'; DecisionDate = '2026-06-11T10:30:00Z' }
+            )
+            Pending  = @()
+        }
+        $prev = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions $prevDec
+        $cur  = Build-SPCampaignSnapshotData -Campaign $camp -Certifications @() -Decisions $curDec
+        $script:d11b = (Compare-SPCampaignSnapshots -Current $cur -Previous $prev).Data
+    }
+    It "captures PENDING->APPROVE as NewlyDecided" {
+        $script:d11b.Scope.NewlyDecidedCount | Should -BeGreaterOrEqual 1
+        $ndApprove = @($script:d11b.Scope.NewlyDecided | Where-Object { $_.IdentityId -eq 'i3' })
+        $ndApprove.Count | Should -Be 1
+        $ndApprove[0].Transition | Should -Be 'PENDING->APPROVE'
+        $ndApprove[0].CurrDecisionDate | Should -Be '2026-06-11T09:00:00Z'
+    }
+    It "captures PENDING->REVOKE as NewlyDecided" {
+        $ndRevoke = @($script:d11b.Scope.NewlyDecided | Where-Object { $_.IdentityId -eq 'i5' })
+        $ndRevoke.Count | Should -Be 1
+        $ndRevoke[0].Transition | Should -Be 'PENDING->REVOKE'
+    }
+    It "does not put APPROVE->REVOKE in NewlyDecided (that goes in Changed)" {
+        @($script:d11b.Scope.NewlyDecided | Where-Object { $_.IdentityId -eq 'i1' }).Count | Should -Be 0
+    }
+    It "NewlyDecided total count is correct" {
+        $script:d11b.Scope.NewlyDecidedCount | Should -Be 2
+    }
+}
+
 Describe "CDF-12: scope items carry the reviewer + per-reviewer approve/revoke counts" {
     BeforeAll {
         $camp  = [PSCustomObject]@{ id = 'camp-cdf12'; name = 'Q2 Access Review'; status = 'ACTIVE'; created = '2026-06-08T10:00:00Z' }

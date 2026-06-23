@@ -589,6 +589,8 @@ $stepStart = Get-Date
 
 # Newly approved items extracted from the scope-diff engine.
 $v4NewlyApproved = [System.Collections.Generic.List[object]]::new()
+$v4NewlyDecided  = [System.Collections.Generic.List[object]]::new()
+$v4SeenKeys      = @{}
 $v4HasPrior      = $false
 $v4PriorLabels   = [System.Collections.Generic.List[string]]::new()
 
@@ -662,22 +664,41 @@ try {
             }
         }
 
+        # Collect truly-new scope items (Added = in current but NOT in prior campaign)
         foreach ($a in @($diff.Scope.Added)) {
+            $aKey = [string](Get-V4Prop $a 'Key' '')
+            if (-not [string]::IsNullOrWhiteSpace($aKey) -and $v4SeenKeys.ContainsKey($aKey)) { continue }
             $dec = [string](Get-V4Prop $a 'Decision' '')
             if ($dec -eq 'APPROVE' -or $dec -eq 'Approved') {
-                # Ensure DecisionDate has a value -- fall back to sign-off or campaign date
                 $itemDate = [string](Get-V4Prop $a 'DecisionDate' '')
                 if ([string]::IsNullOrWhiteSpace($itemDate)) {
                     $a | Add-Member -NotePropertyName 'DecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
                 }
                 $v4NewlyApproved.Add($a)
+                if (-not [string]::IsNullOrWhiteSpace($aKey)) { $v4SeenKeys[$aKey] = $true }
+            }
+        }
+
+        # Collect newly-decided items (existed in both campaigns, was PENDING, now decided)
+        foreach ($nd in @($diff.Scope.NewlyDecided)) {
+            $ndKey = [string](Get-V4Prop $nd 'Key' '')
+            if (-not [string]::IsNullOrWhiteSpace($ndKey) -and $v4SeenKeys.ContainsKey($ndKey)) { continue }
+            $ndDec = [string](Get-V4Prop $nd 'CurrDecision' '')
+            if ($ndDec -eq 'APPROVE' -or $ndDec -eq 'Approved') {
+                # Ensure DecisionDate from current snapshot; fall back to campaign date
+                $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
+                if ([string]::IsNullOrWhiteSpace($ndDate)) {
+                    $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                }
+                $v4NewlyDecided.Add($nd)
+                if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
             }
         }
     }
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $stepResults['ScopeDiff'] = @{ Status = 'Success'; Detail = "newly-approved=$($v4NewlyApproved.Count) hasPrior=$v4HasPrior"; Duration = [math]::Round($stepDuration, 2) }
-    Write-Host "  Step 1b: newly-approved=$($v4NewlyApproved.Count) hasPrior=$v4HasPrior" -ForegroundColor Green
+    $stepResults['ScopeDiff'] = @{ Status = 'Success'; Detail = "new-scope=$($v4NewlyApproved.Count) newly-decided=$($v4NewlyDecided.Count) hasPrior=$v4HasPrior"; Duration = [math]::Round($stepDuration, 2) }
+    Write-Host "  Step 1b: new-scope=$($v4NewlyApproved.Count) newly-decided=$($v4NewlyDecided.Count) hasPrior=$v4HasPrior" -ForegroundColor Green
 }
 catch {
     Write-Host "  Step 1b: ERROR - $($_.Exception.Message)" -ForegroundColor Red
@@ -796,7 +817,7 @@ try {
         }
 
         # Diff data
-        $diffData = [ordered]@{ hasPrior = $v4HasPrior; priorCampaignName = ''; scopeAdded = 0; scopeRemoved = 0; scopeChanged = 0; newlyApprovedCount = 0 }
+        $diffData = [ordered]@{ hasPrior = $v4HasPrior; priorCampaignName = ''; scopeAdded = 0; scopeRemoved = 0; scopeChanged = 0; newlyApprovedCount = 0; newlyDecidedCount = 0 }
         if ($null -ne $audit['Diff']) {
             $df = $audit['Diff']
             if ($null -ne $df.Scope) {
@@ -809,6 +830,7 @@ try {
             }
         }
         $diffData.newlyApprovedCount = $v4NewlyApproved.Count
+        $diffData.newlyDecidedCount = $v4NewlyDecided.Count
 
         $metricsRecord = [ordered]@{
             captureDate      = $captureDate
@@ -1791,17 +1813,17 @@ else {
 }
 [void]$sb.AppendLine('</tbody></table></details>')
 
-# -- Newly Approved Access subsection (from scope-diff engine) --
+# -- New Scope: Approved Access subsection (truly new items not in prior campaign) --
 $naCnt = $v4NewlyApproved.Count
-$naLabel = if ($v4HasPrior) { "Newly Approved Access ($naCnt items)" } else { "Newly Approved Access ($naCnt items) -- no prior campaign snapshot available" }
+$naLabel = if ($v4HasPrior) { "New Scope -- Approved Access ($naCnt items)" } else { "New Scope -- Approved Access ($naCnt items) -- no prior campaign snapshot available" }
 [void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$naLabel</summary>")
 if (-not $v4HasPrior) {
     [void]$sb.AppendLine('<p style="color:#777;font-size:12px;font-style:italic;margin:4px 0 8px">No prior campaign snapshot was found for comparison. Run the report again after a second campaign to see newly approved access.</p>')
 }
+[void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items that appeared in the current campaign scope but were NOT present in the prior campaign, and were approved.</p>')
 [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Privileged</th></tr></thead><tbody>')
 if ($naCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
 else {
-    # Sort by DecisionDate descending (most recent approvals first)
     $naSorted = @($v4NewlyApproved | Sort-Object @{ Expression = {
         $dd = [string](Get-V4Prop $_ 'DecisionDate' '')
         if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
@@ -1816,6 +1838,32 @@ else {
         $naPriv   = $false; try { $naPriv = [bool](Get-V4Prop $na 'Privileged' $false) } catch { }
         $naPrivBadge = if ($naPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $naIdent + '</td><td>' + $naAccess + '</td><td>' + $naSource + '</td><td>' + $naReview + '</td><td>' + (ConvertTo-SafeHtml $naDate) + '</td><td>' + $naPrivBadge + '</td></tr>')
+    }
+}
+[void]$sb.AppendLine('</tbody></table></details>')
+
+# -- Newly Decided: Approved Since Prior Campaign (was PENDING, now APPROVED) --
+$ndCnt = $v4NewlyDecided.Count
+$ndLabel = if ($v4HasPrior) { "Newly Decided -- Approved Since Prior Campaign ($ndCnt items)" } else { "Newly Decided ($ndCnt items) -- no prior campaign for comparison" }
+[void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$ndLabel</summary>")
+[void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items that existed in both the current and prior campaign, were PENDING in the prior, and are now APPROVED. These represent reviewer decisions made since the last campaign.</p>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Privileged</th></tr></thead><tbody>')
+if ($ndCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
+else {
+    $ndSorted = @($v4NewlyDecided | Sort-Object @{ Expression = {
+        $dd = [string](Get-V4Prop $_ 'CurrDecisionDate' '')
+        if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
+    } } -Descending)
+    foreach ($nd in $ndSorted) {
+        $ndIdent  = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'IdentityName' ''))
+        $ndAccess = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'AccessName' ''))
+        $ndSource = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'SourceName' ''))
+        $ndReview = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'ReviewerName' ''))
+        $ndDateRaw = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
+        $ndDate   = & $fmtDt $ndDateRaw
+        $ndPriv   = $false; try { $ndPriv = [bool](Get-V4Prop $nd 'Privileged' $false) } catch { }
+        $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
+        [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td>' + (ConvertTo-SafeHtml $ndDate) + '</td><td>' + $ndPrivBadge + '</td></tr>')
     }
 }
 [void]$sb.AppendLine('</tbody></table></details>')
