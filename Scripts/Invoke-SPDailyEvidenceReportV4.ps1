@@ -1634,8 +1634,8 @@ foreach ($audit in $campaignAudits) {
     $ppct = if ($tot -gt 0) { [math]::Round($pend / $tot * 100, 1) } else { 0 }
     if ($tot -gt 0 -and ($apct + $rpct + $ppct) -ne 100) { $apct = [math]::Round(100 - $rpct - $ppct, 1) }
     $ra = $audit['ReviewerActions']
-    $primary = if ($null -ne $ra) { @($ra['Primary']) } else { @() }
-    $reassigned = if ($null -ne $ra) { @($ra['Reassigned']) } else { @() }
+    $primary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
+    $reassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
     $allRevw = @($primary) + @($reassigned)
     $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
     $totRev = @($allRevw).Count
