@@ -1826,9 +1826,10 @@ foreach ($audit in $campaignAudits) {
         if ($null -ne $rr.PSObject.Properties['ReassignedFrom']) { $rfName = [string]$rr.ReassignedFrom }
         if (-not [string]::IsNullOrWhiteSpace($rfName)) { $reassignedAwayNames[$rfName] = $true }
     }
-    # For COMPLETED campaigns: detect force-signed reviewers by comparing their
-    # SignOffDate to campaign.completed. If they signed at/after completion (within
-    # 5 min), ISC force-signed them -- they didn't finish their review.
+    # For COMPLETED campaigns: detect force-signed reviewers using multiple signals:
+    # 1. DecisionsMade < DecisionsTotal (didn't finish all items)
+    # 2. SignOffDate at/after campaign.completed (force-signed by ISC on close)
+    # 3. DecisionsMade = 0 and not reassigned away (never acted)
     $completionDt = $null
     if ($isCompleted) {
         $compStr = [string]$audit['Completed']
@@ -1841,15 +1842,23 @@ foreach ($audit in $campaignAudits) {
         if ($_.Phase -ne 'SIGNED') { return $true }
         # Skip reviewers whose certs were reassigned away
         if ($reassignedAwayNames.ContainsKey([string]$_.Name)) { return $false }
-        # COMPLETED campaign: force-signed = SignOffDate at/after campaign completion
-        if ($isCompleted -and $null -ne $completionDt) {
+        if (-not $isCompleted) { return $false }
+        # COMPLETED campaign: check all signals
+        $dtMade = [int]$_.DecisionsMade
+        $dtTotal = [int]$_.DecisionsTotal
+        # Signal 1: didn't decide all items
+        if ($dtTotal -gt 0 -and $dtMade -lt $dtTotal) { return $true }
+        # Signal 2: sign-off at/after completion
+        if ($null -ne $completionDt) {
             $soStr = [string]$_.SignOffDate
-            if ([string]::IsNullOrWhiteSpace($soStr)) { return $true }  # no sign-off date = suspect
+            if ([string]::IsNullOrWhiteSpace($soStr)) { return $true }
             try {
                 $soDt = [datetime]::Parse($soStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
-                if (($soDt - $completionDt).TotalSeconds -ge -300) { return $true }  # signed at/after completion
+                if (($soDt - $completionDt).TotalSeconds -ge -300) { return $true }
             } catch { return $true }
         }
+        # Signal 3: zero decisions (and not reassigned -- already filtered above)
+        if ($dtMade -eq 0) { return $true }
         return $false
     } | Sort-Object Name)
     if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
@@ -1861,9 +1870,13 @@ foreach ($audit in $campaignAudits) {
     if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
     else { foreach ($rr in $pendingR) {
         $decMade = [int]$rr.DecisionsMade
+        $decTotal = if ($rr.PSObject.Properties['DecisionsTotal']) { [int]$rr.DecisionsTotal } else { 0 }
         $phCls = if ($decMade -gt 0) { 's-amber' } else { 's-red' }
         $phaseLabel = [string]$rr.Phase
-        if ($isCompleted -and $rr.Phase -eq 'SIGNED') { $phaseLabel = "FORCE-SIGNED ($decMade decisions)" }
+        if ($isCompleted -and $rr.Phase -eq 'SIGNED') {
+            $ratio = if ($decTotal -gt 0) { "$decMade/$decTotal" } else { "$decMade" }
+            $phaseLabel = "FORCE-SIGNED ($ratio decided)"
+        }
         [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $decMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml $phaseLabel) + '</td></tr>')
     } }
     [void]$sb.AppendLine('</tbody></table></details>')

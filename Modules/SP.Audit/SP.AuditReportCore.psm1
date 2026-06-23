@@ -455,6 +455,7 @@ function Group-SPReviewerActions {
         $reviewerName   = ''
         $reviewerEmail  = ''
         $decisionsMade  = 0
+        $decisionsTotal = 0
         $signOffDate    = ''
         $phase          = ''
 
@@ -470,6 +471,12 @@ function Group-SPReviewerActions {
 
         if ($null -ne $cert.decisionsMade) {
             try { $decisionsMade = [int]$cert.decisionsMade } catch { $decisionsMade = 0 }
+        }
+        if ($null -ne $cert.decisionsTotal) {
+            try { $decisionsTotal = [int]$cert.decisionsTotal } catch { $decisionsTotal = 0 }
+        }
+        elseif ($null -ne $cert.totalCount) {
+            try { $decisionsTotal = [int]$cert.totalCount } catch { $decisionsTotal = 0 }
         }
 
         if ($null -ne $cert.signed -and -not [string]::IsNullOrWhiteSpace([string]$cert.signed)) {
@@ -497,6 +504,7 @@ function Group-SPReviewerActions {
                 Email           = $reviewerEmail
                 ReassignedFrom  = $reassignedFromName
                 DecisionsMade   = $decisionsMade
+                DecisionsTotal  = $decisionsTotal
                 SignOffDate     = $signOffDate
                 Phase           = $phase
                 ProofOfAction   = $proofOfAction
@@ -506,18 +514,20 @@ function Group-SPReviewerActions {
             # Primary: aggregate by reviewer name to get CertsAssigned count
             if (-not $primaryMap.Contains($reviewerName)) {
                 $primaryMap[$reviewerName] = [PSCustomObject]@{
-                    Name          = $reviewerName
-                    Email         = $reviewerEmail
-                    CertsAssigned = 0
-                    DecisionsMade = 0
-                    SignOffDate   = $signOffDate
-                    Phase         = $phase
+                    Name           = $reviewerName
+                    Email          = $reviewerEmail
+                    CertsAssigned  = 0
+                    DecisionsMade  = 0
+                    DecisionsTotal = 0
+                    SignOffDate    = $signOffDate
+                    Phase          = $phase
                 }
             }
 
             $entry = $primaryMap[$reviewerName]
             $entry.CertsAssigned = $entry.CertsAssigned + 1
             $entry.DecisionsMade = $entry.DecisionsMade + $decisionsMade
+            $entry.DecisionsTotal = $entry.DecisionsTotal + $decisionsTotal
 
             # Use most recent sign-off date
             if ([string]::IsNullOrWhiteSpace($entry.SignOffDate) -and -not [string]::IsNullOrWhiteSpace($signOffDate)) {
