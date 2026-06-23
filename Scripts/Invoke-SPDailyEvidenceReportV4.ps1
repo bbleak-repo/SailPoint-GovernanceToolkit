@@ -1722,7 +1722,7 @@ $remBlock
 
 # ---- A. Campaign Completion Evidence ----
 [void]$sb.AppendLine('<div class="section"><h2>A. Campaign Completion Evidence</h2>')
-[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Pending</th><th>Items Decided %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Pending</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
 foreach ($audit in $campaignAudits) {
     $cn = ConvertTo-SafeHtml $audit['CampaignName']
     $cs = ConvertTo-SafeHtml ([string]$audit['Status'])
@@ -1731,9 +1731,21 @@ foreach ($audit in $campaignAudits) {
     $t = $a + $r + $p; $dec = $a + $r
     $pc = if ($t -gt 0) { [math]::Round($dec / $t * 100, 0) } else { 0 }
     $pcCls = if ($pc -ge 80) { 's-green' } elseif ($pc -ge 50) { 's-amber' } else { 's-red' }
+    # Reviewer completion: % of primary reviewers who have SIGNED
+    $rvPct = 0; $rvLabel = '-'
+    $ra = $audit['ReviewerActions']
+    if ($null -ne $ra -and $null -ne $ra['Primary']) {
+        $rvAll = @($ra['Primary'])
+        $rvSigned = @($rvAll | Where-Object { $_.Phase -eq 'SIGNED' })
+        if ($rvAll.Count -gt 0) {
+            $rvPct = [math]::Round($rvSigned.Count / $rvAll.Count * 100, 0)
+            $rvLabel = "$rvPct% ($($rvSigned.Count)/$($rvAll.Count))"
+        }
+    }
+    $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
     $cr = & $fmtDt ([string]$audit['Created'])
     $cmp = & $fmtDt ([string]$audit['Completed'])
-    [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td>$cr</td><td>$cmp</td></tr>")
+    [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td>$cr</td><td>$cmp</td></tr>")
 }
 [void]$sb.AppendLine('</tbody></table></div>')
 
@@ -1813,6 +1825,32 @@ else {
 }
 [void]$sb.AppendLine('</tbody></table></details>')
 
+# -- Newly Decided: Approved Since Prior Campaign (was PENDING, now APPROVED) --
+$ndCnt = $v4NewlyDecided.Count
+$ndLabel = if ($v4HasPrior) { "Newly Decided -- Approved Since Prior Campaign ($ndCnt items)" } else { "Newly Decided ($ndCnt items) -- no prior campaign for comparison" }
+[void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$ndLabel</summary>")
+[void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items that existed in both the current and prior campaign, were PENDING in the prior, and are now APPROVED. These represent reviewer decisions made since the last campaign.</p>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Privileged</th></tr></thead><tbody>')
+if ($ndCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
+else {
+    $ndSorted = @($v4NewlyDecided | Sort-Object @{ Expression = {
+        $dd = [string](Get-V4Prop $_ 'CurrDecisionDate' '')
+        if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
+    } } -Descending)
+    foreach ($nd in $ndSorted) {
+        $ndIdent  = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'IdentityName' ''))
+        $ndAccess = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'AccessName' ''))
+        $ndSource = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'SourceName' ''))
+        $ndReview = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'ReviewerName' ''))
+        $ndDateRaw = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
+        $ndDate   = & $fmtDt $ndDateRaw
+        $ndPriv   = $false; try { $ndPriv = [bool](Get-V4Prop $nd 'Privileged' $false) } catch { }
+        $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
+        [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td>' + (ConvertTo-SafeHtml $ndDate) + '</td><td>' + $ndPrivBadge + '</td></tr>')
+    }
+}
+[void]$sb.AppendLine('</tbody></table></details>')
+
 # -- New Scope: Approved Access subsection (truly new items not in prior campaign) --
 $naCnt = $v4NewlyApproved.Count
 $naLabel = if ($v4HasPrior) { "New Scope -- Approved Access ($naCnt items)" } else { "New Scope -- Approved Access ($naCnt items) -- no prior campaign snapshot available" }
@@ -1838,32 +1876,6 @@ else {
         $naPriv   = $false; try { $naPriv = [bool](Get-V4Prop $na 'Privileged' $false) } catch { }
         $naPrivBadge = if ($naPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $naIdent + '</td><td>' + $naAccess + '</td><td>' + $naSource + '</td><td>' + $naReview + '</td><td>' + (ConvertTo-SafeHtml $naDate) + '</td><td>' + $naPrivBadge + '</td></tr>')
-    }
-}
-[void]$sb.AppendLine('</tbody></table></details>')
-
-# -- Newly Decided: Approved Since Prior Campaign (was PENDING, now APPROVED) --
-$ndCnt = $v4NewlyDecided.Count
-$ndLabel = if ($v4HasPrior) { "Newly Decided -- Approved Since Prior Campaign ($ndCnt items)" } else { "Newly Decided ($ndCnt items) -- no prior campaign for comparison" }
-[void]$sb.AppendLine("<details><summary class='s-green' style='font-size:13px;margin:12px 0 6px'>$ndLabel</summary>")
-[void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items that existed in both the current and prior campaign, were PENDING in the prior, and are now APPROVED. These represent reviewer decisions made since the last campaign.</p>')
-[void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Decision Date</th><th>Privileged</th></tr></thead><tbody>')
-if ($ndCnt -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">None.</td></tr>') }
-else {
-    $ndSorted = @($v4NewlyDecided | Sort-Object @{ Expression = {
-        $dd = [string](Get-V4Prop $_ 'CurrDecisionDate' '')
-        if ([string]::IsNullOrWhiteSpace($dd)) { [datetime]::MinValue } else { try { [datetime]::Parse($dd) } catch { [datetime]::MinValue } }
-    } } -Descending)
-    foreach ($nd in $ndSorted) {
-        $ndIdent  = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'IdentityName' ''))
-        $ndAccess = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'AccessName' ''))
-        $ndSource = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'SourceName' ''))
-        $ndReview = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'ReviewerName' ''))
-        $ndDateRaw = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
-        $ndDate   = & $fmtDt $ndDateRaw
-        $ndPriv   = $false; try { $ndPriv = [bool](Get-V4Prop $nd 'Privileged' $false) } catch { }
-        $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
-        [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td>' + (ConvertTo-SafeHtml $ndDate) + '</td><td>' + $ndPrivBadge + '</td></tr>')
     }
 }
 [void]$sb.AppendLine('</tbody></table></details>')
