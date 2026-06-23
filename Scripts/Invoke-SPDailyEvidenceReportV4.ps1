@@ -1788,18 +1788,28 @@ $anyRev = $false
 foreach ($audit in $campaignAudits) {
     $ra = $audit['ReviewerActions']
     if ($null -eq $ra) { continue }
-    $primary = @($ra['Primary']); $reassigned = @($ra['Reassigned'])
+    $primary = if ($null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
+    $reassigned = if ($null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
     if ($primary.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
-    $pendingR = @($primary | Where-Object { $_.Phase -ne 'SIGNED' } | Sort-Object Name)
+    $isCompleted = ([string]$audit['Status']).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING')
+    # For ACTIVE campaigns: pending = not yet signed.
+    # For COMPLETED campaigns: also include force-signed reviewers (DecisionsMade = 0).
+    $pendingR = @($primary | Where-Object {
+        $_.Phase -ne 'SIGNED' -or ($isCompleted -and [int]$_.DecisionsMade -eq 0)
+    } | Sort-Object Name)
     if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
     $anyRev = $true
     [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
-    [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin-bottom:4px">Pending (' + $pendingR.Count + ')</summary>')
+    $pendLabel = if ($isCompleted) { "Pending / Never Reviewed ($($pendingR.Count))" } else { "Pending ($($pendingR.Count))" }
+    [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>$pendLabel</summary>")
     [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
     if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
     else { foreach ($rr in $pendingR) {
-        $phCls = if ($rr.DecisionsMade -gt 0) { 's-amber' } else { 's-red' }
-        [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $rr.DecisionsMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml ([string]$rr.Phase)) + '</td></tr>')
+        $decMade = [int]$rr.DecisionsMade
+        $phCls = if ($decMade -gt 0) { 's-amber' } else { 's-red' }
+        $phaseLabel = [string]$rr.Phase
+        if ($isCompleted -and $rr.Phase -eq 'SIGNED' -and $decMade -eq 0) { $phaseLabel = 'FORCE-SIGNED (0 decisions)' }
+        [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $decMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml $phaseLabel) + '</td></tr>')
     } }
     [void]$sb.AppendLine('</tbody></table></details>')
     if ($reassigned.Count -gt 0) {
@@ -1914,187 +1924,6 @@ else {
 [void]$sb.AppendLine('</tbody></table></details>')
 
 [void]$sb.AppendLine('</div>')
-
-# ---- Post-Completion Forensics (only for COMPLETED campaigns) ----
-$completedAudits = @($campaignAudits | Where-Object { ([string]$_['Status']).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING') })
-if ($completedAudits.Count -gt 0) {
-    [void]$sb.AppendLine('<div class="section"><h2>Post-Completion Review Forensics</h2>')
-    [void]$sb.AppendLine('<p style="color:#777;font-size:12px;margin:0 0 12px">Analysis of completed campaigns. Uses three detection methods: (1) items still PENDING, (2) item DecisionDate at completion time, (3) reviewer sign-off at completion time (force-signed). Method 3 is the most reliable -- ISC force-signs remaining reviewers on close but the sign-off timestamp reveals it.</p>')
-
-    foreach ($cAudit in $completedAudits) {
-        $cName = ConvertTo-SafeHtml $cAudit['CampaignName']
-        $d = $cAudit['Decisions']
-        $completionDateStr = [string]$cAudit['Completed']
-        $completionDt = $null
-        if (-not [string]::IsNullOrWhiteSpace($completionDateStr)) {
-            try { $completionDt = [datetime]::Parse($completionDateStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
-        }
-
-        # --- Method 1: Items still PENDING (ISC may or may not auto-approve these) ---
-        $pendingItems = @($d['Pending'])
-
-        # --- Method 2: Items with DecisionDate at/near completion (auto-decided on close) ---
-        $autoDecidedItems = @()
-        if ($null -ne $completionDt) {
-            foreach ($item in @($d['Approved'])) {
-                $ddStr = [string]$item.DecisionDate
-                if ([string]::IsNullOrWhiteSpace($ddStr)) { $autoDecidedItems += $item; continue }
-                try {
-                    $ddParsed = [datetime]::Parse($ddStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
-                    if ([math]::Abs(($ddParsed - $completionDt).TotalSeconds) -le 300) { $autoDecidedItems += $item }
-                } catch { }
-            }
-        }
-
-        # --- Method 3: Reviewer sign-off forensics (most reliable) ---
-        # Compare each reviewer's SignOffDate to campaign.completed. Force-signed reviewers
-        # have a sign-off timestamp at or after the completion time. Their items were never
-        # genuinely reviewed -- ISC auto-decided them on close.
-        $ra = $cAudit['ReviewerActions']
-        $fcPrimary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
-        $fcReassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
-        $fcAllReviewers = @($fcPrimary) + @($fcReassigned)
-
-        $genuineReviewers = @()
-        $forceSignedReviewers = @()
-        $noDecisionReviewers = @()
-
-        foreach ($rv in $fcAllReviewers) {
-            # Method 3a: DecisionsMade = 0 is the clearest signal -- reviewer never acted
-            $decMade = 0
-            if ($null -ne $rv.PSObject.Properties['DecisionsMade']) { $decMade = [int]$rv.DecisionsMade }
-            if ($decMade -eq 0) {
-                $noDecisionReviewers += $rv
-                continue
-            }
-
-            # Method 3b: Sign-off timing -- if signed at/after completion, force-signed
-            if ($rv.Phase -ne 'SIGNED') { continue }
-            $soStr = ''
-            if ($null -ne $rv.PSObject.Properties['SignOffDate']) { $soStr = [string]$rv.SignOffDate }
-            if ([string]::IsNullOrWhiteSpace($soStr) -and $null -ne $rv.PSObject.Properties['signed']) { $soStr = [string]$rv.signed }
-
-            if ([string]::IsNullOrWhiteSpace($soStr)) {
-                $forceSignedReviewers += $rv
-                continue
-            }
-
-            if ($null -ne $completionDt) {
-                try {
-                    $soDt = [datetime]::Parse($soStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
-                    if (($soDt - $completionDt).TotalSeconds -ge -300) {
-                        $forceSignedReviewers += $rv
-                    } else {
-                        $genuineReviewers += $rv
-                    }
-                } catch { $forceSignedReviewers += $rv }
-            } else {
-                $genuineReviewers += $rv
-            }
-        }
-
-        # Count items owned by suspect reviewers (force-signed + zero decisions)
-        $suspectNames = @{}
-        foreach ($rv in $forceSignedReviewers) {
-            $rvn = [string]$rv.Name
-            if (-not [string]::IsNullOrWhiteSpace($rvn)) { $suspectNames[$rvn] = $rv }
-        }
-        foreach ($rv in $noDecisionReviewers) {
-            $rvn = [string]$rv.Name
-            if (-not [string]::IsNullOrWhiteSpace($rvn)) { $suspectNames[$rvn] = $rv }
-        }
-
-        $suspectItems = 0
-        foreach ($item in @($d['Approved']) + @($d['Revoked']) + @($d['Pending'])) {
-            $rvn = [string]$item.ReviewerName
-            if ($suspectNames.ContainsKey($rvn)) { $suspectItems++ }
-        }
-
-        $allItems = @($d['Approved']).Count + @($d['Revoked']).Count + @($d['Pending']).Count
-        $genuinePct = if ($allItems -gt 0) { [math]::Round(($allItems - $suspectItems - $pendingItems.Count) / $allItems * 100, 0) } else { 0 }
-        $totalSuspectReviewers = $forceSignedReviewers.Count + $noDecisionReviewers.Count
-        $hasGaps = ($totalSuspectReviewers -gt 0 -or $pendingItems.Count -gt 0 -or $autoDecidedItems.Count -gt 0)
-
-        [void]$sb.AppendLine("<div class='subhead'>$cName</div>")
-
-        if (-not $hasGaps) {
-            [void]$sb.AppendLine('<p style="color:#339933;font-weight:600;margin:4px 0 12px">All reviewers signed off before completion. No force-signed or auto-decided items detected.</p>')
-        }
-        else {
-            $completionNote = if ($null -ne $completionDt) { "Completed: $(& $fmtDt $completionDateStr)" } else { 'Completion date: not available from ISC' }
-            [void]$sb.AppendLine("<p style='color:#777;font-size:11px;margin:2px 0 6px'>$completionNote</p>")
-
-            # Summary KPIs
-            [void]$sb.AppendLine("<div style='margin:8px 0 12px;'>")
-            [void]$sb.AppendLine("<span class='kpi' style='display:inline-block;min-width:110px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;text-align:center;'><span style='font-size:18px;font-weight:700;color:#0a7d2c;display:block;'>$($genuineReviewers.Count)</span><span style='font-size:10px;color:#566;'>Genuine Reviewers</span></span>")
-            $ndColor = if ($noDecisionReviewers.Count -gt 0) { '#b00020' } else { '#0a7d2c' }
-            [void]$sb.AppendLine("<span class='kpi' style='display:inline-block;min-width:110px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;text-align:center;'><span style='font-size:18px;font-weight:700;color:$ndColor;display:block;'>$($noDecisionReviewers.Count)</span><span style='font-size:10px;color:#566;'>Zero Decisions</span></span>")
-            $fsColor = if ($forceSignedReviewers.Count -gt 0) { '#9a6700' } else { '#0a7d2c' }
-            [void]$sb.AppendLine("<span class='kpi' style='display:inline-block;min-width:110px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;text-align:center;'><span style='font-size:18px;font-weight:700;color:$fsColor;display:block;'>$($forceSignedReviewers.Count)</span><span style='font-size:10px;color:#566;'>Force-Signed</span></span>")
-            [void]$sb.AppendLine("<span class='kpi' style='display:inline-block;min-width:110px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;text-align:center;'><span style='font-size:18px;font-weight:700;color:#1f3a5f;display:block;'>$suspectItems</span><span style='font-size:10px;color:#566;'>Suspect Items</span></span>")
-            [void]$sb.AppendLine("<span class='kpi' style='display:inline-block;min-width:110px;margin:4px 8px 4px 0;padding:8px 12px;border:1px solid #d4dce6;border-radius:6px;background:#f6f9fc;text-align:center;'><span style='font-size:18px;font-weight:700;color:#1f3a5f;display:block;'>${genuinePct}%</span><span style='font-size:10px;color:#566;'>Genuine Review Rate</span></span>")
-            [void]$sb.AppendLine("</div>")
-
-            # Zero-decision reviewers (clearest signal: never acted at all)
-            if ($noDecisionReviewers.Count -gt 0) {
-                [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px;color:#CC3333">Reviewers with Zero Decisions (' + $noDecisionReviewers.Count + ') -- Never Reviewed Any Items</summary>')
-                [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">These reviewers made 0 decisions. All their items were auto-decided by ISC on campaign close.</p>')
-                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Items Owned</th><th>Classification</th></tr></thead><tbody>')
-                foreach ($rv in @($noDecisionReviewers | Sort-Object Name)) {
-                    $rvNameSafe = ConvertTo-SafeHtml ([string]$rv.Name)
-                    $rvEmail = ConvertTo-SafeHtml (if ($rv.PSObject.Properties['Email']) { [string]$rv.Email } else { '' })
-                    $rvTotal = if ($rv.PSObject.Properties['Total']) { [int]$rv.Total } else { 0 }
-                    $rvCls2 = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { ConvertTo-SafeHtml ([string]$rv.Classification) } else { 'Primary' }
-                    [void]$sb.AppendLine("<tr><td style='font-weight:600;color:#CC3333;'>$rvNameSafe</td><td>$rvEmail</td><td style='text-align:right;font-weight:600'>$rvTotal</td><td>$rvCls2</td></tr>")
-                }
-                [void]$sb.AppendLine('</tbody></table></details>')
-            }
-
-            # Force-signed reviewer detail table
-            if ($forceSignedReviewers.Count -gt 0) {
-                [void]$sb.AppendLine('<details open><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px;color:#CC3333">Force-Signed Reviewers (' + $forceSignedReviewers.Count + ') -- Did Not Complete Review Before Close</summary>')
-                [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">These reviewers were force-signed when the campaign was completed. Their items were auto-decided by ISC, not genuinely reviewed.</p>')
-                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Sign-Off Date</th><th style="text-align:right">Items Owned</th><th>Classification</th></tr></thead><tbody>')
-                foreach ($rv in @($forceSignedReviewers | Sort-Object Name)) {
-                    $rvNameSafe = ConvertTo-SafeHtml ([string]$rv.Name)
-                    $rvEmail = ConvertTo-SafeHtml (if ($rv.PSObject.Properties['Email']) { [string]$rv.Email } else { '' })
-                    $rvSO = if ($rv.PSObject.Properties['SignOffDate'] -and -not [string]::IsNullOrWhiteSpace([string]$rv.SignOffDate)) { & $fmtDt ([string]$rv.SignOffDate) } else { '-' }
-                    $rvTotal = if ($rv.PSObject.Properties['Total']) { [int]$rv.Total } else { 0 }
-                    $rvCls2 = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { ConvertTo-SafeHtml ([string]$rv.Classification) } else { 'Primary' }
-                    [void]$sb.AppendLine("<tr><td style='font-weight:600'>$rvNameSafe</td><td>$rvEmail</td><td>$(ConvertTo-SafeHtml $rvSO)</td><td style='text-align:right;font-weight:600'>$rvTotal</td><td>$rvCls2</td></tr>")
-                }
-                [void]$sb.AppendLine('</tbody></table></details>')
-            }
-
-            # Genuine reviewer detail (collapsed)
-            if ($genuineReviewers.Count -gt 0) {
-                [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px;color:#339933">Genuine Reviewers (' + $genuineReviewers.Count + ') -- Signed Off Before Close</summary>')
-                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Sign-Off Date</th><th style="text-align:right">Items Owned</th></tr></thead><tbody>')
-                foreach ($rv in @($genuineReviewers | Sort-Object Name)) {
-                    $rvNameSafe = ConvertTo-SafeHtml ([string]$rv.Name)
-                    $rvEmail = ConvertTo-SafeHtml (if ($rv.PSObject.Properties['Email']) { [string]$rv.Email } else { '' })
-                    $rvSO = if ($rv.PSObject.Properties['SignOffDate'] -and -not [string]::IsNullOrWhiteSpace([string]$rv.SignOffDate)) { & $fmtDt ([string]$rv.SignOffDate) } else { '-' }
-                    $rvTotal = if ($rv.PSObject.Properties['Total']) { [int]$rv.Total } else { 0 }
-                    [void]$sb.AppendLine("<tr><td style='font-weight:600'>$rvNameSafe</td><td>$rvEmail</td><td>$(ConvertTo-SafeHtml $rvSO)</td><td style='text-align:right'>$rvTotal</td></tr>")
-                }
-                [void]$sb.AppendLine('</tbody></table></details>')
-            }
-
-            # Items still PENDING (if any survived completion)
-            if ($pendingItems.Count -gt 0) {
-                [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px;color:#CC3333">Items Still Pending (' + $pendingItems.Count + ') -- Never Decided</summary>')
-                [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access Name</th><th>Source</th><th>Reviewer</th><th>Privileged</th></tr></thead><tbody>')
-                foreach ($pi in @($pendingItems | Sort-Object @{ Expression = { [string]$_.ReviewerName } })) {
-                    $piPriv = $false; try { $piPriv = [bool]$pi.Privileged } catch { }
-                    $piPrivBadge = if ($piPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
-                    [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml ([string]$pi.IdentityName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.AccessName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.SourceName)) + '</td><td>' + (ConvertTo-SafeHtml ([string]$pi.ReviewerName)) + '</td><td>' + $piPrivBadge + '</td></tr>')
-                }
-                [void]$sb.AppendLine('</tbody></table></details>')
-            }
-        }
-    }
-    [void]$sb.AppendLine('</div>')
-}
 
 # ---- Footer ----
 [void]$sb.AppendLine('<div class="footer">SailPoint ISC Governance Toolkit &middot; Daily Evidence Report v4 &middot; Generated: ' + (ConvertTo-SafeHtml $genStr) + ' &middot; CorrelationID: ' + (ConvertTo-SafeHtml $correlationID) + ' &middot; ' + $campaignAudits.Count + ' campaign(s)</div>')
