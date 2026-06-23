@@ -4,24 +4,31 @@
     Find and optionally complete SailPoint ISC certification campaigns.
 .DESCRIPTION
     Searches for ISC certification campaigns by name, status, and date filters,
-    then displays a summary table of matching campaigns.
+    then displays a numbered summary table of matching campaigns.
 
     By default (without -SetCompleted) the script is purely READ-ONLY: it lists
-    matching campaigns with their name, ID, status, creation date, deadline,
-    decided/total items, and completion percentage. No API write calls are made.
+    matching campaigns with their number, name, ID, status, creation date,
+    deadline, decided/total items, and completion percentage. No API write
+    calls are made.
 
-    With -SetCompleted, the script calls Complete-SPCampaign for each matching
-    campaign. This transitions the campaign to COMPLETED status, causing all
-    undecided items to maintain current access (auto-approve). A JSONL audit
-    trail entry is written for each completion.
+    With -SetCompleted, the script displays the numbered table and then
+    prompts interactively for which campaigns to complete. You can select
+    individual campaigns by number (e.g., 1,2,3), type ALL to complete every
+    match, or Q to quit without completing anything. Selecting ALL requires
+    a second YES confirmation. This transitions selected campaigns to
+    COMPLETED status, causing all undecided items to maintain current access
+    (auto-approve). A JSONL audit trail entry is written for each completion.
+
+    With -Force -SetCompleted, ALL matching campaigns are completed
+    immediately without any interactive prompts. This is the
+    automation/scripting mode.
 
     With -WhatIf -SetCompleted, the script shows what WOULD be completed
-    without making any API calls.
+    (with pending item counts) without making any API calls or prompting.
 
     Safety:
       - Requires Safety.AllowCompleteCampaign = true in settings.json
-      - If more than 5 campaigns match with -SetCompleted, confirmation is
-        required (use -Force to skip)
+      - Interactive selection prevents accidental bulk completion
       - Without -SetCompleted, purely read-only
 .PARAMETER CampaignName
     Exact (case-insensitive) campaign name match. Highest precedence among
@@ -40,11 +47,11 @@
     Number of days to look back from now for campaign creation date.
     Default: 1. Set to 0 to disable date filtering.
 .PARAMETER SetCompleted
-    When specified, calls Complete-SPCampaign for each matching campaign.
-    Without this switch the script is read-only.
+    When specified, displays the campaign list and interactively prompts for
+    which campaigns to complete. Without this switch the script is read-only.
 .PARAMETER Force
-    Skip confirmation prompt when -SetCompleted would affect more than 5
-    campaigns.
+    Skip interactive selection and complete ALL matching campaigns without
+    prompting. Intended for automation and scripting scenarios.
 .PARAMETER ConfigPath
     Path to settings.json. Defaults to Resolve-SPConfigPath.
 .PARAMETER Token
@@ -57,20 +64,21 @@
     Display full comment-based help and exit.
 .EXAMPLE
     .\Invoke-SPCampaignClose.ps1 -Status ACTIVE -DaysBack 7
-    # List all ACTIVE campaigns created in the last 7 days.
+    # List all ACTIVE campaigns created in the last 7 days (read-only).
 .EXAMPLE
     .\Invoke-SPCampaignClose.ps1 -CampaignName 'Q1 Manager Review' -SetCompleted
-    # Complete the campaign with the exact name 'Q1 Manager Review'.
+    # Show matching campaigns and interactively select which to complete.
 .EXAMPLE
     .\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Delta' -Status ACTIVE -SetCompleted -WhatIf
-    # Dry-run: show which ACTIVE campaigns containing 'Delta' would be completed.
+    # Dry-run: show which ACTIVE campaigns containing 'Delta' would be
+    # completed, with pending item counts.
 .EXAMPLE
     .\Invoke-SPCampaignClose.ps1 -Status ACTIVE,STAGED -DaysBack 30 -SetCompleted -Force
-    # Complete all ACTIVE and STAGED campaigns from the last 30 days, skipping
-    # the confirmation prompt even if more than 5 match.
+    # Complete all ACTIVE and STAGED campaigns from the last 30 days without
+    # any interactive prompts (automation mode).
 .NOTES
     Script:  Invoke-SPCampaignClose.ps1
-    Version: 1.0.0
+    Version: 2.0.0
     Exit codes:
         0 = Success (listing completed, or campaigns completed successfully)
         1 = No campaigns matched the search criteria
@@ -355,7 +363,8 @@ $tableRows = foreach ($camp in $campaigns) {
 
 $tableRows = @($tableRows)
 
-# Print table header
+# Print numbered table header
+$colNum      = '#'.PadRight(4)
 $colName     = 'Campaign Name'.PadRight(40)
 $colId       = 'ID'.PadRight(38)
 $colStatus   = 'Status'.PadRight(12)
@@ -364,10 +373,14 @@ $colDeadline = 'Deadline'.PadRight(12)
 $colItems    = 'Decided/Total'.PadRight(15)
 $colPct      = 'Compl%'
 
-Write-Host "  $colName $colId $colStatus $colCreated $colDeadline $colItems $colPct" -ForegroundColor White
-Write-Host "  $('-' * 137)" -ForegroundColor DarkGray
+Write-Host "  $colNum $colName $colId $colStatus $colCreated $colDeadline $colItems $colPct" -ForegroundColor White
+Write-Host "  $('-' * 142)" -ForegroundColor DarkGray
 
+$rowIndex = 0
 foreach ($row in $tableRows) {
+    $rowIndex++
+    $rNum = "$rowIndex".PadRight(4)
+
     $rName = "$($row.Name)".PadRight(40)
     if ($rName.Length -gt 40) { $rName = $rName.Substring(0, 37) + '...' }
 
@@ -388,7 +401,8 @@ foreach ($row in $tableRows) {
         default      { 'White' }
     }
 
-    Write-Host "  $rName " -NoNewline
+    Write-Host "  $rNum " -NoNewline
+    Write-Host "$rName " -NoNewline
     Write-Host "$rId " -NoNewline
     Write-Host "$rStatus " -NoNewline -ForegroundColor $statusColor
     Write-Host "$rCreated $rDeadline $rItems $rPct"
@@ -409,51 +423,92 @@ if (-not $SetCompleted.IsPresent) {
 
 # --- SetCompleted path ---
 
-# WhatIf: show what would be completed and exit
-if ($WhatIfPreference -eq $true) {
+$isWhatIf = ($WhatIfPreference -eq $true)
+
+# WhatIf: show numbered what-would-happen list and exit
+if ($isWhatIf) {
     Write-Host ''
-    Write-Host '  [WhatIf] The following campaigns WOULD be completed:' -ForegroundColor Yellow
-    foreach ($row in $tableRows) {
-        Write-Host "    WhatIf: Would complete $($row.Name) ($($row.Id))" -ForegroundColor Yellow
-        if ($row.Pending -gt 0) {
-            Write-Host "      $($row.Pending) undecided item(s) would auto-approve (maintain current access)." -ForegroundColor DarkYellow
-        }
+    for ($wi = 0; $wi -lt $tableRows.Count; $wi++) {
+        $row = $tableRows[$wi]
+        $wiNum = $wi + 1
+        $wiName = "$($row.Name)"
+        if ($wiName.Length -gt 50) { $wiName = $wiName.Substring(0, 47) + '...' }
+        $pendingNote = if ($row.Pending -gt 0) { "$($row.Pending) items still pending" } else { '0 items still pending' }
+        Write-Host "  WhatIf: Would complete #$wiNum $wiName ($($row.Id)) -- $pendingNote" -ForegroundColor Yellow
     }
     Write-Host ''
     Write-Host "  [WhatIf] $($campaigns.Count) campaign(s) would be completed. No API calls made." -ForegroundColor Yellow
     exit 0
 }
 
-# Safety: warn about pending items across all campaigns
-$totalPending = ($tableRows | Measure-Object -Property Pending -Sum).Sum
-if ($totalPending -gt 0) {
-    Write-Host ''
-    Write-Host "  WARNING: Completing a campaign makes all undecided items maintain current access." -ForegroundColor Yellow
-    Write-Host "           $totalPending item(s) are still pending across $($campaigns.Count) campaign(s)." -ForegroundColor Yellow
-}
+# Determine which campaigns to complete based on -Force or interactive selection
+$selectedIndices = @()
 
-# Confirmation gate: more than 5 campaigns requires confirmation (or -Force)
-if ($campaigns.Count -gt 5 -and -not $Force.IsPresent) {
+if ($Force.IsPresent) {
+    # -Force: complete ALL matching campaigns without prompting
+    $selectedIndices = @(0..($campaigns.Count - 1))
+}
+else {
+    # Interactive selection
     Write-Host ''
-    Write-Host "  $($campaigns.Count) campaigns matched. Use -Force to skip this confirmation." -ForegroundColor Yellow
-    $confirm = Read-Host "  Type 'YES' to complete all $($campaigns.Count) campaigns"
-    if ($confirm -ne 'YES') {
-        Write-Host '  Aborted. No campaigns were completed.' -ForegroundColor Yellow
-        exit 0
+    Write-Host '  WARNING: Completing a campaign makes all undecided items maintain' -ForegroundColor Yellow
+    Write-Host '  current access (auto-approve). This action cannot be undone.' -ForegroundColor Yellow
+    Write-Host ''
+
+    while ($true) {
+        Write-Host '  Select campaign(s) to complete:' -ForegroundColor Cyan
+        $selection = Read-Host '  Enter number(s) (e.g., 1,2), ALL, or Q to quit'
+        $selection = $selection.Trim()
+
+        if ([string]::IsNullOrWhiteSpace($selection) -or $selection -eq 'Q' -or $selection -eq 'q') {
+            Write-Host '  Cancelled. No campaigns were completed.' -ForegroundColor DarkGray
+            exit 0
+        }
+
+        if ($selection -eq 'ALL' -or $selection -eq 'all') {
+            $confirm = Read-Host "  Complete ALL $($campaigns.Count) campaign(s)? Type YES to confirm"
+            if ($confirm -ne 'YES') {
+                Write-Host '  Cancelled.' -ForegroundColor DarkGray
+                continue
+            }
+            $selectedIndices = @(0..($campaigns.Count - 1))
+            break
+        }
+
+        # Parse comma-separated numbers
+        $parts = $selection -split ',' | ForEach-Object { $_.Trim() }
+        $valid = $true
+        $parsedIndices = @()
+        foreach ($p in $parts) {
+            $num = 0
+            if (-not [int]::TryParse($p, [ref]$num) -or $num -lt 1 -or $num -gt $campaigns.Count) {
+                Write-Host "  Invalid selection: '$p'. Enter 1-$($campaigns.Count), ALL, or Q." -ForegroundColor Red
+                $valid = $false
+                break
+            }
+            $parsedIndices += ($num - 1)
+        }
+        if ($valid) {
+            $selectedIndices = @($parsedIndices)
+            break
+        }
     }
 }
 
+# Complete selected campaigns
 Write-Host ''
 
-$completedCount = 0
-$failedCount    = 0
+$completedCount  = 0
+$failedCount     = 0
 $failedCampaigns = @()
 
-foreach ($camp in $campaigns) {
+foreach ($idx in $selectedIndices) {
+    $camp     = $campaigns[$idx]
     $campName = if ($null -ne $camp.name) { [string]$camp.name } else { '(unknown)' }
     $campId   = if ($null -ne $camp.id)   { [string]$camp.id }   else { '?' }
+    $dispNum  = $idx + 1
 
-    Write-Host "  Completing: $campName ($campId)..." -NoNewline -ForegroundColor Gray
+    Write-Host "  Completing #${dispNum}: $campName ($campId)..." -NoNewline -ForegroundColor Gray
 
     try {
         $completeResult = Complete-SPCampaign -CampaignId $campId -CorrelationID $correlationID
@@ -520,8 +575,9 @@ foreach ($camp in $campaigns) {
 }
 
 # Summary
+$selectedCount = $selectedIndices.Count
 Write-Host ''
-Write-Host "  Completion summary: $completedCount succeeded, $failedCount failed (of $($campaigns.Count) total)" -ForegroundColor Cyan
+Write-Host "  Completion summary: $completedCount succeeded, $failedCount failed (of $selectedCount selected)" -ForegroundColor Cyan
 
 if ($failedCount -gt 0) {
     Write-Host ''
@@ -532,7 +588,7 @@ if ($failedCount -gt 0) {
 }
 
 $runDuration = ((Get-Date) - $startTime).TotalSeconds
-Write-SPLog -Message "Invoke-SPCampaignClose finished: Completed=$completedCount, Failed=$failedCount, Duration=$([math]::Round($runDuration, 2))s" `
+Write-SPLog -Message "Invoke-SPCampaignClose finished: Completed=$completedCount, Failed=$failedCount, Selected=$selectedCount, Duration=$([math]::Round($runDuration, 2))s" `
     -Severity INFO -Component 'Invoke-SPCampaignClose' -Action 'Finish' -CorrelationID $correlationID
 
 if ($failedCount -gt 0) {
