@@ -1583,9 +1583,11 @@ $usersSet = @{}; $entSet = @{}; $privUserSet = @{}; $mgrSet = @{}; $srcSet = @{}
 # per-item reviewedBy/decisionDate are often empty on real ISC items; the reviewer + a
 # signoff-date fallback live on the certification, so resolve them here for the Decision Summary.
 $certReviewerMap = @{}
-$allApproved = [System.Collections.Generic.List[object]]::new()
+# Aggregate counts use counters for Approved/Pending (only need .Count).
+# Revoked items are stored in a list because the Decision Summary iterates them.
+$allApprovedCount = 0
 $allRevoked = [System.Collections.Generic.List[object]]::new()
-$allPending = [System.Collections.Generic.List[object]]::new()
+$allPendingCount = 0
 foreach ($audit in $campaignAudits) {
     $d = $audit['Decisions']
     foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
@@ -1599,7 +1601,7 @@ foreach ($audit in $campaignAudits) {
             if ($src) { $srcSet[$src] = $true }
             $isPriv = $false; try { $isPriv = [bool]$it.Privileged } catch { }
             if ($isPriv -and $iid) { $privUserSet[$iid] = $true }
-            switch ($grp) { 'Approved' { $allApproved.Add($it) } 'Revoked' { $allRevoked.Add($it) } default { $allPending.Add($it) } }
+            switch ($grp) { 'Approved' { $allApprovedCount++ } 'Revoked' { $allRevoked.Add($it) } default { $allPendingCount++ } }
         }
     }
     foreach ($cert in @($audit['Certifications'])) {
@@ -1624,7 +1626,7 @@ foreach ($audit in $campaignAudits) {
         $certReviewerMap[$cid] = @{ Name = $rn; SignOff = $sd }
     }
 }
-$aggAppr = $allApproved.Count; $aggRev = $allRevoked.Count; $aggPend = $allPending.Count
+$aggAppr = $allApprovedCount; $aggRev = $allRevoked.Count; $aggPend = $allPendingCount
 $aggTotal = $aggAppr + $aggRev + $aggPend
 $aggDecided = $aggAppr + $aggRev
 $aggPct = if ($aggTotal -gt 0) { [math]::Round($aggDecided / $aggTotal * 100, 0) } else { 0 }
