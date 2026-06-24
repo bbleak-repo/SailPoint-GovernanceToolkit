@@ -541,6 +541,8 @@ try {
 
             $decisionGroups  = Group-SPAuditDecisions -Items $wrappedItems.ToArray() `
                 -CampaignMetadata $campaignMetadata
+            $dgA = @($decisionGroups['Approved']).Count; $dgR = @($decisionGroups['Revoked']).Count; $dgP = @($decisionGroups['Pending']).Count
+            Write-Verbose "    [Decisions] $campName : Approved=$dgA Revoked=$dgR Pending=$dgP (from $(if($itemsFromCache){'cache'}else{'ISC'}) items=$($wrappedItems.Count))"
             $reviewerMetrics = Measure-SPAuditReviewerMetrics -Certifications $certifications
             $rubberStampRisk = Measure-SPAuditRubberStampRisk -Decisions $decisionGroups `
                 -Certifications $certifications
@@ -745,7 +747,10 @@ try {
     if (-not (Test-Path $metricsPath)) { New-Item -ItemType Directory -Path $metricsPath -Force -WhatIf:$false | Out-Null }
 
     $dailyMetricsFile = Join-Path $metricsPath 'daily-metrics.jsonl'
+    Write-Host "  [Metrics] Path: $dailyMetricsFile" -ForegroundColor DarkGray
     $captureTs = (Get-Date).ToString('o')
+    $metricsWritten = 0
+    $metricsSkipped = 0
 
     # Pre-load existing JSONL records to avoid overwriting ACTIVE-state data with
     # COMPLETED-state data. An ACTIVE record captured honest reviewer metrics; a
@@ -780,7 +785,8 @@ try {
         if ($metricsStatus -in @('COMPLETED', 'COMPLETING') -and
             $existingRecords.ContainsKey($metricsDedupKey) -and
             $existingRecords[$metricsDedupKey] -eq 'ACTIVE') {
-            Write-Host "    [Metrics] Skipping $($audit['CampaignName']) -- ACTIVE record already exists" -ForegroundColor DarkGray
+            Write-Host "    [Metrics] Skipping $($audit['CampaignName']) -- ACTIVE record already exists (not overwriting)" -ForegroundColor DarkGray
+            $metricsSkipped++
             continue
         }
 
@@ -924,9 +930,10 @@ try {
         $jsonLine = $metricsRecord | ConvertTo-Json -Depth 5 -Compress
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::AppendAllText($dailyMetricsFile, "$jsonLine`n", $utf8NoBom)
+        $metricsWritten++
     }
 
-    Write-Host "  [Metrics] Wrote $($campaignAudits.Count) record(s) to daily-metrics.jsonl" -ForegroundColor DarkGreen
+    Write-Host "  [Metrics] Wrote $metricsWritten, skipped $metricsSkipped of $($campaignAudits.Count) campaign(s) to: $dailyMetricsFile" -ForegroundColor DarkGreen
 }
 catch {
     Write-Host "  [Metrics] WARN: daily-metrics write failed: $($_.Exception.Message)" -ForegroundColor Yellow

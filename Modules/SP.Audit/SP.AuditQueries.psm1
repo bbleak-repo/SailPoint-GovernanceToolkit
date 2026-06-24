@@ -6924,6 +6924,8 @@ function Get-SPCachedCampaignItems {
             # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly on PS 5.1
             $cachedAt  = [datetime]::Parse([string]$meta.CachedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
             $ageMinutes = [math]::Round(((Get-Date) - $cachedAt.ToLocalTime()).TotalMinutes, 1)
+            $cachedStatusRaw = if ($null -ne $meta.PSObject.Properties['Status']) { [string]$meta.Status } else { '(none)' }
+            Write-Verbose "  [Cache] Disk check: '$campName' | cached=$cachedStatusRaw current=$status | age=${ageMinutes}m ttl=${effectiveTtl}m | permanent=$($meta.IsPermanent)"
 
             # SEAL-ON-TRANSITION: if the cache was captured while ACTIVE but the campaign
             # is now COMPLETED, seal the cache as permanent. The ACTIVE-state data is the
@@ -6953,7 +6955,7 @@ function Get-SPCachedCampaignItems {
                 Write-SPLog -Message "Cache HIT (disk): campaign '$campName' ($($meta.ItemCount) items, cached $($cachedAt.ToString('yyyy-MM-dd HH:mm')))" `
                     -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
                     -CorrelationID $CorrelationID
-                Write-Host "  [Cache] Loading $($meta.ItemCount) items from disk ($campName)..." -ForegroundColor DarkGray
+                Write-Host "  [Cache] Loading $($meta.ItemCount) items from disk ($campName) [cached=$cachedStatusRaw age=${ageMinutes}m]..." -ForegroundColor DarkGray
 
                 $items = [System.Collections.Generic.List[object]]::new()
                 Get-Content $itemsFile | ForEach-Object {
@@ -6990,7 +6992,10 @@ function Get-SPCachedCampaignItems {
     # ---------------------------------------------------------------------------
     # Cache miss: fetch from ISC
     # ---------------------------------------------------------------------------
-    Write-SPLog -Message "Cache MISS: fetching items from ISC for campaign '$campName'" `
+    $missReason = if ($NoCache) { 'NoCache flag' } elseif (-not $isCacheable) { "status=$status not cacheable" } elseif (-not (Test-Path $itemsFile)) { 'no cache file on disk' } elseif (-not (Test-Path $metaFile)) { 'no meta file on disk' } else { "TTL expired (age=${ageMinutes}m > ttl=${effectiveTtl}m)" }
+    Write-Host "  [Cache] MISS: '$campName' -- $missReason. Fetching from ISC..." -ForegroundColor Yellow
+    Write-Verbose "  [Cache] MISS detail: itemsFile=$(Test-Path $itemsFile) metaFile=$(Test-Path $metaFile) cacheable=$isCacheable noCache=$NoCache"
+    Write-SPLog -Message "Cache MISS: fetching items from ISC for campaign '$campName' reason=$missReason" `
         -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
         -CorrelationID $CorrelationID
     # Use caller-supplied certs when provided; otherwise fetch them. This avoids a
