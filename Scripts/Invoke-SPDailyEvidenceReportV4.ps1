@@ -1826,60 +1826,68 @@ foreach ($audit in $campaignAudits) {
         if ($null -ne $rr.PSObject.Properties['ReassignedFrom']) { $rfName = [string]$rr.ReassignedFrom }
         if (-not [string]::IsNullOrWhiteSpace($rfName)) { $reassignedAwayNames[$rfName] = $true }
     }
-    # For COMPLETED campaigns: detect force-signed reviewers using multiple signals:
-    # 1. DecisionsMade < DecisionsTotal (didn't finish all items)
-    # 2. SignOffDate at/after campaign.completed (force-signed by ISC on close)
-    # 3. DecisionsMade = 0 and not reassigned away (never acted)
-    $completionDt = $null
     if ($isCompleted) {
-        $compStr = [string]$audit['Completed']
-        if (-not [string]::IsNullOrWhiteSpace($compStr)) {
-            try { $completionDt = [datetime]::Parse($compStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch { }
+        # COMPLETED campaigns: ISC lies about cert-level data (force-signs everyone,
+        # inflates decisionsMade). But the ITEM data from cache tells the truth --
+        # items that were PENDING when the cache was written are genuinely unreviewed.
+        # Derive the pending reviewer list from the items, not from cert metadata.
+        $d = $audit['Decisions']
+        $itemPending = @($d['Pending'])
+        $pendingByReviewer = [ordered]@{}
+        foreach ($pi in $itemPending) {
+            $rvn = [string]$pi.ReviewerName
+            if ([string]::IsNullOrWhiteSpace($rvn)) { $rvn = '(Unassigned)' }
+            if ($reassignedAwayNames.ContainsKey($rvn)) { continue }
+            if (-not $pendingByReviewer.Contains($rvn)) {
+                $pendingByReviewer[$rvn] = @{ Name = $rvn; Email = ''; PendingCount = 0; TotalCount = 0 }
+            }
+            $pendingByReviewer[$rvn].PendingCount++
         }
+        # Enrich with email from the primary reviewer list + count total items per reviewer
+        foreach ($rv in $primary) {
+            $rvn = [string]$rv.Name
+            if ($pendingByReviewer.Contains($rvn) -and -not [string]::IsNullOrWhiteSpace([string]$rv.Email)) {
+                $pendingByReviewer[$rvn].Email = [string]$rv.Email
+            }
+        }
+        # Also count total items (approved+revoked+pending) per reviewer for context
+        foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
+            foreach ($it in @($d[$grp])) {
+                if ($null -eq $it) { continue }
+                $rvn = [string]$it.ReviewerName
+                if ($pendingByReviewer.Contains($rvn)) { $pendingByReviewer[$rvn].TotalCount++ }
+            }
+        }
+        $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
+        if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
+        $anyRev = $true
+        [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Pending Items by Reviewer ($($pendingR.Count) reviewer(s) with pending items from cached data)</summary>")
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Pending Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
+        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No pending items found (all items were decided before close).</td></tr>') }
+        else { foreach ($rr in $pendingR) {
+            $pCnt = $rr.PendingCount; $tCnt = $rr.TotalCount
+            $phCls = if ($pCnt -eq $tCnt) { 's-red' } else { 's-amber' }
+            $note = if ($pCnt -eq $tCnt) { 'No decisions made' } else { "$($tCnt - $pCnt) of $tCnt decided" }
+            [void]$sb.AppendLine("<tr><td style='font-weight:600'>" + (ConvertTo-SafeHtml $rr.Name) + "</td><td>" + (ConvertTo-SafeHtml $rr.Email) + "</td><td style='text-align:right;font-weight:600' class='$phCls'>$pCnt</td><td style='text-align:right'>$tCnt</td><td>$note</td></tr>")
+        } }
+        [void]$sb.AppendLine('</tbody></table></details>')
     }
-    $pendingR = @($primary | Where-Object {
-        # ACTIVE campaign: pending = not yet signed
-        if ($_.Phase -ne 'SIGNED') { return $true }
-        # Skip reviewers whose certs were reassigned away
-        if ($reassignedAwayNames.ContainsKey([string]$_.Name)) { return $false }
-        if (-not $isCompleted) { return $false }
-        # COMPLETED campaign: check all signals
-        $dtMade = [int]$_.DecisionsMade
-        $dtTotal = [int]$_.DecisionsTotal
-        # Signal 1: didn't decide all items
-        if ($dtTotal -gt 0 -and $dtMade -lt $dtTotal) { return $true }
-        # Signal 2: sign-off at/after completion
-        if ($null -ne $completionDt) {
-            $soStr = [string]$_.SignOffDate
-            if ([string]::IsNullOrWhiteSpace($soStr)) { return $true }
-            try {
-                $soDt = [datetime]::Parse($soStr, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
-                if (($soDt - $completionDt).TotalSeconds -ge -300) { return $true }
-            } catch { return $true }
-        }
-        # Signal 3: zero decisions (and not reassigned -- already filtered above)
-        if ($dtMade -eq 0) { return $true }
-        return $false
-    } | Sort-Object Name)
-    if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
-    $anyRev = $true
-    [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
-    $pendLabel = if ($isCompleted) { "Pending / Never Reviewed ($($pendingR.Count))" } else { "Pending ($($pendingR.Count))" }
-    [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>$pendLabel</summary>")
-    [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
-    if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
-    else { foreach ($rr in $pendingR) {
-        $decMade = [int]$rr.DecisionsMade
-        $decTotal = if ($rr.PSObject.Properties['DecisionsTotal']) { [int]$rr.DecisionsTotal } else { 0 }
-        $phCls = if ($decMade -gt 0) { 's-amber' } else { 's-red' }
-        $phaseLabel = [string]$rr.Phase
-        if ($isCompleted -and $rr.Phase -eq 'SIGNED') {
-            $ratio = if ($decTotal -gt 0) { "$decMade/$decTotal" } else { "$decMade" }
-            $phaseLabel = "FORCE-SIGNED ($ratio decided)"
-        }
-        [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + $decMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml $phaseLabel) + '</td></tr>')
-    } }
-    [void]$sb.AppendLine('</tbody></table></details>')
+    else {
+        # ACTIVE campaigns: use cert-level Phase to detect unsigned reviewers
+        $pendingR = @($primary | Where-Object { $_.Phase -ne 'SIGNED' } | Sort-Object Name)
+        if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
+        $anyRev = $true
+        [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Pending ($($pendingR.Count))</summary>")
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
+        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
+        else { foreach ($rr in $pendingR) {
+            $phCls = if ([int]$rr.DecisionsMade -gt 0) { 's-amber' } else { 's-red' }
+            [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + [int]$rr.DecisionsMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml ([string]$rr.Phase)) + '</td></tr>')
+        } }
+        [void]$sb.AppendLine('</tbody></table></details>')
+    }
     if ($reassigned.Count -gt 0) {
         [void]$sb.AppendLine('<details><summary style="font-weight:bold;font-size:12px;margin:8px 0 4px">Reassigned (' + $reassigned.Count + ')</summary>')
         [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Reassigned From</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th><th>Proof of Action</th></tr></thead><tbody>')
