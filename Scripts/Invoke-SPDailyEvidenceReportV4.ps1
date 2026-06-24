@@ -1253,7 +1253,7 @@ try {
         -YellowMax $thresholds.HighRiskPending.Yellow
 
     $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
-    $detail = "$highRiskPendingCount high-risk identities with pending reviews ($($highRiskPending.Count) items)"
+    $detail = "$highRiskPendingCount high-risk identities with undecided reviews ($($highRiskPending.Count) items)"
     $stepResults['HighRiskExposure'] = @{ Status = 'Success'; Detail = $detail; Duration = [math]::Round($stepDuration, 2) }
     Write-Host "  Step 6: $detail [$kpi5Status]" -ForegroundColor $(if ($kpi5Status -eq 'Green') { 'Green' } elseif ($kpi5Status -eq 'Yellow') { 'Yellow' } else { 'Red' })
 }
@@ -1420,7 +1420,7 @@ $kpiSummary = @(
     }
     @{
         Name = 'High-Risk Exposure'; Value = $highRiskPendingCount; Status = $kpi5Status
-        Detail = "$($highRiskPending.Count) high-risk pending items"
+        Detail = "$($highRiskPending.Count) high-risk undecided items"
         TrendMetric = 'identityRisk.avgScore'
     }
     @{
@@ -1761,7 +1761,7 @@ $donutSvg
 <table style="margin:8px auto 0;font-size:11px;border-collapse:collapse">
 <tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#339933"/></svg></td><td style="padding:2px 6px;color:#555">Approved: $('{0:N0}' -f $appr) ($apct%)</td></tr>
 <tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#CC3333"/></svg></td><td style="padding:2px 6px;color:#555">Revoked: $('{0:N0}' -f $rev) ($rpct%)</td></tr>
-<tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#FF8800"/></svg></td><td style="padding:2px 6px;color:#555">Pending: $('{0:N0}' -f $pend) ($ppct%)</td></tr>
+<tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#FF8800"/></svg></td><td style="padding:2px 6px;color:#555">Undecided: $('{0:N0}' -f $pend) ($ppct%)</td></tr>
 </table>
 </td>
 <td style="width:34%;vertical-align:top;padding:0 12px">
@@ -1785,7 +1785,7 @@ $remBlock
 
 # ---- A. Campaign Completion Evidence ----
 [void]$sb.AppendLine('<div class="section"><h2>A. Campaign Completion Evidence</h2>')
-[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Pending</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
+[void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Undecided</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
 foreach ($audit in $campaignAudits) {
     $cn = ConvertTo-SafeHtml $audit['CampaignName']
     $cs = ConvertTo-SafeHtml ([string]$audit['Status'])
@@ -1815,8 +1815,8 @@ foreach ($audit in $campaignAudits) {
 }
 [void]$sb.AppendLine('</tbody></table></div>')
 
-# ---- B. Pending Reviewer Accountability ----
-[void]$sb.AppendLine('<div class="section"><h2>B. Pending Reviewer Accountability</h2>')
+# ---- B. Reviewer Accountability (Undecided / Pending) ----
+[void]$sb.AppendLine('<div class="section"><h2>B. Reviewer Accountability</h2>')
 $anyRev = $false
 foreach ($audit in $campaignAudits) {
     $ra = $audit['ReviewerActions']
@@ -1869,9 +1869,9 @@ foreach ($audit in $campaignAudits) {
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
         [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Pending Items by Reviewer ($($pendingR.Count) reviewer(s) with pending items from cached data)</summary>")
-        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Pending Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
-        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No pending items found (all items were decided before close).</td></tr>') }
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Undecided Items by Reviewer ($($pendingR.Count) reviewer(s) with undecided items)</summary>")
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Undecided Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
+        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No undecided items found (all items were decided before close).</td></tr>') }
         else { foreach ($rr in $pendingR) {
             $pCnt = $rr.PendingCount; $tCnt = $rr.TotalCount
             $phCls = if ($pCnt -eq $tCnt) { 's-red' } else { 's-amber' }
@@ -1886,9 +1886,9 @@ foreach ($audit in $campaignAudits) {
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
         [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Pending ($($pendingR.Count))</summary>")
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Undecided ($($pendingR.Count))</summary>")
         [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th>Certs Assigned</th><th>Decisions Made</th><th>Sign-Off Date</th><th>Phase</th></tr></thead><tbody>')
-        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No pending reviewers.</td></tr>') }
+        if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="6" style="color:#777;font-style:italic">No undecided reviewers.</td></tr>') }
         else { foreach ($rr in $pendingR) {
             $phCls = if ([int]$rr.DecisionsMade -gt 0) { 's-amber' } else { 's-red' }
             [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $rr.Name) + '</td><td>' + (ConvertTo-SafeHtml $rr.Email) + '</td><td>' + $rr.CertsAssigned + '</td><td>' + [int]$rr.DecisionsMade + '</td><td>-</td><td class="' + $phCls + '">' + (ConvertTo-SafeHtml ([string]$rr.Phase)) + '</td></tr>')
@@ -1908,7 +1908,7 @@ foreach ($audit in $campaignAudits) {
         [void]$sb.AppendLine('</tbody></table></details>')
     }
 }
-if (-not $anyRev) { [void]$sb.AppendLine('<p style="color:#777">No pending reviewer accountability data available.</p>') }
+if (-not $anyRev) { [void]$sb.AppendLine('<p style="color:#777">No undecided reviewer accountability data available.</p>') }
 [void]$sb.AppendLine('</div>')
 
 # ---- Decision Summary (Revoked only + Newly Approved Access from scope-diff) ----
