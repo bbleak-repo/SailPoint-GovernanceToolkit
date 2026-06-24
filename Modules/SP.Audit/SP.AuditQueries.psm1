@@ -6924,7 +6924,31 @@ function Get-SPCachedCampaignItems {
             # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly on PS 5.1
             $cachedAt  = [datetime]::Parse([string]$meta.CachedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
             $ageMinutes = [math]::Round(((Get-Date) - $cachedAt.ToLocalTime()).TotalMinutes, 1)
-            $diskValid = $meta.IsPermanent -or ($ageMinutes -lt $effectiveTtl)
+
+            # SEAL-ON-TRANSITION: if the cache was captured while ACTIVE but the campaign
+            # is now COMPLETED, seal the cache as permanent. The ACTIVE-state data is the
+            # honest truth -- re-fetching would get ISC's post-completion lies (auto-approved
+            # items, inflated decisionsMade, force-signed reviewers).
+            $cachedStatus = if ($null -ne $meta.PSObject.Properties['Status']) { [string]$meta.Status } else { '' }
+            $isTransitioned = (-not $meta.IsPermanent) -and
+                              ($cachedStatus.ToUpperInvariant() -in @('ACTIVE', 'ACTIVATING', '')) -and
+                              $isPermanent  # current status is COMPLETED/COMPLETING
+            if ($isTransitioned) {
+                Write-Host "  [Cache] SEALED: '$campName' transitioned ACTIVE->COMPLETED. Preserving honest ACTIVE-state cache." -ForegroundColor Cyan
+                Write-SPLog -Message "Cache SEALED: '$campName' was ACTIVE when cached, now $status. Marking permanent to preserve honest data." `
+                    -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' -CorrelationID $CorrelationID
+                # Update meta to mark as permanent so future runs never re-fetch
+                try {
+                    $meta | Add-Member -NotePropertyName 'IsPermanent' -NotePropertyValue $true -Force
+                    $meta | Add-Member -NotePropertyName 'SealedAt' -NotePropertyValue (Get-Date).ToString('o') -Force
+                    $meta | Add-Member -NotePropertyName 'SealReason' -NotePropertyValue "Campaign transitioned from $cachedStatus to $status" -Force
+                    $meta | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
+                } catch {
+                    Write-Host "  [Cache] WARN: Failed to update meta for seal: $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+
+            $diskValid = $meta.IsPermanent -or $isTransitioned -or ($ageMinutes -lt $effectiveTtl)
             if ($diskValid) {
                 Write-SPLog -Message "Cache HIT (disk): campaign '$campName' ($($meta.ItemCount) items, cached $($cachedAt.ToString('yyyy-MM-dd HH:mm')))" `
                     -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
