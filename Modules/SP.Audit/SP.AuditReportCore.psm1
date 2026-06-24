@@ -391,11 +391,16 @@ function Group-SPAuditDecisions {
         # Normalise decision variants to the three canonical buckets.
         # APPROVE / APPROVED / CERTIFY  → Approved  (CERTIFY used by some ISC versions)
         # REVOKE  / REVOKED  / DENY / REJECT / EXCEPTION → Revoked
-        # anything else (null/empty)    → Pending
+        # anything else (null/empty)    → Undecided (internally: Pending)
+        #
+        # ISC auto-approve: when a campaign is force-completed, ISC sets decision=APPROVE
+        # on all remaining items but marks them with comment "idNowAutoApproved". These
+        # are NOT genuine reviewer decisions -- reclassify them as Undecided/Pending.
+        $isAutoApproved = ($justification -match 'idNowAutoApproved')
         switch ($decision.ToUpperInvariant()) {
-            'APPROVE'   { $approved.Add($out) }
-            'APPROVED'  { $approved.Add($out) }
-            'CERTIFY'   { $approved.Add($out) }
+            'APPROVE'   { if ($isAutoApproved) { $pending.Add($out) } else { $approved.Add($out) } }
+            'APPROVED'  { if ($isAutoApproved) { $pending.Add($out) } else { $approved.Add($out) } }
+            'CERTIFY'   { if ($isAutoApproved) { $pending.Add($out) } else { $approved.Add($out) } }
             'REVOKE'    { $revoked.Add($out)  }
             'REVOKED'   { $revoked.Add($out)  }
             'DENY'      { $revoked.Add($out)  }
