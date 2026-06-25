@@ -6854,6 +6854,9 @@ function Get-SPCachedCampaignItems {
         [switch]$NoCache,
 
         [Parameter()]
+        [switch]$RefreshCache,
+
+        [Parameter()]
         [object[]]$Certifications,
 
         [Parameter()]
@@ -7044,7 +7047,9 @@ function Get-SPCachedCampaignItems {
 
     # Ensure the cache dir exists; drop a stale/unreadable partial so we append cleanly.
     # When -NoCache is set, do NOT touch existing cache files at all.
-    $writeToCache = $isCacheable -and -not $NoCache
+    # -NoCache: skip read AND write (preserve existing cache for comparison)
+    # -RefreshCache: skip read but DO write (replace cache with fresh data)
+    $writeToCache = $isCacheable -and (-not $NoCache -or $RefreshCache)
     if ($writeToCache) {
         try {
             if (-not (Test-Path $effectiveCachePath)) {
@@ -7102,7 +7107,12 @@ function Get-SPCachedCampaignItems {
     # for comparison or rollback. The fresh data is only used for this run.
     # ---------------------------------------------------------------------------
     if ($NoCache) {
-        Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
+        if ($RefreshCache) {
+            Write-Host "  [Cache] RefreshCache mode -- fresh data will overwrite existing cache." -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
+        }
     }
     elseif ($writeToCache -and $allItems.Count -gt 0) {
         try {

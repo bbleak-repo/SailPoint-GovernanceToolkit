@@ -142,6 +142,9 @@ param(
     [switch]$NoCache,
 
     [Parameter()]
+    [switch]$RefreshCache,
+
+    [Parameter()]
     [Alias('?')]
     [switch]$Help
 )
@@ -250,7 +253,9 @@ Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
 Write-Host '  Daily Evidence Report (v4b)' -ForegroundColor Cyan
 Write-Host "  Date:          $todayLabel" -ForegroundColor DarkGray
 Write-Host "  Period:        Last $effectiveDaysBack day(s)" -ForegroundColor DarkGray
-Write-Host "  Item Cache:    $(if ($NoCache) { 'DISABLED (fresh fetch)' } else { 'Enabled (use -NoCache for fresh data)' })" -ForegroundColor $(if ($NoCache) { 'Yellow' } else { 'DarkGray' })
+$cacheLabel = if ($RefreshCache) { 'REFRESH (fresh fetch + update cache)' } elseif ($NoCache) { 'DISABLED (fresh fetch, cache preserved)' } else { 'Enabled (use -NoCache or -RefreshCache)' }
+$cacheColor = if ($RefreshCache -or $NoCache) { 'Yellow' } else { 'DarkGray' }
+Write-Host "  Item Cache:    $cacheLabel" -ForegroundColor $cacheColor
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -525,7 +530,8 @@ try {
 
             $wrappedItems = [System.Collections.Generic.List[object]]::new()
             $itemParams = @{ Campaign = $campaign; Certifications = $certifications; CorrelationID = $correlationID }
-            if ($NoCache) { $itemParams['NoCache'] = $true }
+            if ($NoCache -or $RefreshCache) { $itemParams['NoCache'] = $true }
+            if ($RefreshCache) { $itemParams['RefreshCache'] = $true }
             $cacheResult = Get-SPCachedCampaignItems @itemParams
             if ($cacheResult.Success) {
                 foreach ($wi in $cacheResult.Data) { $wrappedItems.Add($wi) }
