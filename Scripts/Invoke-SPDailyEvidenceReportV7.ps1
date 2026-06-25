@@ -64,6 +64,12 @@ param(
     [int]$DaysBack = 7,
 
     [Parameter()]
+    [string]$StartDate,
+
+    [Parameter()]
+    [string]$EndDate,
+
+    [Parameter()]
     [string]$CampaignNameContains,
 
     [Parameter()]
@@ -237,7 +243,8 @@ Write-Host ''
 Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
 Write-Host '  Daily Evidence Report (v7) -- Calendar-Day Visualization' -ForegroundColor Cyan
 Write-Host "  Date:          $todayLabel" -ForegroundColor DarkGray
-Write-Host "  Period:        Last $effectiveDaysBack day(s)" -ForegroundColor DarkGray
+$periodLabel = if (-not [string]::IsNullOrWhiteSpace($StartDate) -or -not [string]::IsNullOrWhiteSpace($EndDate)) { "$StartDate to $EndDate" } else { "Last $effectiveDaysBack day(s)" }
+Write-Host "  Period:        $periodLabel" -ForegroundColor DarkGray
 Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
 Write-Host ''
 
@@ -325,7 +332,27 @@ if (-not (Test-Path $jsonlPath)) {
 }
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$cutoffDate = (Get-Date).AddDays(-$effectiveDaysBack).ToString('yyyy-MM-dd')
+
+# Date range: -StartDate/-EndDate take precedence over -DaysBack
+$filterStartDate = ''
+$filterEndDate = ''
+if (-not [string]::IsNullOrWhiteSpace($StartDate)) {
+    try { $filterStartDate = ([datetime]::Parse($StartDate)).ToString('yyyy-MM-dd') }
+    catch { Write-Host "  ERROR: Invalid -StartDate '$StartDate'. Use yyyy-MM-dd format." -ForegroundColor Red; exit 2 }
+}
+if (-not [string]::IsNullOrWhiteSpace($EndDate)) {
+    try { $filterEndDate = ([datetime]::Parse($EndDate)).ToString('yyyy-MM-dd') }
+    catch { Write-Host "  ERROR: Invalid -EndDate '$EndDate'. Use yyyy-MM-dd format." -ForegroundColor Red; exit 2 }
+}
+# If no explicit range, use DaysBack from today
+if ([string]::IsNullOrWhiteSpace($filterStartDate)) {
+    $filterStartDate = (Get-Date).AddDays(-$effectiveDaysBack).ToString('yyyy-MM-dd')
+}
+if ([string]::IsNullOrWhiteSpace($filterEndDate)) {
+    $filterEndDate = (Get-Date).ToString('yyyy-MM-dd')
+}
+Write-Host "    Date range: $filterStartDate to $filterEndDate" -ForegroundColor DarkGray
+
 $allRecords = [System.Collections.Generic.List[object]]::new()
 
 $rawLines = [System.IO.File]::ReadAllLines($jsonlPath, $utf8)
@@ -336,8 +363,9 @@ foreach ($ln in $rawLines) {
         $capDate = [string]$rec.captureDate
         if ([string]::IsNullOrWhiteSpace($capDate)) { continue }
 
-        # Filter by DaysBack
-        if ($capDate -lt $cutoffDate) { continue }
+        # Filter by date range
+        if ($capDate -lt $filterStartDate) { continue }
+        if ($capDate -gt $filterEndDate) { continue }
 
         # Filter by CampaignNameContains
         if (-not [string]::IsNullOrWhiteSpace($CampaignNameContains)) {
