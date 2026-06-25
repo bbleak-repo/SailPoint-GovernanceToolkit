@@ -699,5 +699,7 @@ Export-ModuleMember -Function @(
     'Test-SPVaultExists',
     'Remove-SPVaultCredential',
     'Update-SPVaultCredential',
-    'Update-SPVaultPassphrase'
+    'Update-SPVaultPassphrase',
+    'Invoke-SPVaultEncrypt',
+    'Invoke-SPVaultDecrypt'
 )

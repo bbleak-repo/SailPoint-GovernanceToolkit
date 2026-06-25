@@ -73,6 +73,8 @@
         'Remove-SPVaultCredential',
         'Update-SPVaultCredential',
         'Update-SPVaultPassphrase',
+        'Invoke-SPVaultEncrypt',
+        'Invoke-SPVaultDecrypt',
 
         # SP.Auth exports
         'Get-SPAuthToken',

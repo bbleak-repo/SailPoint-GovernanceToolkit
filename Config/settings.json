@@ -16,6 +16,14 @@
             "VaultPath": ".\\Data\\sp-vault.enc",
             "Pbkdf2Iterations": 600000,
             "CredentialKey": "sailpoint-isc"
+        },
+        "DpapiCredential": {
+            "Path": ".\\Data\\sp-dpapi-credential.xml",
+            "_note": "DPAPI-encrypted credential file (Export-CliXml). Bound to the Windows user + machine. May trigger EDR/Mimikatz alerts."
+        },
+        "ScheduledVault": {
+            "KeyPath": ".\\Data\\sp-scheduled-key.enc",
+            "_note": "AES-encrypted vault passphrase using machine-derived key. No DPAPI. Run New-SPVault.ps1 -Mode ScheduledVault to create."
         }
     },
     "Logging": {

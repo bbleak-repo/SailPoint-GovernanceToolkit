@@ -3,10 +3,22 @@
 .SYNOPSIS
     SailPoint ISC Governance Toolkit Authentication Module
 .DESCRIPTION
-    Provides authentication for SailPoint ISC. Supports three modes:
-      - ConfigFile:   ClientId/ClientSecret read directly from settings.json
-      - Vault:        ClientId/ClientSecret retrieved from encrypted SP.Vault
-      - BrowserToken: Pre-obtained JWT pasted from browser dev tools (no OAuth flow)
+    Provides authentication for SailPoint ISC. Supports five modes:
+      - ConfigFile:      ClientId/ClientSecret read directly from settings.json
+      - Vault:           ClientId/ClientSecret retrieved from encrypted SP.Vault
+      - BrowserToken:    Pre-obtained JWT pasted from browser dev tools (no OAuth flow)
+      - DpapiCredential: PSCredential encrypted via Windows DPAPI (Export-CliXml).
+                         Bound to the current Windows user + machine. If the credential
+                         file is copied to another machine or user context, decryption
+                         fails. Risk: Mimikatz / credential-dumping tools can extract
+                         DPAPI master keys. EDR systems may flag DPAPI operations in
+                         non-interactive sessions.
+      - ScheduledVault:  Uses the toolkit's own AES-256-CBC + PBKDF2 encryption (same
+                         crypto as SP.Vault) to store the vault passphrase encrypted
+                         with a machine-derived key (SHA-256 of machine name + username
+                         + domain + static salt). No DPAPI involvement -- no Mimikatz
+                         or EDR concerns. Requires the regular Vault to be set up first;
+                         this mode automates the passphrase entry for unattended execution.
 
     OAuth modes use client_credentials grant. Token is cached with a 5-minute
     expiry buffer.
@@ -18,7 +30,7 @@
     ~12 minutes (720 seconds).
 .NOTES
     Module: SP.Auth
-    Version: 1.1.0
+    Version: 1.2.0
 #>
 
 # --- Ensure modern TLS for the OAuth token call to ISC ---
@@ -255,6 +267,228 @@ function Get-SPCredentialsFromVault {
     }
 }
 
+function Get-SPCredentialsFromDpapi {
+    <#
+    .SYNOPSIS
+        Retrieves ClientId and ClientSecret from a DPAPI-encrypted PSCredential file
+    .DESCRIPTION
+        Reads a PSCredential object from an Export-CliXml file encrypted with Windows
+        DPAPI. The credential is bound to the Windows user and machine that created it.
+        If the file is copied to another machine or user context, Import-CliXml will
+        fail with a cryptographic exception.
+
+        Security notes:
+        - Uses Windows DPAPI via Export-CliXml / Import-CliXml
+        - Encrypted to: current Windows user + current machine
+        - Risk: Mimikatz / credential-dumping tools can extract DPAPI master keys
+        - EDR systems may flag DPAPI operations in non-interactive sessions
+    .OUTPUTS
+        [hashtable] @{ClientId=[string]; ClientSecret=[string]; OAuthTokenUrl=[string]}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CorrelationID
+    )
+
+    $config = Get-SPConfig
+    $credPath = $config.Authentication.DpapiCredential.Path
+
+    if ([string]::IsNullOrWhiteSpace($credPath)) {
+        throw 'Authentication.DpapiCredential.Path is not configured in settings.json'
+    }
+
+    # Resolve relative paths to toolkit root
+    if (-not [System.IO.Path]::IsPathRooted($credPath)) {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $credPath = [System.IO.Path]::GetFullPath(
+            (Join-Path $toolkitRoot ($credPath.TrimStart('.\').TrimStart('./')))
+        )
+    }
+
+    if (-not (Test-Path -LiteralPath $credPath -PathType Leaf)) {
+        throw "DPAPI credential file not found: $credPath. Run New-SPVault.ps1 -Mode DpapiCredential to create it."
+    }
+
+    $cred = Import-Clixml -Path $credPath
+
+    if ($null -eq $cred -or $cred -isnot [System.Management.Automation.PSCredential]) {
+        throw "DPAPI credential file at '$credPath' does not contain a valid PSCredential object."
+    }
+
+    $oauthUrl = $config.Authentication.ConfigFile.OAuthTokenUrl
+
+    Write-SPLog -Message 'Read credentials from DpapiCredential mode' -Severity 'DEBUG' `
+        -Component 'SP.Auth' -Action 'GetCredentials' -CorrelationID $CorrelationID
+
+    return @{
+        ClientId      = $cred.UserName
+        ClientSecret  = $cred.GetNetworkCredential().Password
+        OAuthTokenUrl = $oauthUrl
+    }
+}
+
+function Get-SPMachineDerivedPassphrase {
+    <#
+    .SYNOPSIS
+        Generates a deterministic passphrase from machine-specific identifiers
+    .DESCRIPTION
+        Combines the machine name, username, domain name, and a static salt, then
+        computes SHA-256 to produce a 64-character hex string. This string serves
+        as the passphrase for encrypting/decrypting the vault passphrase in
+        ScheduledVault mode.
+
+        The resulting passphrase is bound to the specific machine + user + domain
+        combination. If the encrypted key file is moved to a different machine or
+        run under a different user, the derived passphrase will differ and
+        decryption will fail.
+
+        No DPAPI is involved -- this is pure SHA-256 hashing of environment
+        identifiers. Mimikatz cannot extract these values.
+    .OUTPUTS
+        [string] 64-character lowercase hex string
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $machineName = [Environment]::MachineName
+    $userName    = [Environment]::UserName
+    $domainName  = [Environment]::UserDomainName
+    $staticSalt  = 'SailPoint-GovernanceToolkit-ScheduledVault-v1'
+
+    $combined = "$machineName|$userName|$domainName|$staticSalt"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($combined))
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    # Return as hex string (64 chars) -- this becomes the passphrase for Invoke-SPVaultEncrypt
+    return ($hash | ForEach-Object { $_.ToString('x2') }) -join ''
+}
+
+function Get-SPCredentialsFromScheduledVault {
+    <#
+    .SYNOPSIS
+        Retrieves ClientId and ClientSecret from the vault using a machine-derived key
+    .DESCRIPTION
+        Reads an AES-encrypted vault passphrase from the ScheduledVault key file,
+        decrypts it using a machine-derived passphrase (SHA-256 of machine + user +
+        domain + static salt), then opens the regular vault with that passphrase to
+        retrieve the stored credentials.
+
+        This mode is designed for unattended scheduled task execution where no
+        interactive passphrase prompt is possible.
+
+        Security notes:
+        - Uses the toolkit's own AES-256-CBC + PBKDF2 (same crypto as SP.Vault)
+        - Key derived from: machine name + username + domain + static salt (SHA-256)
+        - If the key file is copied to another machine/user: decryption fails
+        - No DPAPI involvement -- no Mimikatz / EDR concerns
+        - Requires the regular vault to be set up first
+    .OUTPUTS
+        [hashtable] @{ClientId=[string]; ClientSecret=[string]; OAuthTokenUrl=[string]}
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$CorrelationID
+    )
+
+    $config = Get-SPConfig
+    $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+
+    # --- Read the encrypted passphrase file ---
+    $keyPath = $config.Authentication.ScheduledVault.KeyPath
+    if ([string]::IsNullOrWhiteSpace($keyPath)) {
+        throw 'Authentication.ScheduledVault.KeyPath is not configured in settings.json'
+    }
+    if (-not [System.IO.Path]::IsPathRooted($keyPath)) {
+        $keyPath = [System.IO.Path]::GetFullPath(
+            (Join-Path $toolkitRoot ($keyPath.TrimStart('.\').TrimStart('./')))
+        )
+    }
+    if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
+        throw "ScheduledVault key file not found: $keyPath. Run New-SPVault.ps1 -Mode ScheduledVault to create it."
+    }
+
+    $encBytes = [System.IO.File]::ReadAllBytes($keyPath)
+
+    # --- Reconstruct the machine-derived passphrase ---
+    $machinePassphrase = Get-SPMachineDerivedPassphrase
+
+    # --- Decrypt the vault passphrase ---
+    $passphraseBytes = $null
+    $vaultPassphrase = $null
+    try {
+        $passphraseBytes = Invoke-SPVaultDecrypt -Data $encBytes -Passphrase $machinePassphrase
+        $vaultPassphrase = [System.Text.Encoding]::UTF8.GetString($passphraseBytes)
+    }
+    catch {
+        throw ("Failed to decrypt ScheduledVault key file. This usually means the file " +
+               "was created on a different machine or by a different user. Error: $($_.Exception.Message)")
+    }
+
+    # --- Open the regular vault with the decrypted passphrase ---
+    $vaultPath = $config.Authentication.Vault.VaultPath
+    if ([string]::IsNullOrWhiteSpace($vaultPath)) {
+        throw 'Authentication.Vault.VaultPath is not configured in settings.json (required by ScheduledVault mode)'
+    }
+    if (-not [System.IO.Path]::IsPathRooted($vaultPath)) {
+        $vaultPath = [System.IO.Path]::GetFullPath(
+            (Join-Path $toolkitRoot ($vaultPath.TrimStart('.\').TrimStart('./')))
+        )
+    }
+    if (-not (Test-Path -LiteralPath $vaultPath -PathType Leaf)) {
+        throw "Vault file not found at '$vaultPath'. The regular vault must exist for ScheduledVault mode."
+    }
+
+    $vaultBytes = [System.IO.File]::ReadAllBytes($vaultPath)
+    $plainBytes = $null
+    try {
+        $plainBytes = Invoke-SPVaultDecrypt -Data $vaultBytes -Passphrase $vaultPassphrase
+    }
+    catch {
+        throw ("Failed to decrypt vault with the stored passphrase. The vault may have been " +
+               "re-keyed since the ScheduledVault key was created. Run New-SPVault.ps1 " +
+               "-Mode ScheduledVault again to update the key. Error: $($_.Exception.Message)")
+    }
+
+    $json  = [System.Text.Encoding]::UTF8.GetString($plainBytes)
+    $store = $json | ConvertFrom-Json
+
+    $credKey = $config.Authentication.Vault.CredentialKey
+    if (-not $credKey) { $credKey = 'sailpoint-isc' }
+
+    $entry = $store.$credKey
+    if ($null -eq $entry) {
+        throw "Credential key '$credKey' not found in vault."
+    }
+
+    $oauthUrl = $config.Authentication.ConfigFile.OAuthTokenUrl
+
+    # Zero sensitive data
+    if ($null -ne $passphraseBytes) {
+        for ($i = 0; $i -lt $passphraseBytes.Length; $i++) { $passphraseBytes[$i] = 0 }
+    }
+    $vaultPassphrase = $null
+    $machinePassphrase = $null
+
+    Write-SPLog -Message 'Read credentials from ScheduledVault mode' -Severity 'DEBUG' `
+        -Component 'SP.Auth' -Action 'GetCredentials' -CorrelationID $CorrelationID
+
+    return @{
+        ClientId      = $entry.ClientId
+        ClientSecret  = $entry.ClientSecret
+        OAuthTokenUrl = $oauthUrl
+    }
+}
+
 #endregion
 
 #region Public Functions
@@ -266,8 +500,10 @@ function Get-SPAuthToken {
     .DESCRIPTION
         Authenticates using client_credentials grant. Credential source is
         determined by Authentication.Mode in settings.json:
-          - 'ConfigFile' reads from Authentication.ConfigFile
-          - 'Vault'      reads from SP.Vault using Authentication.Vault settings
+          - 'ConfigFile'      reads from Authentication.ConfigFile
+          - 'Vault'           reads from SP.Vault using Authentication.Vault settings
+          - 'DpapiCredential' reads from a DPAPI-encrypted PSCredential file (Windows only)
+          - 'ScheduledVault'  reads from the vault using a machine-derived key (no DPAPI)
         Token is cached and reused until expiry minus 5-minute buffer.
         Returns a hashtable with Mode, Token, Headers, and ExpiresAt.
     .PARAMETER CorrelationID
@@ -381,8 +617,14 @@ function Get-SPAuthToken {
         elseif ($mode -eq 'Vault') {
             $creds = Get-SPCredentialsFromVault -CorrelationID $CorrelationID
         }
+        elseif ($mode -eq 'DpapiCredential') {
+            $creds = Get-SPCredentialsFromDpapi -CorrelationID $CorrelationID
+        }
+        elseif ($mode -eq 'ScheduledVault') {
+            $creds = Get-SPCredentialsFromScheduledVault -CorrelationID $CorrelationID
+        }
         else {
-            throw "Unknown Authentication.Mode '$mode'. Valid values: ConfigFile, Vault"
+            throw "Unknown Authentication.Mode '$mode'. Valid values: ConfigFile, Vault, DpapiCredential, ScheduledVault"
         }
 
         if ([string]::IsNullOrWhiteSpace($creds.OAuthTokenUrl)) {

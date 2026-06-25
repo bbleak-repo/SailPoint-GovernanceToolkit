@@ -143,7 +143,7 @@ Top-level sections and the keys that matter most:
 |---|---|---|
 | **Global** | `EnvironmentName` | A label for this environment (shown in logs, used by Safety). |
 | | `DebugMode` | Verbose diagnostics when `true`. |
-| **Authentication** | `Mode` | `ConfigFile`, `Vault`, or `Token` — see §5. |
+| **Authentication** | `Mode` | `ConfigFile`, `Vault`, `DpapiCredential`, `ScheduledVault`, or `Token` — see §5. |
 | | `ConfigFile.TenantUrl` / `OAuthTokenUrl` | Your ISC tenant base + OAuth token endpoint. |
 | | `ConfigFile.ClientId` / `ClientSecret` | OAuth client credentials (use the vault for real secrets). |
 | | `Vault.VaultPath` | Encrypted vault location (`.\Data\sp-vault.enc`). |
@@ -202,10 +202,10 @@ Top-level sections and the keys that matter most:
 
 ## 5. Authentication
 
-The toolkit authenticates to ISC three ways, selected by `Authentication.Mode`:
-**`ConfigFile`** and **`Vault`** both use an OAuth **Personal Access Token (PAT)**;
-**`Token`** uses a short-lived browser bearer token. Read §5.1 first to create the
-credential, then pick a storage mode (§5.2–§5.4).
+The toolkit authenticates to ISC five ways, selected by `Authentication.Mode`:
+**`ConfigFile`**, **`Vault`**, **`DpapiCredential`**, and **`ScheduledVault`** all use
+an OAuth **Personal Access Token (PAT)**; **`Token`** uses a short-lived browser bearer
+token. Read §5.1 first to create the credential, then pick a storage mode (§5.2–§5.6).
 
 ### 5.1 The ISC credential: a Personal Access Token (PAT)
 
@@ -268,22 +268,97 @@ custom vault path for shared/team locations. The `*.enc` file is gitignored.
 > **Store the passphrase in a password manager.** It is never logged and cannot be
 > recovered — lose it and you must recreate the vault (and rotate the PAT secret).
 
-### 5.3.1 Vault vs. ConfigFile for scheduled tasks
+### 5.4 DpapiCredential (automation option A -- Windows DPAPI)
 
-The vault requires an **interactive passphrase prompt** at runtime. This makes it
-unsuitable for fully unattended scheduled tasks (Task Scheduler, cron) where no human
-is present to type the passphrase.
-
-For **non-interactive scheduled tasks**, use `ConfigFile` mode with
-`settings.local.json` and restrict file permissions to the service account:
+Uses Windows DPAPI via PowerShell's `Export-CliXml` to store the PAT credential
+encrypted to the **current Windows user + machine**. No passphrase needed at runtime --
+fully unattended. Set up once as the service account:
 
 ```powershell
-# Restrict settings.local.json to the service account only
-icacls .\Config\settings.local.json /inheritance:r /grant:r "DOMAIN\svc-sailpoint:(R)"
+.\Scripts\New-SPVault.ps1 -Mode DpapiCredential    # prompts for ClientId + Secret, saves encrypted
 ```
 
-Use the vault for interactive runs and demos. Use ConfigFile (with restricted
-permissions) for automation.
+Then set `Authentication.Mode = "DpapiCredential"`. The credential file is created at
+`Authentication.DpapiCredential.Path` (default `.\Data\sp-dpapi-credential.xml`).
+
+**Security properties:**
+- Encrypted to the Windows user account + machine via DPAPI
+- If the file is copied to another machine or user, decryption fails
+- No passphrase needed at runtime -- suitable for Task Scheduler
+- **Risk:** Mimikatz and similar credential dumping tools can extract DPAPI master keys
+  from process memory. Some EDR/endpoint protection systems flag DPAPI operations in
+  non-interactive sessions. Discuss with your SOC/EDR team before deploying.
+
+> **When to use:** when your EDR team approves DPAPI-based credential storage, or in
+> environments without aggressive endpoint monitoring. Simplest automation setup.
+
+### 5.5 ScheduledVault (automation option B -- no DPAPI)
+
+Uses the toolkit's **own AES-256-CBC encryption** (same crypto as the vault) to store
+the vault passphrase encrypted with a **machine-derived key**. No DPAPI involved --
+no Mimikatz/EDR concerns. Requires the regular vault (§5.3) to be set up first.
+
+```powershell
+# Step 1: Set up the regular vault first (if not already done)
+.\Scripts\New-SPVault.ps1 -Mode Vault
+
+# Step 2: Create the scheduled key (prompts for the vault passphrase to verify it)
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault
+```
+
+Then set `Authentication.Mode = "ScheduledVault"`. The encrypted key is created at
+`Authentication.ScheduledVault.KeyPath` (default `.\Data\sp-scheduled-key.enc`).
+
+**How it works:**
+1. Your vault passphrase is encrypted using AES-256-CBC + PBKDF2 (same as the vault)
+2. The encryption key is derived from `SHA-256(MachineName|UserName|DomainName|static-salt)`
+3. At runtime, the machine identity is reconstructed, the passphrase is decrypted, and
+   the regular vault is opened -- no human input needed
+4. If the key file is copied to another machine/user, decryption fails (different identity)
+
+**Security properties:**
+- Uses the same AES-256-CBC + HMAC-SHA256 crypto as the vault -- no DPAPI
+- Key is derived from machine identity -- not extractable by Mimikatz
+- No EDR/endpoint protection alerts
+- Requires the regular vault to be set up first (two-layer security)
+
+> **When to use:** when your SOC/EDR team prohibits DPAPI or you want zero endpoint
+> monitoring alerts. Slightly more setup (two steps) but cleanest from a security tooling
+> perspective.
+
+### 5.3.1 Choosing an automation mode
+
+| Mode | Setup | Passphrase at runtime? | DPAPI? | EDR risk | Best for |
+|---|---|---|---|---|---|
+| **ConfigFile** | Edit JSON | No | No | None | Dev/mock only (secret in plain text) |
+| **Vault** | `New-SPVault.ps1` | YES (interactive) | No | None | Interactive use, demos |
+| **DpapiCredential** | `New-SPVault.ps1 -Mode DpapiCredential` | No | YES | Mimikatz-flaggable | Automation with EDR approval |
+| **ScheduledVault** | `New-SPVault.ps1 -Mode ScheduledVault` | No | No | None | Automation without EDR concerns |
+| **BrowserToken** | F12 copy-paste | No (expires in ~12 min) | No | None | Quick one-off queries |
+
+For **scheduled tasks** (Task Scheduler, cron), use `DpapiCredential` or `ScheduledVault`.
+Both are fully unattended. Your SOC/EDR team decides which is acceptable.
+
+**Task Scheduler setup** (same for both modes):
+```powershell
+# 1. Log in as the service account and run the one-time setup
+.\Scripts\New-SPVault.ps1 -Mode DpapiCredential   # or -Mode ScheduledVault
+
+# 2. Create the scheduled task (as admin)
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\GovernanceToolkit\Scripts\Run-DailyGovernance.ps1' `
+    -WorkingDirectory 'C:\GovernanceToolkit'
+
+$triggers = @(
+    New-ScheduledTaskTrigger -Daily -At '08:00'
+    New-ScheduledTaskTrigger -Daily -At '12:00'
+    New-ScheduledTaskTrigger -Daily -At '17:00'
+)
+
+Register-ScheduledTask -TaskName 'SailPoint-GovernanceToolkit' `
+    -Action $action -Trigger $triggers `
+    -User 'DOMAIN\svc-sailpoint' -RunLevel Highest
+```
 
 ### 5.3.2 Credential Rotation Procedure
 
