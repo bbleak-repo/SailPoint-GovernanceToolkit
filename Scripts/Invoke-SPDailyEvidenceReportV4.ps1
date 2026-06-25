@@ -702,16 +702,40 @@ try {
             }
         }
 
-        # Collect newly-decided items (existed in both campaigns, was PENDING, now decided).
-        # Skip COMPLETED campaigns: ISC auto-approves remaining items on force-completion,
-        # so PENDING->APPROVE transitions are artifacts of closing, not genuine reviewer decisions.
+        # Collect newly-decided items: PENDING in prior campaign -> APPROVE/REVOKE in current.
+        # ISC timing caveat: ISC doesn't commit item decisions until reviewer sign-off.
+        # If the prior campaign was captured pre-sign-off, items show as PENDING even if
+        # the reviewer clicked approve. To avoid false positives, only count items where
+        # the PRIOR snapshot's reviewer was SIGNED (meaning PENDING was genuine, not just
+        # uncommitted). Check the prior snapshot's cert phase via the diff metadata.
         $campStatus = ([string]$audit['Status']).ToUpperInvariant()
         if ($campStatus -notin @('COMPLETED', 'COMPLETING')) {
+            # Build a set of reviewer names who were SIGNED in the prior campaign
+            $priorSignedReviewers = @{}
+            if ($null -ne $priorSnap -and $null -ne $priorSnap.Meta) {
+                try {
+                    $priorCerts = $priorSnap.Certifications
+                    if ($null -eq $priorCerts) { $priorCerts = @() }
+                    foreach ($pc in @($priorCerts)) {
+                        if ($null -ne $pc.Phase -and [string]$pc.Phase -eq 'SIGNED' -and
+                            $null -ne $pc.ReviewerName -and -not [string]::IsNullOrWhiteSpace([string]$pc.ReviewerName)) {
+                            $priorSignedReviewers[[string]$pc.ReviewerName] = $true
+                        }
+                    }
+                } catch { }
+            }
+
             foreach ($nd in @($diff.Scope.NewlyDecided)) {
                 $ndKey = [string](Get-V4Prop $nd 'Key' '')
                 if (-not [string]::IsNullOrWhiteSpace($ndKey) -and $v4SeenKeys.ContainsKey($ndKey)) { continue }
                 $ndDec = [string](Get-V4Prop $nd 'CurrDecision' '')
                 if ($ndDec -eq 'APPROVE' -or $ndDec -eq 'Approved') {
+                    # Only include if the prior reviewer was SIGNED (genuine PENDING, not pre-sign-off)
+                    $ndReviewer = [string](Get-V4Prop $nd 'ReviewerName' '')
+                    if ($priorSignedReviewers.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($ndReviewer) -and
+                        -not $priorSignedReviewers.ContainsKey($ndReviewer)) {
+                        continue  # Prior reviewer was NOT signed -- PENDING was just uncommitted, skip
+                    }
                     $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
                     if ([string]::IsNullOrWhiteSpace($ndDate)) {
                         $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
