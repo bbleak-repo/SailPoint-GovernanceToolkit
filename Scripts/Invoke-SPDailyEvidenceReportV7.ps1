@@ -579,6 +579,16 @@ for ($i = 1; $i -lt $dayCount; $i++) {
     $dailyScopeChange = [int]$curr.Total - [int]$prev.Total
     $curr.NewlyApproved = [math]::Max(0, $dailyScopeChange)
 }
+# Day 0 has no prior day -- zero out its delta fields (they contain raw JSONL values, not deltas)
+if ($dayCount -gt 0) {
+    $day0 = $calendarDays[$dayKeys[0]]
+    $day0.NewlyDecided = 0
+    $day0.NewlyApproved = 0
+    $day0.CompletionDelta = 0
+    $day0.ApprovedDelta = 0
+    $day0.RevokedDelta = 0
+    $day0.PendingDelta = 0
+}
 
 $suspectIncluded = 0
 foreach ($dk in $dayKeys) {
