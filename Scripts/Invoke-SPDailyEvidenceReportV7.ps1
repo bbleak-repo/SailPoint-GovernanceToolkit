@@ -1288,33 +1288,77 @@ if ($dayCount -ge 2) {
 
     if ($hasAnyDiff) {
         [void]$sb.AppendLine("<div class='section'>")
-        [void]$sb.AppendLine("<div class='section-title'>Decision Activity Trending -- Day-by-Day Table</div>")
-        [void]$sb.AppendLine("<p class='note'>One row per calendar day. Campaign column shows the short campaign name for that day. Cumulative row at bottom.</p>")
+        [void]$sb.AppendLine("<div class='section-title'>Campaign Completion Evidence -- Day-by-Day</div>")
+        [void]$sb.AppendLine("<p class='note'>One row per calendar day combining campaign status, item counts, reviewer progress, and day-over-day deltas. Color-coded by completion threshold.</p>")
 
-        [void]$sb.AppendLine("<table><thead><tr><th>Day</th><th>Campaign</th><th style='text-align:right;'>Revoked (campaign)</th><th style='text-align:right;'>Decided Delta</th><th style='text-align:right;'>Scope Delta</th><th style='text-align:right;'>Completion</th></tr></thead><tbody>")
+        [void]$sb.AppendLine("<table><thead><tr>")
+        [void]$sb.AppendLine("<th>Day</th><th>Campaign</th><th>Status</th>")
+        [void]$sb.AppendLine("<th style='text-align:right;'>Total</th><th style='text-align:right;'>Approved</th><th style='text-align:right;'>Revoked</th><th style='text-align:right;'>Undecided</th>")
+        [void]$sb.AppendLine("<th style='text-align:center;'>Items %</th><th style='text-align:center;'>Reviewer %</th>")
+        [void]$sb.AppendLine("<th style='text-align:right;'>Decided +/-</th><th style='text-align:right;'>Completion +/-</th>")
+        [void]$sb.AppendLine("</tr></thead><tbody>")
 
-        $cumRevoked = 0; $cumDecided = 0; $cumScope = 0
+        $cumAppr = 0; $cumRev = 0; $cumPend = 0; $cumTotal = 0
         foreach ($d in $dailyData) {
-            $dayRev = [int]$d.Revoked
-            $dayND  = [int]$d.NewlyDecided
-            $dayNS  = [int]$d.NewlyApproved
-            $cumRevoked += $dayRev
-            $cumDecided += $dayND
-            $cumScope   += $dayNS
+            $dAppr = [int]$d.Approved
+            $dRev  = [int]$d.Revoked
+            $dPend = [int]$d.Pending
+            $dTotal = [int]$d.Total
+            $dComp = [double]$d.CompletionPct
+            $cumAppr += $dAppr; $cumRev += $dRev; $cumPend += $dPend; $cumTotal += $dTotal
 
             $campFull = ConvertTo-SPHtmlSafe $d.CampaignName
-            $revStyle = if ($dayRev -gt 0) { " style='color:$($colors.Red);font-weight:600;'" } else { '' }
-            $ndStyle  = if ($dayND -gt 0) { " style='color:$($colors.Green);font-weight:600;'" } else { '' }
-            $nsStyle  = if ($dayNS -gt 0) { " style='color:$($colors.Blue);font-weight:600;'" } else { '' }
+            $statusLabel = [string]$d.CampaignStatus
+            $stColor = if ($statusLabel -eq 'COMPLETED') { "color:$($colors.Green);font-weight:600;" } else { "color:$($colors.Blue);" }
 
-            $suspTag = ''
-            if ($d.IsSuspect) { $suspTag = " <span class='badge-suspect'>S</span>" }
+            # Items decided %
+            $itemPct = [math]::Round($dComp, 0)
+            $itemCls = if ($itemPct -ge 80) { "color:$($colors.Green);font-weight:600;" } elseif ($itemPct -ge 50) { "color:$($colors.Amber);font-weight:600;" } else { "color:$($colors.Red);font-weight:600;" }
 
-            [void]$sb.AppendLine("<tr><td style='font-weight:600;white-space:nowrap;'>$($d.DayLabel)$suspTag</td><td style='font-size:11px;'>$campFull</td><td style='text-align:right;'$revStyle>$dayRev</td><td style='text-align:right;'$ndStyle>$dayND</td><td style='text-align:right;'$nsStyle>$dayNS</td><td style='text-align:right;font-weight:600;'>$($d.CompletionPct)%</td></tr>")
+            # Reviewer signed %
+            $rvTotal = [int]$d.ReviewersTotal
+            $rvSigned = [int]$d.ReviewersSigned
+            $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvSigned / $rvTotal * 100, 0) } else { 0 }
+            $rvLabel = "$rvPct% ($rvSigned/$rvTotal)"
+            $rvCls = if ($rvPct -ge 80) { "color:$($colors.Green);font-weight:600;" } elseif ($rvPct -ge 50) { "color:$($colors.Amber);" } else { "color:$($colors.Red);font-weight:600;" }
+
+            # Day-over-day deltas
+            $decidedDelta = [int]$d.NewlyDecided
+            $compDelta = [double]$d.CompletionDelta
+            $ddSign = if ($decidedDelta -gt 0) { '+' } else { '' }
+            $cdSign = if ($compDelta -gt 0) { '+' } else { '' }
+            $ddStyle = if ($decidedDelta -gt 0) { "color:$($colors.Green);font-weight:600;" } elseif ($decidedDelta -lt 0) { "color:$($colors.Red);" } else { 'color:#888;' }
+            $cdStyle = if ($compDelta -gt 0) { "color:$($colors.Green);font-weight:600;" } elseif ($compDelta -lt 0) { "color:$($colors.Red);" } else { 'color:#888;' }
+
+            $pendStyle = if ($dPend -gt 0) { "color:$($colors.Red);font-weight:600;" } else { '' }
+            $suspTag = if ($d.IsSuspect) { " <span class='badge-suspect'>S</span>" } else { '' }
+
+            [void]$sb.AppendLine("<tr>")
+            [void]$sb.AppendLine("<td style='font-weight:600;white-space:nowrap;'>$($d.DayLabel)$suspTag</td>")
+            [void]$sb.AppendLine("<td style='font-size:11px;'>$campFull</td>")
+            [void]$sb.AppendLine("<td style='$stColor'>$statusLabel</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $dTotal)</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $dAppr)</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;color:$($colors.Red);'>$('{0:N0}' -f $dRev)</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;$pendStyle'>$('{0:N0}' -f $dPend)</td>")
+            [void]$sb.AppendLine("<td style='text-align:center;$itemCls'>${itemPct}%</td>")
+            [void]$sb.AppendLine("<td style='text-align:center;$rvCls'>$rvLabel</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;$ddStyle'>${ddSign}${decidedDelta}</td>")
+            [void]$sb.AppendLine("<td style='text-align:right;$cdStyle'>${cdSign}${compDelta}%</td>")
+            [void]$sb.AppendLine("</tr>")
         }
 
-        # Cumulative row
-        [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'><td colspan='2'>CUMULATIVE ($dayCount days)</td><td style='text-align:right;color:$($colors.Red);'>$cumRevoked</td><td style='text-align:right;color:$($colors.Green);'>$cumDecided</td><td style='text-align:right;color:$($colors.Blue);'>$cumScope</td><td style='text-align:right;'>$($dailyData[$dayCount - 1].CompletionPct)%</td></tr>")
+        # Totals row
+        $cumDecPct = if ($cumTotal -gt 0) { [math]::Round(($cumAppr + $cumRev) / $cumTotal * 100, 0) } else { 0 }
+        [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'>")
+        [void]$sb.AppendLine("<td colspan='3'>TOTALS ($dayCount days)</td>")
+        [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumTotal)</td>")
+        [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumAppr)</td>")
+        [void]$sb.AppendLine("<td style='text-align:right;color:$($colors.Red);'>$('{0:N0}' -f $cumRev)</td>")
+        [void]$sb.AppendLine("<td style='text-align:right;color:$($colors.Red);'>$('{0:N0}' -f $cumPend)</td>")
+        [void]$sb.AppendLine("<td style='text-align:center;'>${cumDecPct}%</td>")
+        [void]$sb.AppendLine("<td colspan='3'></td>")
+        [void]$sb.AppendLine("</tr>")
 
         [void]$sb.AppendLine("</tbody></table></div>")
     }
