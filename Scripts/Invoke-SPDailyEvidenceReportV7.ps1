@@ -1497,7 +1497,17 @@ if ($dayCount -ge 2) {
 
 #region Chart 9: Cross-Campaign Risk Matrix
 
-if ($dayCount -ge 1) {
+# Only render the risk matrix if campaigns are genuinely different (mixed types/scopes).
+# For daily recurring campaigns with the same scope and reviewers, the matrix produces
+# identical scores and adds no value -- the Campaign Completion Evidence table is better.
+$uniqueTotals = @{}; $uniqueReviewerCounts = @{}
+foreach ($d in $dailyData) {
+    $uniqueTotals[[string]$d.Total] = $true
+    $uniqueReviewerCounts[[string]$d.ReviewersTotal] = $true
+}
+$isMixedCampaigns = ($uniqueTotals.Count -gt 1 -or $uniqueReviewerCounts.Count -gt 1)
+
+if ($dayCount -ge 1 -and $isMixedCampaigns) {
     $campaigns = @()
     foreach ($d in $dailyData) {
         # Count stalled reviewers
