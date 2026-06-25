@@ -535,6 +535,7 @@ foreach ($dateKey in $dateGroups.Keys) {
             CompletionPct    = [double](Get-V7NumericProp $sm 'completionPct' 0)
             ReviewersTotal   = [int](Get-V7NumericProp $sm 'reviewersTotal' 0)
             ReviewersSigned  = [int](Get-V7NumericProp $sm 'reviewersSigned' 0)
+            ReviewersCompleted = 0  # computed below from per-reviewer item data
             PrivTotal        = [int](Get-V7NumericProp $sm 'privilegedTotal' 0)
             PrivApproved     = [int](Get-V7NumericProp $sm 'privilegedApproved' 0)
             PrivRevoked      = [int](Get-V7NumericProp $sm 'privilegedRevoked' 0)
@@ -578,6 +579,15 @@ foreach ($dateKey in $dateGroups.Keys) {
                 $entry.SourceData = @($best.sources)
             }
         } catch { }
+
+        # Compute honest ReviewersCompleted from per-reviewer item data.
+        # A reviewer is "completed" if they have total > 0 and pending = 0.
+        # This is immune to ISC's cert-level inflation on force-completion.
+        $rvCompletedCount = 0
+        foreach ($rv in $dayReviewers) {
+            if ([int]$rv.Total -gt 0 -and [int]$rv.Pending -eq 0) { $rvCompletedCount++ }
+        }
+        $entry.ReviewersCompleted = $rvCompletedCount
 
         $calendarDays[$dateKey] = $entry
     }
@@ -1317,9 +1327,9 @@ if ($dayCount -ge 2) {
 
             # Reviewer signed %
             $rvTotal = [int]$d.ReviewersTotal
-            $rvSigned = [int]$d.ReviewersSigned
-            $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvSigned / $rvTotal * 100, 0) } else { 0 }
-            $rvLabel = "$rvPct% ($rvSigned/$rvTotal)"
+            $rvCompleted = [int]$d.ReviewersCompleted
+            $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvCompleted / $rvTotal * 100, 0) } else { 0 }
+            $rvLabel = "$rvPct% ($rvCompleted/$rvTotal)"
             $rvCls = if ($rvPct -ge 80) { "color:$($colors.Green);font-weight:600;" } elseif ($rvPct -ge 50) { "color:$($colors.Amber);" } else { "color:$($colors.Red);font-weight:600;" }
 
             # Day-over-day deltas
@@ -1663,10 +1673,10 @@ if ($dayCount -ge 2) {
         [void]$sb.AppendLine("<rect x='$xBase' y='$itemY' width='$rcBarW' height='$itemH' fill='#336699' opacity='$opacity' rx='2'/>")
         if ($itemH -gt 14) { [void]$sb.AppendLine("<text x='$($xBase + [int]($rcBarW/2))' y='$($itemY - 3)' text-anchor='middle' font-size='9' font-weight='600' fill='#336699'>$([math]::Round($itemPct,0))%</text>") }
 
-        # Reviewer signed %
+        # Reviewer completed % (from item-level data, not ISC cert sign-off)
         $rvTotal = [int]$d.ReviewersTotal
-        $rvSigned = [int]$d.ReviewersSigned
-        $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvSigned / $rvTotal * 100, 0) } else { 0 }
+        $rvCompleted = [int]$d.ReviewersCompleted
+        $rvPct = if ($rvTotal -gt 0) { [math]::Round($rvCompleted / $rvTotal * 100, 0) } else { 0 }
         $rvH = [int][math]::Max(2, [math]::Round($rvPct / 100 * $rcPlotH))
         $rvY = $rcPadT + $rcPlotH - $rvH
         $rvX = $xBase + $rcBarW + $rcGap
@@ -1682,7 +1692,7 @@ if ($dayCount -ge 2) {
     [void]$sb.AppendLine("<rect x='$($rcPadL + 20)' y='$legY' width='12' height='12' fill='#336699' rx='2'/>")
     [void]$sb.AppendLine("<text x='$($rcPadL + 37)' y='$($legY + 10)' font-size='10' fill='#1c2b3a'>Items Decided %</text>")
     [void]$sb.AppendLine("<rect x='$($rcPadL + 170)' y='$legY' width='12' height='12' fill='$($colors.Green)' rx='2'/>")
-    [void]$sb.AppendLine("<text x='$($rcPadL + 187)' y='$($legY + 10)' font-size='10' fill='#1c2b3a'>Reviewers Signed Off %</text>")
+    [void]$sb.AppendLine("<text x='$($rcPadL + 187)' y='$($legY + 10)' font-size='10' fill='#1c2b3a'>Reviewers Completed %</text>")
 
     [void]$sb.AppendLine("</svg></div></div>")
 }
