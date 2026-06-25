@@ -566,6 +566,11 @@ for ($i = 1; $i -lt $dayCount; $i++) {
     $curr.ApprovedDelta = [int]$curr.Approved - [int]$prev.Approved
     $curr.RevokedDelta = [int]$curr.Revoked - [int]$prev.Revoked
     $curr.PendingDelta = [int]$curr.Pending - [int]$prev.Pending
+    # Compute real daily deltas for trending table (instead of static per-campaign JSONL values)
+    $dailyDecided = ([int]$curr.Approved + [int]$curr.Revoked) - ([int]$prev.Approved + [int]$prev.Revoked)
+    $curr.NewlyDecided = [math]::Max(0, $dailyDecided)
+    $dailyScopeChange = [int]$curr.Total - [int]$prev.Total
+    $curr.NewlyApproved = [math]::Max(0, $dailyScopeChange)
 }
 
 $suspectIncluded = 0
@@ -604,7 +609,7 @@ foreach ($d in $dailyData) {
 $reviewerList = @()
 foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
     [double]$firstComp = -1; [double]$lastComp = 0; $firstSeenIdx = -1
-    [double]$yesterdayComp = 0
+    [double]$yesterdayComp = 0; $lastSeenIdx = -1; $latestSigned = $false
     [string]$firstSeenDate = 'N/A'
     for ($di = 0; $di -lt $dailyData.Count; $di++) {
         $rvDay = $null
@@ -620,16 +625,22 @@ foreach ($rn in ($reviewerNames.Keys | Sort-Object)) {
             }
             if ($di -eq ($dailyData.Count - 2)) { $yesterdayComp = $compVal }
             $lastComp = $compVal
+            $lastSeenIdx = $di
+            # Track signed status from latest appearance
+            $isSigned = $false
+            try { $isSigned = [bool]$rvDay.Signed } catch { }
+            if ($isSigned) { $latestSigned = $true }
         }
     }
     if ($firstComp -lt 0) { $firstComp = 0 }
+    $daysInScope = if ($firstSeenIdx -ge 0 -and $lastSeenIdx -ge 0) { $lastSeenIdx - $firstSeenIdx + 1 } else { 1 }
 
     [double]$delta = $lastComp - $firstComp
     $rvStyle = 'steady'
-    if ($lastComp -ge 100) { $rvStyle = 'finishing' }
-    elseif ($lastComp -ge 90) { $rvStyle = 'finishing' }
-    elseif ($delta -lt 1 -and $lastComp -lt 95) { $rvStyle = 'stalled' }
-    elseif ($delta -lt 5) { $rvStyle = 'slow' }
+    if ($latestSigned -or $lastComp -ge 95) { $rvStyle = 'finishing' }
+    elseif ($lastComp -lt 5 -and $daysInScope -ge 3) { $rvStyle = 'stalled' }
+    elseif ($delta -ge 10) { $rvStyle = 'steady' }
+    elseif ($delta -lt 5 -and $lastComp -lt 90) { $rvStyle = 'slow' }
 
     $reviewerList += @{
         Name                = $rn
@@ -823,7 +834,14 @@ if ($isOverdue) {
 $stalledRvCount = 0
 foreach ($rv in $reviewerList) { if ($rv.Style -eq 'stalled') { $stalledRvCount++ } }
 $privPendCount = [int]$todayRec.PrivPending
-$velocityPerDay = if ($dayCount -ge 2) { [math]::Round(([double]$todayRec.CompletionPct - [double]$firstRec.CompletionPct) / [math]::Max(1, $dayCount - 1), 1) } else { 0 }
+$velocityLong = if ($dayCount -ge 2) { [math]::Round(([double]$todayRec.CompletionPct - [double]$firstRec.CompletionPct) / [math]::Max(1, $dayCount - 1), 1) } else { 0 }
+$velocityShort = 0
+if ($dayCount -ge 3) {
+    $shortStart = $dailyData[[math]::Max(0, $dayCount - 3)]
+    $velocityShort = [math]::Round(([double]$todayRec.CompletionPct - [double]$shortStart.CompletionPct) / [math]::Min(2, [math]::Max(1, $dayCount - 1)), 1)
+}
+else { $velocityShort = $velocityLong }
+$velocityPerDay = $velocityShort  # projection uses recent velocity
 
 if ($isOverdue) {
     $summaryText = "Campaign is $($todayRec.CompletionPct)% complete and OVERDUE by $([math]::Abs($effectiveDeadlineDays)) day(s)."
@@ -839,12 +857,12 @@ if ($privPendCount -gt 0) {
     $summaryText += " $privPendCount privileged access items remain undecided."
 }
 if ($dayCount -ge 2 -and -not $isOverdue) {
-    $summaryText += " Current velocity (${velocityPerDay}%/day) suggests the campaign $willComplete complete on time."
+    $summaryText += " Avg velocity: ${velocityLong}%/day (${dayCount}-day) | Recent: ${velocityShort}%/day (3-day). Projection suggests the campaign $willComplete complete on time."
 }
 elseif ($dayCount -ge 2 -and $isOverdue) {
     $remaining = 100 - [double]$todayRec.CompletionPct
     $daysNeeded = if ($velocityPerDay -gt 0) { [int][math]::Ceiling($remaining / $velocityPerDay) } else { 999 }
-    $summaryText += " Current velocity (${velocityPerDay}%/day). Estimated $daysNeeded more day(s) needed to complete."
+    $summaryText += " Avg velocity: ${velocityLong}%/day (${dayCount}-day) | Recent: ${velocityShort}%/day (3-day). Estimated $daysNeeded more day(s) needed."
 }
 [void]$sb.AppendLine("<p style='font-size:13px;color:#1c2b3a;line-height:1.6;margin:12px 0 16px 0;padding:10px 14px;background:#f6f9fc;border-left:4px solid $dlKpiColor;border-radius:4px;'>$summaryText</p>")
 
@@ -1207,7 +1225,7 @@ if ($dayCount -ge 3) {
     }
 
     $projRounded = [math]::Round($projAtDeadline, 1)
-    $calloutText = if ($hitsTarget) { "ON TRACK: projected $($projRounded)% at deadline" } else { "AT RISK: projected only $($projRounded)% at deadline (velocity: $([math]::Round($vel3,1))%/day)" }
+    $calloutText = if ($hitsTarget) { "ON TRACK: projected $($projRounded)% at deadline" } else { "AT RISK: projected only $($projRounded)% at deadline (3-day velocity: $([math]::Round($vel3,1))%/day)" }
     $calloutColor = if ($hitsTarget) { $colors.Green } else { $colors.Red }
     [void]$sb.AppendLine("<text x='$($jW - $jPadR)' y='$($jPadT + 14)' text-anchor='end' font-size='10' font-weight='600' fill='$calloutColor'>$calloutText</text>")
 
@@ -1455,7 +1473,7 @@ if ($dayCount -ge 1) {
         $timeRisk = if ($c.Deadline -le 2) { 40 } elseif ($c.Deadline -le 5) { 25 } else { 10 }
         $completionRisk = [math]::Max(0, [int]((100 - $c.Completion) * 0.4))
         $privRisk = [math]::Min(25, [int]($c.PrivPending * 1.5))
-        $stalledRisk = $c.StalledReviewers * 8
+        $stalledRisk = [math]::Min(30, [int]($c.StalledReviewers / [math]::Max(1, $c.TotalReviewers) * 40))
         $c.RiskScore = [math]::Min(100, $timeRisk + $completionRisk + $privRisk + $stalledRisk)
     }
 
