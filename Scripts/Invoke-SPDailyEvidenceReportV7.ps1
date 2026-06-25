@@ -1699,6 +1699,159 @@ if ($dayCount -ge 3) {
 
 #endregion
 
+#region Chart 13: Reviewer Compliance Accountability
+
+if ($dayCount -ge 2 -and $reviewerList.Count -gt 0) {
+    [void]$sb.AppendLine("<div class='section'>")
+    [void]$sb.AppendLine("<div class='section-title'>Reviewer Compliance Accountability</div>")
+    [void]$sb.AppendLine("<p class='note'>Categorizes reviewers by engagement pattern across the ${dayCount}-day window. 'Active' = made decisions on that day's campaign. Identifies chronic non-compliance, recent dropoff, and potential unreassigned absences.</p>")
+
+    # Build per-reviewer activity timeline: which days they were active (decisions > 0)
+    $rvCompliance = @()
+    foreach ($rv in $reviewerList) {
+        $rn = $rv.Name
+        $activeDays = @()
+        $totalDecisions = 0
+        $lastActiveIdx = -1
+        $firstActiveIdx = -1
+
+        for ($di = 0; $di -lt $dayCount; $di++) {
+            $rvDay = $null
+            foreach ($r in $dailyData[$di].Reviewers) {
+                if ($r.Name -eq $rn) { $rvDay = $r; break }
+            }
+            $dayDec = if ($null -ne $rvDay) { [int]$rvDay.Approved + [int]$rvDay.Revoked } else { 0 }
+            $totalDecisions += $dayDec
+            if ($dayDec -gt 0) {
+                $activeDays += $di
+                $lastActiveIdx = $di
+                if ($firstActiveIdx -lt 0) { $firstActiveIdx = $di }
+            }
+        }
+
+        $daysSinceActive = if ($lastActiveIdx -ge 0) { $dayCount - 1 - $lastActiveIdx } else { $dayCount }
+        $activeDayCount = $activeDays.Count
+
+        # Classify
+        $compCategory = 'Unknown'
+        $compSeverity = 'green'
+        if ($totalDecisions -eq 0) {
+            $compCategory = 'Never Complied'
+            $compSeverity = 'red'
+        }
+        elseif ($daysSinceActive -eq 0) {
+            $compCategory = 'Active Today'
+            $compSeverity = 'green'
+        }
+        elseif ($daysSinceActive -le 2) {
+            $compCategory = "Inactive $daysSinceActive day(s)"
+            $compSeverity = 'green'
+        }
+        elseif ($daysSinceActive -le 4) {
+            $compCategory = "Inactive $daysSinceActive days"
+            $compSeverity = 'amber'
+        }
+        elseif ($daysSinceActive -le 7) {
+            $compCategory = "Inactive $daysSinceActive days"
+            $compSeverity = 'amber'
+        }
+        else {
+            # Active in first half but not second half = potential vacation/absence
+            $midpoint = [int]($dayCount / 2)
+            $activeFirstHalf = @($activeDays | Where-Object { $_ -lt $midpoint }).Count
+            $activeSecondHalf = @($activeDays | Where-Object { $_ -ge $midpoint }).Count
+            if ($activeFirstHalf -gt 0 -and $activeSecondHalf -eq 0) {
+                $compCategory = "Absent (active early, gone $daysSinceActive days)"
+                $compSeverity = 'red'
+            }
+            else {
+                $compCategory = "Inactive $daysSinceActive days"
+                $compSeverity = 'red'
+            }
+        }
+
+        $rvCompliance += @{
+            Name           = $rn
+            Category       = $compCategory
+            Severity       = $compSeverity
+            TotalDecisions = $totalDecisions
+            ActiveDays     = $activeDayCount
+            DaysSinceActive = $daysSinceActive
+            LastActiveDate = if ($lastActiveIdx -ge 0) { $dailyData[$lastActiveIdx].DayLabel } else { 'Never' }
+        }
+    }
+
+    # Group by severity for summary counts
+    $redCount = @($rvCompliance | Where-Object { $_.Severity -eq 'red' }).Count
+    $amberCount = @($rvCompliance | Where-Object { $_.Severity -eq 'amber' }).Count
+    $greenCount = @($rvCompliance | Where-Object { $_.Severity -eq 'green' }).Count
+    $neverCount = @($rvCompliance | Where-Object { $_.Category -eq 'Never Complied' }).Count
+    $absentCount = @($rvCompliance | Where-Object { $_.Category -match 'Absent' }).Count
+
+    # Summary KPIs
+    [void]$sb.AppendLine("<div style='margin:8px 0 16px;'>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Green);'>$greenCount</span><span class='l'>Compliant</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Amber);'>$amberCount</span><span class='l'>At Risk (3-7 days)</span></span>")
+    $ncColor = if ($neverCount -gt 0) { $colors.Red } else { $colors.Green }
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$ncColor;'>$neverCount</span><span class='l'>Never Complied</span></span>")
+    $abColor = if ($absentCount -gt 0) { $colors.Red } else { $colors.Green }
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$abColor;'>$absentCount</span><span class='l'>Absent (needs reassignment?)</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:$($colors.Red);'>$redCount</span><span class='l'>Non-Compliant Total</span></span>")
+    [void]$sb.AppendLine("</div>")
+
+    # Table: Non-compliant reviewers first (red, then amber), sorted by days since active descending
+    $sorted = @($rvCompliance | Sort-Object @{ Expression = { switch ($_.Severity) { 'red' { 0 } 'amber' { 1 } default { 2 } } } }, @{ Expression = { $_.DaysSinceActive }; Descending = $true })
+
+    # Never Complied section
+    $neverList = @($sorted | Where-Object { $_.Category -eq 'Never Complied' })
+    if ($neverList.Count -gt 0) {
+        [void]$sb.AppendLine("<details open><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Red);'>Never Complied ($($neverList.Count) reviewers) -- Zero decisions across entire window</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Status</th></tr></thead><tbody>")
+        foreach ($rv in $neverList) {
+            [void]$sb.AppendLine("<tr style='background:#fdecec;'><td style='font-weight:600;color:$($colors.Red);'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;font-weight:600;'>0</td><td style='text-align:right;'>0 / $dayCount</td><td>Never</td><td class='s-red'>$($rv.Category)</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table></details>")
+    }
+
+    # Absent (active early, gone recently) section
+    $absentList = @($sorted | Where-Object { $_.Category -match 'Absent' })
+    if ($absentList.Count -gt 0) {
+        [void]$sb.AppendLine("<details open><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Red);'>Potentially Absent / Unreassigned ($($absentList.Count) reviewers) -- Active early in window, inactive recently</summary>")
+        [void]$sb.AppendLine("<p class='note'>These reviewers were active in the first half of the window but have made zero decisions recently. They may be on vacation, leave, or have left the organization without their certifications being reassigned.</p>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Days Since</th><th>Status</th></tr></thead><tbody>")
+        foreach ($rv in $absentList) {
+            [void]$sb.AppendLine("<tr style='background:#fff7e6;'><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td style='text-align:right;font-weight:600;'>$($rv.DaysSinceActive)</td><td class='s-red'>$($rv.Category)</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table></details>")
+    }
+
+    # At-risk (3-7 days inactive) section
+    $atRiskList = @($sorted | Where-Object { $_.Severity -eq 'amber' })
+    if ($atRiskList.Count -gt 0) {
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Amber);'>At Risk ($($atRiskList.Count) reviewers) -- Inactive 3-7 days</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Days Since</th><th>Status</th></tr></thead><tbody>")
+        foreach ($rv in $atRiskList) {
+            [void]$sb.AppendLine("<tr><td style='font-weight:600;'>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td style='text-align:right;'>$($rv.DaysSinceActive)</td><td class='s-amber'>$($rv.Category)</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table></details>")
+    }
+
+    # Compliant section (collapsed)
+    $compliantList = @($sorted | Where-Object { $_.Severity -eq 'green' })
+    if ($compliantList.Count -gt 0) {
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:13px;margin:8px 0 4px;color:$($colors.Green);'>Compliant ($($compliantList.Count) reviewers) -- Active within last 2 days</summary>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Reviewer</th><th style='text-align:right;'>Total Decisions</th><th style='text-align:right;'>Active Days</th><th>Last Active</th><th>Status</th></tr></thead><tbody>")
+        foreach ($rv in $compliantList) {
+            [void]$sb.AppendLine("<tr><td>$(ConvertTo-SPHtmlSafe $rv.Name)</td><td style='text-align:right;'>$($rv.TotalDecisions)</td><td style='text-align:right;'>$($rv.ActiveDays) / $dayCount</td><td>$($rv.LastActiveDate)</td><td class='s-green'>$($rv.Category)</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table></details>")
+    }
+
+    [void]$sb.AppendLine("</div>")
+}
+
+#endregion
+
 #region Footer
 
 $envName = ''
