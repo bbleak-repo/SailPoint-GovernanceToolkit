@@ -806,20 +806,61 @@ try {
         $notStartedCount = @($allReviewers | Where-Object { $_.Phase -eq 'NOT_STARTED' -or $_.DecisionsMade -eq 0 }).Count
         $rvCompPct = if ($allReviewers.Count -gt 0) { [math]::Round($signedCount / $allReviewers.Count * 100, 1) } else { 0 }
 
-        # Per-reviewer detail
-        # Group-SPReviewerActions outputs: Name, Email, CertsAssigned, DecisionsMade,
-        # DecisionsTotal, SignOffDate, Phase. It does NOT have Total/Approved/Revoked.
+        # Per-reviewer detail -- computed from ITEM data, not cert-level DecisionsMade.
+        # Cert-level data is inflated by ISC on force-completion (DecisionsMade = DecisionsTotal
+        # even for reviewers who never logged in). The item data, with idNowAutoApproved
+        # detection in Group-SPAuditDecisions, tells the truth.
+        #
+        # ISC items carry reviewedBy only when the reviewer acted. For unreviewed items,
+        # reviewedBy is null. Use the CertificationId -> reviewer mapping from the
+        # certifications to attribute orphaned items to their assigned reviewer.
+        $certToReviewer = @{}
+        foreach ($cert in @($audit['Certifications'])) {
+            if ($null -eq $cert) { continue }
+            $cid = [string]$cert.id
+            $crn = ''
+            if ($null -ne $cert.reviewer -and $null -ne $cert.reviewer.name) { $crn = [string]$cert.reviewer.name }
+            if (-not [string]::IsNullOrWhiteSpace($cid) -and -not [string]::IsNullOrWhiteSpace($crn)) {
+                $certToReviewer[$cid] = $crn
+            }
+        }
+
+        $rvItemCounts = @{}
+        foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
+            foreach ($item in @($d[$grp])) {
+                if ($null -eq $item) { continue }
+                $rn = [string]$item.ReviewerName
+                # Fallback: if ReviewerName is empty, look up by CertificationId
+                if ([string]::IsNullOrWhiteSpace($rn) -or $rn -eq 'N/A') {
+                    $cid = if ($item.PSObject.Properties['CertificationId']) { [string]$item.CertificationId } else { '' }
+                    if ($certToReviewer.ContainsKey($cid)) { $rn = $certToReviewer[$cid] }
+                }
+                if ([string]::IsNullOrWhiteSpace($rn)) { $rn = 'N/A' }
+                if (-not $rvItemCounts.ContainsKey($rn)) {
+                    $rvItemCounts[$rn] = @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 }
+                }
+                $rvItemCounts[$rn].Total++
+                switch ($grp) {
+                    'Approved' { $rvItemCounts[$rn].Approved++ }
+                    'Revoked'  { $rvItemCounts[$rn].Revoked++ }
+                    default    { $rvItemCounts[$rn].Pending++ }
+                }
+            }
+        }
+
         $reviewerRecords = [System.Collections.Generic.List[object]]::new()
         foreach ($rv in $allReviewers) {
-            $rvTotal = if ($rv.PSObject.Properties['DecisionsTotal']) { [int]$rv.DecisionsTotal } else { 0 }
-            $rvMade = if ($rv.PSObject.Properties['DecisionsMade']) { [int]$rv.DecisionsMade } else { 0 }
-            $rvAppr = $rvMade  # DecisionsMade = approved + revoked (no per-type breakdown available)
-            $rvRev = 0         # Cannot split approved vs revoked at cert level
-            $rvPend = $rvTotal - $rvMade; if ($rvPend -lt 0) { $rvPend = 0 }
-            $rvComp = if ($rvTotal -gt 0) { [math]::Round($rvMade / $rvTotal * 100, 1) } else { 0 }
+            $rvName = [string]$rv.Name
             $rvClass = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { [string]$rv.Classification } else { 'Primary' }
+            # Use item-level counts (honest) instead of cert-level DecisionsMade (inflated)
+            $ic = if ($rvItemCounts.ContainsKey($rvName)) { $rvItemCounts[$rvName] } else { @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 } }
+            $rvTotal = [int]$ic.Total
+            $rvAppr = [int]$ic.Approved
+            $rvRev = [int]$ic.Revoked
+            $rvPend = [int]$ic.Pending
+            $rvComp = if ($rvTotal -gt 0) { [math]::Round(($rvAppr + $rvRev) / $rvTotal * 100, 1) } else { 0 }
             $reviewerRecords.Add([ordered]@{
-                name           = [string]$rv.Name
+                name           = $rvName
                 identityId     = if ($rv.PSObject.Properties['ReviewerId']) { [string]$rv.ReviewerId } else { '' }
                 email          = if ($rv.PSObject.Properties['Email']) { [string]$rv.Email } else { '' }
                 classification = $rvClass

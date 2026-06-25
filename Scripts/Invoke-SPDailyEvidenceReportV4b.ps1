@@ -806,18 +806,47 @@ try {
         $notStartedCount = @($allReviewers | Where-Object { $_.Phase -eq 'NOT_STARTED' -or $_.DecisionsMade -eq 0 }).Count
         $rvCompPct = if ($allReviewers.Count -gt 0) { [math]::Round($signedCount / $allReviewers.Count * 100, 1) } else { 0 }
 
-        # Per-reviewer detail
-        # Per-reviewer detail
-        # Group-SPReviewerActions outputs: Name, Email, CertsAssigned, DecisionsMade,
-        # DecisionsTotal, SignOffDate, Phase. It does NOT have Total/Approved/Revoked.
+        # Per-reviewer detail -- computed from ITEM data with cert-to-reviewer mapping.
+        $certToReviewer = @{}
+        foreach ($cert in @($audit['Certifications'])) {
+            if ($null -eq $cert) { continue }
+            $cid = [string]$cert.id
+            $crn = ''
+            if ($null -ne $cert.reviewer -and $null -ne $cert.reviewer.name) { $crn = [string]$cert.reviewer.name }
+            if (-not [string]::IsNullOrWhiteSpace($cid) -and -not [string]::IsNullOrWhiteSpace($crn)) {
+                $certToReviewer[$cid] = $crn
+            }
+        }
+        $rvItemCounts = @{}
+        foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
+            foreach ($item in @($d[$grp])) {
+                if ($null -eq $item) { continue }
+                $rn = [string]$item.ReviewerName
+                if ([string]::IsNullOrWhiteSpace($rn) -or $rn -eq 'N/A') {
+                    $cid = if ($item.PSObject.Properties['CertificationId']) { [string]$item.CertificationId } else { '' }
+                    if ($certToReviewer.ContainsKey($cid)) { $rn = $certToReviewer[$cid] }
+                }
+                if ([string]::IsNullOrWhiteSpace($rn)) { $rn = 'N/A' }
+                if (-not $rvItemCounts.ContainsKey($rn)) {
+                    $rvItemCounts[$rn] = @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 }
+                }
+                $rvItemCounts[$rn].Total++
+                switch ($grp) {
+                    'Approved' { $rvItemCounts[$rn].Approved++ }
+                    'Revoked'  { $rvItemCounts[$rn].Revoked++ }
+                    default    { $rvItemCounts[$rn].Pending++ }
+                }
+            }
+        }
         $reviewerRecords = [System.Collections.Generic.List[object]]::new()
         foreach ($rv in $allReviewers) {
-            $rvTotal = if ($rv.PSObject.Properties['DecisionsTotal']) { [int]$rv.DecisionsTotal } else { 0 }
-            $rvMade = if ($rv.PSObject.Properties['DecisionsMade']) { [int]$rv.DecisionsMade } else { 0 }
-            $rvAppr = $rvMade
-            $rvRev = 0
-            $rvPend = $rvTotal - $rvMade; if ($rvPend -lt 0) { $rvPend = 0 }
-            $rvComp = if ($rvTotal -gt 0) { [math]::Round($rvMade / $rvTotal * 100, 1) } else { 0 }
+            $rvName = [string]$rv.Name
+            $ic = if ($rvItemCounts.ContainsKey($rvName)) { $rvItemCounts[$rvName] } else { @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 } }
+            $rvTotal = [int]$ic.Total
+            $rvAppr = [int]$ic.Approved
+            $rvRev = [int]$ic.Revoked
+            $rvPend = [int]$ic.Pending
+            $rvComp = if ($rvTotal -gt 0) { [math]::Round(($rvAppr + $rvRev) / $rvTotal * 100, 1) } else { 0 }
             $rvClass = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { [string]$rv.Classification } else { 'Primary' }
             $reviewerRecords.Add([ordered]@{
                 name           = [string]$rv.Name
