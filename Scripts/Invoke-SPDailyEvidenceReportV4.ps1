@@ -830,10 +830,18 @@ try {
             foreach ($item in @($d[$grp])) {
                 if ($null -eq $item) { continue }
                 $rn = [string]$item.ReviewerName
-                # Fallback: if ReviewerName is empty, look up by CertificationId
                 if ([string]::IsNullOrWhiteSpace($rn) -or $rn -eq 'N/A') {
+                    $mapped = $false
+                    # Fallback 1: CertificationId -> reviewer name
                     $cid = if ($item.PSObject.Properties['CertificationId']) { [string]$item.CertificationId } else { '' }
-                    if ($certToReviewer.ContainsKey($cid)) { $rn = $certToReviewer[$cid] }
+                    if (-not [string]::IsNullOrWhiteSpace($cid) -and $certToReviewer.ContainsKey($cid)) {
+                        $rn = $certToReviewer[$cid]; $mapped = $true
+                    }
+                    # Fallback 2: CertificationName "Cert for {Name}" -> extract name
+                    if (-not $mapped) {
+                        $cn = if ($item.PSObject.Properties['CertificationName']) { [string]$item.CertificationName } else { '' }
+                        if ($cn -match '^Cert for (.+)$') { $rn = $Matches[1] }
+                    }
                 }
                 if ([string]::IsNullOrWhiteSpace($rn)) { $rn = 'N/A' }
                 if (-not $rvItemCounts.ContainsKey($rn)) {

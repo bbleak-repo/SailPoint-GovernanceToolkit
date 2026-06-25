@@ -817,14 +817,36 @@ try {
                 $certToReviewer[$cid] = $crn
             }
         }
+        Write-Verbose "    [JSONL] Cert-to-reviewer map: $($certToReviewer.Count) entries from $(@($audit['Certifications']).Count) certs"
+
+        # Also build map from CertificationName pattern "Cert for {Name}" as secondary fallback
+        $certNameToReviewer = @{}
+        foreach ($cert in @($audit['Certifications'])) {
+            if ($null -eq $cert) { continue }
+            $cid = [string]$cert.id
+            $cn = if ($null -ne $cert.PSObject.Properties['name'] -and $null -ne $cert.name) { [string]$cert.name } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($cn)) { $certNameToReviewer[$cn] = $cid }
+        }
+
         $rvItemCounts = @{}
+        $mappedCount = 0; $unmappedCount = 0
         foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
             foreach ($item in @($d[$grp])) {
                 if ($null -eq $item) { continue }
                 $rn = [string]$item.ReviewerName
                 if ([string]::IsNullOrWhiteSpace($rn) -or $rn -eq 'N/A') {
+                    $mapped = $false
+                    # Fallback 1: CertificationId -> reviewer name
                     $cid = if ($item.PSObject.Properties['CertificationId']) { [string]$item.CertificationId } else { '' }
-                    if ($certToReviewer.ContainsKey($cid)) { $rn = $certToReviewer[$cid] }
+                    if (-not [string]::IsNullOrWhiteSpace($cid) -and $certToReviewer.ContainsKey($cid)) {
+                        $rn = $certToReviewer[$cid]; $mapped = $true
+                    }
+                    # Fallback 2: CertificationName "Cert for {Name}" -> extract name
+                    if (-not $mapped) {
+                        $cn = if ($item.PSObject.Properties['CertificationName']) { [string]$item.CertificationName } else { '' }
+                        if ($cn -match '^Cert for (.+)$') { $rn = $Matches[1]; $mapped = $true }
+                    }
+                    if ($mapped) { $mappedCount++ } else { $unmappedCount++ }
                 }
                 if ([string]::IsNullOrWhiteSpace($rn)) { $rn = 'N/A' }
                 if (-not $rvItemCounts.ContainsKey($rn)) {
@@ -838,10 +860,13 @@ try {
                 }
             }
         }
+        Write-Verbose "    [JSONL] Item-to-reviewer mapping: $mappedCount mapped via fallback, $unmappedCount still unmapped, $($rvItemCounts.Count) distinct reviewers"
+        if ($unmappedCount -gt 0) { Write-Host "    [JSONL] WARN: $unmappedCount items could not be mapped to a reviewer" -ForegroundColor Yellow }
         $reviewerRecords = [System.Collections.Generic.List[object]]::new()
+        $noItemsCount = 0
         foreach ($rv in $allReviewers) {
             $rvName = [string]$rv.Name
-            $ic = if ($rvItemCounts.ContainsKey($rvName)) { $rvItemCounts[$rvName] } else { @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 } }
+            $ic = if ($rvItemCounts.ContainsKey($rvName)) { $rvItemCounts[$rvName] } else { $noItemsCount++; @{ Approved = 0; Revoked = 0; Pending = 0; Total = 0 } }
             $rvTotal = [int]$ic.Total
             $rvAppr = [int]$ic.Approved
             $rvRev = [int]$ic.Revoked
@@ -862,6 +887,10 @@ try {
                 phase          = [string]$rv.Phase
             })
         }
+        if ($noItemsCount -gt 0) { Write-Verbose "    [JSONL] $noItemsCount reviewer(s) have 0 items (not in rvItemCounts -- name mismatch?)" }
+        $completedRvCount = @($reviewerRecords | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
+        $withPendingRvCount = @($reviewerRecords | Where-Object { [int]$_.pending -gt 0 }).Count
+        Write-Verbose "    [JSONL] Reviewer stats: $completedRvCount completed, $withPendingRvCount with pending, $noItemsCount no items, total=$($reviewerRecords.Count)"
 
         # Per-source breakdown
         $sourceRecords = [System.Collections.Generic.List[object]]::new()
