@@ -807,13 +807,17 @@ try {
         $rvCompPct = if ($allReviewers.Count -gt 0) { [math]::Round($signedCount / $allReviewers.Count * 100, 1) } else { 0 }
 
         # Per-reviewer detail
+        # Per-reviewer detail
+        # Group-SPReviewerActions outputs: Name, Email, CertsAssigned, DecisionsMade,
+        # DecisionsTotal, SignOffDate, Phase. It does NOT have Total/Approved/Revoked.
         $reviewerRecords = [System.Collections.Generic.List[object]]::new()
         foreach ($rv in $allReviewers) {
-            $rvTotal = [int]$rv.Total
-            $rvAppr = [int]$rv.Approved
-            $rvRev = [int]$rv.Revoked
-            $rvPend = $rvTotal - $rvAppr - $rvRev; if ($rvPend -lt 0) { $rvPend = 0 }
-            $rvComp = if ($rvTotal -gt 0) { [math]::Round(($rvAppr + $rvRev) / $rvTotal * 100, 1) } else { 0 }
+            $rvTotal = if ($rv.PSObject.Properties['DecisionsTotal']) { [int]$rv.DecisionsTotal } else { 0 }
+            $rvMade = if ($rv.PSObject.Properties['DecisionsMade']) { [int]$rv.DecisionsMade } else { 0 }
+            $rvAppr = $rvMade
+            $rvRev = 0
+            $rvPend = $rvTotal - $rvMade; if ($rvPend -lt 0) { $rvPend = 0 }
+            $rvComp = if ($rvTotal -gt 0) { [math]::Round($rvMade / $rvTotal * 100, 1) } else { 0 }
             $rvClass = if ($rv.PSObject.Properties['Classification'] -and -not [string]::IsNullOrWhiteSpace($rv.Classification)) { [string]$rv.Classification } else { 'Primary' }
             $reviewerRecords.Add([ordered]@{
                 name           = [string]$rv.Name
