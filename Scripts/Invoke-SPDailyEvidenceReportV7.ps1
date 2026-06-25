@@ -544,6 +544,13 @@ foreach ($dateKey in $dateGroups.Keys) {
             }
         } catch { }
 
+        # Carry source data for the source-level completion chart
+        try {
+            if ($null -ne $best.PSObject.Properties['sources'] -and $null -ne $best.sources) {
+                $entry.SourceData = @($best.sources)
+            }
+        } catch { }
+
         $calendarDays[$dateKey] = $entry
     }
 }
@@ -1592,11 +1599,13 @@ if ($dayCount -ge 2) {
 
 #region Chart 11: Source-Level Completion Breakdown
 
-# Build source data from the latest day's record (sources array in JSONL)
+# Build source data from the latest calendar day's raw JSONL record
 $latestRec = $null
-try { $latestRec = $dayMap[$dayKeys[$dayCount - 1]] } catch { }
-if ($null -ne $latestRec -and $null -ne $latestRec.PSObject.Properties['sources'] -and $null -ne $latestRec.sources) {
-    $sourceData = @($latestRec.sources)
+$latestDayKey = @($calendarDays.Keys)[$dayCount - 1]
+if ($null -ne $latestDayKey) { $latestRec = $calendarDays[$latestDayKey] }
+# The source data is stored on the raw JSONL record, accessible via the calendar day's SourceData
+if ($null -ne $latestRec -and $null -ne $latestRec.SourceData) {
+    $sourceData = @($latestRec.SourceData)
     if ($sourceData.Count -gt 0) {
         [void]$sb.AppendLine("<div class='section'>")
         [void]$sb.AppendLine("<div class='section-title'>Source-Level Completion Breakdown</div>")

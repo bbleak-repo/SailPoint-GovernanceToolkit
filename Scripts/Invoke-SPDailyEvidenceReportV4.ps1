@@ -1761,7 +1761,7 @@ foreach ($audit in $campaignAudits) {
     if ($remPend -lt 0) { $remPend = 0 }
     $remPct = if ($totRevoked -gt 0) { [math]::Round($removed / $totRevoked * 100, 0) } else { 0 }
     $qPct   = if ($totRevoked -gt 0) { [math]::Round($queued / $totRevoked * 100, 0) } else { 0 }
-    $pPct   = 100 - $remPct - $qPct; if ($pPct -lt 0) { $pPct = 0 }
+    $remPendPct = 100 - $remPct - $qPct; if ($remPendPct -lt 0) { $remPendPct = 0 }
     $stColor = switch ($cStatusRaw) { 'COMPLETED' { '#339933' } 'COMPLETING' { '#339933' } default { '#336699' } }
     $revCompColor = if ($revCompPct -ge 100) { '#339933' } elseif ($revCompPct -ge 50) { '#FF9900' } else { '#CC3333' }
     $pendColor = if ($pend -eq 0) { '#339933' } else { '#FF9900' }
@@ -1771,7 +1771,7 @@ foreach ($audit in $campaignAudits) {
     if ($totRevoked -gt 0) {
         $remBlock = @"
 <div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked deprovisioned (connected AD)</span></div>
-<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$qPct%;background:#336699;height:18px"></td><td style="width:$pPct%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
+<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$qPct%;background:#336699;height:18px"></td><td style="width:$remPendPct%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
 <table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Deprovisioned</td><td style="color:#264d73;font-weight:bold;text-align:center;padding:2px 0">$queued Queued</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Pending</td></tr></table>
 <p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Deprovisioned = revoke completed on a connected Active Directory source. Queued = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.</p>
 "@
