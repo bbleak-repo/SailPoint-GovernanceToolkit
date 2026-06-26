@@ -6995,7 +6995,7 @@ function Get-SPCachedCampaignItems {
     # ---------------------------------------------------------------------------
     # Cache miss: fetch from ISC
     # ---------------------------------------------------------------------------
-    $missReason = if ($NoCache) { 'NoCache flag' } elseif (-not $isCacheable) { "status=$status not cacheable" } elseif (-not (Test-Path $itemsFile)) { 'no cache file on disk' } elseif (-not (Test-Path $metaFile)) { 'no meta file on disk' } else { "TTL expired (age=${ageMinutes}m > ttl=${effectiveTtl}m)" }
+    $missReason = if ($RefreshCache) { 'RefreshCache (will overwrite)' } elseif ($NoCache) { 'NoCache (cache preserved)' } elseif (-not $isCacheable) { "status=$status not cacheable" } elseif (-not (Test-Path $itemsFile)) { 'no cache file on disk' } elseif (-not (Test-Path $metaFile)) { 'no meta file on disk' } else { "TTL expired (age=${ageMinutes}m > ttl=${effectiveTtl}m)" }
     Write-Host "  [Cache] MISS: '$campName' -- $missReason. Fetching from ISC..." -ForegroundColor Yellow
     Write-Verbose "  [Cache] MISS detail: itemsFile=$(Test-Path $itemsFile) metaFile=$(Test-Path $metaFile) cacheable=$isCacheable noCache=$NoCache"
     Write-SPLog -Message "Cache MISS: fetching items from ISC for campaign '$campName' reason=$missReason" `
