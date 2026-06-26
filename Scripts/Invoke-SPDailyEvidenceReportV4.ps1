@@ -1868,17 +1868,13 @@ foreach ($audit in $campaignAudits) {
     $pcCls = if ($pc -ge 80) { 's-green' } elseif ($pc -ge 50) { 's-amber' } else { 's-red' }
     # Reviewer completion: % of primary reviewers who have SIGNED
     # Reviewer completion: match executive summary -- Primary + Reassigned
+    # Reviewer completion: item-level (honest), not cert Phase (ISC inflates on close).
     $rvPct = 0; $rvLabel = '-'
-    $ra = $audit['ReviewerActions']
-    if ($null -ne $ra) {
-        $rvPrimary = if ($null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
-        $rvReassigned = if ($null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
-        $rvAll = @($rvPrimary) + @($rvReassigned)
-        $rvSigned = @($rvAll | Where-Object { $_.Phase -eq 'SIGNED' })
-        if ($rvAll.Count -gt 0) {
-            $rvPct = [math]::Round($rvSigned.Count / $rvAll.Count * 100, 0)
-            $rvLabel = "$rvPct% ($($rvSigned.Count)/$($rvAll.Count))"
-        }
+    $rvCompletedCount2 = @($reviewerRecords | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
+    $rvTotalCount2 = @($reviewerRecords).Count
+    if ($rvTotalCount2 -gt 0) {
+        $rvPct = [math]::Round($rvCompletedCount2 / $rvTotalCount2 * 100, 0)
+        $rvLabel = "$rvPct% ($rvCompletedCount2/$rvTotalCount2)"
     }
     $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
     $cr = & $fmtDt ([string]$audit['Created'])
