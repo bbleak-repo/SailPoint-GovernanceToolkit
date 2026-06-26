@@ -715,7 +715,8 @@ try {
         if ($campaignAudits.Count -le 1) { $isRecurring = $false }
         else {
             $firstTotal = @($campaignAudits[0]['Decisions']['Approved']).Count + @($campaignAudits[0]['Decisions']['Revoked']).Count + @($campaignAudits[0]['Decisions']['Pending']).Count
-            $thisTotal = @($d['Approved']).Count + @($d['Revoked']).Count + @($d['Pending']).Count
+            $thisDecisions = $audit['Decisions']
+            $thisTotal = @($thisDecisions['Approved']).Count + @($thisDecisions['Revoked']).Count + @($thisDecisions['Pending']).Count
             if ([math]::Abs($firstTotal - $thisTotal) -gt ($firstTotal * 0.1)) { $isRecurring = $false }
         }
         if (-not $isRecurring -and $campStatus -notin @('COMPLETED', 'COMPLETING')) {
