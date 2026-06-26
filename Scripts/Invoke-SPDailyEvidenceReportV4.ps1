@@ -1772,13 +1772,13 @@ foreach ($audit in $campaignAudits) {
     $rpct = if ($tot -gt 0) { [math]::Round($rev / $tot * 100, 1) } else { 0 }
     $ppct = if ($tot -gt 0) { [math]::Round($pend / $tot * 100, 1) } else { 0 }
     if ($tot -gt 0 -and ($apct + $rpct + $ppct) -ne 100) { $apct = [math]::Round(100 - $rpct - $ppct, 1) }
-    # Reviewer counts from item-level data (honest), not cert Phase (ISC inflates on close)
-    $execRvRecs = if ($audit.ContainsKey('ReviewerRecords')) { @($audit['ReviewerRecords']) } else { @() }
-    $signed = @($execRvRecs | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
-    $totRev = @($execRvRecs).Count
-    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
     $ra = $audit['ReviewerActions']
+    $primary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
     $reassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
+    $allRevw = @($primary) + @($reassigned)
+    $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+    $totRev = @($allRevw).Count
+    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
     $reassignCnt = @($reassigned).Count
     $revItems = @($d['Revoked'])
     $totRevoked = $revItems.Count

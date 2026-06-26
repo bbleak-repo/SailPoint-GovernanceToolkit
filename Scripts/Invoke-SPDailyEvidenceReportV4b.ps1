@@ -1778,12 +1778,13 @@ foreach ($audit in $campaignAudits) {
     if ($tot -gt 0 -and ($apct + $rpct + $ppct) -ne 100) { $apct = [math]::Round(100 - $rpct - $ppct, 1) }
     # Minimum visible segment: if undecided items exist but round to 0%, force a thin sliver
     if ($pend -gt 0 -and $ppct -lt 0.5) { $ppct = 0.5; $apct = [math]::Round(100 - $rpct - $ppct, 1) }
-    $execRvRecs = if ($audit.ContainsKey('ReviewerRecords')) { @($audit['ReviewerRecords']) } else { @() }
-    $signed = @($execRvRecs | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
-    $totRev = @($execRvRecs).Count
-    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
     $ra = $audit['ReviewerActions']
+    $primary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
     $reassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
+    $allRevw = @($primary) + @($reassigned)
+    $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+    $totRev = @($allRevw).Count
+    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
     $reassignCnt = @($reassigned).Count
     $revItems = @($d['Revoked'])
     $totRevoked = $revItems.Count
