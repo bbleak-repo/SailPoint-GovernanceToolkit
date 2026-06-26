@@ -22,7 +22,16 @@ scheduled orchestrator run).
 3. **Disconnected app delivery** -- Confirm CSV files arrived for all registered apps.
    Check the orchestrator log for `StepName=DisconnectedApps` status. `NoChanges` is
    normal; `ThresholdBlocked` or `Error` requires investigation.
-4. **Escalation activity** -- Check if any stale certifications were escalated. Look for
+4. **Daily evidence (V4b + V7)** -- Run V4b to generate the daily evidence report and
+   update `daily-metrics.jsonl`. Then run V7 for the trending visualization. If reviewer
+   counts seem stale (Items % and Reviewer % diverge), re-run with `-RefreshCache` to
+   force a fresh ISC fetch. Check the "Reviewer Compliance Accountability" section in V7
+   for Never Complied and Absent reviewers.
+   ```powershell
+   .\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -OutputMode Both
+   .\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -DaysBack 18 -OutputMode Both
+   ```
+5. **Escalation activity** -- Check if any stale certifications were escalated. Look for
    `Action=Escalate` in the log. Repeated escalations for the same reviewer indicate
    the reviewer is unresponsive -- follow up manually.
 5. **Error notifications** -- Check the configured notification channel (email inbox,

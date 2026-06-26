@@ -24,6 +24,10 @@ anyone who needs to know "what report do I give to whom?"
 | Governance Metrics | `Invoke-SPGovernanceMetrics.ps1` | KPI dashboards, BI tools | Daily (automated) | KPI time-series + trend reports + completion forecasts | HTML, JSON, JSONL |
 | Daily Evidence Report | `Invoke-SPDailyEvidenceReport.ps1` | CISO, VP Security, auditors | Daily | 6-KPI executive dashboard + domino risk tracker + audit evidence registers | HTML, JSON, JSONL |
 | Daily Evidence Report (v2) | `Invoke-SPDailyEvidenceReportV2.ps1` | CISO, VP Security, auditors | Daily | Lean rewrite: per-campaign executive summary (donut), scope, completion, reviewer accountability, decision summary (no KPI dashboard) | HTML, JSONL |
+| Daily Evidence Report (v4) | `Invoke-SPDailyEvidenceReportV4.ps1` | CISO, auditors, IAM ops | Daily | Focused evidence: KPI dashboard, campaign completion with undecided detection (idNowAutoApproved), revoked register, new scope, reviewer accountability. Writes daily-metrics.jsonl for V7 | HTML, JSON, JSONL |
+| Daily Evidence Report (v4b) | `Invoke-SPDailyEvidenceReportV4b.ps1` | CISO, auditors, IAM ops | Daily | Fork of V4 with bug fixes: donut chart, N/A reviewer warning, item-level reviewer %. Same features as V4 | HTML, JSON, JSONL |
+| Daily Evidence Trending (v7) | `Invoke-SPDailyEvidenceReportV7.ps1` | CISO, leadership, IAM ops | Weekly / on-demand | Calendar-day visualization: completion progression, decision distribution, reviewer heatmap, compliance accountability, source-level breakdown. Reads daily-metrics.jsonl (no API calls) | HTML |
+| Escalation Report | `Invoke-SPDeltaCertEscalate.ps1` | IAM ops, managers | Daily | Late reviewer escalation with org hierarchy, per-manager HTML, email routing CSV | HTML, CSV, TXT |
 | Weekly Digest | `Invoke-SPWeeklyDigest.ps1` | Governance leadership | Weekly | Campaign activity, health, risk, reviewer performance, remediation | HTML, JSON |
 | Leadership Distribution | `Invoke-SPReportDistribution.ps1` | Per-leader delivery | After campaigns | Band-filtered reports, optionally emailed via SMTP | HTML |
 | Adaptive Composable | `Invoke-SPAdaptiveReport.ps1` | Presentation, analysis | On-demand | KPI cards, heatmap, top-N bars, drill-down tree, group table | HTML |
@@ -153,6 +157,115 @@ the toolkit walks when building the org tree:
 
 > **Tip:** Always run with `-PreviewOnly` first to verify the distribution plan.
 > Sending a VP's report to the wrong person is a governance incident.
+
+---
+
+## Daily Evidence Reports (V4 / V4b / V7)
+
+The daily evidence pipeline is the primary compliance and governance reporting tool for
+organizations running daily privileged role attestation campaigns. It consists of three
+scripts that work together:
+
+- **V4 / V4b** = the data engine (fetches from ISC, generates HTML evidence, writes `daily-metrics.jsonl`)
+- **V7** = the trending visualizer (reads `daily-metrics.jsonl`, renders calendar-day charts -- no API calls)
+
+### Architecture
+
+```
+ISC API --> V4/V4b --> cache + snapshots + daily-metrics.jsonl --> V7 trending charts
+                  \--> HTML evidence report (per-campaign detail)
+```
+
+V4/V4b calls the ISC API, processes items through `idNowAutoApproved` detection
+(reclassifies force-closed auto-approved items as Undecided), maps items to reviewers
+via certification ID, and writes honest per-reviewer data to `daily-metrics.jsonl`.
+V7 reads that JSONL and renders calendar-day-oriented charts with one data point per
+day -- no duplicate labels, no API calls.
+
+### Running the daily pipeline
+
+```powershell
+# Step 1: V4b generates evidence + JSONL (uses cache if valid)
+.\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -DaysBack 18 -OutputMode Both
+
+# Step 2: V7 generates trending visualization from JSONL
+.\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -DaysBack 18 -OutputMode Both
+
+# V7 with exact date range
+.\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -StartDate '2026-06-15' -EndDate '2026-06-19' -OutputMode Both
+```
+
+### Cache management
+
+V4/V4b uses a two-layer items cache (memory + disk) to avoid re-fetching from ISC
+on every run. Three modes:
+
+| Flag | Behavior | When to Use |
+|---|---|---|
+| *(default)* | Read from cache if valid, write on miss | Normal daily runs |
+| `-NoCache` | Skip cache read AND write; existing cache preserved | Comparing fresh vs cached side-by-side |
+| `-RefreshCache` | Skip cache read, fetch fresh, overwrite cache with new data | After reviewers sign off; need real-time numbers AND updated cache |
+
+The cache also includes **seal-on-transition**: if a campaign was ACTIVE when cached
+but is now COMPLETED, the cache is automatically sealed as permanent. This preserves
+the honest ACTIVE-state data and prevents ISC's post-completion inflation from
+overwriting it.
+
+### Key ISC behaviors handled
+
+| ISC Behavior | How Toolkit Handles It |
+|---|---|
+| Force-completion auto-approves remaining items with `decision: "APPROVE"` | `Group-SPAuditDecisions` checks `comments` for `idNowAutoApproved`; reclassifies to Undecided |
+| Force-completion inflates cert `decisionsMade` to match `decisionsTotal` | Per-reviewer JSONL data computed from item-level counts, not cert-level |
+| Force-completion sets all certs to `phase: SIGNED` | Reviewer % computed from item-level `pending=0`, not cert `Phase` |
+| `reviewedBy` is `null` on auto-approved items | Cert-to-reviewer mapping resolves orphaned items via CertificationId + CertificationName fallback |
+| `decision` is `null` on unsigned reviewer items (ACTIVE campaigns) | Items correctly classified as Undecided/Pending |
+
+### V4b report sections
+
+| Section | Content |
+|---|---|
+| **KPI Dashboard** | 6 governance KPIs (completion, overdue, revocations, remediation, high-risk, reviewer health) with domino chain |
+| **Executive Summary** | Per-campaign donut chart (Approved/Revoked/Undecided), reviewer sign-off, deprovisioning status |
+| **A. Campaign Completion Evidence** | Per-campaign table: Status, Total, Approved, Revoked, Undecided, Items %, Reviewer %, Created, Completed |
+| **B. Reviewer Accountability** | ACTIVE: unsigned reviewers. COMPLETED: reviewers with undecided items (from item-level data) |
+| **Decision Summary** | Revoked register with remediation status, New Scope -- Approved Access |
+
+### V7 report sections
+
+| Section | Content |
+|---|---|
+| **KPI Banner** | Completion %, Approved, Revoked, Undecided, Reviewers, Priv Pending, N-Day Change, Days to Deadline |
+| **Completion Progression** | SVG line chart showing completion % per calendar day |
+| **Decision Distribution** | Stacked bars (Approved/Revoked/Undecided) per day |
+| **Per-Reviewer Accountability** | Direction arrows, first/yesterday/today completion, stalled detection |
+| **Reviewer Activity Heatmap** | 180-row x N-day SVG grid; absolute decisions per day; inactive rows in red |
+| **Completion Projection** | Velocity-based linear projection with 3-day + N-day velocity labels |
+| **Campaign Completion Evidence** | Merged table: Day, Campaign, Status, Total, Approved, Revoked, Undecided, Items %, Reviewer %, Decided +/-, Completion +/- |
+| **Decision Activity Stacked Bars** | Revoked + Newly Decided + New Scope per day with cumulative line |
+| **Cross-Campaign Risk Matrix** | Only renders for mixed campaign types (hidden for daily recurring) |
+| **Reviewer Completion Progression** | Side-by-side bars: Items Decided % vs Reviewers Completed % |
+| **Source-Level Completion** | Per-source table: AD, AWS, ServiceNow, SAP with thermometer bars |
+| **Decision Velocity** | Day-over-day delta chart (approved/revoked/undecided changes) |
+| **Reviewer Compliance Accountability** | Categorized: Never Complied, Absent/Unreassigned, At Risk, Compliant |
+
+### Terminology
+
+The toolkit uses **"Undecided"** (not "Pending") in all HTML output to match SailPoint
+ISC's GUI terminology. Internally, variables still use `$pending` / `$d['Pending']`
+for backward compatibility.
+
+### Output files
+
+| File | Written By | Read By | Content |
+|---|---|---|---|
+| `daily-evidence-v4b-{timestamp}.html` | V4b | Human | Per-campaign evidence HTML |
+| `daily-evidence-v4b-{timestamp}_fresh.html` | V4b with `-NoCache` | Human | Fresh-data variant |
+| `daily-evidence-v7-{prefix}-{timestamp}.html` | V7 | Human | Calendar-day trending HTML |
+| `Audit/metrics/daily-metrics.jsonl` | V4/V4b | V7 | Per-campaign JSONL records |
+| `Audit/.cache/items-{campaignId}.jsonl` | V4/V4b | V4/V4b (cache) | Cached ISC items per campaign |
+| `Audit/.cache/items-{campaignId}.meta.json` | V4/V4b | V4/V4b (cache) | Cache metadata (TTL, status, seal) |
+| `Audit/Snapshots/{campaignId}/*.json` | V4/V4b | Diff engine | Per-campaign snapshot for cross-campaign diff |
 
 ---
 
