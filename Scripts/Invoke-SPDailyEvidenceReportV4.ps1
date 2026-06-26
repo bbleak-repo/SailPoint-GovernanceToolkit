@@ -901,6 +901,9 @@ try {
             })
         }
 
+        # Store reviewer records on the audit for the HTML section to reference per-campaign
+        $audit['ReviewerRecords'] = @($reviewerRecords)
+
         # Per-source breakdown
         $sourceRecords = [System.Collections.Generic.List[object]]::new()
         $sourceMap = @{}
@@ -1870,9 +1873,11 @@ foreach ($audit in $campaignAudits) {
     # Reviewer completion: % of primary reviewers who have SIGNED
     # Reviewer completion: match executive summary -- Primary + Reassigned
     # Reviewer completion: item-level (honest), not cert Phase (ISC inflates on close).
+    # Use per-campaign ReviewerRecords stored on the audit (not the loop variable which holds the last campaign).
     $rvPct = 0; $rvLabel = '-'
-    $rvCompletedCount2 = @($reviewerRecords | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
-    $rvTotalCount2 = @($reviewerRecords).Count
+    $campReviewerRecs = if ($audit.ContainsKey('ReviewerRecords')) { @($audit['ReviewerRecords']) } else { @() }
+    $rvCompletedCount2 = @($campReviewerRecs | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
+    $rvTotalCount2 = @($campReviewerRecs).Count
     if ($rvTotalCount2 -gt 0) {
         $rvPct = [math]::Round($rvCompletedCount2 / $rvTotalCount2 * 100, 0)
         $rvLabel = "$rvPct% ($rvCompletedCount2/$rvTotalCount2)"

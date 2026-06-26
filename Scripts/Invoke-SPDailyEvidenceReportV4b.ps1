@@ -906,6 +906,8 @@ try {
         $withPendingRvCount = @($reviewerRecords | Where-Object { [int]$_.pending -gt 0 }).Count
         Write-Verbose "    [JSONL] Reviewer stats: $completedRvCount completed, $withPendingRvCount with pending, $noItemsCount no items, total=$($reviewerRecords.Count)"
 
+        $audit['ReviewerRecords'] = @($reviewerRecords)
+
         # Per-source breakdown
         $sourceRecords = [System.Collections.Generic.List[object]]::new()
         $sourceMap = @{}
@@ -1877,11 +1879,11 @@ foreach ($audit in $campaignAudits) {
     # Reviewer completion: % of primary reviewers who have SIGNED
     # Reviewer completion: match executive summary -- Primary + Reassigned
     # Reviewer completion: use item-level data (honest), not cert Phase (ISC inflates on close).
-    # Count reviewers whose items have pending=0 AND total>0 from the per-reviewer JSONL data
-    # we already computed above (same $reviewerRecords used for the JSONL writer).
+    # Use per-campaign ReviewerRecords (not the loop variable which holds the last campaign).
     $rvPct = 0; $rvLabel = '-'
-    $rvCompletedCount2 = @($reviewerRecords | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
-    $rvTotalCount2 = @($reviewerRecords).Count
+    $campReviewerRecs = if ($audit.ContainsKey('ReviewerRecords')) { @($audit['ReviewerRecords']) } else { @() }
+    $rvCompletedCount2 = @($campReviewerRecs | Where-Object { [int]$_.total -gt 0 -and [int]$_.pending -eq 0 }).Count
+    $rvTotalCount2 = @($campReviewerRecs).Count
     if ($rvTotalCount2 -gt 0) {
         $rvPct = [math]::Round($rvCompletedCount2 / $rvTotalCount2 * 100, 0)
         $rvLabel = "$rvPct% ($rvCompletedCount2/$rvTotalCount2)"
