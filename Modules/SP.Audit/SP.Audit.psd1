@@ -62,6 +62,7 @@
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
+        'Group-SPCompletedPendingByReviewer'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'

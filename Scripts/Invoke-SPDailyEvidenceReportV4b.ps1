@@ -555,6 +555,13 @@ try {
 
             $reviewerActions = Group-SPReviewerActions -Certifications $certifications
 
+            # Seal the cert -> assigned-reviewer roster (WI-2). Prefers the ACTIVE-state
+            # sealed roster; falls back to these live certs when no seal exists. The
+            # COMPLETED accountability path uses this to attribute undecided items to the
+            # ASSIGNED reviewer (item.CertificationId -> roster), not item.reviewedBy.
+            $rosterResult = Get-SPCachedCampaignRoster -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+            $certRoster = if ($rosterResult.Success) { @($rosterResult.Data) } else { @() }
+
             $campaignAudit = @{
                 CampaignName    = $campName
                 CampaignId      = $campId
@@ -569,6 +576,7 @@ try {
                 WrappedItems    = $wrappedItems.ToArray()
                 Certifications  = $certifications
                 ReviewerActions = $reviewerActions
+                CertRoster      = $certRoster
                 ItemsFromCache  = $itemsFromCache
             }
             $auditList.Add($campaignAudit)
@@ -1919,32 +1927,17 @@ foreach ($audit in $campaignAudits) {
         # items that were PENDING when the cache was written are genuinely unreviewed.
         # Derive the pending reviewer list from the items, not from cert metadata.
         $d = $audit['Decisions']
-        $itemPending = @($d['Pending'])
-        $pendingByReviewer = [ordered]@{}
-        foreach ($pi in $itemPending) {
-            $rvn = [string]$pi.ReviewerName
-            if ([string]::IsNullOrWhiteSpace($rvn)) { $rvn = '(Unassigned)' }
-            if ($reassignedAwayNames.ContainsKey($rvn)) { continue }
-            if (-not $pendingByReviewer.Contains($rvn)) {
-                $pendingByReviewer[$rvn] = @{ Name = $rvn; Email = ''; PendingCount = 0; TotalCount = 0 }
-            }
-            $pendingByReviewer[$rvn].PendingCount++
-        }
-        # Enrich with email from the primary reviewer list + count total items per reviewer
-        foreach ($rv in $primary) {
-            $rvn = [string]$rv.Name
-            if ($pendingByReviewer.Contains($rvn) -and -not [string]::IsNullOrWhiteSpace([string]$rv.Email)) {
-                $pendingByReviewer[$rvn].Email = [string]$rv.Email
-            }
-        }
-        # Also count total items (approved+revoked+pending) per reviewer for context
-        foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
-            foreach ($it in @($d[$grp])) {
-                if ($null -eq $it) { continue }
-                $rvn = [string]$it.ReviewerName
-                if ($pendingByReviewer.Contains($rvn)) { $pendingByReviewer[$rvn].TotalCount++ }
-            }
-        }
+        # Attribute undecided items to the cert-ASSIGNED reviewer (item.CertificationId ->
+        # sealed/live roster), not item.reviewedBy (null for pending items, which used to
+        # collapse every undecided item into a single (Unassigned) row). DECIDED items still
+        # carry their reviewedBy attribution for the TotalCount context. (cache-honesty R0)
+        $certRoster = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+        $pendingByReviewer = Group-SPCompletedPendingByReviewer `
+            -PendingItems @($d['Pending']) `
+            -DecidedItems (@($d['Approved']) + @($d['Revoked'])) `
+            -Roster $certRoster `
+            -PrimaryReviewers $primary `
+            -ReassignedAwayNames $reassignedAwayNames
         $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true

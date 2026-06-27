@@ -550,6 +550,151 @@ function Group-SPReviewerActions {
     }
 }
 
+function Group-SPCompletedPendingByReviewer {
+    <#
+    .SYNOPSIS
+        COMPLETED-path reviewer attribution: groups undecided (pending) access-review
+        items by their certification's ASSIGNED reviewer, NOT by item.reviewedBy.
+    .DESCRIPTION
+        Root-cause fix for the COMPLETED "(Unassigned) collapse" (cache-honesty R0).
+
+        A pending/undecided item carries NO reviewedBy, so Group-SPAuditDecisions sets
+        its ReviewerName to 'N/A'. The old COMPLETED branch grouped pending items by that
+        field, collapsing EVERY undecided item from EVERY reviewer into a single
+        (Unassigned)/N/A row -- the report could no longer say WHICH assigned reviewer
+        left work undone.
+
+        This pure function instead attributes each pending item to its certification's
+        assigned reviewer via item.CertificationId -> the sealed/live cert roster
+        (Get-SPCachedCampaignRoster / ConvertTo-SPCertRosterEntry). It falls back to the
+        item's own (reviewedBy-derived) ReviewerName only when the cert has no roster
+        entry, and to '(Unassigned)' only when a cert genuinely has no assigned reviewer.
+        DECIDED items keep their reviewedBy attribution and feed the TotalCount context.
+
+        Mirrors the sibling pure functions (Group-SPAuditDecisions / Group-SPReviewerActions):
+        a plain return value, NOT the @{Success;Data;Error} envelope.
+    .PARAMETER PendingItems
+        The Decisions.Pending list (undecided + idNowAutoApproved items).
+    .PARAMETER DecidedItems
+        Approved + Revoked items, used only to compute the TotalCount context per reviewer.
+    .PARAMETER Roster
+        Cert roster entries from Get-SPCachedCampaignRoster (shape per
+        ConvertTo-SPCertRosterEntry: CertificationId / ReviewerName / ReviewerId /
+        ReviewerEmail / Classification / ReassignedFromName ...).
+    .PARAMETER PrimaryReviewers
+        Group-SPReviewerActions Primary entries; an email fallback enrichment (by name).
+    .PARAMETER ReassignedAwayNames
+        Reviewer names whose certs were reassigned away -- skipped (their work moved to
+        the reassignee, so they legitimately show as done).
+    .OUTPUTS
+        [System.Collections.Specialized.OrderedDictionary] keyed by reviewer Name, each
+        value @{ Name; Email; ReviewerId; PendingCount; TotalCount }. Drop-in replacement
+        for the manual $pendingByReviewer build in the daily-evidence COMPLETED branch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$PendingItems = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$DecidedItems = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$Roster = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$PrimaryReviewers = @(),
+
+        [Parameter()]
+        [hashtable]$ReassignedAwayNames = @{}
+    )
+
+    # Index the roster by CertificationId for O(1) cert -> assigned-reviewer lookup.
+    # OrderedDictionary uses .Contains() (NOT .ContainsKey()) per PS 5.1.
+    $rosterByCertId = [ordered]@{}
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { continue }
+        $rcId = ''
+        if ($null -ne $re.PSObject.Properties['CertificationId']) { $rcId = [string]$re.CertificationId }
+        if ([string]::IsNullOrWhiteSpace($rcId)) { continue }
+        if (-not $rosterByCertId.Contains($rcId)) { $rosterByCertId[$rcId] = $re }
+    }
+
+    # Resolve an item's cert-ASSIGNED reviewer (name/email/id). Falls back to the item's
+    # reviewedBy-derived ReviewerName only when the cert has no roster entry; '(Unassigned)'
+    # only when a cert genuinely has no assigned reviewer.
+    $resolveAssigned = {
+        param($item)
+        $name = ''; $email = ''; $reviewerId = ''
+        $certId = ''
+        if ($null -ne $item -and $null -ne $item.PSObject.Properties['CertificationId']) { $certId = [string]$item.CertificationId }
+        if (-not [string]::IsNullOrWhiteSpace($certId) -and $rosterByCertId.Contains($certId)) {
+            $re = $rosterByCertId[$certId]
+            if ($null -ne $re.PSObject.Properties['ReviewerName'])  { $name       = [string]$re.ReviewerName }
+            if ($null -ne $re.PSObject.Properties['ReviewerEmail']) { $email      = [string]$re.ReviewerEmail }
+            if ($null -ne $re.PSObject.Properties['ReviewerId'])    { $reviewerId = [string]$re.ReviewerId }
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            # Fallback: the item's reviewedBy-derived ReviewerName ('N/A' for undecided items).
+            $itemRv = ''
+            if ($null -ne $item -and $null -ne $item.PSObject.Properties['ReviewerName']) { $itemRv = [string]$item.ReviewerName }
+            if (-not [string]::IsNullOrWhiteSpace($itemRv) -and $itemRv -ne 'N/A') { $name = $itemRv }
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = '(Unassigned)' }
+        return @{ Name = $name; Email = $email; ReviewerId = $reviewerId }
+    }
+
+    $pendingByReviewer = [ordered]@{}
+
+    foreach ($pi in $PendingItems) {
+        if ($null -eq $pi) { continue }
+        $info = & $resolveAssigned $pi
+        $rvn = $info.Name
+        if ($ReassignedAwayNames.ContainsKey($rvn)) { continue }
+        if (-not $pendingByReviewer.Contains($rvn)) {
+            $pendingByReviewer[$rvn] = @{ Name = $rvn; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
+        }
+        $pendingByReviewer[$rvn].PendingCount++
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].Email) -and -not [string]::IsNullOrWhiteSpace($info.Email)) {
+            $pendingByReviewer[$rvn].Email = $info.Email
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
+            $pendingByReviewer[$rvn].ReviewerId = $info.ReviewerId
+        }
+    }
+
+    # TotalCount context: count decided + pending items attributed to the SAME cert-assigned
+    # reviewer, but only for reviewers already in the pending map -- keeps each row internally
+    # consistent (PendingCount <= TotalCount for that reviewer).
+    foreach ($it in (@($DecidedItems) + @($PendingItems))) {
+        if ($null -eq $it) { continue }
+        $info = & $resolveAssigned $it
+        $rvn = $info.Name
+        if ($pendingByReviewer.Contains($rvn)) { $pendingByReviewer[$rvn].TotalCount++ }
+    }
+
+    # Enrich email: roster first (applied above), then the primary reviewer list by name.
+    foreach ($rv in $PrimaryReviewers) {
+        if ($null -eq $rv) { continue }
+        $rvn = ''
+        if ($null -ne $rv.PSObject.Properties['Name']) { $rvn = [string]$rv.Name }
+        if ([string]::IsNullOrWhiteSpace($rvn)) { continue }
+        if ($pendingByReviewer.Contains($rvn)) {
+            $rvEmail = ''
+            if ($null -ne $rv.PSObject.Properties['Email']) { $rvEmail = [string]$rv.Email }
+            if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].Email) -and -not [string]::IsNullOrWhiteSpace($rvEmail)) {
+                $pendingByReviewer[$rvn].Email = $rvEmail
+            }
+        }
+    }
+
+    return $pendingByReviewer
+}
+
 function Group-SPAuditIdentityEvents {
     <#
     .SYNOPSIS
@@ -2578,6 +2723,7 @@ Export-ModuleMember -Function @(
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',
+    'Group-SPCompletedPendingByReviewer',
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
