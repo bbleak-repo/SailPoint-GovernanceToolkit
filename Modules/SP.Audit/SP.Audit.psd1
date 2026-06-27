@@ -64,6 +64,7 @@
         'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
         'Group-SPCompletedPendingByReviewer'
+        'Resolve-SPCaptureDateKey'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'

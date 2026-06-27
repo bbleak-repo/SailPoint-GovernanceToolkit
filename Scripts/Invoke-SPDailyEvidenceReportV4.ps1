@@ -79,6 +79,13 @@
     Does NOT clear existing cache files -- other scripts and future runs still benefit
     from the cache. Use this when you need real-time item counts (e.g., reviewers have
     been signing off and you want the latest decided items).
+.PARAMETER PerRunDay
+    OPT-IN time-axis switch (cache-honesty G7 / WI-12). By DEFAULT the daily-evidence
+    JSONL captureDate is the campaign's OWN created date (campaign-to-campaign axis) --
+    correct for recurring daily campaigns. With -PerRunDay the captureDate is the run
+    date instead, so a single long-running campaign captured daily shows true per-day
+    ACTIVE progression. Trade-off: this changes the day-over-day meaning from per-campaign
+    to per-capture-day, so it is opt-in and never the default.
 .NOTES
     Script:  Invoke-SPDailyEvidenceReportV4.ps1
     Version: 1.0.0
@@ -143,6 +150,9 @@ param(
 
     [Parameter()]
     [switch]$RefreshCache,
+
+    [Parameter()]
+    [switch]$PerRunDay,
 
     [Parameter()]
     [Alias('?')]
@@ -803,13 +813,10 @@ try {
     }
 
     foreach ($audit in $campaignAudits) {
-        # captureDate = the campaign's own date (from created), NOT the run date.
-        $campaignCreated = [string]$audit['Created']
-        $captureDate = (Get-Date).ToString('yyyy-MM-dd')
-        if (-not [string]::IsNullOrWhiteSpace($campaignCreated)) {
-            try { $captureDate = ([datetime]::Parse($campaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
-            catch { }
-        }
+        # captureDate axis (cache-honesty G7 / WI-12): DEFAULT = the campaign's own created
+        # date (campaign-to-campaign axis); -PerRunDay = the run date (true per-day progression
+        # of a single long-running campaign). Pure helper keeps both scripts in lockstep.
+        $captureDate = Resolve-SPCaptureDateKey -CampaignCreated ([string]$audit['Created']) -PerRunDay:$PerRunDay
         # Don't overwrite an ACTIVE-state JSONL record with COMPLETED data.
         # ACTIVE records have honest reviewer metrics; COMPLETED records are inflated by auto-approve.
         $metricsStatus = ([string]$audit['Status']).ToUpperInvariant()

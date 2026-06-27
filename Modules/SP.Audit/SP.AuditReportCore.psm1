@@ -784,6 +784,77 @@ function Group-SPCompletedPendingByReviewer {
     return $pendingByReviewer
 }
 
+function Resolve-SPCaptureDateKey {
+    <#
+    .SYNOPSIS
+        Resolves the captureDate axis key (yyyy-MM-dd) for a daily-evidence JSONL record.
+    .DESCRIPTION
+        Time-axis semantics decision for the daily-evidence store (cache-honesty G7 / WI-12).
+
+        DEFAULT (no -PerRunDay): the key is the campaign's OWN created date (parsed from
+        CampaignCreated), falling back to the run date when Created is blank or unparseable.
+        This is the CAMPAIGN-created (campaign-to-campaign) axis -- byte-for-byte the legacy
+        inline logic the daily-evidence scripts have always used. It is CORRECT for recurring
+        daily campaigns (one campaign created per day, Created == that day), but for a single
+        LONG-RUNNING campaign captured over many days every capture collapses to one constant
+        slot (per-day ACTIVE progression is invisible) and two campaigns created the same day
+        share a slot in V7's per-day resolution so one is dropped.
+
+        -PerRunDay (OPT-IN): the key is the RunDate unconditionally (CampaignCreated ignored).
+        This is the per-run-day axis: a single long-running campaign captured daily yields a
+        DISTINCT key per run day, surfacing true per-day ACTIVE progression. The trade-off is
+        that it changes the day-over-day meaning from per-campaign to per-capture-day, so it is
+        OPT-IN and NEVER the default -- existing report meaning is not silently changed.
+
+        Pure date math, no side effects. Returns a plain [string] yyyy-MM-dd (NOT the
+        @{Success;Data;Error} envelope), matching the sibling pure functions
+        Group-SPAuditDecisions / Group-SPReviewerActions / Group-SPCompletedPendingByReviewer.
+    .PARAMETER CampaignCreated
+        The campaign's Created timestamp (ISO-8601 / roundtrip). Blank or unparseable -> the
+        default path falls back to RunDate. Ignored entirely when -PerRunDay is set.
+    .PARAMETER RunDate
+        The capture run's date. Default (Get-Date) -- identical to the legacy inline fallback.
+    .PARAMETER PerRunDay
+        OPT-IN. Key on the RunDate instead of the campaign Created date, for true per-day
+        progression of a single long-running campaign. Changes the day-over-day axis meaning;
+        never the default. See .DESCRIPTION for the trade-off.
+    .OUTPUTS
+        [string] in yyyy-MM-dd form.
+    .EXAMPLE
+        Resolve-SPCaptureDateKey -CampaignCreated '2026-06-01T08:00:00Z' -RunDate ([datetime]'2026-06-27')
+        # '2026-06-01' (default: campaign-created axis)
+    .EXAMPLE
+        Resolve-SPCaptureDateKey -CampaignCreated '2026-06-01T08:00:00Z' -RunDate ([datetime]'2026-06-27') -PerRunDay
+        # '2026-06-27' (opt-in: per-run-day axis)
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [string]$CampaignCreated = '',
+
+        [Parameter()]
+        [datetime]$RunDate = (Get-Date),
+
+        [Parameter()]
+        [switch]$PerRunDay
+    )
+
+    # -PerRunDay: per-run-day axis -- key on the run date unconditionally (ignore Created).
+    if ($PerRunDay) {
+        return $RunDate.ToString('yyyy-MM-dd')
+    }
+
+    # DEFAULT: campaign-created axis -- byte-for-byte the legacy inline logic. Start from the
+    # run date, then prefer the parsed campaign Created date when present and parseable.
+    $key = $RunDate.ToString('yyyy-MM-dd')
+    if (-not [string]::IsNullOrWhiteSpace($CampaignCreated)) {
+        try { $key = ([datetime]::Parse($CampaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
+        catch { }
+    }
+    return $key
+}
+
 function Group-SPAuditIdentityEvents {
     <#
     .SYNOPSIS
@@ -2839,6 +2910,7 @@ Export-ModuleMember -Function @(
     'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',
     'Group-SPCompletedPendingByReviewer',
+    'Resolve-SPCaptureDateKey',
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',
