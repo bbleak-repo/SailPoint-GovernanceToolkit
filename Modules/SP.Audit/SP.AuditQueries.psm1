@@ -117,6 +117,102 @@ function Get-SPAuditActiveCacheTtl {
     return $ttl
 }
 
+function Get-SPAuditEffectiveCacheTtl {
+    <#
+    .SYNOPSIS
+        Resolves the effective ACTIVE-cache TTL for a campaign, optionally shrinking it
+        as the campaign's deadline approaches (WI-8 / G5 -- opt-in, default OFF).
+    .DESCRIPTION
+        Returns the base ACTIVE TTL unchanged unless the opt-in "near-deadline capture"
+        feature is enabled AND the campaign's deadline falls within the configured window,
+        in which case the TTL is shrunk to a smaller value so the cache goes stale sooner
+        and a fresher (near-final) capture is taken before the campaign closes. This makes
+        work done just before close less likely to be falsely shown as pending.
+
+        KEY INVARIANT: this helper can only ever LOWER the TTL, never raise it. With the
+        feature default-OFF (or any config error), it returns the base TTL byte-for-byte,
+        so existing caching behavior is unchanged; even when ON it is strictly more
+        conservative (fresher cache), so nothing that currently caches stops caching.
+
+        Opt-in config (read defensively; code defaults apply when absent) under Audit:
+          NearDeadlineCapture.Enabled       [bool] default $false -- master switch.
+          NearDeadlineCapture.WindowMinutes [int]  default 1440 (24h) -- how close to the
+                                            deadline (in minutes) the shrink activates.
+          NearDeadlineCapture.TtlMinutes    [int]  default 15 -- the shrunk TTL applied
+                                            inside the window (effective = min(base, this)).
+    .PARAMETER Campaign
+        Campaign object. May carry a '.deadline' (ISO-8601). When absent/blank/garbage,
+        the base TTL is returned unchanged.
+    .PARAMETER BaseTtl
+        The base ACTIVE TTL in minutes. When -1 (default) the value is resolved from
+        Get-SPAuditActiveCacheTtl (config Audit.CacheActiveTtlMinutes, default 180).
+    .PARAMETER Now
+        Reference "now" for deadline math (injectable for tests). Defaults to Get-Date.
+    .OUTPUTS
+        [int] effective TTL minutes (<= base).
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [object]$Campaign,
+        [int]$BaseTtl = -1,
+        [datetime]$Now = (Get-Date)
+    )
+
+    $base = if ($BaseTtl -ge 0) { $BaseTtl } else { Get-SPAuditActiveCacheTtl }
+
+    # Opt-in config with defensive code defaults.
+    $enabled       = $false
+    $windowMinutes = 1440
+    $nearTtl       = 15
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and $null -ne $cfg.Audit -and
+            $null -ne $cfg.Audit.PSObject.Properties['NearDeadlineCapture'] -and
+            $null -ne $cfg.Audit.NearDeadlineCapture) {
+            $ndc = $cfg.Audit.NearDeadlineCapture
+            if ($null -ne $ndc.PSObject.Properties['Enabled'] -and $null -ne $ndc.Enabled) {
+                $enabled = [bool]$ndc.Enabled
+            }
+            if ($null -ne $ndc.PSObject.Properties['WindowMinutes'] -and $null -ne $ndc.WindowMinutes) {
+                $windowMinutes = [int]$ndc.WindowMinutes
+            }
+            if ($null -ne $ndc.PSObject.Properties['TtlMinutes'] -and $null -ne $ndc.TtlMinutes) {
+                $nearTtl = [int]$ndc.TtlMinutes
+            }
+        }
+    } catch { return $base }
+
+    if (-not $enabled) { return $base }
+
+    # Resolve campaign deadline (mirror the [datetime]::Parse RoundtripKind pattern used
+    # elsewhere in this module). No parseable deadline -> base unchanged.
+    $deadline = $null
+    if ($null -ne $Campaign -and $null -ne $Campaign.PSObject.Properties['deadline'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$Campaign.deadline)) {
+        try {
+            $deadline = [datetime]::Parse([string]$Campaign.deadline,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind)
+        } catch { $deadline = $null }
+    }
+    if ($null -eq $deadline) { return $base }
+
+    $minutesToDeadline = ($deadline.ToLocalTime() - $Now).TotalMinutes
+    if ($minutesToDeadline -le $windowMinutes) {
+        # Inside the window (or slightly past the deadline). Shrink -- but never raise.
+        $effective = [math]::Min($base, $nearTtl)
+        if ($effective -lt $base) {
+            Write-SPLog -Message ("Near-deadline TTL shrink: base=${base}m -> ${effective}m " +
+                "(minutesToDeadline=$([math]::Round($minutesToDeadline,1)), window=${windowMinutes}m)") `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'EffectiveCacheTtl'
+        }
+        return $effective
+    }
+
+    return $base
+}
+
 function Get-SPAuditSourceName {
     <#
     .SYNOPSIS
@@ -6860,8 +6956,8 @@ function Get-SPCachedCampaignItems {
 
         TTL rules:
           COMPLETED / COMPLETING  -> permanent on disk (sealed data never changes).
-          ACTIVE / ACTIVATING     -> configurable TTL (default 30 min; respects
-                                     reviewers acting during the day).
+          ACTIVE / ACTIVATING     -> configurable TTL (default 180 min / 3h;
+                                     respects reviewers acting during the day).
           STAGED / ERROR          -> never cached.
 
         Returned items are pre-wrapped in @{Item; CertificationId; CertificationName;
@@ -6955,7 +7051,12 @@ function Get-SPCachedCampaignItems {
 
     # Active-campaign TTL: explicit -TtlMinutes wins; otherwise read config
     # (Audit.CacheActiveTtlMinutes, default 180). COMPLETED campaigns ignore it entirely.
-    $effectiveTtl = if ($TtlMinutes -ge 0) { $TtlMinutes } else { Get-SPAuditActiveCacheTtl }
+    # WI-8 (G5): Get-SPAuditEffectiveCacheTtl can shrink (never raise) the base TTL when
+    # the opt-in near-deadline-capture feature is on and the deadline is near. With the
+    # feature default-OFF it returns $baseTtl untouched, so the mem/disk TTL checks below
+    # are byte-for-byte unchanged in default config -- additive.
+    $baseTtl      = if ($TtlMinutes -ge 0) { $TtlMinutes } else { Get-SPAuditActiveCacheTtl }
+    $effectiveTtl = Get-SPAuditEffectiveCacheTtl -Campaign $Campaign -BaseTtl $baseTtl
 
     $safeCampId   = $campId -replace '[^A-Za-z0-9_\-]', '_'
     $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
@@ -7567,6 +7668,7 @@ Export-ModuleMember -Function @(
     'Test-SPSourceOnboardingReadiness',
     'Get-SPCachedCampaignItems',
     'Get-SPCachedCampaignRoster',
+    'Get-SPAuditEffectiveCacheTtl',
     'Clear-SPAuditItemCache',
     'Clear-SPAuditAccountCache'
 )
