@@ -578,6 +578,11 @@ try {
                 ReviewerActions = $reviewerActions
                 CertRoster      = $certRoster
                 ItemsFromCache  = $itemsFromCache
+                # WI-4 (G1): capture-provenance so the COMPLETED render can warn when a
+                # campaign was sealed WITHOUT a prior ACTIVE-state snapshot (unverified).
+                CaptureCapturedWhileActive = [bool]$rosterResult.CapturedWhileActive
+                CaptureSealed              = [bool]$rosterResult.Sealed
+                CaptureSource              = [string]$rosterResult.Source
             }
             $auditList.Add($campaignAudit)
         }
@@ -1936,6 +1941,11 @@ foreach ($audit in $campaignAudits) {
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
         [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
+        # WI-4 (G1): visible provenance banner. When the campaign was sealed WITHOUT a
+        # prior ACTIVE-state capture, the COMPLETED item data is ISC post-completion data
+        # being trusted without an honest snapshot -- mark the completion unverified.
+        $capActive = if ($audit.ContainsKey('CaptureCapturedWhileActive')) { [bool]$audit['CaptureCapturedWhileActive'] } else { $false }
+        if (-not $capActive) { [void]$sb.AppendLine('<div class="s-red" style="border:1px solid #c0392b;background:#fdecea;padding:6px 8px;margin:4px 0;font-size:12px;font-weight:600">&#9888; No active-state capture -- completion unverified. ISC post-completion data is being trusted without a sealed ACTIVE-state snapshot.</div>') }
         [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Undecided Items by Reviewer ($($pendingR.Count) reviewer(s) with undecided items)</summary>")
         [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Undecided Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
         if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No undecided items found (all items were decided before close).</td></tr>') }

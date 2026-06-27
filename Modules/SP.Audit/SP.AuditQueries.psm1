@@ -7013,6 +7013,14 @@ function Get-SPCachedCampaignItems {
                     $meta | Add-Member -NotePropertyName 'IsPermanent' -NotePropertyValue $true -Force
                     $meta | Add-Member -NotePropertyName 'SealedAt' -NotePropertyValue (Get-Date).ToString('o') -Force
                     $meta | Add-Member -NotePropertyName 'SealReason' -NotePropertyValue "Campaign transitioned from $cachedStatus to $status" -Force
+                    # WI-4 (G1): an ACTIVE->COMPLETED seal stays VERIFIED -- the honest
+                    # ACTIVE-state snapshot existed before close. Preserve the original
+                    # first-seen status (this path returns early below and never reaches
+                    # the cache-miss meta2 block that would otherwise stamp these).
+                    $sealFirstSeen = if ($null -ne $meta.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.FirstSeenStatus)) { [string]$meta.FirstSeenStatus } else { $cachedStatus }
+                    $meta | Add-Member -NotePropertyName 'FirstSeenStatus' -NotePropertyValue $sealFirstSeen -Force
+                    $meta | Add-Member -NotePropertyName 'CapturedWhileActive' -NotePropertyValue $true -Force
+                    $meta | Add-Member -NotePropertyName 'Unverified' -NotePropertyValue $false -Force
                     $meta | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
                 } catch {
                     Write-Host "  [Cache] WARN: Failed to update meta for seal: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -7222,6 +7230,25 @@ function Get-SPCachedCampaignItems {
     }
     elseif ($writeToCache -and $allItems.Count -gt 0) {
         try {
+            # WI-4 (G1): stamp capture-provenance onto the items meta. Recover a STICKY
+            # first-seen status from any prior meta still on disk (metaFile is only
+            # overwritten just below, so on a TTL/Refresh miss it is still present). When a
+            # COMPLETED campaign is first cached here WITHOUT a prior ACTIVE capture, the
+            # record is flagged Unverified so the report can warn that ISC post-completion
+            # data is being trusted without a sealed ACTIVE-state snapshot.
+            $priorFirstSeen = $null; $priorCapturedActive = $false
+            if (Test-Path $metaFile) {
+                try {
+                    $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
+                    elseif ($null -ne $pm.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.Status)) { $priorFirstSeen = [string]$pm.Status }
+                    if ($null -ne $pm.PSObject.Properties['CapturedWhileActive']) { $priorCapturedActive = [bool]$pm.CapturedWhileActive }
+                } catch { }
+            }
+            $firstSeenStatus = if ($null -ne $priorFirstSeen) { $priorFirstSeen } else { $status }
+            $capturedWhileActive = $priorCapturedActive -or ($firstSeenStatus.ToUpperInvariant() -in @('ACTIVE', 'ACTIVATING', ''))   # mirror the active-set used at the seal-on-transition check
+            $isUnverified = $isPermanent -and (-not $capturedWhileActive)
+
             $meta2 = [ordered]@{
                 CampaignId   = $campId
                 CampaignName = $campName
@@ -7230,6 +7257,9 @@ function Get-SPCachedCampaignItems {
                 CachedAt     = (Get-Date).ToString('o')
                 CertCount    = $certs.Count
                 ItemCount    = $allItems.Count
+                FirstSeenStatus     = $firstSeenStatus
+                CapturedWhileActive = $capturedWhileActive
+                Unverified          = $isUnverified
             }
             $meta2 | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
 
