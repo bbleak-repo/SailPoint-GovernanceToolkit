@@ -541,3 +541,199 @@ Describe "AQ-007: Get-SPAuditIdentityEvents filters events and resolves source n
 }
 
 #endregion
+
+#region AQ-008: Get-SPCachedCampaignItems seals cert roster at ACTIVE (WI-2)
+
+Describe "AQ-008: Get-SPCachedCampaignItems seals cert roster at ACTIVE" {
+
+    Context "When an ACTIVE campaign with distinct/reassigned reviewers is cached" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+            # Items fetch is mocked so the cache miss path runs without live API.
+            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = "$CertificationId-01"; decision = 'APPROVE'; reviewedBy = [PSCustomObject]@{ id = 'id-rv-1'; name = 'Alice Reviewer' } },
+                        [PSCustomObject]@{ id = "$CertificationId-02" }
+                    )
+                    Error   = $null
+                }
+            }
+
+            # 3 certs mirroring the fixture shape: primary, complete, reassigned.
+            $script:AQ008Certs = @(
+                [PSCustomObject]@{
+                    id           = 'cert-primary'
+                    name         = 'Cert Primary'
+                    campaign     = [PSCustomObject]@{ id = 'camp-seal-001' }
+                    phase        = 'ACTIVE'
+                    reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-1'; name = 'Alice Reviewer'; email = 'alice@corp.test' }
+                    reassignment = $null
+                },
+                [PSCustomObject]@{
+                    id           = 'cert-complete'
+                    name         = 'Cert Complete'
+                    campaign     = [PSCustomObject]@{ id = 'camp-seal-001' }
+                    phase        = 'ACTIVE'
+                    reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-4'; name = 'Dana Done'; email = 'dana@corp.test' }
+                    reassignment = $null
+                },
+                [PSCustomObject]@{
+                    id           = 'cert-reassigned'
+                    name         = 'Cert Reassigned'
+                    campaign     = [PSCustomObject]@{ id = 'camp-seal-001' }
+                    phase        = 'ACTIVE'
+                    reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-2'; name = 'Bob Reviewer'; email = 'bob@corp.test' }
+                    reassignment = [PSCustomObject]@{
+                        from   = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-3'; name = 'Carol Reviewer' }
+                        to     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-2'; name = 'Bob Reviewer' }
+                        reason = 'Reassigned Carol -> Bob'
+                        date   = '2026-06-20T12:00:00Z'
+                    }
+                }
+            )
+
+            $script:AQ008Campaign  = [PSCustomObject]@{ id = 'camp-seal-001'; name = 'Seal'; status = 'ACTIVE' }
+            $script:AQ008CacheDir  = Join-Path $TestDrive 'cache'
+        }
+
+        It "Should write a roster-*.json file alongside the items cache" {
+            $null = Get-SPCachedCampaignItems -Campaign $script:AQ008Campaign -CachePath $script:AQ008CacheDir -Certifications $script:AQ008Certs -TtlMinutes 180
+            $rosterFiles = Get-ChildItem -Path $script:AQ008CacheDir -Filter 'roster-*.json' -ErrorAction SilentlyContinue
+            $rosterFiles | Should -Not -BeNullOrEmpty
+        }
+
+        It "Should stamp Status=ACTIVE and CapturedWhileActive=true" {
+            $null = Get-SPCachedCampaignItems -Campaign $script:AQ008Campaign -CachePath $script:AQ008CacheDir -Certifications $script:AQ008Certs -TtlMinutes 180
+            $rosterFile = (Get-ChildItem -Path $script:AQ008CacheDir -Filter 'roster-*.json')[0].FullName
+            $roster = Get-Content $rosterFile -Raw | ConvertFrom-Json
+            $roster.Status              | Should -Be 'ACTIVE'
+            $roster.CapturedWhileActive | Should -Be $true
+            $roster.CertCount           | Should -Be 3
+        }
+
+        It "Should map cert id -> assigned ReviewerName/ReviewerId" {
+            $null = Get-SPCachedCampaignItems -Campaign $script:AQ008Campaign -CachePath $script:AQ008CacheDir -Certifications $script:AQ008Certs -TtlMinutes 180
+            $rosterFile = (Get-ChildItem -Path $script:AQ008CacheDir -Filter 'roster-*.json')[0].FullName
+            $roster = Get-Content $rosterFile -Raw | ConvertFrom-Json
+            $primary = $roster.Entries | Where-Object { $_.CertificationId -eq 'cert-primary' }
+            $primary.ReviewerName | Should -Be 'Alice Reviewer'
+            $primary.ReviewerId   | Should -Be 'id-rv-1'
+            $primary.Classification | Should -Be 'Primary'
+        }
+
+        It "Should attribute a reassigned cert to the 'to' reviewer and record the 'from'" {
+            $null = Get-SPCachedCampaignItems -Campaign $script:AQ008Campaign -CachePath $script:AQ008CacheDir -Certifications $script:AQ008Certs -TtlMinutes 180
+            $rosterFile = (Get-ChildItem -Path $script:AQ008CacheDir -Filter 'roster-*.json')[0].FullName
+            $roster = Get-Content $rosterFile -Raw | ConvertFrom-Json
+            $reassigned = $roster.Entries | Where-Object { $_.CertificationId -eq 'cert-reassigned' }
+            $reassigned.Classification     | Should -Be 'Reassigned'
+            $reassigned.ReviewerName       | Should -Be 'Bob Reviewer'
+            $reassigned.ReassignedFromName | Should -Be 'Carol Reviewer'
+            $reassigned.ReassignedFromId   | Should -Be 'id-rv-3'
+        }
+    }
+}
+
+#endregion
+
+#region AQ-009: Get-SPCachedCampaignRoster reads sealed, falls back to live (WI-2)
+
+Describe "AQ-009: Get-SPCachedCampaignRoster reads sealed, falls back to live" {
+
+    Context "When a sealed roster exists on disk" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditQueries {
+                return @{ Success = $true; Data = @([PSCustomObject]@{ id = "$CertificationId-01" }); Error = $null }
+            }
+            # Spy: if the reader ever calls live certs while a seal exists, this is wrong.
+            Mock Get-SPAuditCertifications -ModuleName SP.AuditQueries {
+                return @{ Success = $true; Data = @(); Error = $null }
+            }
+
+            $script:AQ009Certs = @(
+                [PSCustomObject]@{
+                    id           = 'cert-seal-a'
+                    name         = 'Cert Seal A'
+                    campaign     = [PSCustomObject]@{ id = 'camp-seal-009' }
+                    phase        = 'ACTIVE'
+                    reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-9a'; name = 'Anna Active'; email = 'anna@corp.test' }
+                    reassignment = $null
+                },
+                [PSCustomObject]@{
+                    id           = 'cert-seal-b'
+                    name         = 'Cert Seal B'
+                    campaign     = [PSCustomObject]@{ id = 'camp-seal-009' }
+                    phase        = 'ACTIVE'
+                    reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-9b'; name = 'Brian Busy'; email = 'brian@corp.test' }
+                    reassignment = $null
+                }
+            )
+            $script:AQ009CacheDir = Join-Path $TestDrive 'cache009'
+            $script:AQ009Active   = [PSCustomObject]@{ id = 'camp-seal-009'; name = 'Seal009'; status = 'ACTIVE' }
+            # Produce the seal via the ACTIVE cache write.
+            $null = Get-SPCachedCampaignItems -Campaign $script:AQ009Active -CachePath $script:AQ009CacheDir -Certifications $script:AQ009Certs -TtlMinutes 180
+        }
+
+        It "Should return Source='Sealed' and map the assigned reviewer" {
+            $result = Get-SPCachedCampaignRoster -Campaign $script:AQ009Active -CachePath $script:AQ009CacheDir
+            $result.Success | Should -Be $true
+            $result.Source  | Should -Be 'Sealed'
+            $result.Sealed  | Should -Be $true
+            $a = $result.Data | Where-Object { $_.CertificationId -eq 'cert-seal-a' }
+            $a.ReviewerName | Should -Be 'Anna Active'
+            $a.ReviewerId   | Should -Be 'id-rv-9a'
+        }
+
+        It "Should NOT call live certs when a seal exists" {
+            $null = Get-SPCachedCampaignRoster -Campaign $script:AQ009Active -CachePath $script:AQ009CacheDir
+            Should -Invoke Get-SPAuditCertifications -ModuleName SP.AuditQueries -Times 0
+        }
+
+        It "Should still return the ACTIVE seal when read with a COMPLETED campaign object" {
+            $completed = [PSCustomObject]@{ id = 'camp-seal-009'; name = 'Seal009'; status = 'COMPLETED' }
+            $result = Get-SPCachedCampaignRoster -Campaign $completed -CachePath $script:AQ009CacheDir
+            $result.Source              | Should -Be 'Sealed'
+            $result.CapturedWhileActive | Should -Be $true
+            Should -Invoke Get-SPAuditCertifications -ModuleName SP.AuditQueries -Times 0
+        }
+    }
+
+    Context "When no seal exists (live fallback)" {
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditQueries { }
+            Mock Get-SPAuditCertifications -ModuleName SP.AuditQueries {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{ id = 'cert-live-1'; name = 'Live 1'; reviewer = [PSCustomObject]@{ id = 'id-live-1'; name = 'Liv One' }; reassignment = $null },
+                        [PSCustomObject]@{ id = 'cert-live-2'; name = 'Live 2'; reviewer = [PSCustomObject]@{ id = 'id-live-2'; name = 'Liv Two' }; reassignment = $null }
+                    )
+                    Error   = $null
+                }
+            }
+            $script:AQ009EmptyDir = Join-Path $TestDrive 'cache009empty'
+            $null = New-Item -ItemType Directory -Path $script:AQ009EmptyDir -Force
+            $script:AQ009Camp = [PSCustomObject]@{ id = 'camp-nolive-009'; name = 'NoSeal'; status = 'COMPLETED' }
+        }
+
+        It "Should return Source='Live', Sealed=false, with entries from live certs" {
+            $result = Get-SPCachedCampaignRoster -Campaign $script:AQ009Camp -CachePath $script:AQ009EmptyDir
+            $result.Success | Should -Be $true
+            $result.Source  | Should -Be 'Live'
+            $result.Sealed  | Should -Be $false
+            $result.Data.Count | Should -Be 2
+            $one = $result.Data | Where-Object { $_.CertificationId -eq 'cert-live-1' }
+            $one.ReviewerName | Should -Be 'Liv One'
+        }
+
+        It "Should call live certs exactly once when no seal exists" {
+            $null = Get-SPCachedCampaignRoster -Campaign $script:AQ009Camp -CachePath $script:AQ009EmptyDir
+            Should -Invoke Get-SPAuditCertifications -ModuleName SP.AuditQueries -Times 1
+        }
+    }
+}
+
+#endregion

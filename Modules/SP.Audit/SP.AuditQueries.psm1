@@ -6778,6 +6778,72 @@ function Test-SPSourceOnboardingReadiness {
 # ---------------------------------------------------------------------------
 $script:_ItemMemCache = @{}   # key: campaignId -> @{Items; CachedAt; Status}
 
+function ConvertTo-SPCertRosterEntry {
+    # ---------------------------------------------------------------------------
+    # Internal (non-exported) helper. Maps a single ISC certification object to a
+    # flat roster entry capturing its ASSIGNED reviewer. Mirrors the reviewer
+    # classification used by Get-SPAuditCertifications (see lines ~745-757): when a
+    # reassignment is present the cert is 'Reassigned' and the effective reviewer is
+    # reassignment.to; otherwise 'Primary' and the effective reviewer is reviewer.
+    # Null-safe via PSObject.Properties[...] so it works on PS 5.1 PSCustomObjects.
+    # WI-2: this entry is what gets SEALED at ACTIVE state so the COMPLETED reporting
+    # path (WI-3) can attribute undecided items to the cert-assigned reviewer instead
+    # of item.reviewedBy (null for pending items -> everything collapses to Unassigned).
+    # ---------------------------------------------------------------------------
+    [CmdletBinding()]
+    [OutputType([psobject])]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [object]$Cert
+    )
+    process {
+        if ($null -eq $Cert) { return }
+
+        $certId   = if ($null -ne $Cert.PSObject.Properties['id']) { [string]$Cert.id } else { '' }
+        $certName = if ($null -ne $Cert.PSObject.Properties['name'] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$Cert.name)) { [string]$Cert.name } else { $certId }
+
+        # Classification + effective reviewer (mirror Get-SPAuditCertifications).
+        $classification    = 'Primary'
+        $effectiveReviewer = if ($null -ne $Cert.PSObject.Properties['reviewer']) { $Cert.reviewer } else { $null }
+        $reassignFromName  = $null
+        $reassignFromId    = $null
+
+        if ($null -ne $Cert.PSObject.Properties['reassignment'] -and $null -ne $Cert.reassignment) {
+            $classification = 'Reassigned'
+            $reassign = $Cert.reassignment
+            if ($null -ne $reassign.PSObject.Properties['to'] -and $null -ne $reassign.to) {
+                $effectiveReviewer = $reassign.to
+            }
+            if ($null -ne $reassign.PSObject.Properties['from'] -and $null -ne $reassign.from) {
+                $from = $reassign.from
+                if ($null -ne $from.PSObject.Properties['name']) { $reassignFromName = [string]$from.name }
+                if ($null -ne $from.PSObject.Properties['id'])   { $reassignFromId   = [string]$from.id }
+            }
+        }
+
+        $revName  = $null
+        $revId    = $null
+        $revEmail = $null
+        if ($null -ne $effectiveReviewer) {
+            if ($null -ne $effectiveReviewer.PSObject.Properties['name'])  { $revName  = [string]$effectiveReviewer.name }
+            if ($null -ne $effectiveReviewer.PSObject.Properties['id'])    { $revId    = [string]$effectiveReviewer.id }
+            if ($null -ne $effectiveReviewer.PSObject.Properties['email']) { $revEmail = [string]$effectiveReviewer.email }
+        }
+
+        [PSCustomObject]@{
+            CertificationId    = $certId
+            CertificationName  = $certName
+            ReviewerName       = $revName
+            ReviewerId         = $revId
+            ReviewerEmail      = $revEmail
+            Classification     = $classification
+            ReassignedFromName = $reassignFromName
+            ReassignedFromId   = $reassignFromId
+        }
+    }
+}
+
 function Get-SPCachedCampaignItems {
     <#
     .SYNOPSIS
@@ -7102,6 +7168,46 @@ function Get-SPCachedCampaignItems {
     Write-Host "  Fetched $($allItems.Count) item(s) from ISC for '$campName'" -ForegroundColor DarkGray
 
     # ---------------------------------------------------------------------------
+    # WI-2: SEAL the cert -> assigned-reviewer roster alongside the items. This is
+    # written to a SEPARATE sibling file (roster-$safeCampId.json) -- NOT embedded in
+    # meta, whose ConvertTo-Json (default depth 2) would truncate nested entries.
+    # Captured at whatever state the campaign is in right now; when that is ACTIVE the
+    # seal is the honest source of truth the COMPLETED reporting path (WI-3) reads,
+    # rather than re-fetching live post-completion certs (force-signed / reassigned).
+    # Guarded only by ($writeToCache -and certs present) -- INDEPENDENT of the items
+    # meta gate, because a cert with zero items still has an assigned reviewer that must
+    # be sealed for accountability. CapturedWhileActive is the WI-4 provenance hook.
+    # ---------------------------------------------------------------------------
+    if ($writeToCache -and $certs.Count -gt 0) {
+        $rosterFile = Join-Path $effectiveCachePath "roster-$safeCampId.json"
+        try {
+            if (-not (Test-Path $effectiveCachePath)) {
+                New-Item -Path $effectiveCachePath -ItemType Directory -Force -WhatIf:$false | Out-Null
+            }
+            $rosterEntries = @($certs | ConvertTo-SPCertRosterEntry)
+            $roster = [ordered]@{
+                CampaignId          = $campId
+                CampaignName        = $campName
+                Status              = $status
+                IsPermanent         = $isPermanent
+                CapturedWhileActive = (-not $isPermanent)
+                CapturedAt          = (Get-Date).ToString('o')
+                CertCount           = $certs.Count
+                Entries             = $rosterEntries
+            }
+            $roster | ConvertTo-Json -Depth 6 | Set-Content $rosterFile -Encoding UTF8
+            Write-SPLog -Message "Sealed cert roster for '$campName': $($rosterEntries.Count) cert(s) -> $rosterFile (capturedWhileActive=$(-not $isPermanent))" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Cert roster seal failed for '$campName': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
+
+    # ---------------------------------------------------------------------------
     # Finalize cache: items were streamed to disk above; write meta to mark complete.
     # When -NoCache was specified, skip writing back so the existing cache is preserved
     # for comparison or rollback. The fresh data is only used for this run.
@@ -7162,6 +7268,143 @@ function Get-SPCachedCampaignItems {
     }
 }
 
+function Get-SPCachedCampaignRoster {
+    <#
+    .SYNOPSIS
+        Returns the cert -> assigned-reviewer roster for a campaign, preferring the
+        SEALED ACTIVE-state roster written by Get-SPCachedCampaignItems (WI-2).
+    .DESCRIPTION
+        READ-ONLY. When a sealed roster file (roster-<campId>.json) exists on disk it is
+        returned verbatim (Source='Sealed') -- this is the honest ACTIVE-state cert ->
+        reviewer map the COMPLETED reporting path (WI-3) must use so undecided items are
+        attributed to the ASSIGNED reviewer, not item.reviewedBy. When no seal exists the
+        function FALLS BACK to live certs (caller-supplied -Certifications, else
+        Get-SPAuditCertifications) and returns Source='Live'. The reader NEVER writes a
+        roster file; sealing happens only on the Get-SPCachedCampaignItems cache-miss path.
+    .PARAMETER Campaign
+        The campaign object (must carry .id; .name/.status optional). Status does not
+        affect which roster is returned -- a COMPLETED campaign still reads the sealed
+        ACTIVE roster, which is the whole point of the seal.
+    .PARAMETER CachePath
+        Explicit cache directory; honored as-is. Defaults to Get-SPAuditCacheDir.
+    .PARAMETER Certifications
+        Caller-supplied full cert set used ONLY for the live fallback (no seal on disk).
+    .PARAMETER CorrelationID
+        Unique ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{
+            Success             = $bool
+            Data                = @(roster entries; see ConvertTo-SPCertRosterEntry)
+            Sealed              = $bool    # $true = served from the ACTIVE-state seal
+            CapturedWhileActive = $bool
+            Source              = 'Sealed' | 'Live'
+            CacheFile           = [string]
+            Error               = $string
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Campaign,
+
+        [Parameter()]
+        [string]$CachePath,
+
+        [Parameter()]
+        [object[]]$Certifications,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $campId   = [string]$Campaign.id
+    $campName = if ($null -ne $Campaign.PSObject.Properties['name'] -and
+                    -not [string]::IsNullOrWhiteSpace($Campaign.name)) { [string]$Campaign.name } else { $campId }
+
+    # Resolve cache dir identically to Get-SPCachedCampaignItems.
+    if (-not [string]::IsNullOrWhiteSpace($CachePath)) {
+        $effectiveCachePath = $CachePath
+    }
+    else {
+        $effectiveCachePath = Get-SPAuditCacheDir
+    }
+
+    $safeCampId = $campId -replace '[^A-Za-z0-9_\-]', '_'
+    $rosterFile = Join-Path $effectiveCachePath "roster-$safeCampId.json"
+
+    # ---------------------------------------------------------------------------
+    # Preferred path: read the SEALED roster captured at ACTIVE state.
+    # ---------------------------------------------------------------------------
+    if (Test-Path $rosterFile) {
+        try {
+            $r = Get-Content $rosterFile -Raw | ConvertFrom-Json
+            $entries = if ($null -ne $r.PSObject.Properties['Entries']) { @($r.Entries) } else { @() }
+            $capturedWhileActive = if ($null -ne $r.PSObject.Properties['CapturedWhileActive']) { [bool]$r.CapturedWhileActive } else { $false }
+            Write-SPLog -Message "Roster HIT (sealed): '$campName' -> $($entries.Count) cert(s) from $rosterFile (capturedWhileActive=$capturedWhileActive)" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success             = $true
+                Data                = @($entries)
+                Sealed              = $true
+                CapturedWhileActive = $capturedWhileActive
+                Source              = 'Sealed'
+                CacheFile           = $rosterFile
+                Error               = $null
+            }
+        }
+        catch {
+            Write-SPLog -Message "Sealed roster read failed for '$campName': $($_.Exception.Message) -- falling back to live certs" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+        }
+    }
+
+    # ---------------------------------------------------------------------------
+    # Fallback (additive): no seal on disk -- build the roster from live certs.
+    # ---------------------------------------------------------------------------
+    if ($PSBoundParameters.ContainsKey('Certifications') -and $null -ne $Certifications) {
+        $certs = @($Certifications)
+    }
+    else {
+        $certsResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+        if (-not $certsResult.Success) {
+            Write-SPLog -Message "Roster live fallback failed for '$campName': $($certsResult.Error)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success             = $false
+                Data                = @()
+                Sealed              = $false
+                CapturedWhileActive = $false
+                Source              = 'Live'
+                CacheFile           = $rosterFile
+                Error               = $certsResult.Error
+            }
+        }
+        $certs = @($certsResult.Data)
+    }
+
+    $entries = @($certs | ConvertTo-SPCertRosterEntry)
+    Write-SPLog -Message "Roster MISS (live): '$campName' -> $($entries.Count) cert(s) built from live certs (no seal on disk)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+        -CorrelationID $CorrelationID
+    return @{
+        Success             = $true
+        Data                = @($entries)
+        Sealed              = $false
+        CapturedWhileActive = $false
+        Source              = 'Live'
+        CacheFile           = $rosterFile
+        Error               = $null
+    }
+}
+
 function Clear-SPAuditItemCache {
     <#
     .SYNOPSIS
@@ -7198,11 +7441,18 @@ function Clear-SPAuditItemCache {
         try {
             $cachePath = Get-SPAuditCacheDir
             if (Test-Path $cachePath) {
-                $pattern = if ([string]::IsNullOrWhiteSpace($CampaignId)) { 'items-*.jsonl' } else {
+                # WI-2: roster siblings (roster-<campId>.json) are sealed next to the items
+                # cache, so clearing must remove them too or a stale seal would outlive its items.
+                if ([string]::IsNullOrWhiteSpace($CampaignId)) {
+                    $patterns = @('items-*.jsonl', 'roster-*.json')
+                } else {
                     $safId = $CampaignId -replace '[^A-Za-z0-9_\-]','_'
-                    "items-$safId.*"
+                    $patterns = @("items-$safId.*", "roster-$safId.json")
                 }
-                $files = Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
+                $files = @()
+                foreach ($pattern in $patterns) {
+                    $files += Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
+                }
                 foreach ($f in $files) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
                 $clearedTargets += "disk($($files.Count) files)"
                 Write-Host "  Disk cache cleared ($($files.Count) file(s) removed)." -ForegroundColor DarkGray
@@ -7286,6 +7536,7 @@ Export-ModuleMember -Function @(
     'Get-SPReviewerDelegations',
     'Test-SPSourceOnboardingReadiness',
     'Get-SPCachedCampaignItems',
+    'Get-SPCachedCampaignRoster',
     'Clear-SPAuditItemCache',
     'Clear-SPAuditAccountCache'
 )
