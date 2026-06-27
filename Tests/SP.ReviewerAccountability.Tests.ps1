@@ -323,3 +323,87 @@ Describe "RA-10: Severity is Red for multi, Amber for single" {
         }
     }
 }
+
+Describe "RA-11: Window looks at the LAST N captures (recent progress not flagged)" {
+    It "Does NOT flag a reviewer who stalled in the distant past but is progressing recently" {
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "ra11-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        try {
+            # 8 daily captures: stalled (30) days 8..4, then progressing 40/50/60 days 3..1.
+            # Window = last Min(ConsecutiveDays+2, count) = Min(5,8) = 5 captures (days 5,4,3,2,1)
+            # = 30,30,40,50,60 -> shows progress -> NOT stalled.
+            $captures = @(
+                @{ Day = 8; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 30 } ) }
+                @{ Day = 7; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 30 } ) }
+                @{ Day = 6; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 30 } ) }
+                @{ Day = 5; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 30 } ) }
+                @{ Day = 4; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 30 } ) }
+                @{ Day = 3; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 40 } ) }
+                @{ Day = 2; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 50 } ) }
+                @{ Day = 1; Reviewers = @( @{ Reviewer = 'ReviewerA'; Completion = 60 } ) }
+            )
+            New-TestTrendFile -Dir $tmpDir -CampaignId 'camp-11' -CampaignName 'Campaign Eleven' -DailyCaptures $captures
+
+            $result = Get-SPStalledReviewers -TrendDir $tmpDir -ConsecutiveDays 3 -DaysBack 14
+            $result.Success | Should -Be $true
+            $match = $result.Data.StalledReviewers | Where-Object { $_.Reviewer -eq 'ReviewerA' }
+            $match | Should -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe "RA-12: Finished-but-unsigned reviewer is NOT flagged stalled" {
+    It "Does NOT flag a reviewer flat at 100% completion" {
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "ra12-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        try {
+            # 5 daily captures all at 100% (decisions done, just not signed off) -> flat, but finished.
+            $captures = @()
+            for ($d = 5; $d -ge 1; $d--) {
+                $captures += @{ Day = $d; Reviewers = @( @{ Reviewer = 'ReviewerF'; Completion = 100 } ) }
+            }
+            New-TestTrendFile -Dir $tmpDir -CampaignId 'camp-12' -CampaignName 'Campaign Twelve' -DailyCaptures $captures
+
+            $result = Get-SPStalledReviewers -TrendDir $tmpDir -ConsecutiveDays 3 -DaysBack 14
+            $result.Success | Should -Be $true
+            $match = $result.Data.StalledReviewers | Where-Object { $_.Reviewer -eq 'ReviewerF' }
+            $match | Should -BeNullOrEmpty
+        }
+        finally {
+            Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe "RA-13: Multi-campaign reviewer sorts before single-campaign with more stalled days" {
+    It "ReviewerP (CampaignCount 2) sorts ahead of ReviewerQ (more StalledDays, 1 campaign)" {
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "ra13-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        try {
+            # ReviewerP: 2 campaigns, flat 30% over 5 days -> CampaignCount 2, StalledDays ~4
+            $capsP = @()
+            for ($d = 5; $d -ge 1; $d--) {
+                $capsP += @{ Day = $d; Reviewers = @( @{ Reviewer = 'ReviewerP'; Completion = 30 } ) }
+            }
+            New-TestTrendFile -Dir $tmpDir -CampaignId 'camp-p1' -CampaignName 'Camp P1' -DailyCaptures $capsP
+            New-TestTrendFile -Dir $tmpDir -CampaignId 'camp-p2' -CampaignName 'Camp P2' -DailyCaptures $capsP
+
+            # ReviewerQ: 1 campaign, flat 50% over 8 days -> CampaignCount 1, StalledDays ~7 (more)
+            $capsQ = @()
+            for ($d = 8; $d -ge 1; $d--) {
+                $capsQ += @{ Day = $d; Reviewers = @( @{ Reviewer = 'ReviewerQ'; Completion = 50 } ) }
+            }
+            New-TestTrendFile -Dir $tmpDir -CampaignId 'camp-q1' -CampaignName 'Camp Q1' -DailyCaptures $capsQ
+
+            $result = Get-SPStalledReviewers -TrendDir $tmpDir -ConsecutiveDays 3 -DaysBack 14
+            $result.Success | Should -Be $true
+            $result.Data.StalledReviewers[0].Reviewer | Should -Be 'ReviewerP'
+        }
+        finally {
+            Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
