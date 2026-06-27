@@ -1949,9 +1949,13 @@ foreach ($audit in $campaignAudits) {
             if ($null -ne $re.PSObject.Properties['ReassignedFromId']) { $rfId = [string]$re.ReassignedFromId }
             if (-not [string]::IsNullOrWhiteSpace($rfId)) { $reassignedAwayIds[$rfId] = $true }
         }
+        # G12: null-safe bucket access -- a malformed audit with Decisions=$null used to
+        # throw 'Cannot index into a null array' on $d['Pending']. Get-SPDecisionBucket
+        # degrades to @() instead. (Section A line ~1889 carries the identical risk; left
+        # as-is per scope -- same pattern applies if hardened later.)
         $pendingByReviewer = Group-SPCompletedPendingByReviewer `
-            -PendingItems @($d['Pending']) `
-            -DecidedItems (@($d['Approved']) + @($d['Revoked'])) `
+            -PendingItems @(Get-SPDecisionBucket -Audit $audit -Name 'Pending') `
+            -DecidedItems (@(Get-SPDecisionBucket -Audit $audit -Name 'Approved') + @(Get-SPDecisionBucket -Audit $audit -Name 'Revoked')) `
             -Roster $certRoster `
             -PrimaryReviewers $primary `
             -ReassignedAwayNames $reassignedAwayNames `

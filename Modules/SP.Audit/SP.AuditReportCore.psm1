@@ -94,6 +94,102 @@ function Get-SPRevocationDisposition {
     return [PSCustomObject]@{ Disposition = 'Queued'; Label = 'Queued for removal'; IsRemoved = $false; IsQueued = $true; IsPending = $false; IsConnectedAD = $false }
 }
 
+function Test-SPAutoApproveMarker {
+    <#
+    .SYNOPSIS
+        Returns $true when a justification string contains a configured ISC
+        force-sign / auto-approve marker (default 'idNowAutoApproved').
+    .DESCRIPTION
+        G9 (cache-honesty robustness): the auto-approve marker used to be a single
+        case-SENSITIVE inline match (`$just.Contains('idNowAutoApproved')`). That is
+        brittle -- an ISC rename or a casing change silently re-inflates completion.
+        This helper:
+          (a) reads the marker list from config (Audit.AutoApproveMarkers) with a
+              defensive try/catch mirroring Get-SPAuditActiveCacheTtl, falling back to
+              the code default @('idNowAutoApproved') so behavior is unchanged when no
+              config is present;
+          (b) matches CASE-INSENSITIVELY via IndexOf(...,OrdinalIgnoreCase).
+        Net effect: same default match, now case-insensitive and config-extendable.
+    .PARAMETER Justification
+        The reviewer's note/comment text. Pass '' when none is available.
+    .OUTPUTS
+        [bool]
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string]$Justification
+    )
+    $just = if ($null -ne $Justification) { [string]$Justification } else { '' }
+    if ([string]::IsNullOrEmpty($just)) { return $false }
+
+    $markers = @('idNowAutoApproved')
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+            $null -ne $cfg.Audit.PSObject.Properties['AutoApproveMarkers'] -and
+            $null -ne $cfg.Audit.AutoApproveMarkers) {
+            $cfgMarkers = @($cfg.Audit.AutoApproveMarkers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            if ($cfgMarkers.Count -gt 0) { $markers = $cfgMarkers }
+        }
+    } catch { }
+
+    foreach ($m in $markers) {
+        $marker = [string]$m
+        if ([string]::IsNullOrEmpty($marker)) { continue }
+        if ($just.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-SPDecisionBucket {
+    <#
+    .SYNOPSIS
+        Null-safe accessor for a named decision bucket inside an audit's Decisions map.
+    .DESCRIPTION
+        G12 (cache-honesty robustness): the COMPLETED V4 path indexed
+        $audit['Decisions']['Pending'] directly. When a malformed/missing audit has
+        Decisions = $null, `$null['Pending']` throws 'Cannot index into a null array'
+        in PS 5.1. This helper degrades gracefully to @() when the audit, its Decisions
+        map, or the named bucket is missing/null. Handles both a hashtable Decisions
+        (via .Contains) and a non-hashtable / PSCustomObject Decisions (via PSObject).
+    .PARAMETER Audit
+        The per-campaign audit hashtable (expected to carry a 'Decisions' map).
+    .PARAMETER Name
+        The bucket name to read (e.g. 'Pending', 'Approved', 'Revoked').
+    .OUTPUTS
+        [object[]] -- the bucket contents, or @() when absent/null.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [object]$Audit,
+        [string]$Name
+    )
+    if ($null -eq $Audit -or [string]::IsNullOrEmpty($Name)) { return @() }
+
+    $decisions = $null
+    if ($Audit -is [System.Collections.IDictionary]) {
+        if ($Audit.Contains('Decisions')) { $decisions = $Audit['Decisions'] }
+    }
+    elseif ($null -ne $Audit.PSObject -and $null -ne $Audit.PSObject.Properties['Decisions']) {
+        $decisions = $Audit.Decisions
+    }
+    if ($null -eq $decisions) { return @() }
+
+    $bucket = $null
+    if ($decisions -is [System.Collections.IDictionary]) {
+        if ($decisions.Contains($Name)) { $bucket = $decisions[$Name] }
+    }
+    elseif ($null -ne $decisions.PSObject -and $null -ne $decisions.PSObject.Properties[$Name]) {
+        $bucket = $decisions.$Name
+    }
+    if ($null -eq $bucket) { return @() }
+    return @($bucket)
+}
+
 function ConvertTo-SPCanonicalDecision {
     <#
     .SYNOPSIS
@@ -128,7 +224,9 @@ function ConvertTo-SPCanonicalDecision {
     $just = if ($null -ne $Justification) { [string]$Justification } else { '' }
     switch ($dec) {
         { $_ -in @('APPROVE', 'APPROVED', 'CERTIFY') } {
-            if ($just.Contains('idNowAutoApproved')) { return 'Pending' }
+            # G9: config-driven, case-insensitive marker test (was the brittle
+            # case-sensitive $just.Contains('idNowAutoApproved')).
+            if (Test-SPAutoApproveMarker -Justification $just) { return 'Pending' }
             return 'Approved'
         }
         { $_ -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION') } {
@@ -2906,6 +3004,8 @@ function Build-SPLeadershipHierarchy {
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'ConvertTo-SPCanonicalDecision',
+    'Test-SPAutoApproveMarker',
+    'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',

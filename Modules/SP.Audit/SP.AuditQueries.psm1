@@ -117,6 +117,77 @@ function Get-SPAuditActiveCacheTtl {
     return $ttl
 }
 
+function Add-SPItemCacheLines {
+    <#
+    .SYNOPSIS
+        Mutex-guarded append of pre-formatted JSONL line(s) to an item-cache file (G10).
+    .DESCRIPTION
+        The per-cert incremental flush in Get-SPCachedCampaignItems writes to the shared
+        items-<campId>.jsonl. A GUI fetch and a scheduler fetch hitting the same campaign
+        concurrently can interleave their AppendAllText calls and corrupt the JSONL. This
+        mirrors the proven log-writer mutex (SP.Logging.psm1): a named Mutex keyed off a
+        SHA256 of the absolute file path serializes appends cross-process; the write uses
+        a FileShare.ReadWrite Append stream and Encoding.UTF8.GetBytes (which never emits a
+        BOM) so the existing no-BOM JSONL format is preserved byte-for-byte.
+    .PARAMETER Path
+        Absolute path to the items-<campId>.jsonl cache file.
+    .PARAMETER Content
+        The already-newline-terminated text to append (StringBuilder content unchanged).
+    .OUTPUTS
+        None. Throws on a hard failure so the caller's existing try/catch logs a WARN.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Content
+    )
+    if ([string]::IsNullOrEmpty($Content)) { return }
+
+    # Mutex name: stable SHA256 of the absolute file path (local session scope is
+    # sufficient -- toolkit users run as themselves). SHA256 for FIPS compliance.
+    $hashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant()))
+    $mutexName = 'SP.AuditCache.' + (([System.BitConverter]::ToString($hashBytes) -replace '-').Substring(0, 40))
+
+    $payload  = [System.Text.Encoding]::UTF8.GetBytes($Content)
+    $mutex    = $null
+    $acquired = $false
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+        try {
+            $acquired = $mutex.WaitOne(5000)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            # Previous holder died without releasing -- mutex is now ours.
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw [System.IO.IOException]::new("Could not acquire item-cache mutex within 5s for $Path")
+        }
+        $fs = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Append,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        try {
+            $fs.Write($payload, 0, $payload.Length)
+            $fs.Flush()
+        }
+        finally {
+            $fs.Dispose()
+        }
+    }
+    finally {
+        if ($null -ne $mutex) {
+            if ($acquired) { try { $mutex.ReleaseMutex() } catch { } }
+            $mutex.Dispose()
+        }
+    }
+}
+
 function Get-SPAuditEffectiveCacheTtl {
     <#
     .SYNOPSIS
@@ -7265,7 +7336,9 @@ function Get-SPCachedCampaignItems {
             # Flush this cert's items immediately so a kill mid-pull keeps everything
             # fetched up to the last completed certification.
             if ($writeToCache -and $certLines.Length -gt 0) {
-                try { [System.IO.File]::AppendAllText($itemsFile, $certLines.ToString(), $utf8NoBom) }
+                # G10: mutex-guarded append (concurrent GUI+scheduler fetch can no longer
+                # interleave/corrupt the JSONL). UTF8.GetBytes preserves the no-BOM format.
+                try { Add-SPItemCacheLines -Path $itemsFile -Content $certLines.ToString() }
                 catch {
                     Write-SPLog -Message "Incremental cache append failed for '$campName' cert '$certId2': $($_.Exception.Message)" `
                         -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' -CorrelationID $CorrelationID
@@ -7375,8 +7448,61 @@ function Get-SPCachedCampaignItems {
                 -CorrelationID $CorrelationID
         }
     }
+    elseif ($writeToCache -and $allItems.Count -eq 0 -and $isPermanent) {
+        # G11: a COMPLETED/COMPLETING campaign that genuinely has 0 items must still seal
+        # a permanent record. Previously the 0-item branch only deleted the empty partial,
+        # so the layer-2 disk check (requires BOTH itemsFile AND metaFile) always missed and
+        # the campaign was re-fetched every run. Write a sealed-empty items file + meta
+        # (mirroring the $meta2 shape) so next run produces a permanent disk HIT and the
+        # Get-Content loader yields zero items unchanged. ACTIVE 0-item keeps the old delete.
+        try {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            # Ensure an empty items file exists so the layer-2 (itemsFile AND metaFile) check HITs.
+            [System.IO.File]::WriteAllText($itemsFile, '', $utf8NoBom)
+
+            # Recover a STICKY first-seen status from any prior meta (same logic as the
+            # >0-item finalize block) so a previously-ACTIVE seal stays VERIFIED.
+            $priorFirstSeen = $null; $priorCapturedActive = $false
+            if (Test-Path $metaFile) {
+                try {
+                    $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
+                    elseif ($null -ne $pm.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.Status)) { $priorFirstSeen = [string]$pm.Status }
+                    if ($null -ne $pm.PSObject.Properties['CapturedWhileActive']) { $priorCapturedActive = [bool]$pm.CapturedWhileActive }
+                } catch { }
+            }
+            $firstSeenStatus = if ($null -ne $priorFirstSeen) { $priorFirstSeen } else { $status }
+            $capturedWhileActive = $priorCapturedActive -or ($firstSeenStatus.ToUpperInvariant() -in @('ACTIVE', 'ACTIVATING', ''))
+            $isUnverified = $isPermanent -and (-not $capturedWhileActive)
+
+            $meta2 = [ordered]@{
+                CampaignId   = $campId
+                CampaignName = $campName
+                Status       = $status
+                IsPermanent  = $isPermanent
+                CachedAt     = (Get-Date).ToString('o')
+                CertCount    = $certs.Count
+                ItemCount    = 0
+                FirstSeenStatus     = $firstSeenStatus
+                CapturedWhileActive = $capturedWhileActive
+                Unverified          = $isUnverified
+            }
+            $meta2 | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
+
+            Write-SPLog -Message "Wrote sealed-empty cache for '$campName': 0 items -> $itemsFile (permanent=$isPermanent)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+            Write-Host "  [Cache] Sealed empty COMPLETED campaign ($campName) -- will not re-fetch." -ForegroundColor DarkGreen
+        }
+        catch {
+            Write-SPLog -Message "Sealed-empty cache finalize failed for '$campName': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
     elseif ($writeToCache -and $allItems.Count -eq 0 -and (Test-Path $itemsFile)) {
-        # Nothing fetched -- remove the empty partial so it is not mistaken for a resume.
+        # Nothing fetched (ACTIVE 0-item) -- remove the empty partial so it is not mistaken
+        # for a resume. Unchanged ACTIVE behavior.
         try { [System.IO.File]::Delete($itemsFile) } catch { }
     }
 

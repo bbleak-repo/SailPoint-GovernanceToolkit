@@ -93,6 +93,7 @@ function Get-SPConfigDefaults {
             OutputPath               = '.\Audit'
             CachePath                = '.\Audit\.cache'
             CacheActiveTtlMinutes    = 180
+            AutoApproveMarkers       = @('idNowAutoApproved')
             AccountCacheTtlMinutes   = 1440
             IdentityCacheTtlMinutes  = 1440
             SnapshotPath             = '.\Audit\Snapshots'
