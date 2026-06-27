@@ -252,6 +252,7 @@
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
+        'Get-SPCampaignReviewerTrend'
         'Export-SPCampaignTrendHtml'
         'Get-SPProgramTrend'
         'Export-SPProgramTrendHtml'

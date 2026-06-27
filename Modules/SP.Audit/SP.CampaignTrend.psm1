@@ -112,6 +112,11 @@ function Save-SPCampaignTrendPoint {
     .PARAMETER TrendDir
         Override the trend root (default: resolved from config, toolkit-root absolute,
         environment-scoped).
+    .PARAMETER ProtectActive
+        Opt-in ACTIVE-record protection (mirrors the daily-evidence dedup at
+        Invoke-SPDailyEvidenceReportV4.ps1). When set, a COMPLETED/COMPLETING capture is
+        SKIPPED if an ACTIVE row already exists for the SAME UTC day -- so a post-completion
+        run cannot dilute the honest ACTIVE record. Default off preserves append-only behavior.
     .OUTPUTS
         [hashtable] @{ Success; Data=@{ FilePath; Timestamp }; Error }
     #>
@@ -120,7 +125,8 @@ function Save-SPCampaignTrendPoint {
     param(
         [Parameter(Mandatory)][object]$Snapshot,
         [Parameter()][object]$Diff,
-        [Parameter()][string]$TrendDir
+        [Parameter()][string]$TrendDir,
+        [Parameter()][switch]$ProtectActive
     )
     try {
         $meta = Get-SPTrendVal $Snapshot 'Meta'
@@ -311,6 +317,35 @@ function Save-SPCampaignTrendPoint {
             reviewers    = $reviewerSummaries
         }
 
+        # --- ACTIVE-record protection (opt-in) ------------------------------------------------
+        # Mirror of Invoke-SPDailyEvidenceReportV4.ps1: don't let a COMPLETED/COMPLETING capture
+        # dilute the honest ACTIVE record for the same UTC day. Read existing rows, and if any
+        # ACTIVE row shares this capture's UTC day, short-circuit (additive Skipped/SkipReason).
+        if ($ProtectActive) {
+            $incomingStatus = ([string](Get-SPTrendVal $meta 'Status' '')).ToUpperInvariant()
+            if ($incomingStatus -in @('COMPLETED', 'COMPLETING') -and (Test-Path $file)) {
+                $incomingDay = $null
+                try { $incomingDay = ([datetime]::Parse($tsUtc)).ToUniversalTime().ToString('yyyy-MM-dd') } catch { }
+                if (-not [string]::IsNullOrWhiteSpace($incomingDay)) {
+                    $utf8Read = New-Object System.Text.UTF8Encoding($false)
+                    $activeExists = $false
+                    foreach ($ln in [System.IO.File]::ReadAllLines($file, $utf8Read)) {
+                        if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+                        try {
+                            $prev = $ln | ConvertFrom-Json
+                            $prevStatus = ([string](Get-SPTrendVal $prev 'status' '')).ToUpperInvariant()
+                            if ($prevStatus -ne 'ACTIVE') { continue }
+                            $prevDay = ([datetime]::Parse([string]$prev.timestamp)).ToUniversalTime().ToString('yyyy-MM-dd')
+                            if ($prevDay -eq $incomingDay) { $activeExists = $true; break }
+                        } catch { }
+                    }
+                    if ($activeExists) {
+                        return @{ Success = $true; Data = @{ FilePath = $file; Timestamp = $tsUtc; Skipped = $true; SkipReason = 'ACTIVE record exists for this day -- not diluting with COMPLETED' }; Error = $null }
+                    }
+                }
+            }
+        }
+
         $utf8 = New-Object System.Text.UTF8Encoding($false)
         $line = $record | ConvertTo-Json -Depth 6 -Compress
         $tmp  = "$file.tmp"
@@ -443,6 +478,93 @@ function Get-SPCampaignTrend {
         }; Error = $null }
     }
     catch { return @{ Success = $false; Data = $null; Error = "Get-SPCampaignTrend failed: $($_.Exception.Message)" } }
+}
+
+function Get-SPCampaignReviewerTrend {
+    <#
+    .SYNOPSIS
+        Reads the per-reviewer decision series that Save-SPCampaignTrendPoint writes (the
+        `reviewers` array on each row) and rolls it up into a per-reviewer time-series.
+    .DESCRIPTION
+        Get-SPCampaignTrend only rolls up the flat `metrics` block; the `reviewers` array
+        (written at Save-SPCampaignTrendPoint) was never surfaced via a read path. This is that
+        read path -- for each capture row it buckets every reviewer (by NAME) into an ordered
+        time-series of @{ timestamp; total; approved; revoked; pending; completion }, plus a
+        Latest point per reviewer.
+    .PARAMETER CampaignId
+        Campaign id whose series to read.
+    .PARAMETER DaysBack
+        Window in days. Default 365.
+    .PARAMETER Environment
+        Environment subfolder (matches what was captured). Optional.
+    .PARAMETER TrendDir
+        Override the trend root.
+    .OUTPUTS
+        [hashtable] @{ Success; Data=@{ CampaignId; CampaignName; PointCount; Reviewers=@(@{ Reviewer; Points; Latest }) }; Error }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$CampaignId,
+        [Parameter()][int]$DaysBack = 365,
+        [Parameter()][string]$Environment = '',
+        [Parameter()][string]$TrendDir
+    )
+    try {
+        if ([string]::IsNullOrWhiteSpace($TrendDir)) { $TrendDir = Get-SPCampaignTrendDir -Environment $Environment }
+        $safeId = $CampaignId -replace '[^A-Za-z0-9_\-]', '_'
+        $file = Join-Path $TrendDir "$safeId.jsonl"
+        if (-not (Test-Path $file)) { return @{ Success = $true; Data = @{ CampaignId = $CampaignId; CampaignName = ''; PointCount = 0; Reviewers = @() }; Error = $null } }
+
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $cutoff = (Get-Date).AddDays(-$DaysBack).ToUniversalTime()
+        $records = [System.Collections.Generic.List[object]]::new()
+        foreach ($ln in [System.IO.File]::ReadAllLines($file, $utf8)) {
+            if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+            try {
+                $rec = $ln | ConvertFrom-Json
+                $ts = [datetime]::Parse([string]$rec.timestamp).ToUniversalTime()
+                if ($ts -ge $cutoff) { $records.Add($rec) }
+            } catch { }
+        }
+        $records = @($records | Sort-Object { [datetime]::Parse([string]$_.timestamp) })
+        if ($records.Count -eq 0) { return @{ Success = $true; Data = @{ CampaignId = $CampaignId; CampaignName = ''; PointCount = 0; Reviewers = @() }; Error = $null } }
+
+        # Bucket each row's reviewers array by reviewer NAME into an ordered time-series.
+        $series = [ordered]@{}
+        foreach ($rec in $records) {
+            $ts = [string]$rec.timestamp
+            $revs = Get-SPTrendVal $rec 'reviewers'
+            if ($null -eq $revs) { continue }
+            foreach ($rv in @($revs)) {
+                if ($null -eq $rv) { continue }
+                $rName = [string](Get-SPTrendVal $rv 'reviewer' '')
+                if ([string]::IsNullOrWhiteSpace($rName)) { continue }
+                if (-not $series.Contains($rName)) { $series[$rName] = [System.Collections.Generic.List[object]]::new() }
+                $series[$rName].Add([ordered]@{
+                    timestamp  = $ts
+                    total      = [int](Get-SPTrendVal $rv 'total' 0)
+                    approved   = [int](Get-SPTrendVal $rv 'approved' 0)
+                    revoked    = [int](Get-SPTrendVal $rv 'revoked' 0)
+                    pending    = [int](Get-SPTrendVal $rv 'pending' 0)
+                    completion = [double](Get-SPTrendVal $rv 'completion' 0)
+                })
+            }
+        }
+
+        $reviewers = foreach ($rName in $series.Keys) {
+            $pts = @($series[$rName])
+            [ordered]@{ Reviewer = $rName; Points = $pts; Latest = $pts[$pts.Count - 1] }
+        }
+
+        return @{ Success = $true; Data = @{
+            CampaignId   = $CampaignId
+            CampaignName = [string]$records[$records.Count - 1].campaignName
+            PointCount   = $records.Count
+            Reviewers    = @($reviewers)
+        }; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPCampaignReviewerTrend failed: $($_.Exception.Message)" } }
 }
 
 #endregion
@@ -679,6 +801,7 @@ function Export-SPProgramTrendHtml {
 Export-ModuleMember -Function @(
     'Save-SPCampaignTrendPoint',
     'Get-SPCampaignTrend',
+    'Get-SPCampaignReviewerTrend',
     'Export-SPCampaignTrendHtml',
     'Get-SPProgramTrend',
     'Export-SPProgramTrendHtml'
