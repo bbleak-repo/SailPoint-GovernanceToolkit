@@ -586,6 +586,20 @@ function Group-SPCompletedPendingByReviewer {
     .PARAMETER ReassignedAwayNames
         Reviewer names whose certs were reassigned away -- skipped (their work moved to
         the reassignee, so they legitimately show as done).
+    .PARAMETER KeyByReviewerId
+        OPT-IN (cache-honesty G3 / WI-5). When set, group reviewer accountability on the
+        ISC identity ID ('id:'+ReviewerId) rather than the display name, so two distinct
+        reviewers sharing a display name are NOT merged into one row and a single reviewer
+        renamed across captures is NOT split into two rows. Id-less rows (and the genuine
+        '(Unassigned)' bucket) fall back to a 'name:'+Name key so they still collapse
+        correctly and distinct id-less names are not merged. The VALUE shape is unchanged;
+        Name carries the first non-empty display name seen for the key. DEFAULT (switch
+        off) is the legacy name-keying -- the additive shim for code/tests that still key
+        on display name (e.g. SP.ReviewerCompletionAttribution RCA-02..05).
+    .PARAMETER ReassignedAwayIds
+        Reviewer identity IDs whose certs were reassigned away -- skipped by ID (companion
+        to ReassignedAwayNames). An ID match excludes only the reassigned-away person and
+        will NOT wrongly drop an innocent same-named reviewer. Default empty -> no effect.
     .OUTPUTS
         [System.Collections.Specialized.OrderedDictionary] keyed by reviewer Name, each
         value @{ Name; Email; ReviewerId; PendingCount; TotalCount }. Drop-in replacement
@@ -610,7 +624,13 @@ function Group-SPCompletedPendingByReviewer {
         [object[]]$PrimaryReviewers = @(),
 
         [Parameter()]
-        [hashtable]$ReassignedAwayNames = @{}
+        [hashtable]$ReassignedAwayNames = @{},
+
+        [Parameter()]
+        [switch]$KeyByReviewerId,
+
+        [Parameter()]
+        [hashtable]$ReassignedAwayIds = @{}
     )
 
     # Index the roster by CertificationId for O(1) cert -> assigned-reviewer lookup.
@@ -648,46 +668,74 @@ function Group-SPCompletedPendingByReviewer {
         return @{ Name = $name; Email = $email; ReviewerId = $reviewerId }
     }
 
+    # Stable group key for a resolved-reviewer $info. DEFAULT (KeyByReviewerId off) = the
+    # legacy display-name key (so existing name-keyed consumers/tests are unaffected). OPT-IN
+    # (KeyByReviewerId) = 'id:'+ReviewerId when the ID is known (so same-named reviewers do
+    # not merge and a renamed reviewer does not split), else 'name:'+Name fallback (id-less
+    # rows and the genuine '(Unassigned)' bucket still collapse correctly). Used by ALL three
+    # accumulation loops so they agree on the bucket for every item.
+    $deriveKey = {
+        param($info)
+        if ($KeyByReviewerId) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId)) { return 'id:' + [string]$info.ReviewerId }
+            return 'name:' + [string]$info.Name
+        }
+        return [string]$info.Name
+    }
+
     $pendingByReviewer = [ordered]@{}
 
     foreach ($pi in $PendingItems) {
         if ($null -eq $pi) { continue }
         $info = & $resolveAssigned $pi
-        $rvn = $info.Name
-        if ($ReassignedAwayNames.ContainsKey($rvn)) { continue }
-        if (-not $pendingByReviewer.Contains($rvn)) {
-            $pendingByReviewer[$rvn] = @{ Name = $rvn; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
+        # Reassigned-away exclusion: by name (legacy shim) AND, additively, by ID -- an ID
+        # match excludes only the reassigned-away person without a name collision dropping an
+        # innocent same-named reviewer.
+        if ($ReassignedAwayNames.ContainsKey($info.Name)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId) -and $ReassignedAwayIds.ContainsKey([string]$info.ReviewerId)) { continue }
+        $key = & $deriveKey $info
+        if (-not $pendingByReviewer.Contains($key)) {
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
         }
-        $pendingByReviewer[$rvn].PendingCount++
-        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].Email) -and -not [string]::IsNullOrWhiteSpace($info.Email)) {
-            $pendingByReviewer[$rvn].Email = $info.Email
+        # Name = first non-empty display name seen for this key (a renamed reviewer keeps one
+        # row with one display name).
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].Name) -and -not [string]::IsNullOrWhiteSpace($info.Name)) {
+            $pendingByReviewer[$key].Name = $info.Name
         }
-        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
-            $pendingByReviewer[$rvn].ReviewerId = $info.ReviewerId
+        $pendingByReviewer[$key].PendingCount++
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].Email) -and -not [string]::IsNullOrWhiteSpace($info.Email)) {
+            $pendingByReviewer[$key].Email = $info.Email
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
+            $pendingByReviewer[$key].ReviewerId = $info.ReviewerId
         }
     }
 
     # TotalCount context: count decided + pending items attributed to the SAME cert-assigned
-    # reviewer, but only for reviewers already in the pending map -- keeps each row internally
-    # consistent (PendingCount <= TotalCount for that reviewer).
+    # reviewer (same key function), but only for reviewers already in the pending map -- keeps
+    # each row internally consistent (PendingCount <= TotalCount for that reviewer).
     foreach ($it in (@($DecidedItems) + @($PendingItems))) {
         if ($null -eq $it) { continue }
         $info = & $resolveAssigned $it
-        $rvn = $info.Name
-        if ($pendingByReviewer.Contains($rvn)) { $pendingByReviewer[$rvn].TotalCount++ }
+        $key = & $deriveKey $info
+        if ($pendingByReviewer.Contains($key)) { $pendingByReviewer[$key].TotalCount++ }
     }
 
-    # Enrich email: roster first (applied above), then the primary reviewer list by name.
+    # Enrich email: roster first (applied above), then the primary reviewer list by DISPLAY
+    # NAME (the only stable join key the Primary entries carry -- no ReviewerId). Matching on
+    # each row's display name keeps the default name-keyed path identical (key == Name there)
+    # and still fills emails when id-keying is on.
     foreach ($rv in $PrimaryReviewers) {
         if ($null -eq $rv) { continue }
         $rvn = ''
         if ($null -ne $rv.PSObject.Properties['Name']) { $rvn = [string]$rv.Name }
         if ([string]::IsNullOrWhiteSpace($rvn)) { continue }
-        if ($pendingByReviewer.Contains($rvn)) {
-            $rvEmail = ''
-            if ($null -ne $rv.PSObject.Properties['Email']) { $rvEmail = [string]$rv.Email }
-            if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$rvn].Email) -and -not [string]::IsNullOrWhiteSpace($rvEmail)) {
-                $pendingByReviewer[$rvn].Email = $rvEmail
+        $rvEmail = ''
+        if ($null -ne $rv.PSObject.Properties['Email']) { $rvEmail = [string]$rv.Email }
+        if ([string]::IsNullOrWhiteSpace($rvEmail)) { continue }
+        foreach ($row in $pendingByReviewer.Values) {
+            if ([string]$row.Name -eq $rvn -and [string]::IsNullOrWhiteSpace([string]$row.Email)) {
+                $row.Email = $rvEmail
             }
         }
     }

@@ -1932,12 +1932,25 @@ foreach ($audit in $campaignAudits) {
         # collapse every undecided item into a single (Unassigned) row). DECIDED items still
         # carry their reviewedBy attribution for the TotalCount context. (cache-honesty R0)
         $certRoster = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+        # WI-5 (G3): key reviewer accountability on ISC identity ID (display name for
+        # presentation only) so two reviewers sharing a name are not merged and a renamed
+        # reviewer is not split. Build the reassigned-away exclusion by ID from the sealed/live
+        # roster's ReassignedFromId (additive companion to the name-based set above).
+        $reassignedAwayIds = @{}
+        foreach ($re in $certRoster) {
+            if ($null -eq $re) { continue }
+            $rfId = ''
+            if ($null -ne $re.PSObject.Properties['ReassignedFromId']) { $rfId = [string]$re.ReassignedFromId }
+            if (-not [string]::IsNullOrWhiteSpace($rfId)) { $reassignedAwayIds[$rfId] = $true }
+        }
         $pendingByReviewer = Group-SPCompletedPendingByReviewer `
             -PendingItems @($d['Pending']) `
             -DecidedItems (@($d['Approved']) + @($d['Revoked'])) `
             -Roster $certRoster `
             -PrimaryReviewers $primary `
-            -ReassignedAwayNames $reassignedAwayNames
+            -ReassignedAwayNames $reassignedAwayNames `
+            -KeyByReviewerId `
+            -ReassignedAwayIds $reassignedAwayIds
         $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
