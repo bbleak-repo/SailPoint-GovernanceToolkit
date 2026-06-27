@@ -1,0 +1,208 @@
+#Requires -Version 5.1
+#Requires -Modules Pester
+
+<#
+.SYNOPSIS
+    Pester 5.x tests for completion-definition consistency (WI-6 / G4).
+.DESCRIPTION
+    Proves the two completion paths agree on a force-completed campaign:
+        PATH A (honest)  - Group-SPAuditDecisions  (decided vs pending buckets)
+        PATH B (metrics) - Measure-SPCampaignMetrics (ApprovedCount / RevokedCount /
+                           PendingCount / CompletionRate)
+
+    Before WI-6, Measure-SPCampaignMetrics used a divergent inline switch that:
+      - counted ISC force-sign 'idNowAutoApproved' APPROVEs as COMPLETE (should be pending),
+      - lumped CERTIFY (a real approve) into pending,
+      - lumped DENY / REJECT / EXCEPTION (real revokes) into pending.
+    Both paths now share ConvertTo-SPCanonicalDecision, so they must agree item-for-item.
+
+    Decision-set / expected (honest) classification:
+        APPROVE                         -> Approved
+        CERTIFY                         -> Approved
+        REVOKE                          -> Revoked
+        DENY                            -> Revoked
+        EXCEPTION                       -> Revoked
+        APPROVE + 'idNowAutoApproved'   -> Pending  (force-sign lie)
+        null                            -> Pending
+      => decided = 5, pending = 2, total = 7
+
+    Assertions are derived from the LIVE honest counts ($g) so the test stays robust
+    if the shared set changes.
+#>
+
+BeforeAll {
+    . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
+    Import-SPTestModules -Core -Api -Audit
+
+    # ONE shared force-completed raw-item set covering every divergent case.
+    $script:RawItems = @(
+        [PSCustomObject]@{ decision = 'APPROVE' }
+        [PSCustomObject]@{ decision = 'CERTIFY' }
+        [PSCustomObject]@{ decision = 'REVOKE' }
+        [PSCustomObject]@{ decision = 'DENY' }
+        [PSCustomObject]@{ decision = 'EXCEPTION' }
+        [PSCustomObject]@{ decision = 'APPROVE'; comment = 'idNowAutoApproved' }
+        [PSCustomObject]@{ decision = $null }
+    )
+}
+
+# ---------------------------------------------------------------------------
+#region CC-001: Honest path vs metrics path agree on a force-completed campaign
+# ---------------------------------------------------------------------------
+
+Describe "CC-001: Completion-definition consistency (WI-6 / G4)" {
+
+    Context "When a force-completed campaign mixes APPROVE/CERTIFY/REVOKE/DENY/EXCEPTION/auto-approve/null" {
+
+        BeforeEach {
+            Mock Write-SPLog -ModuleName SP.AuditReportCore { }
+
+            Mock Measure-SPAuditReviewerMetrics -ModuleName SP.AuditReportCore {
+                return @{
+                    ReviewerMetrics     = @()
+                    CampaignMinHours    = $null
+                    CampaignMaxHours    = $null
+                    CampaignAvgHours    = $null
+                    CampaignMedianHours = $null
+                }
+            }
+
+            Mock Get-SPAuditCertifications -ModuleName SP.AuditReportCore {
+                return @{
+                    Success = $true
+                    Data    = @(
+                        [PSCustomObject]@{
+                            id                     = 'cert-1'
+                            EffectiveReviewer      = [PSCustomObject]@{ id = 'm1'; displayName = 'M' }
+                            ReviewerClassification = 'Primary'
+                            created                = '2026-05-01T10:00:00Z'
+                            signed                 = '2026-05-02T08:00:00Z'
+                        }
+                    )
+                    Error   = $null
+                }
+            }
+
+            Mock Get-SPAuditCertificationItems -ModuleName SP.AuditReportCore {
+                return @{
+                    Success = $true
+                    Data    = $script:RawItems
+                    Error   = $null
+                }
+            }
+        }
+
+        It "Both paths agree on decided / pending / completion-rate" {
+            # PATH A (honest): wrap each raw item in the shape Group-SPAuditDecisions consumes.
+            $wrapped = foreach ($raw in $script:RawItems) {
+                [PSCustomObject]@{
+                    Item              = $raw
+                    CertificationId   = 'cert-1'
+                    CertificationName = 'c'
+                    CampaignName      = 'camp'
+                }
+            }
+            $g = Group-SPAuditDecisions -Items $wrapped
+
+            $honestDecided = $g.Approved.Count + $g.Revoked.Count
+            $honestPending = $g.Pending.Count
+            $total         = $script:RawItems.Count
+
+            # Sanity on the honest path itself (derived, not hard-coded beyond the documented set).
+            $honestDecided | Should -Be 5
+            $honestPending | Should -Be 2
+            $total         | Should -Be 7
+
+            # PATH B (metrics): same raw items via the public Measure path.
+            $campaign = [PSCustomObject]@{
+                id      = 'camp'
+                name    = 'c'
+                type    = 'MANAGER'
+                status  = 'COMPLETED'
+                created = '2026-05-01T10:00:00Z'
+            }
+            $m = Measure-SPCampaignMetrics -Campaigns @($campaign)
+
+            $m.Success         | Should -Be $true
+            $m.Data.Count      | Should -Be 1
+            $m.Data[0].TotalItems | Should -Be $total
+
+            # Core of the item: the two paths AGREE.
+            ($m.Data[0].ApprovedCount + $m.Data[0].RevokedCount) | Should -Be $honestDecided
+            $m.Data[0].PendingCount | Should -Be $honestPending
+
+            $expectedRate = [Math]::Round(($honestDecided / $total) * 100, 1)
+            $m.Data[0].CompletionRate | Should -Be $expectedRate
+        }
+
+        It "Counts the idNowAutoApproved force-sign item as PENDING in BOTH paths" {
+            $wrapped = foreach ($raw in $script:RawItems) {
+                [PSCustomObject]@{
+                    Item              = $raw
+                    CertificationId   = 'cert-1'
+                    CertificationName = 'c'
+                    CampaignName      = 'camp'
+                }
+            }
+            $g = Group-SPAuditDecisions -Items $wrapped
+
+            # Honest path: the two pending items are the auto-approve lie + the null decision.
+            $g.Pending.Count | Should -Be 2
+
+            $campaign = [PSCustomObject]@{
+                id      = 'camp'
+                name    = 'c'
+                type    = 'MANAGER'
+                status  = 'COMPLETED'
+                created = '2026-05-01T10:00:00Z'
+            }
+            $m = Measure-SPCampaignMetrics -Campaigns @($campaign)
+
+            # Metrics path: PendingCount includes the force-sign lie + null, NOT CERTIFY/DENY/EXCEPTION.
+            $m.Data[0].PendingCount  | Should -Be 2
+            # CERTIFY counts as a real approve; DENY/EXCEPTION as real revokes => decided = 5.
+            ($m.Data[0].ApprovedCount + $m.Data[0].RevokedCount) | Should -Be 5
+        }
+
+        It "Stamps the metrics output as the HonestClassifier number of record" {
+            $campaign = [PSCustomObject]@{
+                id      = 'camp'
+                name    = 'c'
+                type    = 'MANAGER'
+                status  = 'COMPLETED'
+                created = '2026-05-01T10:00:00Z'
+            }
+            $m = Measure-SPCampaignMetrics -Campaigns @($campaign)
+            $m.Data[0].CompletionBasis | Should -Be 'HonestClassifier'
+        }
+    }
+}
+
+#endregion
+
+# ---------------------------------------------------------------------------
+#region CC-002: ConvertTo-SPCanonicalDecision direct unit coverage
+# ---------------------------------------------------------------------------
+
+Describe "CC-002: ConvertTo-SPCanonicalDecision shared classifier" {
+
+    It "Maps '<Decision>' (justification '<Justification>') to '<Expected>'" -ForEach @(
+        @{ Decision = 'APPROVE';   Justification = '';                  Expected = 'Approved' }
+        @{ Decision = 'APPROVED';  Justification = '';                  Expected = 'Approved' }
+        @{ Decision = 'CERTIFY';   Justification = '';                  Expected = 'Approved' }
+        @{ Decision = 'approve';   Justification = '';                  Expected = 'Approved' }
+        @{ Decision = 'APPROVE';   Justification = 'idNowAutoApproved'; Expected = 'Pending'  }
+        @{ Decision = 'REVOKE';    Justification = '';                  Expected = 'Revoked'  }
+        @{ Decision = 'REVOKED';   Justification = '';                  Expected = 'Revoked'  }
+        @{ Decision = 'DENY';      Justification = '';                  Expected = 'Revoked'  }
+        @{ Decision = 'REJECT';    Justification = '';                  Expected = 'Revoked'  }
+        @{ Decision = 'EXCEPTION'; Justification = '';                  Expected = 'Revoked'  }
+        @{ Decision = '';          Justification = '';                  Expected = 'Pending'  }
+        @{ Decision = $null;       Justification = '';                  Expected = 'Pending'  }
+        @{ Decision = 'UNDECIDED'; Justification = '';                  Expected = 'Pending'  }
+    ) {
+        ConvertTo-SPCanonicalDecision -Decision $Decision -Justification $Justification | Should -Be $Expected
+    }
+}
+
+#endregion

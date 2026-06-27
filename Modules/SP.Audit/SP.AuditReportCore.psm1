@@ -94,6 +94,50 @@ function Get-SPRevocationDisposition {
     return [PSCustomObject]@{ Disposition = 'Queued'; Label = 'Queued for removal'; IsRemoved = $false; IsQueued = $true; IsPending = $false; IsConnectedAD = $false }
 }
 
+function ConvertTo-SPCanonicalDecision {
+    <#
+    .SYNOPSIS
+        The SINGLE honest definition of a certification item's decision outcome.
+    .DESCRIPTION
+        Maps an ISC item decision (+ its justification/comment) to exactly one of the
+        three canonical buckets every evidence path must agree on:
+            APPROVE / APPROVED / CERTIFY  -> 'Approved'
+                EXCEPT when the justification contains 'idNowAutoApproved' (ISC force-sign
+                lie: the API says APPROVE but the reviewer never decided) -> 'Pending'
+            REVOKE / REVOKED / DENY / REJECT / EXCEPTION -> 'Revoked'
+            UNDECIDED / null / empty / anything else      -> 'Pending'
+
+        This encodes the same logic Group-SPAuditDecisions used inline; it is factored out
+        so Measure-SPCampaignMetrics and Group-SPAuditDecisions share ONE completion
+        definition (the "number of record") rather than the old divergent inline switches.
+    .PARAMETER Decision
+        The raw ISC decision string (e.g. 'APPROVE', 'REVOKE', 'CERTIFY', null/empty).
+    .PARAMETER Justification
+        The reviewer's note/comment text. Only inspected on the APPROVE branch to detect the
+        'idNowAutoApproved' force-sign marker. Pass '' when no justification is available.
+    .OUTPUTS
+        [string] 'Approved' | 'Revoked' | 'Pending'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$Decision,
+        [string]$Justification
+    )
+    $dec = if ($null -ne $Decision) { ([string]$Decision).ToUpperInvariant() } else { '' }
+    $just = if ($null -ne $Justification) { [string]$Justification } else { '' }
+    switch ($dec) {
+        { $_ -in @('APPROVE', 'APPROVED', 'CERTIFY') } {
+            if ($just.Contains('idNowAutoApproved')) { return 'Pending' }
+            return 'Approved'
+        }
+        { $_ -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION') } {
+            return 'Revoked'
+        }
+        default { return 'Pending' }  # null, empty, UNDECIDED, anything else
+    }
+}
+
 function Group-SPAuditDecisions {
     <#
     .SYNOPSIS
@@ -401,15 +445,12 @@ function Group-SPAuditDecisions {
         # comment as a fallback when the decision field doesn't say UNDECIDED directly.
         # Performance: .Contains() is ~10x faster than -match for 40k+ items; the auto-
         # approve check only runs for APPROVE variants, not REVOKE or empty decisions.
-        switch ($decision.ToUpperInvariant()) {
-            { $_ -in @('APPROVE', 'APPROVED', 'CERTIFY') } {
-                if ($justification.Contains('idNowAutoApproved')) { $pending.Add($out) }
-                else { $approved.Add($out) }
-            }
-            { $_ -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION') } {
-                $revoked.Add($out)
-            }
-            default { $pending.Add($out) }  # null, empty, UNDECIDED, anything else
+        # The classification itself lives in ConvertTo-SPCanonicalDecision -- the single
+        # honest definition shared with Measure-SPCampaignMetrics so the two paths agree.
+        switch (ConvertTo-SPCanonicalDecision -Decision $decision -Justification $justification) {
+            'Approved' { $approved.Add($out) }
+            'Revoked'  { $revoked.Add($out) }
+            default    { $pending.Add($out) }  # 'Pending'
         }
     }
 
@@ -2320,12 +2361,36 @@ function Measure-SPCampaignMetrics {
                         $decision = [string]$item.decision
                     }
 
-                    switch ($decision.ToUpper()) {
-                        'APPROVE'  { $approvedCount++ }
-                        'APPROVED' { $approvedCount++ }
-                        'REVOKE'   { $revokedCount++ }
-                        'REVOKED'  { $revokedCount++ }
-                        default    { $pendingCount++ }
+                    # Extract the justification the SAME way Group-SPAuditDecisions does
+                    # (item.comment, else item.comments string-or-array) so the shared honest
+                    # classifier can spot ISC force-sign 'idNowAutoApproved' lies. Without this
+                    # the old inline switch counted force-signed APPROVEs as complete and lumped
+                    # CERTIFY/DENY/REJECT/EXCEPTION into pending -- disagreeing with the honest path.
+                    $just = ''
+                    if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['comment'] -and
+                        $null -ne $item.comment -and -not [string]::IsNullOrWhiteSpace([string]$item.comment)) {
+                        $just = [string]$item.comment
+                    }
+                    elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['comments'] -and $null -ne $item.comments) {
+                        $cm = $item.comments
+                        if ($cm -is [string]) { $just = $cm }
+                        elseif ($cm -is [System.Collections.IEnumerable]) {
+                            $parts = @()
+                            foreach ($c in $cm) {
+                                if ($null -eq $c) { continue }
+                                if ($c -is [string]) { $parts += $c }
+                                elseif ($null -ne $c.PSObject.Properties['comment'] -and -not [string]::IsNullOrWhiteSpace([string]$c.comment)) { $parts += [string]$c.comment }
+                                elseif ($null -ne $c.PSObject.Properties['text'] -and -not [string]::IsNullOrWhiteSpace([string]$c.text)) { $parts += [string]$c.text }
+                            }
+                            $just = ($parts -join '; ')
+                        }
+                    }
+
+                    # ONE honest completion definition shared with Group-SPAuditDecisions.
+                    switch (ConvertTo-SPCanonicalDecision -Decision $decision -Justification $just) {
+                        'Approved' { $approvedCount++ }
+                        'Revoked'  { $revokedCount++ }
+                        default    { $pendingCount++ }  # 'Pending'
                     }
                 }
 
@@ -2455,6 +2520,7 @@ function Measure-SPCampaignMetrics {
                 SlowestReviewer         = $slowestReviewer
                 ItemsPerReviewer        = $reviewerItemCounts
                 DeadlineStatus          = $deadlineStatus
+                CompletionBasis         = 'HonestClassifier'
             }
 
             $metricsResults.Add($metricsObj)
@@ -2768,6 +2834,7 @@ function Build-SPLeadershipHierarchy {
 
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
+    'ConvertTo-SPCanonicalDecision',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',
