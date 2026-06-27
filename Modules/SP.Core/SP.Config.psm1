@@ -46,6 +46,8 @@ function Get-SPConfigDefaults {
                 Pbkdf2Iterations = 600000
                 CredentialKey    = 'sailpoint-isc'
             }
+            DpapiCredential = @{ Path = '.\Data\sp-dpapi-credential.xml' }
+            ScheduledVault  = @{ KeyPath = '.\Data\sp-scheduled-key.enc' }
         }
         Logging = @{
             Path             = '.\Logs'
