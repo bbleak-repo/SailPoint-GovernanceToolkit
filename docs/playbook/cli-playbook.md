@@ -1289,17 +1289,21 @@ risk, reviewer performance, remediation tracking, and orchestrator reliability i
 
 ### `Invoke-SPDailyEvidenceReport.ps1`
 
-> **Three complementary versions** -- all coexist, produce separate output files, and
-> can run in any combination. They are NOT sequential replacements.
+> **Complementary versions** -- all coexist, produce separate output files, and can run
+> in any combination. They are NOT sequential replacements.
 >
 > | Version | Script | Best for | Key feature |
 > |---|---|---|---|
 > | **V1** | `Invoke-SPDailyEvidenceReport.ps1` | Standalone daily compliance dashboard | 6-KPI tiles, Domino Tracker, Governance Confidence Score, evidence registers. Works for any campaign on any schedule. |
 > | **V2** | `Invoke-SPDailyEvidenceReportV2.ps1` | Lean per-campaign audit evidence | Donut chart, source-aware remediation (Deprovisioned/Queued/Pending), decision register with justification. No KPI dashboard. |
 > | **V3** | `Invoke-SPDailyEvidenceReportV3.ps1` | Day-over-day delta tracking | Everything V2 has + KPI dashboard + access change tracking (added/removed/changed) + reviewer timeliness aging. Requires recurring daily campaign model. |
+> | **V4 / V4b** | `Invoke-SPDailyEvidenceReportV4.ps1` / `...V4b.ps1` | Cache-honest evidence engine + `daily-metrics.jsonl` | Undecided detection (`idNowAutoApproved`); reviewer accountability that stays honest across ACTIVE -> COMPLETED via a cert-to-reviewer roster sealed at ACTIVE state; writes the JSONL that V7 trends. |
+> | **V7** | `Invoke-SPDailyEvidenceReportV7.ps1` | Calendar-day trending visualizer | Reads `daily-metrics.jsonl` (no API calls): completion progression, reviewer heatmap, velocity, compliance accountability. |
 >
 > **Quick decision:** Use V1 for "what is governance posture today?" Use V3 for "what
-> changed since yesterday?" Use V2 for a clean audit artifact without KPI overhead.
+> changed since yesterday?" Use V2 for a clean audit artifact without KPI overhead. Use
+> **V4/V4b + V7** for daily privileged-attestation programs that need reviewer-completion
+> tracking that stays correct *after* a campaign closes (see the V4/V4b/V7 section below).
 
 **Purpose:** a daily executive governance dashboard with six KPIs, a Governance Confidence
 Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy
@@ -1481,6 +1485,85 @@ the prior campaign resolves to yesterday's, not an unrelated one. It captures a 
 **Output:** `daily-evidence-v3-{timestamp}.html` (+ `daily-evidence-v3-audit.jsonl`). **Related:**
 `Invoke-SPCampaignDiff.ps1` (the scope-diff this hybridizes), `Invoke-SPDailyEvidenceReportV2.ps1`
 (the current-state sibling — both remain available).
+
+### `Invoke-SPDailyEvidenceReportV4.ps1` / `V4b.ps1` / `V7.ps1`
+**Purpose:** the **cache-honest daily-evidence pipeline** for daily (or long-running)
+privileged-attestation programs that need reviewer-completion tracking which stays correct **after a
+campaign closes**. **V4 / V4b** are the data engine — they fetch from ISC, render per-campaign HTML
+evidence, and write `Audit\metrics\daily-metrics.jsonl`. **V7** is the trending visualizer — it reads
+that JSONL (no API calls) and renders calendar-day charts. V4b is a bug-fixed fork of V4 (donut
+chart, N/A-reviewer warning, item-level reviewer %); both take the same parameters and write the same
+JSONL. Run one of V4/V4b, then V7.
+
+```
+ISC API  -->  V4 / V4b  -->  items cache + snapshots + daily-metrics.jsonl  -->  V7 (calendar-day charts)
+                       \-->  per-campaign HTML evidence report
+```
+
+**Why this pipeline exists — honest completion tracking across ACTIVE and COMPLETED.** After a
+campaign is force-completed, ISC's API *inflates* the data: it auto-approves leftover items (marking
+them `idNowAutoApproved`), reports `decisionsMade = decisionsTotal`, and sets every certification to
+`phase: SIGNED` — so a naive read claims *everyone* finished. The pipeline refuses that story:
+
+- **Item-level truth, not cert sign-off.** "Who didn't complete" is derived from the items that were
+  genuinely **Undecided** when the campaign was last captured ACTIVE — never from cert `phase`.
+- **Sealed cert-to-reviewer roster.** The assigned-reviewer roster is captured and **sealed at ACTIVE
+  state**, and undecided items are attributed to the **cert-assigned reviewer** (keyed on ISC
+  identity ID). A COMPLETED campaign therefore names the *actual accountable reviewer* instead of
+  collapsing every undecided item into a single `(Unassigned)` row.
+- **Seal-on-transition.** When a campaign that was cached ACTIVE flips to COMPLETED, its cache is
+  sealed permanent — the honest ACTIVE-state data is preserved and never overwritten by ISC's
+  post-completion inflation.
+- **Unverified-provenance banner (warning).** If a campaign is **first seen *after* it already
+  COMPLETED** (no ACTIVE-state capture ever ran), the report renders a red "no active-state capture —
+  completion unverified" banner rather than silently trusting ISC's post-close numbers.
+  **Operational rule:** schedule V4/V4b to run **while campaigns are ACTIVE** (after the daily
+  orchestrator) so every campaign gets an honest pre-close capture.
+
+| Parameter (V4 / V4b) | Description |
+|---|---|
+| `-DaysBack <n>` | Lookback window (default 1). |
+| `-CampaignName` / `-CampaignNameStartsWith` / `-CampaignNameContains` | Campaign name filters. |
+| `-Status` | Restrict to campaign states: STAGED / ACTIVE / COMPLETING / COMPLETED. |
+| `-NoCache` | Fetch fresh from ISC but **do not** read or overwrite the cache (compare fresh vs cached). |
+| `-RefreshCache` | Fetch fresh **and** overwrite the cache (after reviewers sign off; real-time numbers + updated cache). |
+| `-PerRunDay` | **Opt-in** time axis. Default `captureDate` = the campaign's own *created* date (campaign-to-campaign axis — correct for recurring daily campaigns). `-PerRunDay` uses the *run* date, giving true per-day ACTIVE progression for a **single long-running** campaign. |
+| `-NoCapture` | Re-render from existing snapshots without capturing a new one. |
+| `-OutputMode` | `Console`/`HTML`/`JSON`/`Both`. |
+
+| Parameter (V7) | Description |
+|---|---|
+| `-DaysBack <n>` | Trend window in days. |
+| `-StartDate` / `-EndDate` | Exact `yyyy-MM-dd` range (takes precedence over `-DaysBack`). |
+| `-OutputMode` | `Console`/`HTML`/`Both`. |
+
+```powershell
+# Daily: V4b generates evidence + JSONL (honest reviewer accountability; uses cache if valid)
+.\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -CampaignNameContains 'Daily Attestation' -OutputMode Both -Token $token
+
+# After reviewers signed off mid-day -- refresh the cache with live numbers
+.\Scripts\Invoke-SPDailyEvidenceReportV4b.ps1 -CampaignNameContains 'Daily Attestation' -RefreshCache -Token $token
+
+# A single long-running quarterly campaign captured daily -- true per-day progression
+.\Scripts\Invoke-SPDailyEvidenceReportV4.ps1 -CampaignName 'Q3 Privileged Review' -PerRunDay -Token $token
+
+# Trend the last 18 days from the JSONL (no API calls)
+.\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -DaysBack 18 -OutputMode Both
+
+# Trend an exact date range
+.\Scripts\Invoke-SPDailyEvidenceReportV7.ps1 -StartDate '2026-06-15' -EndDate '2026-06-19' -OutputMode Both
+```
+
+> **Optional — near-deadline cache freshness.** By default the ACTIVE-campaign item cache uses a
+> fixed TTL (`Audit.CacheActiveTtlMinutes`, default 180 min). To capture a fresher final picture as a
+> deadline nears, enable `Audit.NearDeadlineCapture` in `settings.json`: `Enabled` (default `false`),
+> `WindowMinutes` (default 1440 = 24 h before deadline), and `TtlMinutes` (default 15 — the shrunk
+> TTL inside the window; it only ever *shortens* the effective TTL, never lengthens it).
+
+**Output:** `daily-evidence-v4{,b}-{timestamp}.html` (plus a `_fresh.html` variant under `-NoCache`),
+`daily-evidence-v7-{prefix}-{timestamp}.html`, and `Audit\metrics\daily-metrics.jsonl`. For the
+exhaustive per-section tables and the full ISC-behaviour handling matrix, see
+[Reporting & Analytics](07-reporting-analytics.md).
 
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
