@@ -7309,6 +7309,9 @@ function Get-SPCachedCampaignItems {
 
     $certIdx   = 0
     $certTotal = $certs.Count
+    # M3: count cert-fetch failures so a transient all-certs-fail blip on a COMPLETED campaign
+    # is not mistaken for a genuine 0-item result and sealed permanently empty (see G11 below).
+    $certFetchFailures = 0
 
     foreach ($cert in $certs) {
         $certIdx++
@@ -7344,6 +7347,10 @@ function Get-SPCachedCampaignItems {
                         -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' -CorrelationID $CorrelationID
                 }
             }
+        }
+        else {
+            # M3: a failed cert fetch (transient API error) is NOT a genuine empty cert.
+            $certFetchFailures++
         }
     }
 
@@ -7448,9 +7455,13 @@ function Get-SPCachedCampaignItems {
                 -CorrelationID $CorrelationID
         }
     }
-    elseif ($writeToCache -and $allItems.Count -eq 0 -and $isPermanent) {
-        # G11: a COMPLETED/COMPLETING campaign that genuinely has 0 items must still seal
-        # a permanent record. Previously the 0-item branch only deleted the empty partial,
+    elseif ($writeToCache -and $allItems.Count -eq 0 -and $isPermanent -and $certFetchFailures -eq 0) {
+        # G11 (+M3 guard): a COMPLETED/COMPLETING campaign that GENUINELY has 0 items -- every
+        # cert fetched OK and returned zero -- must still seal a permanent record. The
+        # $certFetchFailures -eq 0 guard (M3) prevents a transient all-certs-fail blip from being
+        # sealed permanently empty; that case falls through to the delete branch below and
+        # self-heals (re-fetches) on the next run.
+        # Previously the 0-item branch only deleted the empty partial,
         # so the layer-2 disk check (requires BOTH itemsFile AND metaFile) always missed and
         # the campaign was re-fetched every run. Write a sealed-empty items file + meta
         # (mirroring the $meta2 shape) so next run produces a permanent disk HIT and the

@@ -162,6 +162,47 @@ Describe "CR-G11: COMPLETED 0-item fetch writes sealed-empty meta" {
     }
 }
 
+Describe "CR-G11b (M3): COMPLETED 0-item from a FAILED fetch is NOT sealed empty" {
+
+    BeforeEach {
+        Mock Write-SPLog -ModuleName SP.AuditQueries { }
+        # Every cert fetch FAILS (transient API error). $allItems stays empty, but this is a
+        # transient blip -- NOT a genuine empty campaign -- so it must NOT be poison-sealed.
+        Mock Get-SPAuditCertificationItems -ModuleName SP.AuditQueries {
+            return @{ Success = $false; Data = @(); Error = 'transient 503' }
+        }
+        $script:G11bCacheDir = Join-Path $TestDrive 'g11bcache'
+        $script:G11bMetaFile = Join-Path $script:G11bCacheDir 'items-camp-fail-001.meta.json'
+        $script:G11bCerts = @(
+            [PSCustomObject]@{
+                id           = 'cert-fail-a'
+                name         = 'Cert Fail A'
+                campaign     = [PSCustomObject]@{ id = 'camp-fail-001' }
+                phase        = 'SIGNED'
+                reviewer     = [PSCustomObject]@{ type = 'IDENTITY'; id = 'id-rv-f1'; name = 'Fail Reviewer'; email = 'f1@corp.test' }
+                reassignment = $null
+            }
+        )
+        $script:G11bCompleted = [PSCustomObject]@{ id = 'camp-fail-001'; name = 'FailCompleted'; status = 'COMPLETED' }
+        Clear-SPAuditItemCache -CampaignId 'camp-fail-001' -MemoryOnly
+    }
+
+    It "Does NOT write a sealed-empty meta when all cert fetches failed (poison-seal guard)" {
+        $r = Get-SPCachedCampaignItems -Campaign $script:G11bCompleted -CachePath $script:G11bCacheDir -Certifications $script:G11bCerts
+        $r.ItemCount | Should -Be 0
+        Test-Path $script:G11bMetaFile | Should -Be $false -Because "a failed-fetch 0-item COMPLETED campaign must not be sealed permanently empty"
+    }
+
+    It "Re-fetches on the next run instead of serving a permanent empty HIT" {
+        Clear-SPAuditItemCache -CampaignId 'camp-fail-001' -MemoryOnly
+        $null = Get-SPCachedCampaignItems -Campaign $script:G11bCompleted -CachePath $script:G11bCacheDir -Certifications $script:G11bCerts
+        Clear-SPAuditItemCache -CampaignId 'camp-fail-001' -MemoryOnly
+        $r2 = Get-SPCachedCampaignItems -Campaign $script:G11bCompleted -CachePath $script:G11bCacheDir -Certifications $script:G11bCerts
+        $r2.FromCache | Should -Be $false -Because "the failed-fetch empty was not sealed; the next run re-fetches (self-heals)"
+        Should -Invoke Get-SPAuditCertificationItems -ModuleName SP.AuditQueries -Times 2 -Exactly
+    }
+}
+
 #endregion
 
 #region G12: null-safe decision-bucket accessor

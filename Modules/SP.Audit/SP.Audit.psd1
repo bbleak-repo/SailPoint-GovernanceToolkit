@@ -60,6 +60,7 @@
 
         # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
+        'ConvertTo-SPCanonicalDecision'
         'Test-SPAutoApproveMarker'
         'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
