@@ -117,6 +117,173 @@ function Get-SPAuditActiveCacheTtl {
     return $ttl
 }
 
+function Add-SPItemCacheLines {
+    <#
+    .SYNOPSIS
+        Mutex-guarded append of pre-formatted JSONL line(s) to an item-cache file (G10).
+    .DESCRIPTION
+        The per-cert incremental flush in Get-SPCachedCampaignItems writes to the shared
+        items-<campId>.jsonl. A GUI fetch and a scheduler fetch hitting the same campaign
+        concurrently can interleave their AppendAllText calls and corrupt the JSONL. This
+        mirrors the proven log-writer mutex (SP.Logging.psm1): a named Mutex keyed off a
+        SHA256 of the absolute file path serializes appends cross-process; the write uses
+        a FileShare.ReadWrite Append stream and Encoding.UTF8.GetBytes (which never emits a
+        BOM) so the existing no-BOM JSONL format is preserved byte-for-byte.
+    .PARAMETER Path
+        Absolute path to the items-<campId>.jsonl cache file.
+    .PARAMETER Content
+        The already-newline-terminated text to append (StringBuilder content unchanged).
+    .OUTPUTS
+        None. Throws on a hard failure so the caller's existing try/catch logs a WARN.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Content
+    )
+    if ([string]::IsNullOrEmpty($Content)) { return }
+
+    # Mutex name: stable SHA256 of the absolute file path (local session scope is
+    # sufficient -- toolkit users run as themselves). SHA256 for FIPS compliance.
+    $hashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant()))
+    $mutexName = 'SP.AuditCache.' + (([System.BitConverter]::ToString($hashBytes) -replace '-').Substring(0, 40))
+
+    $payload  = [System.Text.Encoding]::UTF8.GetBytes($Content)
+    $mutex    = $null
+    $acquired = $false
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+        try {
+            $acquired = $mutex.WaitOne(5000)
+        }
+        catch [System.Threading.AbandonedMutexException] {
+            # Previous holder died without releasing -- mutex is now ours.
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw [System.IO.IOException]::new("Could not acquire item-cache mutex within 5s for $Path")
+        }
+        $fs = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Append,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        try {
+            $fs.Write($payload, 0, $payload.Length)
+            $fs.Flush()
+        }
+        finally {
+            $fs.Dispose()
+        }
+    }
+    finally {
+        if ($null -ne $mutex) {
+            if ($acquired) { try { $mutex.ReleaseMutex() } catch { } }
+            $mutex.Dispose()
+        }
+    }
+}
+
+function Get-SPAuditEffectiveCacheTtl {
+    <#
+    .SYNOPSIS
+        Resolves the effective ACTIVE-cache TTL for a campaign, optionally shrinking it
+        as the campaign's deadline approaches (WI-8 / G5 -- opt-in, default OFF).
+    .DESCRIPTION
+        Returns the base ACTIVE TTL unchanged unless the opt-in "near-deadline capture"
+        feature is enabled AND the campaign's deadline falls within the configured window,
+        in which case the TTL is shrunk to a smaller value so the cache goes stale sooner
+        and a fresher (near-final) capture is taken before the campaign closes. This makes
+        work done just before close less likely to be falsely shown as pending.
+
+        KEY INVARIANT: this helper can only ever LOWER the TTL, never raise it. With the
+        feature default-OFF (or any config error), it returns the base TTL byte-for-byte,
+        so existing caching behavior is unchanged; even when ON it is strictly more
+        conservative (fresher cache), so nothing that currently caches stops caching.
+
+        Opt-in config (read defensively; code defaults apply when absent) under Audit:
+          NearDeadlineCapture.Enabled       [bool] default $false -- master switch.
+          NearDeadlineCapture.WindowMinutes [int]  default 1440 (24h) -- how close to the
+                                            deadline (in minutes) the shrink activates.
+          NearDeadlineCapture.TtlMinutes    [int]  default 15 -- the shrunk TTL applied
+                                            inside the window (effective = min(base, this)).
+    .PARAMETER Campaign
+        Campaign object. May carry a '.deadline' (ISO-8601). When absent/blank/garbage,
+        the base TTL is returned unchanged.
+    .PARAMETER BaseTtl
+        The base ACTIVE TTL in minutes. When -1 (default) the value is resolved from
+        Get-SPAuditActiveCacheTtl (config Audit.CacheActiveTtlMinutes, default 180).
+    .PARAMETER Now
+        Reference "now" for deadline math (injectable for tests). Defaults to Get-Date.
+    .OUTPUTS
+        [int] effective TTL minutes (<= base).
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [object]$Campaign,
+        [int]$BaseTtl = -1,
+        [datetime]$Now = (Get-Date)
+    )
+
+    $base = if ($BaseTtl -ge 0) { $BaseTtl } else { Get-SPAuditActiveCacheTtl }
+
+    # Opt-in config with defensive code defaults.
+    $enabled       = $false
+    $windowMinutes = 1440
+    $nearTtl       = 15
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and $null -ne $cfg.Audit -and
+            $null -ne $cfg.Audit.PSObject.Properties['NearDeadlineCapture'] -and
+            $null -ne $cfg.Audit.NearDeadlineCapture) {
+            $ndc = $cfg.Audit.NearDeadlineCapture
+            if ($null -ne $ndc.PSObject.Properties['Enabled'] -and $null -ne $ndc.Enabled) {
+                $enabled = [bool]$ndc.Enabled
+            }
+            if ($null -ne $ndc.PSObject.Properties['WindowMinutes'] -and $null -ne $ndc.WindowMinutes) {
+                $windowMinutes = [int]$ndc.WindowMinutes
+            }
+            if ($null -ne $ndc.PSObject.Properties['TtlMinutes'] -and $null -ne $ndc.TtlMinutes) {
+                $nearTtl = [int]$ndc.TtlMinutes
+            }
+        }
+    } catch { return $base }
+
+    if (-not $enabled) { return $base }
+
+    # Resolve campaign deadline (mirror the [datetime]::Parse RoundtripKind pattern used
+    # elsewhere in this module). No parseable deadline -> base unchanged.
+    $deadline = $null
+    if ($null -ne $Campaign -and $null -ne $Campaign.PSObject.Properties['deadline'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$Campaign.deadline)) {
+        try {
+            $deadline = [datetime]::Parse([string]$Campaign.deadline,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::RoundtripKind)
+        } catch { $deadline = $null }
+    }
+    if ($null -eq $deadline) { return $base }
+
+    $minutesToDeadline = ($deadline.ToLocalTime() - $Now).TotalMinutes
+    if ($minutesToDeadline -le $windowMinutes) {
+        # Inside the window (or slightly past the deadline). Shrink -- but never raise.
+        $effective = [math]::Min($base, $nearTtl)
+        if ($effective -lt $base) {
+            Write-SPLog -Message ("Near-deadline TTL shrink: base=${base}m -> ${effective}m " +
+                "(minutesToDeadline=$([math]::Round($minutesToDeadline,1)), window=${windowMinutes}m)") `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'EffectiveCacheTtl'
+        }
+        return $effective
+    }
+
+    return $base
+}
+
 function Get-SPAuditSourceName {
     <#
     .SYNOPSIS
@@ -6778,6 +6945,72 @@ function Test-SPSourceOnboardingReadiness {
 # ---------------------------------------------------------------------------
 $script:_ItemMemCache = @{}   # key: campaignId -> @{Items; CachedAt; Status}
 
+function ConvertTo-SPCertRosterEntry {
+    # ---------------------------------------------------------------------------
+    # Internal (non-exported) helper. Maps a single ISC certification object to a
+    # flat roster entry capturing its ASSIGNED reviewer. Mirrors the reviewer
+    # classification used by Get-SPAuditCertifications (see lines ~745-757): when a
+    # reassignment is present the cert is 'Reassigned' and the effective reviewer is
+    # reassignment.to; otherwise 'Primary' and the effective reviewer is reviewer.
+    # Null-safe via PSObject.Properties[...] so it works on PS 5.1 PSCustomObjects.
+    # WI-2: this entry is what gets SEALED at ACTIVE state so the COMPLETED reporting
+    # path (WI-3) can attribute undecided items to the cert-assigned reviewer instead
+    # of item.reviewedBy (null for pending items -> everything collapses to Unassigned).
+    # ---------------------------------------------------------------------------
+    [CmdletBinding()]
+    [OutputType([psobject])]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [object]$Cert
+    )
+    process {
+        if ($null -eq $Cert) { return }
+
+        $certId   = if ($null -ne $Cert.PSObject.Properties['id']) { [string]$Cert.id } else { '' }
+        $certName = if ($null -ne $Cert.PSObject.Properties['name'] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$Cert.name)) { [string]$Cert.name } else { $certId }
+
+        # Classification + effective reviewer (mirror Get-SPAuditCertifications).
+        $classification    = 'Primary'
+        $effectiveReviewer = if ($null -ne $Cert.PSObject.Properties['reviewer']) { $Cert.reviewer } else { $null }
+        $reassignFromName  = $null
+        $reassignFromId    = $null
+
+        if ($null -ne $Cert.PSObject.Properties['reassignment'] -and $null -ne $Cert.reassignment) {
+            $classification = 'Reassigned'
+            $reassign = $Cert.reassignment
+            if ($null -ne $reassign.PSObject.Properties['to'] -and $null -ne $reassign.to) {
+                $effectiveReviewer = $reassign.to
+            }
+            if ($null -ne $reassign.PSObject.Properties['from'] -and $null -ne $reassign.from) {
+                $from = $reassign.from
+                if ($null -ne $from.PSObject.Properties['name']) { $reassignFromName = [string]$from.name }
+                if ($null -ne $from.PSObject.Properties['id'])   { $reassignFromId   = [string]$from.id }
+            }
+        }
+
+        $revName  = $null
+        $revId    = $null
+        $revEmail = $null
+        if ($null -ne $effectiveReviewer) {
+            if ($null -ne $effectiveReviewer.PSObject.Properties['name'])  { $revName  = [string]$effectiveReviewer.name }
+            if ($null -ne $effectiveReviewer.PSObject.Properties['id'])    { $revId    = [string]$effectiveReviewer.id }
+            if ($null -ne $effectiveReviewer.PSObject.Properties['email']) { $revEmail = [string]$effectiveReviewer.email }
+        }
+
+        [PSCustomObject]@{
+            CertificationId    = $certId
+            CertificationName  = $certName
+            ReviewerName       = $revName
+            ReviewerId         = $revId
+            ReviewerEmail      = $revEmail
+            Classification     = $classification
+            ReassignedFromName = $reassignFromName
+            ReassignedFromId   = $reassignFromId
+        }
+    }
+}
+
 function Get-SPCachedCampaignItems {
     <#
     .SYNOPSIS
@@ -6794,8 +7027,8 @@ function Get-SPCachedCampaignItems {
 
         TTL rules:
           COMPLETED / COMPLETING  -> permanent on disk (sealed data never changes).
-          ACTIVE / ACTIVATING     -> configurable TTL (default 30 min; respects
-                                     reviewers acting during the day).
+          ACTIVE / ACTIVATING     -> configurable TTL (default 180 min / 3h;
+                                     respects reviewers acting during the day).
           STAGED / ERROR          -> never cached.
 
         Returned items are pre-wrapped in @{Item; CertificationId; CertificationName;
@@ -6889,7 +7122,12 @@ function Get-SPCachedCampaignItems {
 
     # Active-campaign TTL: explicit -TtlMinutes wins; otherwise read config
     # (Audit.CacheActiveTtlMinutes, default 180). COMPLETED campaigns ignore it entirely.
-    $effectiveTtl = if ($TtlMinutes -ge 0) { $TtlMinutes } else { Get-SPAuditActiveCacheTtl }
+    # WI-8 (G5): Get-SPAuditEffectiveCacheTtl can shrink (never raise) the base TTL when
+    # the opt-in near-deadline-capture feature is on and the deadline is near. With the
+    # feature default-OFF it returns $baseTtl untouched, so the mem/disk TTL checks below
+    # are byte-for-byte unchanged in default config -- additive.
+    $baseTtl      = if ($TtlMinutes -ge 0) { $TtlMinutes } else { Get-SPAuditActiveCacheTtl }
+    $effectiveTtl = Get-SPAuditEffectiveCacheTtl -Campaign $Campaign -BaseTtl $baseTtl
 
     $safeCampId   = $campId -replace '[^A-Za-z0-9_\-]', '_'
     $itemsFile    = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
@@ -6947,6 +7185,14 @@ function Get-SPCachedCampaignItems {
                     $meta | Add-Member -NotePropertyName 'IsPermanent' -NotePropertyValue $true -Force
                     $meta | Add-Member -NotePropertyName 'SealedAt' -NotePropertyValue (Get-Date).ToString('o') -Force
                     $meta | Add-Member -NotePropertyName 'SealReason' -NotePropertyValue "Campaign transitioned from $cachedStatus to $status" -Force
+                    # WI-4 (G1): an ACTIVE->COMPLETED seal stays VERIFIED -- the honest
+                    # ACTIVE-state snapshot existed before close. Preserve the original
+                    # first-seen status (this path returns early below and never reaches
+                    # the cache-miss meta2 block that would otherwise stamp these).
+                    $sealFirstSeen = if ($null -ne $meta.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.FirstSeenStatus)) { [string]$meta.FirstSeenStatus } else { $cachedStatus }
+                    $meta | Add-Member -NotePropertyName 'FirstSeenStatus' -NotePropertyValue $sealFirstSeen -Force
+                    $meta | Add-Member -NotePropertyName 'CapturedWhileActive' -NotePropertyValue $true -Force
+                    $meta | Add-Member -NotePropertyName 'Unverified' -NotePropertyValue $false -Force
                     $meta | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
                 } catch {
                     Write-Host "  [Cache] WARN: Failed to update meta for seal: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -7063,6 +7309,9 @@ function Get-SPCachedCampaignItems {
 
     $certIdx   = 0
     $certTotal = $certs.Count
+    # M3: count cert-fetch failures so a transient all-certs-fail blip on a COMPLETED campaign
+    # is not mistaken for a genuine 0-item result and sealed permanently empty (see G11 below).
+    $certFetchFailures = 0
 
     foreach ($cert in $certs) {
         $certIdx++
@@ -7090,16 +7339,62 @@ function Get-SPCachedCampaignItems {
             # Flush this cert's items immediately so a kill mid-pull keeps everything
             # fetched up to the last completed certification.
             if ($writeToCache -and $certLines.Length -gt 0) {
-                try { [System.IO.File]::AppendAllText($itemsFile, $certLines.ToString(), $utf8NoBom) }
+                # G10: mutex-guarded append (concurrent GUI+scheduler fetch can no longer
+                # interleave/corrupt the JSONL). UTF8.GetBytes preserves the no-BOM format.
+                try { Add-SPItemCacheLines -Path $itemsFile -Content $certLines.ToString() }
                 catch {
                     Write-SPLog -Message "Incremental cache append failed for '$campName' cert '$certId2': $($_.Exception.Message)" `
                         -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' -CorrelationID $CorrelationID
                 }
             }
         }
+        else {
+            # M3: a failed cert fetch (transient API error) is NOT a genuine empty cert.
+            $certFetchFailures++
+        }
     }
 
     Write-Host "  Fetched $($allItems.Count) item(s) from ISC for '$campName'" -ForegroundColor DarkGray
+
+    # ---------------------------------------------------------------------------
+    # WI-2: SEAL the cert -> assigned-reviewer roster alongside the items. This is
+    # written to a SEPARATE sibling file (roster-$safeCampId.json) -- NOT embedded in
+    # meta, whose ConvertTo-Json (default depth 2) would truncate nested entries.
+    # Captured at whatever state the campaign is in right now; when that is ACTIVE the
+    # seal is the honest source of truth the COMPLETED reporting path (WI-3) reads,
+    # rather than re-fetching live post-completion certs (force-signed / reassigned).
+    # Guarded only by ($writeToCache -and certs present) -- INDEPENDENT of the items
+    # meta gate, because a cert with zero items still has an assigned reviewer that must
+    # be sealed for accountability. CapturedWhileActive is the WI-4 provenance hook.
+    # ---------------------------------------------------------------------------
+    if ($writeToCache -and $certs.Count -gt 0) {
+        $rosterFile = Join-Path $effectiveCachePath "roster-$safeCampId.json"
+        try {
+            if (-not (Test-Path $effectiveCachePath)) {
+                New-Item -Path $effectiveCachePath -ItemType Directory -Force -WhatIf:$false | Out-Null
+            }
+            $rosterEntries = @($certs | ConvertTo-SPCertRosterEntry)
+            $roster = [ordered]@{
+                CampaignId          = $campId
+                CampaignName        = $campName
+                Status              = $status
+                IsPermanent         = $isPermanent
+                CapturedWhileActive = (-not $isPermanent)
+                CapturedAt          = (Get-Date).ToString('o')
+                CertCount           = $certs.Count
+                Entries             = $rosterEntries
+            }
+            $roster | ConvertTo-Json -Depth 6 | Set-Content $rosterFile -Encoding UTF8
+            Write-SPLog -Message "Sealed cert roster for '$campName': $($rosterEntries.Count) cert(s) -> $rosterFile (capturedWhileActive=$(-not $isPermanent))" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+        catch {
+            Write-SPLog -Message "Cert roster seal failed for '$campName': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
 
     # ---------------------------------------------------------------------------
     # Finalize cache: items were streamed to disk above; write meta to mark complete.
@@ -7116,6 +7411,25 @@ function Get-SPCachedCampaignItems {
     }
     elseif ($writeToCache -and $allItems.Count -gt 0) {
         try {
+            # WI-4 (G1): stamp capture-provenance onto the items meta. Recover a STICKY
+            # first-seen status from any prior meta still on disk (metaFile is only
+            # overwritten just below, so on a TTL/Refresh miss it is still present). When a
+            # COMPLETED campaign is first cached here WITHOUT a prior ACTIVE capture, the
+            # record is flagged Unverified so the report can warn that ISC post-completion
+            # data is being trusted without a sealed ACTIVE-state snapshot.
+            $priorFirstSeen = $null; $priorCapturedActive = $false
+            if (Test-Path $metaFile) {
+                try {
+                    $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
+                    elseif ($null -ne $pm.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.Status)) { $priorFirstSeen = [string]$pm.Status }
+                    if ($null -ne $pm.PSObject.Properties['CapturedWhileActive']) { $priorCapturedActive = [bool]$pm.CapturedWhileActive }
+                } catch { }
+            }
+            $firstSeenStatus = if ($null -ne $priorFirstSeen) { $priorFirstSeen } else { $status }
+            $capturedWhileActive = $priorCapturedActive -or ($firstSeenStatus.ToUpperInvariant() -in @('ACTIVE', 'ACTIVATING', ''))   # mirror the active-set used at the seal-on-transition check
+            $isUnverified = $isPermanent -and (-not $capturedWhileActive)
+
             $meta2 = [ordered]@{
                 CampaignId   = $campId
                 CampaignName = $campName
@@ -7124,6 +7438,9 @@ function Get-SPCachedCampaignItems {
                 CachedAt     = (Get-Date).ToString('o')
                 CertCount    = $certs.Count
                 ItemCount    = $allItems.Count
+                FirstSeenStatus     = $firstSeenStatus
+                CapturedWhileActive = $capturedWhileActive
+                Unverified          = $isUnverified
             }
             $meta2 | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
 
@@ -7138,8 +7455,65 @@ function Get-SPCachedCampaignItems {
                 -CorrelationID $CorrelationID
         }
     }
+    elseif ($writeToCache -and $allItems.Count -eq 0 -and $isPermanent -and $certFetchFailures -eq 0) {
+        # G11 (+M3 guard): a COMPLETED/COMPLETING campaign that GENUINELY has 0 items -- every
+        # cert fetched OK and returned zero -- must still seal a permanent record. The
+        # $certFetchFailures -eq 0 guard (M3) prevents a transient all-certs-fail blip from being
+        # sealed permanently empty; that case falls through to the delete branch below and
+        # self-heals (re-fetches) on the next run.
+        # Previously the 0-item branch only deleted the empty partial,
+        # so the layer-2 disk check (requires BOTH itemsFile AND metaFile) always missed and
+        # the campaign was re-fetched every run. Write a sealed-empty items file + meta
+        # (mirroring the $meta2 shape) so next run produces a permanent disk HIT and the
+        # Get-Content loader yields zero items unchanged. ACTIVE 0-item keeps the old delete.
+        try {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            # Ensure an empty items file exists so the layer-2 (itemsFile AND metaFile) check HITs.
+            [System.IO.File]::WriteAllText($itemsFile, '', $utf8NoBom)
+
+            # Recover a STICKY first-seen status from any prior meta (same logic as the
+            # >0-item finalize block) so a previously-ACTIVE seal stays VERIFIED.
+            $priorFirstSeen = $null; $priorCapturedActive = $false
+            if (Test-Path $metaFile) {
+                try {
+                    $pm = Get-Content $metaFile -Raw | ConvertFrom-Json
+                    if ($null -ne $pm.PSObject.Properties['FirstSeenStatus'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.FirstSeenStatus)) { $priorFirstSeen = [string]$pm.FirstSeenStatus }
+                    elseif ($null -ne $pm.PSObject.Properties['Status'] -and -not [string]::IsNullOrWhiteSpace([string]$pm.Status)) { $priorFirstSeen = [string]$pm.Status }
+                    if ($null -ne $pm.PSObject.Properties['CapturedWhileActive']) { $priorCapturedActive = [bool]$pm.CapturedWhileActive }
+                } catch { }
+            }
+            $firstSeenStatus = if ($null -ne $priorFirstSeen) { $priorFirstSeen } else { $status }
+            $capturedWhileActive = $priorCapturedActive -or ($firstSeenStatus.ToUpperInvariant() -in @('ACTIVE', 'ACTIVATING', ''))
+            $isUnverified = $isPermanent -and (-not $capturedWhileActive)
+
+            $meta2 = [ordered]@{
+                CampaignId   = $campId
+                CampaignName = $campName
+                Status       = $status
+                IsPermanent  = $isPermanent
+                CachedAt     = (Get-Date).ToString('o')
+                CertCount    = $certs.Count
+                ItemCount    = 0
+                FirstSeenStatus     = $firstSeenStatus
+                CapturedWhileActive = $capturedWhileActive
+                Unverified          = $isUnverified
+            }
+            $meta2 | ConvertTo-Json | Set-Content $metaFile -Encoding UTF8
+
+            Write-SPLog -Message "Wrote sealed-empty cache for '$campName': 0 items -> $itemsFile (permanent=$isPermanent)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+            Write-Host "  [Cache] Sealed empty COMPLETED campaign ($campName) -- will not re-fetch." -ForegroundColor DarkGreen
+        }
+        catch {
+            Write-SPLog -Message "Sealed-empty cache finalize failed for '$campName': $($_.Exception.Message)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedItems' `
+                -CorrelationID $CorrelationID
+        }
+    }
     elseif ($writeToCache -and $allItems.Count -eq 0 -and (Test-Path $itemsFile)) {
-        # Nothing fetched -- remove the empty partial so it is not mistaken for a resume.
+        # Nothing fetched (ACTIVE 0-item) -- remove the empty partial so it is not mistaken
+        # for a resume. Unchanged ACTIVE behavior.
         try { [System.IO.File]::Delete($itemsFile) } catch { }
     }
 
@@ -7159,6 +7533,143 @@ function Get-SPCachedCampaignItems {
         FromCache = $false
         CacheFile = if ($isCacheable) { $itemsFile } else { '' }
         Error     = $null
+    }
+}
+
+function Get-SPCachedCampaignRoster {
+    <#
+    .SYNOPSIS
+        Returns the cert -> assigned-reviewer roster for a campaign, preferring the
+        SEALED ACTIVE-state roster written by Get-SPCachedCampaignItems (WI-2).
+    .DESCRIPTION
+        READ-ONLY. When a sealed roster file (roster-<campId>.json) exists on disk it is
+        returned verbatim (Source='Sealed') -- this is the honest ACTIVE-state cert ->
+        reviewer map the COMPLETED reporting path (WI-3) must use so undecided items are
+        attributed to the ASSIGNED reviewer, not item.reviewedBy. When no seal exists the
+        function FALLS BACK to live certs (caller-supplied -Certifications, else
+        Get-SPAuditCertifications) and returns Source='Live'. The reader NEVER writes a
+        roster file; sealing happens only on the Get-SPCachedCampaignItems cache-miss path.
+    .PARAMETER Campaign
+        The campaign object (must carry .id; .name/.status optional). Status does not
+        affect which roster is returned -- a COMPLETED campaign still reads the sealed
+        ACTIVE roster, which is the whole point of the seal.
+    .PARAMETER CachePath
+        Explicit cache directory; honored as-is. Defaults to Get-SPAuditCacheDir.
+    .PARAMETER Certifications
+        Caller-supplied full cert set used ONLY for the live fallback (no seal on disk).
+    .PARAMETER CorrelationID
+        Unique ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{
+            Success             = $bool
+            Data                = @(roster entries; see ConvertTo-SPCertRosterEntry)
+            Sealed              = $bool    # $true = served from the ACTIVE-state seal
+            CapturedWhileActive = $bool
+            Source              = 'Sealed' | 'Live'
+            CacheFile           = [string]
+            Error               = $string
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [object]$Campaign,
+
+        [Parameter()]
+        [string]$CachePath,
+
+        [Parameter()]
+        [object[]]$Certifications,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    $campId   = [string]$Campaign.id
+    $campName = if ($null -ne $Campaign.PSObject.Properties['name'] -and
+                    -not [string]::IsNullOrWhiteSpace($Campaign.name)) { [string]$Campaign.name } else { $campId }
+
+    # Resolve cache dir identically to Get-SPCachedCampaignItems.
+    if (-not [string]::IsNullOrWhiteSpace($CachePath)) {
+        $effectiveCachePath = $CachePath
+    }
+    else {
+        $effectiveCachePath = Get-SPAuditCacheDir
+    }
+
+    $safeCampId = $campId -replace '[^A-Za-z0-9_\-]', '_'
+    $rosterFile = Join-Path $effectiveCachePath "roster-$safeCampId.json"
+
+    # ---------------------------------------------------------------------------
+    # Preferred path: read the SEALED roster captured at ACTIVE state.
+    # ---------------------------------------------------------------------------
+    if (Test-Path $rosterFile) {
+        try {
+            $r = Get-Content $rosterFile -Raw | ConvertFrom-Json
+            $entries = if ($null -ne $r.PSObject.Properties['Entries']) { @($r.Entries) } else { @() }
+            $capturedWhileActive = if ($null -ne $r.PSObject.Properties['CapturedWhileActive']) { [bool]$r.CapturedWhileActive } else { $false }
+            Write-SPLog -Message "Roster HIT (sealed): '$campName' -> $($entries.Count) cert(s) from $rosterFile (capturedWhileActive=$capturedWhileActive)" `
+                -Severity DEBUG -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success             = $true
+                Data                = @($entries)
+                Sealed              = $true
+                CapturedWhileActive = $capturedWhileActive
+                Source              = 'Sealed'
+                CacheFile           = $rosterFile
+                Error               = $null
+            }
+        }
+        catch {
+            Write-SPLog -Message "Sealed roster read failed for '$campName': $($_.Exception.Message) -- falling back to live certs" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+        }
+    }
+
+    # ---------------------------------------------------------------------------
+    # Fallback (additive): no seal on disk -- build the roster from live certs.
+    # ---------------------------------------------------------------------------
+    if ($PSBoundParameters.ContainsKey('Certifications') -and $null -ne $Certifications) {
+        $certs = @($Certifications)
+    }
+    else {
+        $certsResult = Get-SPAuditCertifications -CampaignId $campId -CorrelationID $CorrelationID
+        if (-not $certsResult.Success) {
+            Write-SPLog -Message "Roster live fallback failed for '$campName': $($certsResult.Error)" `
+                -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+                -CorrelationID $CorrelationID
+            return @{
+                Success             = $false
+                Data                = @()
+                Sealed              = $false
+                CapturedWhileActive = $false
+                Source              = 'Live'
+                CacheFile           = $rosterFile
+                Error               = $certsResult.Error
+            }
+        }
+        $certs = @($certsResult.Data)
+    }
+
+    $entries = @($certs | ConvertTo-SPCertRosterEntry)
+    Write-SPLog -Message "Roster MISS (live): '$campName' -> $($entries.Count) cert(s) built from live certs (no seal on disk)" `
+        -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedRoster' `
+        -CorrelationID $CorrelationID
+    return @{
+        Success             = $true
+        Data                = @($entries)
+        Sealed              = $false
+        CapturedWhileActive = $false
+        Source              = 'Live'
+        CacheFile           = $rosterFile
+        Error               = $null
     }
 }
 
@@ -7198,11 +7709,18 @@ function Clear-SPAuditItemCache {
         try {
             $cachePath = Get-SPAuditCacheDir
             if (Test-Path $cachePath) {
-                $pattern = if ([string]::IsNullOrWhiteSpace($CampaignId)) { 'items-*.jsonl' } else {
+                # WI-2: roster siblings (roster-<campId>.json) are sealed next to the items
+                # cache, so clearing must remove them too or a stale seal would outlive its items.
+                if ([string]::IsNullOrWhiteSpace($CampaignId)) {
+                    $patterns = @('items-*.jsonl', 'roster-*.json')
+                } else {
                     $safId = $CampaignId -replace '[^A-Za-z0-9_\-]','_'
-                    "items-$safId.*"
+                    $patterns = @("items-$safId.*", "roster-$safId.json")
                 }
-                $files = Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
+                $files = @()
+                foreach ($pattern in $patterns) {
+                    $files += Get-ChildItem -Path $cachePath -Filter $pattern -ErrorAction SilentlyContinue
+                }
                 foreach ($f in $files) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
                 $clearedTargets += "disk($($files.Count) files)"
                 Write-Host "  Disk cache cleared ($($files.Count) file(s) removed)." -ForegroundColor DarkGray
@@ -7286,6 +7804,8 @@ Export-ModuleMember -Function @(
     'Get-SPReviewerDelegations',
     'Test-SPSourceOnboardingReadiness',
     'Get-SPCachedCampaignItems',
+    'Get-SPCachedCampaignRoster',
+    'Get-SPAuditEffectiveCacheTtl',
     'Clear-SPAuditItemCache',
     'Clear-SPAuditAccountCache'
 )

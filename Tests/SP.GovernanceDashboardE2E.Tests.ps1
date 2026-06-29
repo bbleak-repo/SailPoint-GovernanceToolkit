@@ -180,8 +180,39 @@ Describe "DE-01: Dashboard data has KPI values" {
 # DE-02: Sparkline arrays have weekly buckets
 # ===================================================================
 Describe "DE-02: Sparkline arrays have weekly buckets" {
+    BeforeAll {
+        # Date-anchored fixture: the file-level $script:e2eMetricsDir is pinned to
+        # fixed dates (2026-05-14..06-12). The Last30Days window is relative to NOW,
+        # so as wall-clock advances those records drift out of the window and the
+        # weekly-bucket count shrinks. Build a fresh 30-day dataset ending TODAY so
+        # all 30 days land inside Last30Days -> 5 ISO weeks -> 4-5 buckets, honestly.
+        $script:de02MetricsDir = Join-Path $TestDrive 'de02-metrics'
+        $de02Records = [System.Collections.Generic.List[hashtable]]::new()
+        for ($d = 0; $d -lt 30; $d++) {
+            $ts = (Get-Date).AddDays(-$d).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $maturity = [math]::Round(2.5 + ((29 - $d) / 29.0) * 1.0, 2)
+            $stale    = [int](80 + ((29 - $d) / 29.0) * 80)
+            $reviewer = [math]::Round(72 + ($d % 7), 1)
+            $overdue  = if ($d -lt 15) { 2 } else { 0 }
+            $de02Records.Add([ordered]@{
+                timestamp = $ts
+                label     = $null
+                metrics   = [ordered]@{
+                    'maturity.overallScore'       = $maturity
+                    'campaigns.activeCount'       = 4
+                    'reviewers.avgCompletionPct'  = $reviewer
+                    'staleAccess.totalItems'      = $stale
+                    'campaigns.overdueCount'      = $overdue
+                    'campaigns.completedCount'    = 1
+                    'campaigns.avgDaysToComplete' = 14.0
+                }
+            })
+        }
+        New-DEGovernanceMetricsFile -Dir $script:de02MetricsDir -Records @($de02Records)
+    }
+
     It "Sparklines.MaturityScore has 4-5 entries for 30 days of daily data" {
-        Set-DEConfigMock -MetricsDir $script:e2eMetricsDir -TrendDir $script:e2eTrendDir
+        Set-DEConfigMock -MetricsDir $script:de02MetricsDir -TrendDir $script:e2eTrendDir
 
         $dashboard = Get-SPGovernanceDashboardData -Period Last30Days
 

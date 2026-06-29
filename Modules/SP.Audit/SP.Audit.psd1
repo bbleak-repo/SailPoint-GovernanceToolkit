@@ -46,6 +46,8 @@
         'Get-SPAuditCertifications'
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
+        'Get-SPCachedCampaignRoster'
+        'Get-SPAuditEffectiveCacheTtl'
         'Clear-SPAuditItemCache'
         'Clear-SPAuditAccountCache'
         'Get-SPAuditCampaignReport'
@@ -58,9 +60,14 @@
 
         # SP.AuditReportCore - Categorization and metrics
         'Group-SPAuditDecisions'
+        'ConvertTo-SPCanonicalDecision'
+        'Test-SPAutoApproveMarker'
+        'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'
         'Group-SPReviewerActions'
+        'Group-SPCompletedPendingByReviewer'
+        'Resolve-SPCaptureDateKey'
         'Group-SPAuditIdentityEvents'
         'Group-SPAuditRemediationProof'
         'Measure-SPAuditReviewerMetrics'
@@ -249,6 +256,7 @@
         # SP.CampaignTrend - Per-campaign KPI time-series (rate trend, daily/weekly/monthly)
         'Save-SPCampaignTrendPoint'
         'Get-SPCampaignTrend'
+        'Get-SPCampaignReviewerTrend'
         'Export-SPCampaignTrendHtml'
         'Get-SPProgramTrend'
         'Export-SPProgramTrendHtml'

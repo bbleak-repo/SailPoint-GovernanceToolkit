@@ -85,6 +85,12 @@ function Get-SPStalledReviewers {
         Minimum completion percentage gap to consider "stalled". If a reviewer's
         completion moved by less than this between the first and last capture, they
         are stalled. Default: 1.0 (percent).
+    .PARAMETER CompletionCeiling
+        Reviewers whose latest completion is at or above this percentage are NOT
+        flagged as stalled even if their completion has been flat. This avoids a
+        false positive for a reviewer who has finished all their decisions (100%)
+        but simply has not signed off -- flat progress at completion is "done",
+        not "stalled". Default: 100 (only genuinely-finished reviewers are excluded).
     .PARAMETER TrendDir
         Override the campaign trend directory. Default: resolved from config.
     .PARAMETER CorrelationID
@@ -109,7 +115,8 @@ function Get-SPStalledReviewers {
         [Parameter()] [int]$DaysBack = 14,
         [Parameter()] [double]$MinCompletionGap = 1.0,
         [Parameter()] [string]$TrendDir,
-        [Parameter()] [string]$CorrelationID
+        [Parameter()] [string]$CorrelationID,
+        [Parameter()] [double]$CompletionCeiling = 100
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) { $CorrelationID = [guid]::NewGuid().ToString() }
@@ -204,7 +211,7 @@ function Get-SPStalledReviewers {
 
                 # Check for consecutive days with zero progress
                 # Look at the LAST N captures
-                $recentCaptures = @($captures | Select-Object -Last ([math]::Max($ConsecutiveDays + 2, $captures.Count)))
+                $recentCaptures = @($captures | Select-Object -Last ([math]::Min($ConsecutiveDays + 2, $captures.Count)))
 
                 $maxStalled = 0
                 $currentStalled = 0
@@ -228,8 +235,8 @@ function Get-SPStalledReviewers {
                 }
                 if ($currentStalled -gt $maxStalled) { $maxStalled = $currentStalled }
 
-                if ($maxStalled -ge $ConsecutiveDays) {
-                    $latestCapture = $captures[$captures.Count - 1]
+                $latestCapture = $captures[$captures.Count - 1]
+                if ($maxStalled -ge $ConsecutiveDays -and $latestCapture.Completion -lt $CompletionCeiling) {
                     $stalledCampaigns.Add(@{
                         CampaignName   = $campData.CampaignName
                         CampaignId     = $campId
@@ -261,7 +268,7 @@ function Get-SPStalledReviewers {
         }
 
         # Sort: multi-campaign first, then by stalled days descending
-        $sorted = @($stalledList | Sort-Object { $_.CampaignCount } -Descending | Sort-Object { $_.StalledDays } -Descending)
+        $sorted = @($stalledList | Sort-Object @{Expression={$_.CampaignCount};Descending=$true}, @{Expression={$_.StalledDays};Descending=$true})
 
         $multiCamp = @($sorted | Where-Object { $_.CampaignCount -gt 1 }).Count
         $singleCamp = @($sorted | Where-Object { $_.CampaignCount -eq 1 }).Count

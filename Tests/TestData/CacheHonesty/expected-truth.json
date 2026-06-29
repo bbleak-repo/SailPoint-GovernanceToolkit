@@ -1,0 +1,177 @@
+{
+    "_meta":  {
+                  "purpose":  "Documented expected-truth table for the cache-honesty mock fixtures (WI-0). States which ASSIGNED reviewer SHOULD show complete/incomplete per campaign per cert. Downstream WI-1 (red repro) and WI-11 (end-to-end proof) assert the rendered who-completed/who-did-not against this file.",
+                  "planItem":  "WI-0",
+                  "planIdMapping":  {
+                                        "camp-active-001":  "camp-ch-active-001",
+                                        "camp-completed-001":  "camp-ch-completed-001",
+                                        "camp-transition-001":  "camp-ch-transition-001",
+                                        "reassignment-fixture":  "camp-ch-reassign-001"
+                                    },
+                  "planIdMappingRationale":  "The plan literal IDs camp-active-001 / camp-completed-001 ALREADY EXIST in the live mock seed-data.json with conflicting data and are load-bearing for existing mock tests (Tests/Integration/Test-SailPointWorkflow.ps1, Tests/Smoke/Invoke-SmokeTest.ps1). Per the additive prime directive they are NOT mutated; a new collision-free camp-ch-* namespace (ch = cache-honesty) is introduced instead. Downstream WI-1/WI-11 consume this truth file, so the IDs are decoupled from the plan literals.",
+                  "classifierRules":  "Mirrors Group-SPAuditDecisions (Modules/SP.Audit/SP.AuditReportCore.psm1 switch at ~line 404): decision in {APPROVE,APPROVED,CERTIFY} AND justification/comment does NOT contain idNowAutoApproved =\u003e APPROVED (decided). decision in {APPROVE,...} WITH comment containing idNowAutoApproved =\u003e PENDING (auto-approved; counts as NOT complete). decision in {REVOKE,REVOKED,DENY,REJECT,EXCEPTION} =\u003e REVOKED (decided). null/empty/missing/UNDECIDED decision =\u003e PENDING (genuinely undecided). reviewerName is read from reviewedBy.name (OBJECT form), which is null for pending items.",
+                  "reviewerCompleteRule":  "A cert\u0027s ASSIGNED reviewer SHOULD show COMPLETE iff that cert has zero undecided items (no null-decision AND no idNowAutoApproved), else INCOMPLETE. Attribution is by item.CertificationId -\u003e cert.reviewer (the sealed assigned reviewer), NEVER item.reviewedBy (null for pending items, which today collapses every undecided item into a single (Unassigned) row).",
+                  "completeFormula":  "shouldShowComplete == (undecidedCount == 0 AND autoApprovedCount == 0); shouldAppearInIncompleteList == (NOT shouldShowComplete AND NOT reassignedAway)."
+              },
+    "campaigns":  [
+                      {
+                          "campaignId":  "camp-ch-active-001",
+                          "status":  "ACTIVE",
+                          "reviewers":  [
+                                            {
+                                                "reviewerId":  "id-ch-rv-001",
+                                                "reviewerName":  "Alan Active",
+                                                "certId":  "cert-ch-active-001",
+                                                "decidedCount":  3,
+                                                "undecidedCount":  2,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  false,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  true
+                                            },
+                                            {
+                                                "reviewerId":  "id-ch-rv-002",
+                                                "reviewerName":  "Bonnie Active",
+                                                "certId":  "cert-ch-active-002",
+                                                "decidedCount":  5,
+                                                "undecidedCount":  0,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  true,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  false
+                                            },
+                                            {
+                                                "reviewerId":  "id-ch-rv-003",
+                                                "reviewerName":  "Carl Active",
+                                                "certId":  "cert-ch-active-003",
+                                                "decidedCount":  1,
+                                                "undecidedCount":  4,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  false,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  true
+                                            }
+                                        ]
+                      },
+                      {
+                          "campaignId":  "camp-ch-completed-001",
+                          "status":  "COMPLETED",
+                          "reviewers":  [
+                                            {
+                                                "reviewerId":  "id-ch-rv-004",
+                                                "reviewerName":  "Dana Done",
+                                                "certId":  "cert-ch-completed-001",
+                                                "decidedCount":  3,
+                                                "undecidedCount":  2,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  false,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  true
+                                            },
+                                            {
+                                                "reviewerId":  "id-ch-rv-005",
+                                                "reviewerName":  "Evan Done",
+                                                "certId":  "cert-ch-completed-002",
+                                                "decidedCount":  2,
+                                                "undecidedCount":  0,
+                                                "autoApprovedCount":  3,
+                                                "shouldShowComplete":  false,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  true
+                                            },
+                                            {
+                                                "reviewerId":  "id-ch-rv-006",
+                                                "reviewerName":  "Fiona Done",
+                                                "certId":  "cert-ch-completed-003",
+                                                "decidedCount":  5,
+                                                "undecidedCount":  0,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  true,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  false
+                                            }
+                                        ]
+                      },
+                      {
+                          "campaignId":  "camp-ch-transition-001",
+                          "status":  "ACTIVE",
+                          "note":  "Served ACTIVE first, then flipped to COMPLETED via POST /v3/campaigns/:id/complete. Attribution MUST be stable across the flip: expectedActive == expectedCompleted.",
+                          "expectedActive":  [
+                                                 {
+                                                     "reviewerId":  "id-ch-rv-007",
+                                                     "reviewerName":  "Greg Trans",
+                                                     "certId":  "cert-ch-transition-001",
+                                                     "decidedCount":  2,
+                                                     "undecidedCount":  2,
+                                                     "autoApprovedCount":  0,
+                                                     "shouldShowComplete":  false,
+                                                     "reassignedAway":  false,
+                                                     "shouldAppearInIncompleteList":  true
+                                                 },
+                                                 {
+                                                     "reviewerId":  "id-ch-rv-008",
+                                                     "reviewerName":  "Helen Trans",
+                                                     "certId":  "cert-ch-transition-002",
+                                                     "decidedCount":  4,
+                                                     "undecidedCount":  0,
+                                                     "autoApprovedCount":  0,
+                                                     "shouldShowComplete":  true,
+                                                     "reassignedAway":  false,
+                                                     "shouldAppearInIncompleteList":  false
+                                                 }
+                                             ],
+                          "expectedCompleted":  [
+                                                    {
+                                                        "reviewerId":  "id-ch-rv-007",
+                                                        "reviewerName":  "Greg Trans",
+                                                        "certId":  "cert-ch-transition-001",
+                                                        "decidedCount":  2,
+                                                        "undecidedCount":  2,
+                                                        "autoApprovedCount":  0,
+                                                        "shouldShowComplete":  false,
+                                                        "reassignedAway":  false,
+                                                        "shouldAppearInIncompleteList":  true
+                                                    },
+                                                    {
+                                                        "reviewerId":  "id-ch-rv-008",
+                                                        "reviewerName":  "Helen Trans",
+                                                        "certId":  "cert-ch-transition-002",
+                                                        "decidedCount":  4,
+                                                        "undecidedCount":  0,
+                                                        "autoApprovedCount":  0,
+                                                        "shouldShowComplete":  true,
+                                                        "reassignedAway":  false,
+                                                        "shouldAppearInIncompleteList":  false
+                                                    }
+                                                ]
+                      },
+                      {
+                          "campaignId":  "camp-ch-reassign-001",
+                          "status":  "ACTIVE",
+                          "reviewers":  [
+                                            {
+                                                "reviewerId":  "id-ch-rv-010",
+                                                "reviewerName":  "Iris ReassignTo",
+                                                "certId":  "cert-ch-reassign-001",
+                                                "decidedCount":  1,
+                                                "undecidedCount":  3,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  false,
+                                                "reassignedAway":  false,
+                                                "shouldAppearInIncompleteList":  true
+                                            },
+                                            {
+                                                "reviewerId":  "id-ch-rv-009",
+                                                "reviewerName":  "Hank ReassignFrom",
+                                                "certId":  "cert-ch-reassign-001",
+                                                "decidedCount":  0,
+                                                "undecidedCount":  0,
+                                                "autoApprovedCount":  0,
+                                                "shouldShowComplete":  true,
+                                                "reassignedAway":  true,
+                                                "shouldAppearInIncompleteList":  false
+                                            }
+                                        ]
+                      }
+                  ]
+}

@@ -1,0 +1,1189 @@
+{
+    "_meta":  {
+                  "purpose":  "Canonical cache-honesty mock fixture payload (WI-0). Mirrors live mock shape; identical campaigns/certs/items are appended to the SailPoint-ISC seed-data.json.",
+                  "planItem":  "WI-0"
+              },
+    "campaigns":  [
+                      {
+                          "id":  "camp-ch-active-001",
+                          "name":  "CH Active Campaign 001",
+                          "description":  "Cache-honesty ACTIVE fixture (distinct reviewers, mixed decided/undecided)",
+                          "status":  "ACTIVE",
+                          "type":  "SOURCE_OWNER",
+                          "created":  "2026-06-20T12:00:00Z",
+                          "deadline":  "2026-07-20T12:00:00Z",
+                          "totalCertifications":  3,
+                          "completedCertifications":  1
+                      },
+                      {
+                          "id":  "camp-ch-completed-001",
+                          "name":  "CH Completed Campaign 001",
+                          "description":  "Cache-honesty COMPLETED/force-signed fixture (inflated decisionsMade lie)",
+                          "status":  "COMPLETED",
+                          "type":  "MANAGER",
+                          "created":  "2026-06-10T12:00:00Z",
+                          "deadline":  "2026-06-19T12:00:00Z",
+                          "totalCertifications":  3,
+                          "completedCertifications":  3
+                      },
+                      {
+                          "id":  "camp-ch-transition-001",
+                          "name":  "CH Transition Campaign 001",
+                          "description":  "Cache-honesty ACTIVE-\u003eCOMPLETED transition fixture (flippable via /complete)",
+                          "status":  "ACTIVE",
+                          "type":  "SOURCE_OWNER",
+                          "created":  "2026-06-20T12:00:00Z",
+                          "deadline":  "2026-07-20T12:00:00Z",
+                          "totalCertifications":  2,
+                          "completedCertifications":  1
+                      },
+                      {
+                          "id":  "camp-ch-reassign-001",
+                          "name":  "CH Reassignment Campaign 001",
+                          "description":  "Cache-honesty reassignment fixture (cert reassigned Hank-\u003eIris, undecided items)",
+                          "status":  "ACTIVE",
+                          "type":  "MANAGER",
+                          "created":  "2026-06-20T12:00:00Z",
+                          "deadline":  "2026-07-20T12:00:00Z",
+                          "totalCertifications":  1,
+                          "completedCertifications":  0
+                      }
+                  ],
+    "certifications":  [
+                           {
+                               "id":  "cert-ch-active-001",
+                               "name":  "Cert cert-ch-active-001",
+                               "campaign":  {
+                                                "id":  "camp-ch-active-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  3,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-001",
+                                                "name":  "Alan Active"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-active-002",
+                               "name":  "Cert cert-ch-active-002",
+                               "campaign":  {
+                                                "id":  "camp-ch-active-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  5,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-002",
+                                                "name":  "Bonnie Active"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-active-003",
+                               "name":  "Cert cert-ch-active-003",
+                               "campaign":  {
+                                                "id":  "camp-ch-active-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  1,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-003",
+                                                "name":  "Carl Active"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-completed-001",
+                               "name":  "Cert cert-ch-completed-001",
+                               "campaign":  {
+                                                "id":  "camp-ch-completed-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "SIGNED",
+                               "created":  "2026-06-10T12:00:00Z",
+                               "signed":  "2026-06-20T12:00:00Z",
+                               "decisionsMade":  5,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-004",
+                                                "name":  "Dana Done"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-completed-002",
+                               "name":  "Cert cert-ch-completed-002",
+                               "campaign":  {
+                                                "id":  "camp-ch-completed-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "SIGNED",
+                               "created":  "2026-06-10T12:00:00Z",
+                               "signed":  "2026-06-20T12:00:00Z",
+                               "decisionsMade":  5,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-005",
+                                                "name":  "Evan Done"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-completed-003",
+                               "name":  "Cert cert-ch-completed-003",
+                               "campaign":  {
+                                                "id":  "camp-ch-completed-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "SIGNED",
+                               "created":  "2026-06-10T12:00:00Z",
+                               "signed":  "2026-06-20T12:00:00Z",
+                               "decisionsMade":  5,
+                               "decisionsTotal":  5,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-006",
+                                                "name":  "Fiona Done"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-transition-001",
+                               "name":  "Cert cert-ch-transition-001",
+                               "campaign":  {
+                                                "id":  "camp-ch-transition-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  2,
+                               "decisionsTotal":  4,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-007",
+                                                "name":  "Greg Trans"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-transition-002",
+                               "name":  "Cert cert-ch-transition-002",
+                               "campaign":  {
+                                                "id":  "camp-ch-transition-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  4,
+                               "decisionsTotal":  4,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-008",
+                                                "name":  "Helen Trans"
+                                            },
+                               "reassignment":  null
+                           },
+                           {
+                               "id":  "cert-ch-reassign-001",
+                               "name":  "Cert cert-ch-reassign-001",
+                               "campaign":  {
+                                                "id":  "camp-ch-reassign-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "ACTIVE",
+                               "created":  "2026-06-20T12:00:00Z",
+                               "signed":  null,
+                               "decisionsMade":  1,
+                               "decisionsTotal":  4,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-010",
+                                                "name":  "Iris ReassignTo"
+                                            },
+                               "reassignment":  {
+                                                    "from":  {
+                                                                 "type":  "IDENTITY",
+                                                                 "id":  "id-ch-rv-009",
+                                                                 "name":  "Hank ReassignFrom"
+                                                             },
+                                                    "to":  {
+                                                               "type":  "IDENTITY",
+                                                               "id":  "id-ch-rv-010",
+                                                               "name":  "Iris ReassignTo"
+                                                           },
+                                                    "reason":  "Reassigned from Hank to Iris before any decisions were made",
+                                                    "date":  "2026-06-20T12:00:00Z"
+                                                }
+                           }
+                       ],
+    "accessReviewItems":  {
+                              "cert-ch-active-001":  [
+                                                         {
+                                                             "id":  "cert-ch-active-001-01",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-001",
+                                                                                "name":  "Alan Active",
+                                                                                "email":  "alan.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-001-01",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-001-01",
+                                                                                     "name":  "Target 01 for cert-ch-active-001"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-001-01",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-001-01"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 01 for cert-ch-active-001,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-001-02",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-001",
+                                                                                "name":  "Alan Active",
+                                                                                "email":  "alan.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-001-02",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-001-02",
+                                                                                     "name":  "Target 02 for cert-ch-active-001"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-001-02",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-001-02"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 02 for cert-ch-active-001,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-001-03",
+                                                             "decision":  "REVOKE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-001",
+                                                                                "name":  "Alan Active",
+                                                                                "email":  "alan.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-001-03",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-001-03",
+                                                                                     "name":  "Target 03 for cert-ch-active-001"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-001-03",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-001-03"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 03 for cert-ch-active-001,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-001-04",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-001-04",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-001-04",
+                                                                                     "name":  "Target 04 for cert-ch-active-001"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-001-04",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-001-04"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 04 for cert-ch-active-001,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-001-05",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-001-05",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-001-05",
+                                                                                     "name":  "Target 05 for cert-ch-active-001"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-001-05",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-001-05"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 05 for cert-ch-active-001,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         }
+                                                     ],
+                              "cert-ch-active-002":  [
+                                                         {
+                                                             "id":  "cert-ch-active-002-01",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-002",
+                                                                                "name":  "Bonnie Active",
+                                                                                "email":  "bonnie.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-002-01",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-002-01",
+                                                                                     "name":  "Target 01 for cert-ch-active-002"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-002-01",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-002-01"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 01 for cert-ch-active-002,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-002-02",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-002",
+                                                                                "name":  "Bonnie Active",
+                                                                                "email":  "bonnie.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-002-02",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-002-02",
+                                                                                     "name":  "Target 02 for cert-ch-active-002"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-002-02",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-002-02"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 02 for cert-ch-active-002,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-002-03",
+                                                             "decision":  "REVOKE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-002",
+                                                                                "name":  "Bonnie Active",
+                                                                                "email":  "bonnie.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-002-03",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-002-03",
+                                                                                     "name":  "Target 03 for cert-ch-active-002"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-002-03",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-002-03"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 03 for cert-ch-active-002,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-002-04",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-002",
+                                                                                "name":  "Bonnie Active",
+                                                                                "email":  "bonnie.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-002-04",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-002-04",
+                                                                                     "name":  "Target 04 for cert-ch-active-002"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-002-04",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-002-04"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 04 for cert-ch-active-002,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-002-05",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-002",
+                                                                                "name":  "Bonnie Active",
+                                                                                "email":  "bonnie.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-002-05",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-002-05",
+                                                                                     "name":  "Target 05 for cert-ch-active-002"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-002-05",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-002-05"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 05 for cert-ch-active-002,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         }
+                                                     ],
+                              "cert-ch-active-003":  [
+                                                         {
+                                                             "id":  "cert-ch-active-003-01",
+                                                             "decision":  "APPROVE",
+                                                             "decisionDate":  "2026-06-20T12:00:00Z",
+                                                             "reviewedBy":  {
+                                                                                "type":  "IDENTITY",
+                                                                                "id":  "id-ch-rv-003",
+                                                                                "name":  "Carl Active",
+                                                                                "email":  "carl.active@corp.test"
+                                                                            },
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-003-01",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-003-01",
+                                                                                     "name":  "Target 01 for cert-ch-active-003"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-003-01",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-003-01"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 01 for cert-ch-active-003,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-003-02",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-003-02",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-003-02",
+                                                                                     "name":  "Target 02 for cert-ch-active-003"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-003-02",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-003-02"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 02 for cert-ch-active-003,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-003-03",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-003-03",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-003-03",
+                                                                                     "name":  "Target 03 for cert-ch-active-003"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-003-03",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-003-03"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 03 for cert-ch-active-003,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-003-04",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-003-04",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-003-04",
+                                                                                     "name":  "Target 04 for cert-ch-active-003"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-003-04",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-003-04"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 04 for cert-ch-active-003,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         },
+                                                         {
+                                                             "id":  "cert-ch-active-003-05",
+                                                             "identitySummary":  {
+                                                                                     "id":  "id-tgt-cert-ch-active-003-05",
+                                                                                     "identityId":  "id-tgt-cert-ch-active-003-05",
+                                                                                     "name":  "Target 05 for cert-ch-active-003"
+                                                                                 },
+                                                             "access":  {
+                                                                            "type":  "ENTITLEMENT",
+                                                                            "name":  "AD-SG-CH-cert-ch-active-003-05",
+                                                                            "description":  "AD Group: AD-SG-CH-cert-ch-active-003-05"
+                                                                        },
+                                                             "account":  {
+                                                                             "nativeIdentity":  "CN=Target 05 for cert-ch-active-003,OU=Users,DC=corp,DC=test",
+                                                                             "sourceId":  "src-ad-001"
+                                                                         }
+                                                         }
+                                                     ],
+                              "cert-ch-completed-001":  [
+                                                            {
+                                                                "id":  "cert-ch-completed-001-01",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-004",
+                                                                                   "name":  "Dana Done",
+                                                                                   "email":  "dana.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-001-01",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-001-01",
+                                                                                        "name":  "Target 01 for cert-ch-completed-001"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-001-01",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-001-01"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 01 for cert-ch-completed-001,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-001-02",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-004",
+                                                                                   "name":  "Dana Done",
+                                                                                   "email":  "dana.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-001-02",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-001-02",
+                                                                                        "name":  "Target 02 for cert-ch-completed-001"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-001-02",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-001-02"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 02 for cert-ch-completed-001,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-001-03",
+                                                                "decision":  "REVOKE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-004",
+                                                                                   "name":  "Dana Done",
+                                                                                   "email":  "dana.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-001-03",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-001-03",
+                                                                                        "name":  "Target 03 for cert-ch-completed-001"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-001-03",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-001-03"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 03 for cert-ch-completed-001,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-001-04",
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-001-04",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-001-04",
+                                                                                        "name":  "Target 04 for cert-ch-completed-001"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-001-04",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-001-04"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 04 for cert-ch-completed-001,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-001-05",
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-001-05",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-001-05",
+                                                                                        "name":  "Target 05 for cert-ch-completed-001"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-001-05",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-001-05"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 05 for cert-ch-completed-001,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            }
+                                                        ],
+                              "cert-ch-completed-002":  [
+                                                            {
+                                                                "id":  "cert-ch-completed-002-01",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-005",
+                                                                                   "name":  "Evan Done",
+                                                                                   "email":  "evan.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-002-01",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-002-01",
+                                                                                        "name":  "Target 01 for cert-ch-completed-002"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-002-01",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-002-01"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 01 for cert-ch-completed-002,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-002-02",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-005",
+                                                                                   "name":  "Evan Done",
+                                                                                   "email":  "evan.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-002-02",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-002-02",
+                                                                                        "name":  "Target 02 for cert-ch-completed-002"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-002-02",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-002-02"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 02 for cert-ch-completed-002,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-002-03",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "comment":  "idNowAutoApproved",
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-002-03",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-002-03",
+                                                                                        "name":  "Target 03 for cert-ch-completed-002"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-002-03",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-002-03"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 03 for cert-ch-completed-002,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-002-04",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "comment":  "idNowAutoApproved",
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-002-04",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-002-04",
+                                                                                        "name":  "Target 04 for cert-ch-completed-002"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-002-04",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-002-04"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 04 for cert-ch-completed-002,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-002-05",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "comment":  "idNowAutoApproved",
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-002-05",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-002-05",
+                                                                                        "name":  "Target 05 for cert-ch-completed-002"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-002-05",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-002-05"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 05 for cert-ch-completed-002,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            }
+                                                        ],
+                              "cert-ch-completed-003":  [
+                                                            {
+                                                                "id":  "cert-ch-completed-003-01",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-006",
+                                                                                   "name":  "Fiona Done",
+                                                                                   "email":  "fiona.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-003-01",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-003-01",
+                                                                                        "name":  "Target 01 for cert-ch-completed-003"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-003-01",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-003-01"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 01 for cert-ch-completed-003,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-003-02",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-006",
+                                                                                   "name":  "Fiona Done",
+                                                                                   "email":  "fiona.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-003-02",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-003-02",
+                                                                                        "name":  "Target 02 for cert-ch-completed-003"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-003-02",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-003-02"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 02 for cert-ch-completed-003,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-003-03",
+                                                                "decision":  "REVOKE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-006",
+                                                                                   "name":  "Fiona Done",
+                                                                                   "email":  "fiona.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-003-03",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-003-03",
+                                                                                        "name":  "Target 03 for cert-ch-completed-003"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-003-03",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-003-03"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 03 for cert-ch-completed-003,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-003-04",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-006",
+                                                                                   "name":  "Fiona Done",
+                                                                                   "email":  "fiona.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-003-04",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-003-04",
+                                                                                        "name":  "Target 04 for cert-ch-completed-003"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-003-04",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-003-04"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 04 for cert-ch-completed-003,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            },
+                                                            {
+                                                                "id":  "cert-ch-completed-003-05",
+                                                                "decision":  "APPROVE",
+                                                                "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                "reviewedBy":  {
+                                                                                   "type":  "IDENTITY",
+                                                                                   "id":  "id-ch-rv-006",
+                                                                                   "name":  "Fiona Done",
+                                                                                   "email":  "fiona.done@corp.test"
+                                                                               },
+                                                                "identitySummary":  {
+                                                                                        "id":  "id-tgt-cert-ch-completed-003-05",
+                                                                                        "identityId":  "id-tgt-cert-ch-completed-003-05",
+                                                                                        "name":  "Target 05 for cert-ch-completed-003"
+                                                                                    },
+                                                                "access":  {
+                                                                               "type":  "ENTITLEMENT",
+                                                                               "name":  "AD-SG-CH-cert-ch-completed-003-05",
+                                                                               "description":  "AD Group: AD-SG-CH-cert-ch-completed-003-05"
+                                                                           },
+                                                                "account":  {
+                                                                                "nativeIdentity":  "CN=Target 05 for cert-ch-completed-003,OU=Users,DC=corp,DC=test",
+                                                                                "sourceId":  "src-ad-001"
+                                                                            }
+                                                            }
+                                                        ],
+                              "cert-ch-transition-001":  [
+                                                             {
+                                                                 "id":  "cert-ch-transition-001-01",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-007",
+                                                                                    "name":  "Greg Trans",
+                                                                                    "email":  "greg.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-001-01",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-001-01",
+                                                                                         "name":  "Target 01 for cert-ch-transition-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-001-01",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-001-01"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 01 for cert-ch-transition-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-001-02",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-007",
+                                                                                    "name":  "Greg Trans",
+                                                                                    "email":  "greg.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-001-02",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-001-02",
+                                                                                         "name":  "Target 02 for cert-ch-transition-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-001-02",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-001-02"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 02 for cert-ch-transition-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-001-03",
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-001-03",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-001-03",
+                                                                                         "name":  "Target 03 for cert-ch-transition-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-001-03",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-001-03"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 03 for cert-ch-transition-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-001-04",
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-001-04",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-001-04",
+                                                                                         "name":  "Target 04 for cert-ch-transition-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-001-04",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-001-04"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 04 for cert-ch-transition-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             }
+                                                         ],
+                              "cert-ch-transition-002":  [
+                                                             {
+                                                                 "id":  "cert-ch-transition-002-01",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-008",
+                                                                                    "name":  "Helen Trans",
+                                                                                    "email":  "helen.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-002-01",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-002-01",
+                                                                                         "name":  "Target 01 for cert-ch-transition-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-002-01",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-002-01"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 01 for cert-ch-transition-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-002-02",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-008",
+                                                                                    "name":  "Helen Trans",
+                                                                                    "email":  "helen.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-002-02",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-002-02",
+                                                                                         "name":  "Target 02 for cert-ch-transition-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-002-02",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-002-02"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 02 for cert-ch-transition-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-002-03",
+                                                                 "decision":  "REVOKE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-008",
+                                                                                    "name":  "Helen Trans",
+                                                                                    "email":  "helen.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-002-03",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-002-03",
+                                                                                         "name":  "Target 03 for cert-ch-transition-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-002-03",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-002-03"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 03 for cert-ch-transition-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-transition-002-04",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-20T12:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-008",
+                                                                                    "name":  "Helen Trans",
+                                                                                    "email":  "helen.trans@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-transition-002-04",
+                                                                                         "identityId":  "id-tgt-cert-ch-transition-002-04",
+                                                                                         "name":  "Target 04 for cert-ch-transition-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-transition-002-04",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-transition-002-04"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 04 for cert-ch-transition-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             }
+                                                         ],
+                              "cert-ch-reassign-001":  [
+                                                           {
+                                                               "id":  "cert-ch-reassign-001-01",
+                                                               "decision":  "APPROVE",
+                                                               "decisionDate":  "2026-06-20T12:00:00Z",
+                                                               "reviewedBy":  {
+                                                                                  "type":  "IDENTITY",
+                                                                                  "id":  "id-ch-rv-010",
+                                                                                  "name":  "Iris ReassignTo",
+                                                                                  "email":  "iris.reassignto@corp.test"
+                                                                              },
+                                                               "identitySummary":  {
+                                                                                       "id":  "id-tgt-cert-ch-reassign-001-01",
+                                                                                       "identityId":  "id-tgt-cert-ch-reassign-001-01",
+                                                                                       "name":  "Target 01 for cert-ch-reassign-001"
+                                                                                   },
+                                                               "access":  {
+                                                                              "type":  "ENTITLEMENT",
+                                                                              "name":  "AD-SG-CH-cert-ch-reassign-001-01",
+                                                                              "description":  "AD Group: AD-SG-CH-cert-ch-reassign-001-01"
+                                                                          },
+                                                               "account":  {
+                                                                               "nativeIdentity":  "CN=Target 01 for cert-ch-reassign-001,OU=Users,DC=corp,DC=test",
+                                                                               "sourceId":  "src-ad-001"
+                                                                           }
+                                                           },
+                                                           {
+                                                               "id":  "cert-ch-reassign-001-02",
+                                                               "identitySummary":  {
+                                                                                       "id":  "id-tgt-cert-ch-reassign-001-02",
+                                                                                       "identityId":  "id-tgt-cert-ch-reassign-001-02",
+                                                                                       "name":  "Target 02 for cert-ch-reassign-001"
+                                                                                   },
+                                                               "access":  {
+                                                                              "type":  "ENTITLEMENT",
+                                                                              "name":  "AD-SG-CH-cert-ch-reassign-001-02",
+                                                                              "description":  "AD Group: AD-SG-CH-cert-ch-reassign-001-02"
+                                                                          },
+                                                               "account":  {
+                                                                               "nativeIdentity":  "CN=Target 02 for cert-ch-reassign-001,OU=Users,DC=corp,DC=test",
+                                                                               "sourceId":  "src-ad-001"
+                                                                           }
+                                                           },
+                                                           {
+                                                               "id":  "cert-ch-reassign-001-03",
+                                                               "identitySummary":  {
+                                                                                       "id":  "id-tgt-cert-ch-reassign-001-03",
+                                                                                       "identityId":  "id-tgt-cert-ch-reassign-001-03",
+                                                                                       "name":  "Target 03 for cert-ch-reassign-001"
+                                                                                   },
+                                                               "access":  {
+                                                                              "type":  "ENTITLEMENT",
+                                                                              "name":  "AD-SG-CH-cert-ch-reassign-001-03",
+                                                                              "description":  "AD Group: AD-SG-CH-cert-ch-reassign-001-03"
+                                                                          },
+                                                               "account":  {
+                                                                               "nativeIdentity":  "CN=Target 03 for cert-ch-reassign-001,OU=Users,DC=corp,DC=test",
+                                                                               "sourceId":  "src-ad-001"
+                                                                           }
+                                                           },
+                                                           {
+                                                               "id":  "cert-ch-reassign-001-04",
+                                                               "identitySummary":  {
+                                                                                       "id":  "id-tgt-cert-ch-reassign-001-04",
+                                                                                       "identityId":  "id-tgt-cert-ch-reassign-001-04",
+                                                                                       "name":  "Target 04 for cert-ch-reassign-001"
+                                                                                   },
+                                                               "access":  {
+                                                                              "type":  "ENTITLEMENT",
+                                                                              "name":  "AD-SG-CH-cert-ch-reassign-001-04",
+                                                                              "description":  "AD Group: AD-SG-CH-cert-ch-reassign-001-04"
+                                                                          },
+                                                               "account":  {
+                                                                               "nativeIdentity":  "CN=Target 04 for cert-ch-reassign-001,OU=Users,DC=corp,DC=test",
+                                                                               "sourceId":  "src-ad-001"
+                                                                           }
+                                                           }
+                                                       ]
+                          }
+}

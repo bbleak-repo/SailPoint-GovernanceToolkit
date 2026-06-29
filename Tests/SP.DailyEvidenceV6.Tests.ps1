@@ -15,6 +15,12 @@ BeforeAll {
     . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
     Import-SPTestModules -Shared -Core
 
+    # Env-resilience: the v6 script is invoked under pwsh (PowerShell 7). When pwsh
+    # is absent (e.g. PS 5.1-only CI/host), the Invoke-V6 shell-out cannot run, so
+    # the pwsh-dependent Its Skip instead of failing. Mirrors the idiom in
+    # SP.Distribution.Tests.ps1 (Get-Command pwsh -ErrorAction SilentlyContinue).
+    $script:PwshAvailable = [bool](Get-Command pwsh -ErrorAction SilentlyContinue)
+
     $script:V6Path = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts\Invoke-SPDailyEvidenceReportV6.ps1'
     $script:ToolkitRoot = Split-Path $PSScriptRoot -Parent
     $script:MetricsDir = Join-Path $script:ToolkitRoot (Join-Path 'Audit' 'metrics')
@@ -179,16 +185,20 @@ Describe "DV6-02: v6 produces HTML from 7-day synthetic data" {
         }
         Write-V6TestJsonl -Records $records
 
-        $script:V6Output02 = Invoke-V6 '-DaysBack 7 -OutputMode HTML'
-        $script:V6Html02 = Get-LatestV6Html
+        if ($script:PwshAvailable) {
+            $script:V6Output02 = Invoke-V6 '-DaysBack 7 -OutputMode HTML'
+            $script:V6Html02 = Get-LatestV6Html
+        }
     }
 
     It "produces an HTML file" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Html02 | Should -Not -BeNullOrEmpty
         $script:V6Html02.Length | Should -BeGreaterThan 1000
     }
 
     It "HTML contains KPI banner" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Completion'
         $content | Should -Match 'Approved'
@@ -196,26 +206,31 @@ Describe "DV6-02: v6 produces HTML from 7-day synthetic data" {
     }
 
     It "HTML contains Metric Trends section" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Metric Trends'
     }
 
     It "HTML contains Per-Reviewer Accountability" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Per-Reviewer Accountability'
     }
 
     It "HTML contains Risk Matrix" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Cross-Campaign Risk Matrix'
     }
 
     It "HTML contains Completion Projection" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Completion Projection'
     }
 
     It "HTML contains Heatmap" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html02.FullName -Raw
         $content | Should -Match 'Reviewer Activity Heatmap'
     }
@@ -229,20 +244,25 @@ Describe "DV6-03: v6 handles single-day data" {
         $records = @(New-V6TestRecord -CaptureDate (Get-Date).ToString('yyyy-MM-dd') -CompletionPct 65)
         Write-V6TestJsonl -Records $records
 
-        $script:V6Output03 = Invoke-V6 '-DaysBack 1 -OutputMode Both'
-        $script:V6Html03 = Get-LatestV6Html
+        if ($script:PwshAvailable) {
+            $script:V6Output03 = Invoke-V6 '-DaysBack 1 -OutputMode Both'
+            $script:V6Html03 = Get-LatestV6Html
+        }
     }
 
     It "produces HTML even with 1 data point" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Html03 | Should -Not -BeNullOrEmpty
     }
 
     It "HTML contains insufficient data banner" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $content = Get-Content $script:V6Html03.FullName -Raw
         $content | Should -Match 'Insufficient Trend Data'
     }
 
     It "console output shows single-point note" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Output03 -join "`n" | Should -Match 'single-point'
     }
 }
@@ -254,14 +274,18 @@ Describe "DV6-04: v6 deduplicates by captureDate" {
         $rec2 = New-V6TestRecord -CaptureDate $today -CaptureTimestamp "${today}T16:00:00-04:00" -CompletionPct 75
         Write-V6TestJsonl -Records @($rec1, $rec2)
 
-        $script:V6Output04 = Invoke-V6 '-DaysBack 1 -OutputMode Both'
+        if ($script:PwshAvailable) {
+            $script:V6Output04 = Invoke-V6 '-DaysBack 1 -OutputMode Both'
+        }
     }
 
     It "keeps only 1 data point after dedup" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Output04 -join "`n" | Should -Match 'Built 1 daily data point'
     }
 
     It "kept the later timestamp record (75% completion)" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Output04 -join "`n" | Should -Match '75%'
     }
 }
@@ -275,12 +299,15 @@ Describe "DV6-05: v6 sorts reviewers alphabetically" {
             -ReviewerNames @('Zara','Michelle','Alice') -CompletionPct 60
         Write-V6TestJsonl -Records @($rec)
 
-        Invoke-V6 '-DaysBack 1 -OutputMode HTML' | Out-Null
-        $script:V6Html05 = Get-LatestV6Html
-        $script:V6Html05Content = Get-Content $script:V6Html05.FullName -Raw
+        if ($script:PwshAvailable) {
+            Invoke-V6 '-DaysBack 1 -OutputMode HTML' | Out-Null
+            $script:V6Html05 = Get-LatestV6Html
+            $script:V6Html05Content = Get-Content $script:V6Html05.FullName -Raw
+        }
     }
 
     It "Alice appears before Michelle before Zara in the HTML" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $alicePos = $script:V6Html05Content.IndexOf('Alice')
         $michellePos = $script:V6Html05Content.IndexOf('Michelle')
         $zaraPos = $script:V6Html05Content.IndexOf('Zara')
@@ -315,14 +342,18 @@ Describe "DV6-07: CampaignNameContains filter" {
         $rec2 = New-V6TestRecord -CaptureDate $yesterday -CampaignName 'Monthly SOX Audit' -CompletionPct 55
         Write-V6TestJsonl -Records @($rec1, $rec2)
 
-        $script:V6Output07 = Invoke-V6 "-DaysBack 7 -CampaignNameContains 'Q2' -OutputMode Console"
+        if ($script:PwshAvailable) {
+            $script:V6Output07 = Invoke-V6 "-DaysBack 7 -CampaignNameContains 'Q2' -OutputMode Console"
+        }
     }
 
     It "loads only 1 record matching Q2" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Output07 -join "`n" | Should -Match 'Loaded 1 record'
     }
 
     It "shows Q2 campaign name" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $script:V6Output07 -join "`n" | Should -Match 'Q2 Privileged Review'
     }
 }
@@ -341,12 +372,15 @@ Describe "DV6-08: Cross-campaign risk matrix sorted by date descending" {
         }
         Write-V6TestJsonl -Records $records
 
-        Invoke-V6 '-DaysBack 7 -OutputMode HTML' | Out-Null
-        $script:V6Html08 = Get-LatestV6Html
-        $script:V6Html08Content = Get-Content $script:V6Html08.FullName -Raw
+        if ($script:PwshAvailable) {
+            Invoke-V6 '-DaysBack 7 -OutputMode HTML' | Out-Null
+            $script:V6Html08 = Get-LatestV6Html
+            $script:V6Html08Content = Get-Content $script:V6Html08.FullName -Raw
+        }
     }
 
     It "latest date appears first in risk matrix" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available in this environment'; return }
         $latestLabel = (Get-Date).ToString('MM/dd')
         $earliestLabel = (Get-Date).AddDays(-3).ToString('MM/dd')
         # Find the Risk Matrix section, then check order within it

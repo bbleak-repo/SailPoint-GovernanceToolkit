@@ -94,6 +94,148 @@ function Get-SPRevocationDisposition {
     return [PSCustomObject]@{ Disposition = 'Queued'; Label = 'Queued for removal'; IsRemoved = $false; IsQueued = $true; IsPending = $false; IsConnectedAD = $false }
 }
 
+function Test-SPAutoApproveMarker {
+    <#
+    .SYNOPSIS
+        Returns $true when a justification string contains a configured ISC
+        force-sign / auto-approve marker (default 'idNowAutoApproved').
+    .DESCRIPTION
+        G9 (cache-honesty robustness): the auto-approve marker used to be a single
+        case-SENSITIVE inline match (`$just.Contains('idNowAutoApproved')`). That is
+        brittle -- an ISC rename or a casing change silently re-inflates completion.
+        This helper:
+          (a) reads the marker list from config (Audit.AutoApproveMarkers) with a
+              defensive try/catch mirroring Get-SPAuditActiveCacheTtl, falling back to
+              the code default @('idNowAutoApproved') so behavior is unchanged when no
+              config is present;
+          (b) matches CASE-INSENSITIVELY via IndexOf(...,OrdinalIgnoreCase).
+        Net effect: same default match, now case-insensitive and config-extendable.
+    .PARAMETER Justification
+        The reviewer's note/comment text. Pass '' when none is available.
+    .OUTPUTS
+        [bool]
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [string]$Justification
+    )
+    $just = if ($null -ne $Justification) { [string]$Justification } else { '' }
+    if ([string]::IsNullOrEmpty($just)) { return $false }
+
+    $markers = @('idNowAutoApproved')
+    try {
+        $cfg = Get-SPConfig
+        if ($null -ne $cfg.PSObject.Properties['Audit'] -and
+            $null -ne $cfg.Audit.PSObject.Properties['AutoApproveMarkers'] -and
+            $null -ne $cfg.Audit.AutoApproveMarkers) {
+            $cfgMarkers = @($cfg.Audit.AutoApproveMarkers | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            if ($cfgMarkers.Count -gt 0) { $markers = $cfgMarkers }
+        }
+    } catch { }
+
+    foreach ($m in $markers) {
+        $marker = [string]$m
+        if ([string]::IsNullOrEmpty($marker)) { continue }
+        if ($just.IndexOf($marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-SPDecisionBucket {
+    <#
+    .SYNOPSIS
+        Null-safe accessor for a named decision bucket inside an audit's Decisions map.
+    .DESCRIPTION
+        G12 (cache-honesty robustness): the COMPLETED V4 path indexed
+        $audit['Decisions']['Pending'] directly. When a malformed/missing audit has
+        Decisions = $null, `$null['Pending']` throws 'Cannot index into a null array'
+        in PS 5.1. This helper degrades gracefully to @() when the audit, its Decisions
+        map, or the named bucket is missing/null. Handles both a hashtable Decisions
+        (via .Contains) and a non-hashtable / PSCustomObject Decisions (via PSObject).
+    .PARAMETER Audit
+        The per-campaign audit hashtable (expected to carry a 'Decisions' map).
+    .PARAMETER Name
+        The bucket name to read (e.g. 'Pending', 'Approved', 'Revoked').
+    .OUTPUTS
+        [object[]] -- the bucket contents, or @() when absent/null.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [object]$Audit,
+        [string]$Name
+    )
+    if ($null -eq $Audit -or [string]::IsNullOrEmpty($Name)) { return @() }
+
+    $decisions = $null
+    if ($Audit -is [System.Collections.IDictionary]) {
+        if ($Audit.Contains('Decisions')) { $decisions = $Audit['Decisions'] }
+    }
+    elseif ($null -ne $Audit.PSObject -and $null -ne $Audit.PSObject.Properties['Decisions']) {
+        $decisions = $Audit.Decisions
+    }
+    if ($null -eq $decisions) { return @() }
+
+    $bucket = $null
+    if ($decisions -is [System.Collections.IDictionary]) {
+        if ($decisions.Contains($Name)) { $bucket = $decisions[$Name] }
+    }
+    elseif ($null -ne $decisions.PSObject -and $null -ne $decisions.PSObject.Properties[$Name]) {
+        $bucket = $decisions.$Name
+    }
+    if ($null -eq $bucket) { return @() }
+    return @($bucket)
+}
+
+function ConvertTo-SPCanonicalDecision {
+    <#
+    .SYNOPSIS
+        The SINGLE honest definition of a certification item's decision outcome.
+    .DESCRIPTION
+        Maps an ISC item decision (+ its justification/comment) to exactly one of the
+        three canonical buckets every evidence path must agree on:
+            APPROVE / APPROVED / CERTIFY  -> 'Approved'
+                EXCEPT when the justification contains 'idNowAutoApproved' (ISC force-sign
+                lie: the API says APPROVE but the reviewer never decided) -> 'Pending'
+            REVOKE / REVOKED / DENY / REJECT / EXCEPTION -> 'Revoked'
+            UNDECIDED / null / empty / anything else      -> 'Pending'
+
+        This encodes the same logic Group-SPAuditDecisions used inline; it is factored out
+        so Measure-SPCampaignMetrics and Group-SPAuditDecisions share ONE completion
+        definition (the "number of record") rather than the old divergent inline switches.
+    .PARAMETER Decision
+        The raw ISC decision string (e.g. 'APPROVE', 'REVOKE', 'CERTIFY', null/empty).
+    .PARAMETER Justification
+        The reviewer's note/comment text. Only inspected on the APPROVE branch to detect the
+        'idNowAutoApproved' force-sign marker. Pass '' when no justification is available.
+    .OUTPUTS
+        [string] 'Approved' | 'Revoked' | 'Pending'
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [string]$Decision,
+        [string]$Justification
+    )
+    $dec = if ($null -ne $Decision) { ([string]$Decision).ToUpperInvariant() } else { '' }
+    $just = if ($null -ne $Justification) { [string]$Justification } else { '' }
+    switch ($dec) {
+        { $_ -in @('APPROVE', 'APPROVED', 'CERTIFY') } {
+            # G9: config-driven, case-insensitive marker test (was the brittle
+            # case-sensitive $just.Contains('idNowAutoApproved')).
+            if (Test-SPAutoApproveMarker -Justification $just) { return 'Pending' }
+            return 'Approved'
+        }
+        { $_ -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION') } {
+            return 'Revoked'
+        }
+        default { return 'Pending' }  # null, empty, UNDECIDED, anything else
+    }
+}
+
 function Group-SPAuditDecisions {
     <#
     .SYNOPSIS
@@ -401,15 +543,12 @@ function Group-SPAuditDecisions {
         # comment as a fallback when the decision field doesn't say UNDECIDED directly.
         # Performance: .Contains() is ~10x faster than -match for 40k+ items; the auto-
         # approve check only runs for APPROVE variants, not REVOKE or empty decisions.
-        switch ($decision.ToUpperInvariant()) {
-            { $_ -in @('APPROVE', 'APPROVED', 'CERTIFY') } {
-                if ($justification.Contains('idNowAutoApproved')) { $pending.Add($out) }
-                else { $approved.Add($out) }
-            }
-            { $_ -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION') } {
-                $revoked.Add($out)
-            }
-            default { $pending.Add($out) }  # null, empty, UNDECIDED, anything else
+        # The classification itself lives in ConvertTo-SPCanonicalDecision -- the single
+        # honest definition shared with Measure-SPCampaignMetrics so the two paths agree.
+        switch (ConvertTo-SPCanonicalDecision -Decision $decision -Justification $justification) {
+            'Approved' { $approved.Add($out) }
+            'Revoked'  { $revoked.Add($out) }
+            default    { $pending.Add($out) }  # 'Pending'
         }
     }
 
@@ -548,6 +687,270 @@ function Group-SPReviewerActions {
         Primary    = @($primaryMap.Values)
         Reassigned = $reassignedList.ToArray()
     }
+}
+
+function Group-SPCompletedPendingByReviewer {
+    <#
+    .SYNOPSIS
+        COMPLETED-path reviewer attribution: groups undecided (pending) access-review
+        items by their certification's ASSIGNED reviewer, NOT by item.reviewedBy.
+    .DESCRIPTION
+        Root-cause fix for the COMPLETED "(Unassigned) collapse" (cache-honesty R0).
+
+        A pending/undecided item carries NO reviewedBy, so Group-SPAuditDecisions sets
+        its ReviewerName to 'N/A'. The old COMPLETED branch grouped pending items by that
+        field, collapsing EVERY undecided item from EVERY reviewer into a single
+        (Unassigned)/N/A row -- the report could no longer say WHICH assigned reviewer
+        left work undone.
+
+        This pure function instead attributes each pending item to its certification's
+        assigned reviewer via item.CertificationId -> the sealed/live cert roster
+        (Get-SPCachedCampaignRoster / ConvertTo-SPCertRosterEntry). It falls back to the
+        item's own (reviewedBy-derived) ReviewerName only when the cert has no roster
+        entry, and to '(Unassigned)' only when a cert genuinely has no assigned reviewer.
+        DECIDED items keep their reviewedBy attribution and feed the TotalCount context.
+
+        Mirrors the sibling pure functions (Group-SPAuditDecisions / Group-SPReviewerActions):
+        a plain return value, NOT the @{Success;Data;Error} envelope.
+    .PARAMETER PendingItems
+        The Decisions.Pending list (undecided + idNowAutoApproved items).
+    .PARAMETER DecidedItems
+        Approved + Revoked items, used only to compute the TotalCount context per reviewer.
+    .PARAMETER Roster
+        Cert roster entries from Get-SPCachedCampaignRoster (shape per
+        ConvertTo-SPCertRosterEntry: CertificationId / ReviewerName / ReviewerId /
+        ReviewerEmail / Classification / ReassignedFromName ...).
+    .PARAMETER PrimaryReviewers
+        Group-SPReviewerActions Primary entries; an email fallback enrichment (by name).
+    .PARAMETER ReassignedAwayNames
+        Reviewer names whose certs were reassigned away -- skipped (their work moved to
+        the reassignee, so they legitimately show as done).
+    .PARAMETER KeyByReviewerId
+        OPT-IN (cache-honesty G3 / WI-5). When set, group reviewer accountability on the
+        ISC identity ID ('id:'+ReviewerId) rather than the display name, so two distinct
+        reviewers sharing a display name are NOT merged into one row and a single reviewer
+        renamed across captures is NOT split into two rows. Id-less rows (and the genuine
+        '(Unassigned)' bucket) fall back to a 'name:'+Name key so they still collapse
+        correctly and distinct id-less names are not merged. The VALUE shape is unchanged;
+        Name carries the first non-empty display name seen for the key. DEFAULT (switch
+        off) is the legacy name-keying -- the additive shim for code/tests that still key
+        on display name (e.g. SP.ReviewerCompletionAttribution RCA-02..05).
+    .PARAMETER ReassignedAwayIds
+        Reviewer identity IDs whose certs were reassigned away -- skipped by ID (companion
+        to ReassignedAwayNames). An ID match excludes only the reassigned-away person and
+        will NOT wrongly drop an innocent same-named reviewer. Default empty -> no effect.
+    .OUTPUTS
+        [System.Collections.Specialized.OrderedDictionary] keyed by reviewer Name, each
+        value @{ Name; Email; ReviewerId; PendingCount; TotalCount }. Drop-in replacement
+        for the manual $pendingByReviewer build in the daily-evidence COMPLETED branch.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$PendingItems = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$DecidedItems = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$Roster = @(),
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [object[]]$PrimaryReviewers = @(),
+
+        [Parameter()]
+        [hashtable]$ReassignedAwayNames = @{},
+
+        [Parameter()]
+        [switch]$KeyByReviewerId,
+
+        [Parameter()]
+        [hashtable]$ReassignedAwayIds = @{}
+    )
+
+    # Index the roster by CertificationId for O(1) cert -> assigned-reviewer lookup.
+    # OrderedDictionary uses .Contains() (NOT .ContainsKey()) per PS 5.1.
+    $rosterByCertId = [ordered]@{}
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { continue }
+        $rcId = ''
+        if ($null -ne $re.PSObject.Properties['CertificationId']) { $rcId = [string]$re.CertificationId }
+        if ([string]::IsNullOrWhiteSpace($rcId)) { continue }
+        if (-not $rosterByCertId.Contains($rcId)) { $rosterByCertId[$rcId] = $re }
+    }
+
+    # Resolve an item's cert-ASSIGNED reviewer (name/email/id). Falls back to the item's
+    # reviewedBy-derived ReviewerName only when the cert has no roster entry; '(Unassigned)'
+    # only when a cert genuinely has no assigned reviewer.
+    $resolveAssigned = {
+        param($item)
+        $name = ''; $email = ''; $reviewerId = ''
+        $certId = ''
+        if ($null -ne $item -and $null -ne $item.PSObject.Properties['CertificationId']) { $certId = [string]$item.CertificationId }
+        if (-not [string]::IsNullOrWhiteSpace($certId) -and $rosterByCertId.Contains($certId)) {
+            $re = $rosterByCertId[$certId]
+            if ($null -ne $re.PSObject.Properties['ReviewerName'])  { $name       = [string]$re.ReviewerName }
+            if ($null -ne $re.PSObject.Properties['ReviewerEmail']) { $email      = [string]$re.ReviewerEmail }
+            if ($null -ne $re.PSObject.Properties['ReviewerId'])    { $reviewerId = [string]$re.ReviewerId }
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            # Fallback: the item's reviewedBy-derived ReviewerName ('N/A' for undecided items).
+            $itemRv = ''
+            if ($null -ne $item -and $null -ne $item.PSObject.Properties['ReviewerName']) { $itemRv = [string]$item.ReviewerName }
+            if (-not [string]::IsNullOrWhiteSpace($itemRv) -and $itemRv -ne 'N/A') { $name = $itemRv }
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = '(Unassigned)' }
+        return @{ Name = $name; Email = $email; ReviewerId = $reviewerId }
+    }
+
+    # Stable group key for a resolved-reviewer $info. DEFAULT (KeyByReviewerId off) = the
+    # legacy display-name key (so existing name-keyed consumers/tests are unaffected). OPT-IN
+    # (KeyByReviewerId) = 'id:'+ReviewerId when the ID is known (so same-named reviewers do
+    # not merge and a renamed reviewer does not split), else 'name:'+Name fallback (id-less
+    # rows and the genuine '(Unassigned)' bucket still collapse correctly). Used by ALL three
+    # accumulation loops so they agree on the bucket for every item.
+    $deriveKey = {
+        param($info)
+        if ($KeyByReviewerId) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId)) { return 'id:' + [string]$info.ReviewerId }
+            return 'name:' + [string]$info.Name
+        }
+        return [string]$info.Name
+    }
+
+    $pendingByReviewer = [ordered]@{}
+
+    foreach ($pi in $PendingItems) {
+        if ($null -eq $pi) { continue }
+        $info = & $resolveAssigned $pi
+        # Reassigned-away exclusion: by name (legacy shim) AND, additively, by ID -- an ID
+        # match excludes only the reassigned-away person without a name collision dropping an
+        # innocent same-named reviewer.
+        if ($ReassignedAwayNames.ContainsKey($info.Name)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId) -and $ReassignedAwayIds.ContainsKey([string]$info.ReviewerId)) { continue }
+        $key = & $deriveKey $info
+        if (-not $pendingByReviewer.Contains($key)) {
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
+        }
+        # Name = first non-empty display name seen for this key (a renamed reviewer keeps one
+        # row with one display name).
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].Name) -and -not [string]::IsNullOrWhiteSpace($info.Name)) {
+            $pendingByReviewer[$key].Name = $info.Name
+        }
+        $pendingByReviewer[$key].PendingCount++
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].Email) -and -not [string]::IsNullOrWhiteSpace($info.Email)) {
+            $pendingByReviewer[$key].Email = $info.Email
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
+            $pendingByReviewer[$key].ReviewerId = $info.ReviewerId
+        }
+    }
+
+    # TotalCount context: count decided + pending items attributed to the SAME cert-assigned
+    # reviewer (same key function), but only for reviewers already in the pending map -- keeps
+    # each row internally consistent (PendingCount <= TotalCount for that reviewer).
+    foreach ($it in (@($DecidedItems) + @($PendingItems))) {
+        if ($null -eq $it) { continue }
+        $info = & $resolveAssigned $it
+        $key = & $deriveKey $info
+        if ($pendingByReviewer.Contains($key)) { $pendingByReviewer[$key].TotalCount++ }
+    }
+
+    # Enrich email: roster first (applied above), then the primary reviewer list by DISPLAY
+    # NAME (the only stable join key the Primary entries carry -- no ReviewerId). Matching on
+    # each row's display name keeps the default name-keyed path identical (key == Name there)
+    # and still fills emails when id-keying is on.
+    foreach ($rv in $PrimaryReviewers) {
+        if ($null -eq $rv) { continue }
+        $rvn = ''
+        if ($null -ne $rv.PSObject.Properties['Name']) { $rvn = [string]$rv.Name }
+        if ([string]::IsNullOrWhiteSpace($rvn)) { continue }
+        $rvEmail = ''
+        if ($null -ne $rv.PSObject.Properties['Email']) { $rvEmail = [string]$rv.Email }
+        if ([string]::IsNullOrWhiteSpace($rvEmail)) { continue }
+        foreach ($row in $pendingByReviewer.Values) {
+            if ([string]$row.Name -eq $rvn -and [string]::IsNullOrWhiteSpace([string]$row.Email)) {
+                $row.Email = $rvEmail
+            }
+        }
+    }
+
+    return $pendingByReviewer
+}
+
+function Resolve-SPCaptureDateKey {
+    <#
+    .SYNOPSIS
+        Resolves the captureDate axis key (yyyy-MM-dd) for a daily-evidence JSONL record.
+    .DESCRIPTION
+        Time-axis semantics decision for the daily-evidence store (cache-honesty G7 / WI-12).
+
+        DEFAULT (no -PerRunDay): the key is the campaign's OWN created date (parsed from
+        CampaignCreated), falling back to the run date when Created is blank or unparseable.
+        This is the CAMPAIGN-created (campaign-to-campaign) axis -- byte-for-byte the legacy
+        inline logic the daily-evidence scripts have always used. It is CORRECT for recurring
+        daily campaigns (one campaign created per day, Created == that day), but for a single
+        LONG-RUNNING campaign captured over many days every capture collapses to one constant
+        slot (per-day ACTIVE progression is invisible) and two campaigns created the same day
+        share a slot in V7's per-day resolution so one is dropped.
+
+        -PerRunDay (OPT-IN): the key is the RunDate unconditionally (CampaignCreated ignored).
+        This is the per-run-day axis: a single long-running campaign captured daily yields a
+        DISTINCT key per run day, surfacing true per-day ACTIVE progression. The trade-off is
+        that it changes the day-over-day meaning from per-campaign to per-capture-day, so it is
+        OPT-IN and NEVER the default -- existing report meaning is not silently changed.
+
+        Pure date math, no side effects. Returns a plain [string] yyyy-MM-dd (NOT the
+        @{Success;Data;Error} envelope), matching the sibling pure functions
+        Group-SPAuditDecisions / Group-SPReviewerActions / Group-SPCompletedPendingByReviewer.
+    .PARAMETER CampaignCreated
+        The campaign's Created timestamp (ISO-8601 / roundtrip). Blank or unparseable -> the
+        default path falls back to RunDate. Ignored entirely when -PerRunDay is set.
+    .PARAMETER RunDate
+        The capture run's date. Default (Get-Date) -- identical to the legacy inline fallback.
+    .PARAMETER PerRunDay
+        OPT-IN. Key on the RunDate instead of the campaign Created date, for true per-day
+        progression of a single long-running campaign. Changes the day-over-day axis meaning;
+        never the default. See .DESCRIPTION for the trade-off.
+    .OUTPUTS
+        [string] in yyyy-MM-dd form.
+    .EXAMPLE
+        Resolve-SPCaptureDateKey -CampaignCreated '2026-06-01T08:00:00Z' -RunDate ([datetime]'2026-06-27')
+        # '2026-06-01' (default: campaign-created axis)
+    .EXAMPLE
+        Resolve-SPCaptureDateKey -CampaignCreated '2026-06-01T08:00:00Z' -RunDate ([datetime]'2026-06-27') -PerRunDay
+        # '2026-06-27' (opt-in: per-run-day axis)
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [string]$CampaignCreated = '',
+
+        [Parameter()]
+        [datetime]$RunDate = (Get-Date),
+
+        [Parameter()]
+        [switch]$PerRunDay
+    )
+
+    # -PerRunDay: per-run-day axis -- key on the run date unconditionally (ignore Created).
+    if ($PerRunDay) {
+        return $RunDate.ToString('yyyy-MM-dd')
+    }
+
+    # DEFAULT: campaign-created axis -- byte-for-byte the legacy inline logic. Start from the
+    # run date, then prefer the parsed campaign Created date when present and parseable.
+    $key = $RunDate.ToString('yyyy-MM-dd')
+    if (-not [string]::IsNullOrWhiteSpace($CampaignCreated)) {
+        try { $key = ([datetime]::Parse($CampaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
+        catch { }
+    }
+    return $key
 }
 
 function Group-SPAuditIdentityEvents {
@@ -2127,12 +2530,36 @@ function Measure-SPCampaignMetrics {
                         $decision = [string]$item.decision
                     }
 
-                    switch ($decision.ToUpper()) {
-                        'APPROVE'  { $approvedCount++ }
-                        'APPROVED' { $approvedCount++ }
-                        'REVOKE'   { $revokedCount++ }
-                        'REVOKED'  { $revokedCount++ }
-                        default    { $pendingCount++ }
+                    # Extract the justification the SAME way Group-SPAuditDecisions does
+                    # (item.comment, else item.comments string-or-array) so the shared honest
+                    # classifier can spot ISC force-sign 'idNowAutoApproved' lies. Without this
+                    # the old inline switch counted force-signed APPROVEs as complete and lumped
+                    # CERTIFY/DENY/REJECT/EXCEPTION into pending -- disagreeing with the honest path.
+                    $just = ''
+                    if ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['comment'] -and
+                        $null -ne $item.comment -and -not [string]::IsNullOrWhiteSpace([string]$item.comment)) {
+                        $just = [string]$item.comment
+                    }
+                    elseif ($null -ne $item.PSObject -and $null -ne $item.PSObject.Properties['comments'] -and $null -ne $item.comments) {
+                        $cm = $item.comments
+                        if ($cm -is [string]) { $just = $cm }
+                        elseif ($cm -is [System.Collections.IEnumerable]) {
+                            $parts = @()
+                            foreach ($c in $cm) {
+                                if ($null -eq $c) { continue }
+                                if ($c -is [string]) { $parts += $c }
+                                elseif ($null -ne $c.PSObject.Properties['comment'] -and -not [string]::IsNullOrWhiteSpace([string]$c.comment)) { $parts += [string]$c.comment }
+                                elseif ($null -ne $c.PSObject.Properties['text'] -and -not [string]::IsNullOrWhiteSpace([string]$c.text)) { $parts += [string]$c.text }
+                            }
+                            $just = ($parts -join '; ')
+                        }
+                    }
+
+                    # ONE honest completion definition shared with Group-SPAuditDecisions.
+                    switch (ConvertTo-SPCanonicalDecision -Decision $decision -Justification $just) {
+                        'Approved' { $approvedCount++ }
+                        'Revoked'  { $revokedCount++ }
+                        default    { $pendingCount++ }  # 'Pending'
                     }
                 }
 
@@ -2262,6 +2689,7 @@ function Measure-SPCampaignMetrics {
                 SlowestReviewer         = $slowestReviewer
                 ItemsPerReviewer        = $reviewerItemCounts
                 DeadlineStatus          = $deadlineStatus
+                CompletionBasis         = 'HonestClassifier'
             }
 
             $metricsResults.Add($metricsObj)
@@ -2575,9 +3003,14 @@ function Build-SPLeadershipHierarchy {
 
 Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
+    'ConvertTo-SPCanonicalDecision',
+    'Test-SPAutoApproveMarker',
+    'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
     'Group-SPReviewerActions',
+    'Group-SPCompletedPendingByReviewer',
+    'Resolve-SPCaptureDateKey',
     'Group-SPAuditIdentityEvents',
     'Group-SPAuditRemediationProof',
     'Measure-SPAuditReviewerMetrics',

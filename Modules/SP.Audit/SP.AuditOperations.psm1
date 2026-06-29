@@ -1687,7 +1687,9 @@ function Save-SPGovernanceMetrics {
         [Parameter()][object[]]$CampaignList,
         [Parameter()][object[]]$CampaignAuditData,
         [Parameter()][string]$Label,
-        [Parameter()][string]$CorrelationID
+        [Parameter()][string]$CorrelationID,
+        [Parameter()][switch]$DedupSameDay,
+        [Parameter()][string]$MetricsDir
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -1700,26 +1702,43 @@ function Save-SPGovernanceMetrics {
     Write-SPLog -Message 'Save-SPGovernanceMetrics: starting' `
         -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
 
-    # Resolve metrics path and retention from config
+    # Resolve metrics path and retention from config.
+    # Additive override: -MetricsDir bypasses config/default resolution (mirrors
+    # Save-SPCampaignTrendPoint's -TrendDir) so the function is testable without mocking Get-SPConfig.
     $metricsPath   = '.\Audit\metrics'
     $retentionDays = 365
-    try {
-        $config = Get-SPConfig
-        if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Metrics') {
-            $metricsCfg = $config.Metrics
-            if ($metricsCfg.PSObject.Properties.Name -contains 'Path' -and
-                -not [string]::IsNullOrWhiteSpace($metricsCfg.Path)) {
-                $metricsPath = $metricsCfg.Path
+    if (-not [string]::IsNullOrWhiteSpace($MetricsDir)) {
+        $metricsPath = $MetricsDir
+        try {
+            $config = Get-SPConfig
+            if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Metrics') {
+                $metricsCfg = $config.Metrics
+                if ($metricsCfg.PSObject.Properties.Name -contains 'RetentionDays' -and
+                    $null -ne $metricsCfg.RetentionDays) {
+                    $retentionDays = [int]$metricsCfg.RetentionDays
+                }
             }
-            if ($metricsCfg.PSObject.Properties.Name -contains 'RetentionDays' -and
-                $null -ne $metricsCfg.RetentionDays) {
-                $retentionDays = [int]$metricsCfg.RetentionDays
+        } catch { }
+    }
+    else {
+        try {
+            $config = Get-SPConfig
+            if ($null -ne $config -and $config.PSObject.Properties.Name -contains 'Metrics') {
+                $metricsCfg = $config.Metrics
+                if ($metricsCfg.PSObject.Properties.Name -contains 'Path' -and
+                    -not [string]::IsNullOrWhiteSpace($metricsCfg.Path)) {
+                    $metricsPath = $metricsCfg.Path
+                }
+                if ($metricsCfg.PSObject.Properties.Name -contains 'RetentionDays' -and
+                    $null -ne $metricsCfg.RetentionDays) {
+                    $retentionDays = [int]$metricsCfg.RetentionDays
+                }
             }
         }
-    }
-    catch {
-        Write-SPLog -Message "Could not load Metrics config, using defaults: $($_.Exception.Message)" `
-            -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        catch {
+            Write-SPLog -Message "Could not load Metrics config, using defaults: $($_.Exception.Message)" `
+                -Severity WARN -Component $component -Action $action -CorrelationID $CorrelationID
+        }
     }
 
     # Ensure metrics directory exists
@@ -1729,6 +1748,38 @@ function Save-SPGovernanceMetrics {
 
     $filePath = Join-Path -Path $metricsPath -ChildPath 'governance-metrics.jsonl'
     $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    # --- Same-day dedup (opt-in) ----------------------------------------------------------
+    # Port of the daily-evidence dedup: this record has no per-campaign status (just
+    # {timestamp,label,metrics}), so the faithful dedup is keyed on (Label, UTC date). When set,
+    # a 2nd same-Label same-day run is skipped instead of appended a duplicate. Default off
+    # preserves the append-only behavior all existing tests rely on.
+    if ($DedupSameDay -and (Test-Path -Path $filePath)) {
+        $incomingLabel = if ([string]::IsNullOrWhiteSpace($Label)) { $null } else { $Label }
+        $incomingDay = $null
+        try { $incomingDay = ([datetime]::Parse($timestamp)).ToUniversalTime().ToString('yyyy-MM-dd') } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($incomingDay)) {
+            $utf8Dedup = New-Object System.Text.UTF8Encoding($false)
+            $dupExists = $false
+            foreach ($line in [System.IO.File]::ReadAllLines($filePath, $utf8Dedup)) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try {
+                    $parsedRow = $line | ConvertFrom-Json
+                    $rowLabel = $null
+                    if ($null -ne $parsedRow.PSObject.Properties['label'] -and $null -ne $parsedRow.label) { $rowLabel = [string]$parsedRow.label }
+                    $labelMatch = ([string]::IsNullOrWhiteSpace($incomingLabel) -and [string]::IsNullOrWhiteSpace($rowLabel)) -or ($incomingLabel -eq $rowLabel)
+                    if (-not $labelMatch) { continue }
+                    $rowDay = ([datetime]::Parse([string]$parsedRow.timestamp)).ToUniversalTime().ToString('yyyy-MM-dd')
+                    if ($rowDay -eq $incomingDay) { $dupExists = $true; break }
+                } catch { }
+            }
+            if ($dupExists) {
+                Write-SPLog -Message "Save-SPGovernanceMetrics: same-day record for label '$incomingLabel' already exists -- skipping (DedupSameDay)" `
+                    -Severity INFO -Component $component -Action $action -CorrelationID $CorrelationID
+                return @{ Success = $true; Data = @{ Timestamp = $timestamp; MetricCount = 0; FilePath = $filePath; Skipped = $true } }
+            }
+        }
+    }
 
     # Extract KPIs from each analytics output
     $metrics = [ordered]@{}

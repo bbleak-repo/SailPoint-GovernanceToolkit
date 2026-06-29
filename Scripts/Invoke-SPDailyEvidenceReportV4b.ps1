@@ -79,6 +79,13 @@
     Does NOT clear existing cache files -- other scripts and future runs still benefit
     from the cache. Use this when you need real-time item counts (e.g., reviewers have
     been signing off and you want the latest decided items).
+.PARAMETER PerRunDay
+    OPT-IN time-axis switch (cache-honesty G7 / WI-12). By DEFAULT the daily-evidence
+    JSONL captureDate is the campaign's OWN created date (campaign-to-campaign axis) --
+    correct for recurring daily campaigns. With -PerRunDay the captureDate is the run
+    date instead, so a single long-running campaign captured daily shows true per-day
+    ACTIVE progression. Trade-off: this changes the day-over-day meaning from per-campaign
+    to per-capture-day, so it is opt-in and never the default.
 .NOTES
     Script:  Invoke-SPDailyEvidenceReportV4b.ps1
     Version: 1.1.0
@@ -143,6 +150,9 @@ param(
 
     [Parameter()]
     [switch]$RefreshCache,
+
+    [Parameter()]
+    [switch]$PerRunDay,
 
     [Parameter()]
     [Alias('?')]
@@ -555,6 +565,13 @@ try {
 
             $reviewerActions = Group-SPReviewerActions -Certifications $certifications
 
+            # Seal the cert -> assigned-reviewer roster (WI-2). Prefers the ACTIVE-state
+            # sealed roster; falls back to these live certs when no seal exists. The
+            # COMPLETED accountability path uses this to attribute undecided items to the
+            # ASSIGNED reviewer (item.CertificationId -> roster), not item.reviewedBy.
+            $rosterResult = Get-SPCachedCampaignRoster -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
+            $certRoster = if ($rosterResult.Success) { @($rosterResult.Data) } else { @() }
+
             $campaignAudit = @{
                 CampaignName    = $campName
                 CampaignId      = $campId
@@ -569,7 +586,14 @@ try {
                 WrappedItems    = $wrappedItems.ToArray()
                 Certifications  = $certifications
                 ReviewerActions = $reviewerActions
+                CertRoster      = $certRoster
                 ItemsFromCache  = $itemsFromCache
+                # WI-4 (G1): capture-provenance so the COMPLETED render can warn when a campaign
+                # was sealed WITHOUT a prior ACTIVE-state snapshot (unverified). (Ported from V4 --
+                # V4b had the roster for attribution but was missing this provenance + the banner.)
+                CaptureCapturedWhileActive = [bool]$rosterResult.CapturedWhileActive
+                CaptureSealed              = [bool]$rosterResult.Sealed
+                CaptureSource              = [string]$rosterResult.Source
             }
             $auditList.Add($campaignAudit)
         }
@@ -785,13 +809,10 @@ try {
     }
 
     foreach ($audit in $campaignAudits) {
-        # captureDate = the campaign's own date (from created), NOT the run date.
-        $campaignCreated = [string]$audit['Created']
-        $captureDate = (Get-Date).ToString('yyyy-MM-dd')
-        if (-not [string]::IsNullOrWhiteSpace($campaignCreated)) {
-            try { $captureDate = ([datetime]::Parse($campaignCreated, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)).ToString('yyyy-MM-dd') }
-            catch { }
-        }
+        # captureDate axis (cache-honesty G7 / WI-12): DEFAULT = the campaign's own created
+        # date (campaign-to-campaign axis); -PerRunDay = the run date (true per-day progression
+        # of a single long-running campaign). Pure helper keeps both scripts in lockstep.
+        $captureDate = Resolve-SPCaptureDateKey -CampaignCreated ([string]$audit['Created']) -PerRunDay:$PerRunDay
         # Don't overwrite an ACTIVE-state JSONL record with COMPLETED data.
         # ACTIVE records have honest reviewer metrics; COMPLETED records are inflated by auto-approve.
         $metricsStatus = ([string]$audit['Status']).ToUpperInvariant()
@@ -1309,17 +1330,21 @@ try {
             $d = $audit['Decisions']
             if ($null -eq $d -or $null -eq $d['Pending']) { continue }
             foreach ($pending in @($d['Pending'])) {
-                $pId = $pending.IdentityId
-                if ($null -ne $pId -and $highRiskIds.ContainsKey($pId)) {
+                # NOTE: do NOT name this $pId -- PowerShell variable names are case-insensitive, so
+                # $pId collides with the read-only automatic $PID. The old name silently failed to
+                # assign (leaving the process id), so this lookup never matched and High-Risk Exposure
+                # found nothing. Use $riskIdId.
+                $riskIdId = $pending.IdentityId
+                if ($null -ne $riskIdId -and $highRiskIds.ContainsKey($riskIdId)) {
                     $highRiskPending.Add([PSCustomObject]@{
-                        IdentityId   = $pId
+                        IdentityId   = $riskIdId
                         IdentityName = $pending.IdentityName
-                        RiskScore    = $highRiskIds[$pId].RiskScore
+                        RiskScore    = $highRiskIds[$riskIdId].RiskScore
                         AccessName   = $pending.AccessName
                         SourceName   = if ($null -ne $pending.SourceName) { $pending.SourceName } else { '' }
                         CampaignName = $audit['CampaignName']
                     })
-                    $highRiskPendingIdentityIds[$pId] = $true
+                    $highRiskPendingIdentityIds[$riskIdId] = $true
                 }
             }
         }
@@ -1919,36 +1944,39 @@ foreach ($audit in $campaignAudits) {
         # items that were PENDING when the cache was written are genuinely unreviewed.
         # Derive the pending reviewer list from the items, not from cert metadata.
         $d = $audit['Decisions']
-        $itemPending = @($d['Pending'])
-        $pendingByReviewer = [ordered]@{}
-        foreach ($pi in $itemPending) {
-            $rvn = [string]$pi.ReviewerName
-            if ([string]::IsNullOrWhiteSpace($rvn)) { $rvn = '(Unassigned)' }
-            if ($reassignedAwayNames.ContainsKey($rvn)) { continue }
-            if (-not $pendingByReviewer.Contains($rvn)) {
-                $pendingByReviewer[$rvn] = @{ Name = $rvn; Email = ''; PendingCount = 0; TotalCount = 0 }
-            }
-            $pendingByReviewer[$rvn].PendingCount++
+        # Attribute undecided items to the cert-ASSIGNED reviewer (item.CertificationId ->
+        # sealed/live roster), not item.reviewedBy (null for pending items, which used to
+        # collapse every undecided item into a single (Unassigned) row). DECIDED items still
+        # carry their reviewedBy attribution for the TotalCount context. (cache-honesty R0)
+        $certRoster = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+        # WI-5 (G3): key reviewer accountability on ISC identity ID (display name for
+        # presentation only) so two reviewers sharing a name are not merged and a renamed
+        # reviewer is not split. Build the reassigned-away exclusion by ID from the sealed/live
+        # roster's ReassignedFromId (additive companion to the name-based set above).
+        $reassignedAwayIds = @{}
+        foreach ($re in $certRoster) {
+            if ($null -eq $re) { continue }
+            $rfId = ''
+            if ($null -ne $re.PSObject.Properties['ReassignedFromId']) { $rfId = [string]$re.ReassignedFromId }
+            if (-not [string]::IsNullOrWhiteSpace($rfId)) { $reassignedAwayIds[$rfId] = $true }
         }
-        # Enrich with email from the primary reviewer list + count total items per reviewer
-        foreach ($rv in $primary) {
-            $rvn = [string]$rv.Name
-            if ($pendingByReviewer.Contains($rvn) -and -not [string]::IsNullOrWhiteSpace([string]$rv.Email)) {
-                $pendingByReviewer[$rvn].Email = [string]$rv.Email
-            }
-        }
-        # Also count total items (approved+revoked+pending) per reviewer for context
-        foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
-            foreach ($it in @($d[$grp])) {
-                if ($null -eq $it) { continue }
-                $rvn = [string]$it.ReviewerName
-                if ($pendingByReviewer.Contains($rvn)) { $pendingByReviewer[$rvn].TotalCount++ }
-            }
-        }
+        $pendingByReviewer = Group-SPCompletedPendingByReviewer `
+            -PendingItems @($d['Pending']) `
+            -DecidedItems (@($d['Approved']) + @($d['Revoked'])) `
+            -Roster $certRoster `
+            -PrimaryReviewers $primary `
+            -ReassignedAwayNames $reassignedAwayNames `
+            -KeyByReviewerId `
+            -ReassignedAwayIds $reassignedAwayIds
         $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
         [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
+        # WI-4 (G1): visible provenance banner. When the campaign was sealed WITHOUT a prior
+        # ACTIVE-state capture, the COMPLETED item data is ISC post-completion data being trusted
+        # without an honest snapshot -- mark the completion unverified. (Ported from V4.)
+        $capActive = if ($audit.ContainsKey('CaptureCapturedWhileActive')) { [bool]$audit['CaptureCapturedWhileActive'] } else { $false }
+        if (-not $capActive) { [void]$sb.AppendLine('<div class="s-red" style="border:1px solid #c0392b;background:#fdecea;padding:6px 8px;margin:4px 0;font-size:12px;font-weight:600">&#9888; No active-state capture -- completion unverified. ISC post-completion data is being trusted without a sealed ACTIVE-state snapshot.</div>') }
         # Warn if any undecided items have no assigned reviewer
         $unassignedEntry = $pendingByReviewer['(Unassigned)']
         if ($null -ne $unassignedEntry -and $unassignedEntry.PendingCount -gt 0) {

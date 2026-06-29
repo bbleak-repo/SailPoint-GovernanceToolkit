@@ -211,6 +211,15 @@ but is now COMPLETED, the cache is automatically sealed as permanent. This prese
 the honest ACTIVE-state data and prevents ISC's post-completion inflation from
 overwriting it.
 
+**Provenance & freshness.** A campaign first seen *after* it already COMPLETED has no honest
+ACTIVE-state capture to preserve, so V4/V4b stamp it `Unverified` and the report shows a red
+**"⚠ no active-state capture — completion unverified"** banner — run the daily capture *while
+campaigns are ACTIVE* to avoid it. The ACTIVE-cache TTL (`Audit.CacheActiveTtlMinutes`, default 180
+min) can optionally **shrink near a deadline** via `Audit.NearDeadlineCapture`
+(`Enabled` / `WindowMinutes` 1440 / `TtlMinutes` 15) to capture a fresher final picture. The
+`captureDate` time axis defaults to the campaign's created date (campaign-to-campaign); pass
+`-PerRunDay` to switch V4/V4b to a per-run-day axis for a single long-running campaign.
+
 ### Key ISC behaviors handled
 
 | ISC Behavior | How Toolkit Handles It |
@@ -218,7 +227,7 @@ overwriting it.
 | Force-completion auto-approves remaining items with `decision: "APPROVE"` | `Group-SPAuditDecisions` checks `comments` for `idNowAutoApproved`; reclassifies to Undecided |
 | Force-completion inflates cert `decisionsMade` to match `decisionsTotal` | Per-reviewer JSONL data computed from item-level counts, not cert-level |
 | Force-completion sets all certs to `phase: SIGNED` | Reviewer % computed from item-level `pending=0`, not cert `Phase` |
-| `reviewedBy` is `null` on auto-approved items | Cert-to-reviewer mapping resolves orphaned items via CertificationId + CertificationName fallback |
+| `reviewedBy` is `null` on undecided / auto-approved items | Undecided items are attributed to the **cert-assigned reviewer** via a cert-to-reviewer roster **sealed at ACTIVE state** (keyed on ISC identity ID), not the empty `reviewedBy` — so COMPLETED campaigns name the accountable reviewer instead of collapsing to `(Unassigned)` |
 | `decision` is `null` on unsigned reviewer items (ACTIVE campaigns) | Items correctly classified as Undecided/Pending |
 
 ### V4b report sections
@@ -228,7 +237,7 @@ overwriting it.
 | **KPI Dashboard** | 6 governance KPIs (completion, overdue, revocations, remediation, high-risk, reviewer health) with domino chain |
 | **Executive Summary** | Per-campaign donut chart (Approved/Revoked/Undecided), reviewer sign-off, deprovisioning status |
 | **A. Campaign Completion Evidence** | Per-campaign table: Status, Total, Approved, Revoked, Undecided, Items %, Reviewer %, Created, Completed |
-| **B. Reviewer Accountability** | ACTIVE: unsigned reviewers. COMPLETED: reviewers with undecided items (from item-level data) |
+| **B. Reviewer Accountability** | ACTIVE: unsigned reviewers (cert `Phase`). COMPLETED: undecided items attributed to the **cert-assigned reviewer** from the ACTIVE-sealed roster (no `(Unassigned)` collapse) |
 | **Decision Summary** | Revoked register with remediation status, New Scope -- Approved Access |
 
 ### V7 report sections
