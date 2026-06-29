@@ -1964,7 +1964,8 @@ foreach ($audit in $campaignAudits) {
             -PrimaryReviewers $primary `
             -ReassignedAwayNames $reassignedAwayNames `
             -KeyByReviewerId `
-            -ReassignedAwayIds $reassignedAwayIds
+            -ReassignedAwayIds $reassignedAwayIds `
+            -IncludeUnsignedComplete
         $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
@@ -1974,13 +1975,19 @@ foreach ($audit in $campaignAudits) {
         # being trusted without an honest snapshot -- mark the completion unverified.
         $capActive = if ($audit.ContainsKey('CaptureCapturedWhileActive')) { [bool]$audit['CaptureCapturedWhileActive'] } else { $false }
         if (-not $capActive) { [void]$sb.AppendLine('<div class="s-red" style="border:1px solid #c0392b;background:#fdecea;padding:6px 8px;margin:4px 0;font-size:12px;font-weight:600">&#9888; No active-state capture -- completion unverified. ISC post-completion data is being trusted without a sealed ACTIVE-state snapshot.</div>') }
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Undecided Items by Reviewer ($($pendingR.Count) reviewer(s) with undecided items)</summary>")
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Reviewers who did not complete ($($pendingR.Count))</summary>")
+        [void]$sb.AppendLine("<div style='font-size:11px;color:#777;margin-bottom:4px'>Includes reviewers with undecided items AND reviewers who decided everything but never signed off (force-closed).</div>")
         [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Undecided Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
         if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No undecided items found (all items were decided before close).</td></tr>') }
         else { foreach ($rr in $pendingR) {
             $pCnt = $rr.PendingCount; $tCnt = $rr.TotalCount
-            $phCls = if ($pCnt -eq $tCnt) { 's-red' } else { 's-amber' }
-            $note = if ($pCnt -eq $tCnt) { 'No decisions made' } else { "$($tCnt - $pCnt) of $tCnt decided" }
+            # COMP-REVIEWER-COMPLETENESS: note + colour driven by CompletionReason so a force-signed
+            # reviewer who decided everything (PendingCount==0) reads as "all decided - not signed off"
+            # rather than an empty/0 cell. Force-close finished-but-unsigned = amber (non-completion,
+            # but work was done); no decisions = red; partial = amber.
+            if ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+            elseif ($pCnt -eq $tCnt) { $phCls = 's-red'; $note = 'No decisions made' }
+            else { $phCls = 's-amber'; $note = "$($tCnt - $pCnt) of $tCnt decided" }
             [void]$sb.AppendLine("<tr><td style='font-weight:600'>" + (ConvertTo-SafeHtml $rr.Name) + "</td><td>" + (ConvertTo-SafeHtml $rr.Email) + "</td><td style='text-align:right;font-weight:600' class='$phCls'>$pCnt</td><td style='text-align:right'>$tCnt</td><td>$note</td></tr>")
         } }
         [void]$sb.AppendLine('</tbody></table></details>')

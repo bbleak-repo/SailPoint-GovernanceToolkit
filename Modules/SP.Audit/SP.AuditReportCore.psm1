@@ -739,6 +739,18 @@ function Group-SPCompletedPendingByReviewer {
         Reviewer identity IDs whose certs were reassigned away -- skipped by ID (companion
         to ReassignedAwayNames). An ID match excludes only the reassigned-away person and
         will NOT wrongly drop an innocent same-named reviewer. Default empty -> no effect.
+    .PARAMETER IncludeUnsignedComplete
+        OPT-IN (COMP-REVIEWER-COMPLETENESS). When set, also surface reviewers who DECIDED
+        every item but never manually signed off -- the cert was force-signed by someone else
+        (signedBy.id != reviewer.id) at a force-close. These have NO pending items so they are
+        invisible to the default path, yet they did NOT complete (completion = sign-off AND
+        items-decided). For each roster entry not already in the pending map (and not reassigned
+        away), a row is added ONLY when there is POSITIVE evidence of a force-close: SignedById
+        is non-empty AND SignedById != ReviewerId (CompletionReason='finished-but-unsigned',
+        PendingCount=0). A manual sign-off (SignedById == ReviewerId) or an indeterminate sealed
+        roster (SignedById empty) adds NO row, so genuinely-complete reviewers stay absent and
+        sealed rosters lacking signedBy never fabricate rows. DEFAULT (switch off) is byte-for-
+        byte identical to today -- the additive contract RCA-02/07 lock.
     .OUTPUTS
         [System.Collections.Specialized.OrderedDictionary] keyed by reviewer Name, each
         value @{ Name; Email; ReviewerId; PendingCount; TotalCount }. Drop-in replacement
@@ -769,7 +781,10 @@ function Group-SPCompletedPendingByReviewer {
         [switch]$KeyByReviewerId,
 
         [Parameter()]
-        [hashtable]$ReassignedAwayIds = @{}
+        [hashtable]$ReassignedAwayIds = @{},
+
+        [Parameter()]
+        [switch]$IncludeUnsignedComplete
     )
 
     # Index the roster by CertificationId for O(1) cert -> assigned-reviewer lookup.
@@ -834,7 +849,11 @@ function Group-SPCompletedPendingByReviewer {
         if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId) -and $ReassignedAwayIds.ContainsKey([string]$info.ReviewerId)) { continue }
         $key = & $deriveKey $info
         if (-not $pendingByReviewer.Contains($key)) {
-            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
+            # CompletionReason (COMP-REVIEWER-COMPLETENESS): every row carries WHY the reviewer
+            # did not complete. A row built from pending items has PendingCount>0 -> undecided/
+            # auto-approved work was left; the finished-but-unsigned roster loop below adds the
+            # other reason for force-signed reviewers who decided everything.
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0; CompletionReason = 'undecided-auto-approved' }
         }
         # Name = first non-empty display name seen for this key (a renamed reviewer keeps one
         # row with one display name).
@@ -847,6 +866,38 @@ function Group-SPCompletedPendingByReviewer {
         }
         if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
             $pendingByReviewer[$key].ReviewerId = $info.ReviewerId
+        }
+    }
+
+    # Finished-but-unsigned surfacing (COMP-REVIEWER-COMPLETENESS, OPT-IN). After the pending
+    # accumulation (so a reviewer with ANY undecided work already has a row) and BEFORE the
+    # TotalCount loop (so newly-added rows still get their decided count filled), walk the roster
+    # and add a row for each cert-assigned reviewer who left NO pending items yet did NOT complete
+    # because the cert was force-signed by someone else (signedBy.id != reviewer.id). Only POSITIVE
+    # force-close evidence adds a row: a manual sign-off or an indeterminate sealed roster (empty
+    # SignedById) is left absent, so genuinely-complete reviewers stay out and sealed rosters that
+    # lack signedBy never fabricate rows. Default (switch off) skips this entirely.
+    if ($IncludeUnsignedComplete) {
+        foreach ($re in $Roster) {
+            if ($null -eq $re) { continue }
+            $rName = ''; $rId = ''; $rEmail = ''
+            if ($null -ne $re.PSObject.Properties['ReviewerName'])  { $rName  = [string]$re.ReviewerName }
+            if ($null -ne $re.PSObject.Properties['ReviewerId'])    { $rId    = [string]$re.ReviewerId }
+            if ($null -ne $re.PSObject.Properties['ReviewerEmail']) { $rEmail = [string]$re.ReviewerEmail }
+            $signedById = ''
+            if ($null -ne $re.PSObject.Properties['SignedById']) { $signedById = [string]$re.SignedById }
+            $info = @{ Name = $rName; ReviewerId = $rId; Email = $rEmail }
+            if ([string]::IsNullOrWhiteSpace([string]$info.Name)) { $info.Name = '(Unassigned)' }
+            # Reassigned-away exclusion (mirror the pending loop) -- their work moved on.
+            if ($ReassignedAwayNames.ContainsKey($info.Name)) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($rId) -and $ReassignedAwayIds.ContainsKey($rId)) { continue }
+            $key = & $deriveKey $info
+            # Already has pending work -> already attributed; do not overwrite its reason.
+            if ($pendingByReviewer.Contains($key)) { continue }
+            # Classify sign-off. Only a force-close (positive evidence) is surfaced here.
+            $forceSigned    = (-not [string]::IsNullOrWhiteSpace($signedById)) -and ($signedById -ne $rId)
+            if (-not $forceSigned) { continue }
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = $rEmail; ReviewerId = $rId; PendingCount = 0; TotalCount = 0; CompletionReason = 'finished-but-unsigned' }
         }
     }
 

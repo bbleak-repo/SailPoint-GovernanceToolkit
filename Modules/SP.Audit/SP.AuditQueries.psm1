@@ -6998,6 +6998,20 @@ function ConvertTo-SPCertRosterEntry {
             if ($null -ne $effectiveReviewer.PSObject.Properties['email']) { $revEmail = [string]$effectiveReviewer.email }
         }
 
+        # Sign-off provenance (COMP-REVIEWER-COMPLETENESS). Capture who actually signed the
+        # cert so the COMPLETED render can tell a manual sign-off apart from a force-close
+        # (signedBy.id != reviewer.id). Null-safe via PSObject.Properties (mirrors the
+        # $effectiveReviewer pattern above). Absent on sealed/ACTIVE-captured certs -> ''
+        # (conservative): an empty SignedById is treated downstream as indeterminate, never
+        # as positive evidence of a force-close.
+        $signedById   = ''
+        $signedByName = ''
+        if ($null -ne $Cert.PSObject.Properties['signedBy'] -and $null -ne $Cert.signedBy) {
+            $signedBy = $Cert.signedBy
+            if ($null -ne $signedBy.PSObject.Properties['id'])   { $signedById   = [string]$signedBy.id }
+            if ($null -ne $signedBy.PSObject.Properties['name']) { $signedByName = [string]$signedBy.name }
+        }
+
         [PSCustomObject]@{
             CertificationId    = $certId
             CertificationName  = $certName
@@ -7007,6 +7021,8 @@ function ConvertTo-SPCertRosterEntry {
             Classification     = $classification
             ReassignedFromName = $reassignFromName
             ReassignedFromId   = $reassignFromId
+            SignedById         = $signedById
+            SignedByName       = $signedByName
         }
     }
 }
