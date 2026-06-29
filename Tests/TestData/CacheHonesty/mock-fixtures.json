@@ -47,6 +47,19 @@
                           "deadline":  "2026-07-20T12:00:00Z",
                           "totalCertifications":  1,
                           "completedCertifications":  0
+                      },
+                      {
+                          "id":  "camp-ch-forceclose-001",
+                          "name":  "CH Force-Close Campaign 001",
+                          "description":  "Cache-honesty FORCE-CLOSED COMPLETED fixture (certs force-signed by System ForceClose; leftover items idNowAutoApproved; both reviewers did-not-complete for distinct reasons)",
+                          "status":  "COMPLETED",
+                          "type":  "MANAGER",
+                          "created":  "2026-06-10T12:00:00Z",
+                          "deadline":  "2026-06-19T12:00:00Z",
+                          "totalCertifications":  2,
+                          "completedCertifications":  2,
+                          "forceClosed":  true,
+                          "closedDate":  "2026-06-19T18:00:00Z"
                       }
                   ],
     "certifications":  [
@@ -233,6 +246,58 @@
                                                     "reason":  "Reassigned from Hank to Iris before any decisions were made",
                                                     "date":  "2026-06-20T12:00:00Z"
                                                 }
+                           },
+                           {
+                               "id":  "cert-ch-forceclose-001",
+                               "name":  "Cert cert-ch-forceclose-001",
+                               "campaign":  {
+                                                "id":  "camp-ch-forceclose-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "SIGNED",
+                               "created":  "2026-06-10T12:00:00Z",
+                               "signed":  "2026-06-19T18:00:00Z",
+                               "decisionsMade":  4,
+                               "decisionsTotal":  4,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-011",
+                                                "name":  "Quinn ForceSigned"
+                                            },
+                               "reassignment":  null,
+                               "forceSigned":  true,
+                               "manuallySignedOff":  false,
+                               "signedBy":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-admin-001",
+                                                "name":  "System ForceClose"
+                                            }
+                           },
+                           {
+                               "id":  "cert-ch-forceclose-002",
+                               "name":  "Cert cert-ch-forceclose-002",
+                               "campaign":  {
+                                                "id":  "camp-ch-forceclose-001",
+                                                "type":  "CERTIFICATION_CAMPAIGN"
+                                            },
+                               "phase":  "SIGNED",
+                               "created":  "2026-06-10T12:00:00Z",
+                               "signed":  "2026-06-19T18:00:00Z",
+                               "decisionsMade":  4,
+                               "decisionsTotal":  4,
+                               "reviewer":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-rv-012",
+                                                "name":  "Rita Undecided"
+                                            },
+                               "reassignment":  null,
+                               "forceSigned":  true,
+                               "manuallySignedOff":  false,
+                               "signedBy":  {
+                                                "type":  "IDENTITY",
+                                                "id":  "id-ch-admin-001",
+                                                "name":  "System ForceClose"
+                                            }
                            }
                        ],
     "accessReviewItems":  {
@@ -1184,6 +1249,192 @@
                                                                                "sourceId":  "src-ad-001"
                                                                            }
                                                            }
-                                                       ]
+                                                       ],
+                              "cert-ch-forceclose-001":  [
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-001-01",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-15T09:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-011",
+                                                                                    "name":  "Quinn ForceSigned",
+                                                                                    "email":  "quinn.forcesigned@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-001-01",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-001-01",
+                                                                                         "name":  "Target 01 for cert-ch-forceclose-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-001-01",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-001-01"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 01 for cert-ch-forceclose-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-001-02",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-16T09:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-011",
+                                                                                    "name":  "Quinn ForceSigned",
+                                                                                    "email":  "quinn.forcesigned@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-001-02",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-001-02",
+                                                                                         "name":  "Target 02 for cert-ch-forceclose-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-001-02",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-001-02"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 02 for cert-ch-forceclose-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-001-03",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-17T09:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-011",
+                                                                                    "name":  "Quinn ForceSigned",
+                                                                                    "email":  "quinn.forcesigned@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-001-03",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-001-03",
+                                                                                         "name":  "Target 03 for cert-ch-forceclose-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-001-03",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-001-03"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 03 for cert-ch-forceclose-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-001-04",
+                                                                 "decision":  "REVOKE",
+                                                                 "decisionDate":  "2026-06-17T15:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-011",
+                                                                                    "name":  "Quinn ForceSigned",
+                                                                                    "email":  "quinn.forcesigned@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-001-04",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-001-04",
+                                                                                         "name":  "Target 04 for cert-ch-forceclose-001"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-001-04",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-001-04"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 04 for cert-ch-forceclose-001,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             }
+                                                         ],
+                              "cert-ch-forceclose-002":  [
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-002-01",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-15T10:00:00Z",
+                                                                 "reviewedBy":  {
+                                                                                    "type":  "IDENTITY",
+                                                                                    "id":  "id-ch-rv-012",
+                                                                                    "name":  "Rita Undecided",
+                                                                                    "email":  "rita.undecided@corp.test"
+                                                                                },
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-002-01",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-002-01",
+                                                                                         "name":  "Target 01 for cert-ch-forceclose-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-002-01",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-002-01"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 01 for cert-ch-forceclose-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-002-02",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-19T18:00:00Z",
+                                                                 "comment":  "idNowAutoApproved",
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-002-02",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-002-02",
+                                                                                         "name":  "Target 02 for cert-ch-forceclose-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-002-02",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-002-02"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 02 for cert-ch-forceclose-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-002-03",
+                                                                 "decision":  "APPROVE",
+                                                                 "decisionDate":  "2026-06-19T18:00:00Z",
+                                                                 "comment":  "idNowAutoApproved",
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-002-03",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-002-03",
+                                                                                         "name":  "Target 03 for cert-ch-forceclose-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-002-03",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-002-03"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 03 for cert-ch-forceclose-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             },
+                                                             {
+                                                                 "id":  "cert-ch-forceclose-002-04",
+                                                                 "identitySummary":  {
+                                                                                         "id":  "id-tgt-cert-ch-forceclose-002-04",
+                                                                                         "identityId":  "id-tgt-cert-ch-forceclose-002-04",
+                                                                                         "name":  "Target 04 for cert-ch-forceclose-002"
+                                                                                     },
+                                                                 "access":  {
+                                                                                "type":  "ENTITLEMENT",
+                                                                                "name":  "AD-SG-CH-cert-ch-forceclose-002-04",
+                                                                                "description":  "AD Group: AD-SG-CH-cert-ch-forceclose-002-04"
+                                                                            },
+                                                                 "account":  {
+                                                                                 "nativeIdentity":  "CN=Target 04 for cert-ch-forceclose-002,OU=Users,DC=corp,DC=test",
+                                                                                 "sourceId":  "src-ad-001"
+                                                                             }
+                                                             }
+                                                         ]
                           }
 }
