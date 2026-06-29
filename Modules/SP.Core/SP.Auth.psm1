@@ -335,23 +335,39 @@ function Get-SPScheduledVaultSecret {
         Returns the per-install random secret (base64) that strengthens the ScheduledVault
         machine-derived passphrase so it is NOT derivable from public machine/user/domain values.
     .DESCRIPTION
-        On first use this generates a 256-bit cryptographically-random secret, DPAPI-protects it
-        (CurrentUser scope), and persists it to Data\.sv-secret with a current-user-only ACL.
-        Subsequent calls read + unprotect it. Because it is DPAPI-protected, the secret cannot be
-        decrypted off the originating box/user even if the file is copied -- which closes the
-        "exfiltrate the files, decrypt offline anywhere" weakness of a purely derived key.
+        On first use this generates a 256-bit cryptographically-random secret and persists it under
+        one of two protection modes. The secret FILE is self-describing (a 5-byte header: 'SVK1' +
+        a mode byte), so read-back never depends on config matching the file. The file is ACL-locked
+        to the current user in BOTH modes. Subsequent calls read it back.
 
-        Deleting Data\.sv-secret invalidates any existing ScheduledVault key (re-run
-        New-SPVault.ps1 -Mode ScheduledVault). Running as a different user fails to unprotect it.
+          Dpapi   (recommended) -- the random secret is DPAPI-protected (CurrentUser). It cannot be
+                  decrypted off the originating box/user even if every file is copied. Strongest; the
+                  ProtectedData calls may be visible to EDR/SOC.
+          AclFile (EDR-quiet)   -- the random secret is stored as a raw blob in an NTFS-ACL-locked
+                  file (NO DPAPI). Removes the "derivable from public/repo values" weakness, but an
+                  attacker who can READ the secret file could decrypt off-box. No EDR noise.
+
+        Both are far stronger than the legacy public-only derivation. Prefer Dpapi unless an EDR/SOC
+        constraint requires AclFile. Deleting the secret invalidates any existing ScheduledVault key
+        (re-run New-SPVault.ps1 -Mode ScheduledVault). In Dpapi mode a different user/machine cannot read it.
+    .PARAMETER SecretPath
+        Override the secret file location (testing). Defaults to Data\.sv-secret.
+    .PARAMETER KeyProtection
+        Protection mode used WHEN CREATING the secret: 'Dpapi' (default) or 'AclFile'. Ignored when
+        the secret already exists (the file is self-describing). When omitted, reads
+        Authentication.ScheduledVault.KeyProtection from config, falling back to 'Dpapi'.
     .OUTPUTS
         [string] base64-encoded 256-bit secret.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        # Override the secret file location (testing / non-default layouts). Defaults to Data\.sv-secret.
         [Parameter()]
-        [string]$SecretPath
+        [string]$SecretPath,
+
+        [Parameter()]
+        [ValidateSet('Dpapi', 'AclFile')]
+        [string]$KeyProtection
     )
 
     Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
@@ -360,24 +376,53 @@ function Get-SPScheduledVaultSecret {
         $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
         $SecretPath  = Join-Path (Join-Path $toolkitRoot 'Data') '.sv-secret'
     }
-    $dataDir    = Split-Path -Parent $SecretPath
-    $secretPath = $SecretPath
-    $scope      = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    $dataDir = Split-Path -Parent $SecretPath
+    $scope   = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    $magic   = [byte[]](0x53, 0x56, 0x4B, 0x31)   # 'SVK1'
 
-    if (Test-Path -LiteralPath $secretPath -PathType Leaf) {
+    # ---- READ (self-describing): the file knows how it was protected. ----
+    if (Test-Path -LiteralPath $SecretPath -PathType Leaf) {
         try {
-            $protected = [System.IO.File]::ReadAllBytes($secretPath)
-            $plain     = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, $scope)
+            $raw = [System.IO.File]::ReadAllBytes($SecretPath)
+            if ($raw.Length -ge 5 -and $raw[0] -eq $magic[0] -and $raw[1] -eq $magic[1] -and
+                $raw[2] -eq $magic[2] -and $raw[3] -eq $magic[3]) {
+                $mode    = [char]$raw[4]
+                $payload = New-Object byte[] ($raw.Length - 5)
+                [Array]::Copy($raw, 5, $payload, 0, $payload.Length)
+                if ($mode -eq 'D') {
+                    $plain = [System.Security.Cryptography.ProtectedData]::Unprotect($payload, $null, $scope)
+                    return [Convert]::ToBase64String($plain)
+                }
+                elseif ($mode -eq 'A') {
+                    return [Convert]::ToBase64String($payload)   # raw secret; protected at rest by the file ACL
+                }
+                else { throw "Unknown ScheduledVault secret mode '$mode'." }
+            }
+            # Legacy (pre-format) file: the whole file is a DPAPI blob.
+            $plain = [System.Security.Cryptography.ProtectedData]::Unprotect($raw, $null, $scope)
             return [Convert]::ToBase64String($plain)
         }
         catch {
-            throw ("Failed to read the ScheduledVault per-install secret (Data\.sv-secret). It can " +
-                   "only be decrypted by the user/machine that created it. Re-run " +
+            throw ("Failed to read the ScheduledVault per-install secret ($SecretPath). For DPAPI mode " +
+                   "it can only be decrypted by the user/machine that created it. Re-run " +
                    "New-SPVault.ps1 -Mode ScheduledVault as the scheduled-task account. Error: $($_.Exception.Message)")
         }
     }
 
-    # First use: generate, DPAPI-protect, persist, then restrict the ACL to the current user.
+    # ---- CREATE: resolve the protection mode (param -> config -> Dpapi). ----
+    if ([string]::IsNullOrWhiteSpace($KeyProtection)) {
+        $KeyProtection = 'Dpapi'
+        try {
+            $cfg = Get-SPConfig
+            if ($null -ne $cfg.PSObject.Properties['Authentication'] -and
+                $null -ne $cfg.Authentication.PSObject.Properties['ScheduledVault'] -and
+                $null -ne $cfg.Authentication.ScheduledVault.PSObject.Properties['KeyProtection']) {
+                $cand = [string]$cfg.Authentication.ScheduledVault.KeyProtection
+                if ($cand -in @('Dpapi', 'AclFile')) { $KeyProtection = $cand }
+            }
+        } catch { }
+    }
+
     if (-not (Test-Path -LiteralPath $dataDir)) {
         New-Item -ItemType Directory -Path $dataDir -Force -WhatIf:$false | Out-Null
     }
@@ -385,15 +430,25 @@ function Get-SPScheduledVaultSecret {
     $rng   = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
 
-    $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
-    [System.IO.File]::WriteAllBytes($secretPath, $protected)
+    if ($KeyProtection -eq 'AclFile') {
+        $modeByte = [byte][char]'A'
+        $payload  = $bytes
+    }
+    else {
+        $modeByte = [byte][char]'D'
+        $payload  = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
+    }
+    $out = New-Object System.Collections.Generic.List[byte]
+    $out.AddRange($magic); $out.Add($modeByte); $out.AddRange($payload)
+    [System.IO.File]::WriteAllBytes($SecretPath, $out.ToArray())
 
+    # ACL-lock to the current user (primary protection for AclFile; defense-in-depth for Dpapi).
     try {
-        $acl = Get-Acl -LiteralPath $secretPath
+        $acl = Get-Acl -LiteralPath $SecretPath
         $acl.SetAccessRuleProtection($true, $false)
         $me  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
         $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
-        Set-Acl -LiteralPath $secretPath -AclObject $acl
+        Set-Acl -LiteralPath $SecretPath -AclObject $acl
     } catch { }
 
     return [Convert]::ToBase64String($bytes)
@@ -425,7 +480,12 @@ function Get-SPMachineDerivedPassphrase {
     param(
         # Override the per-install secret file location (testing). Defaults to Data\.sv-secret.
         [Parameter()]
-        [string]$SecretPath
+        [string]$SecretPath,
+
+        # Protection mode used when the secret is first created: 'Dpapi' (default) or 'AclFile'.
+        [Parameter()]
+        [ValidateSet('Dpapi', 'AclFile')]
+        [string]$KeyProtection
     )
 
     $machineName   = [Environment]::MachineName
@@ -434,8 +494,10 @@ function Get-SPMachineDerivedPassphrase {
     $staticSalt    = 'SailPoint-GovernanceToolkit-ScheduledVault-v1'
     # Per-install, DPAPI-protected random secret -- this is what makes the derived key
     # non-derivable from the (public) machine/user/domain values. Do not remove.
-    $installSecret = if ([string]::IsNullOrWhiteSpace($SecretPath)) { Get-SPScheduledVaultSecret }
-                     else { Get-SPScheduledVaultSecret -SecretPath $SecretPath }
+    $svArgs = @{}
+    if (-not [string]::IsNullOrWhiteSpace($SecretPath))    { $svArgs['SecretPath']    = $SecretPath }
+    if (-not [string]::IsNullOrWhiteSpace($KeyProtection)) { $svArgs['KeyProtection'] = $KeyProtection }
+    $installSecret = Get-SPScheduledVaultSecret @svArgs
 
     $combined = "$machineName|$userName|$domainName|$staticSalt|$installSecret"
     $sha = [System.Security.Cryptography.SHA256]::Create()

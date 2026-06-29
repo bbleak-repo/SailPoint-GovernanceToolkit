@@ -779,6 +779,8 @@ body {
 <a href="javascript:void(0)" onclick="showSection('dc-gotchas-by-experience-level'); return false;">11. Gotchas by experie</a>
 <a href="javascript:void(0)" onclick="showSection('dc-recommended-operational-calendar'); return false;">12. Recommended operat</a>
 <a href="javascript:void(0)" onclick="showSection('dc-the-path-to-true-entitlement-scoped-certification'); return false;">13. The path to true e</a>
+<a href="javascript:void(0)" onclick="showSection('dc-stalled-reviewer-detection'); return false;">14. Stalled Reviewer D</a>
+<a href="javascript:void(0)" onclick="showSection('dc-identity-cache-management'); return false;">15. Identity Cache Man</a>
 
   </div>
 </div>
@@ -845,6 +847,8 @@ body {
 <a href="javascript:void(0)" onclick="showSection('dc-gotchas-by-experience-level'); return false;"><span class="sidebar-num">46</span><span>11. Gotchas by experience level</span></a>
 <a href="javascript:void(0)" onclick="showSection('dc-recommended-operational-calendar'); return false;"><span class="sidebar-num">47</span><span>12. Recommended operational calendar</span></a>
 <a href="javascript:void(0)" onclick="showSection('dc-the-path-to-true-entitlement-scoped-certification'); return false;"><span class="sidebar-num">48</span><span>13. The path to true entitlement-scoped certification</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-stalled-reviewer-detection'); return false;"><span class="sidebar-num">49</span><span>14. Stalled Reviewer Detection</span></a>
+<a href="javascript:void(0)" onclick="showSection('dc-identity-cache-management'); return false;"><span class="sidebar-num">50</span><span>15. Identity Cache Management</span></a>
 
     </div>
   </div>
@@ -913,6 +917,12 @@ body {
 <th>Notes</th>
 </tr></thead><tbody>
 <tr>
+<td><strong>SP.Shared</strong></td>
+<td>Shared utilities: HTML encoding/dates/properties/file writing (SP.HtmlHelpers), generic TTL-aware cache with JSONL persistence (SP.CacheService), identity resolution and caching (SP.IdentityService)</td>
+<td>Everything</td>
+<td>Infrastructure -- loaded first, before SP.Core. 26 exported functions across 3 sub-modules.</td>
+</tr>
+<tr>
 <td><strong>SP.Core</strong></td>
 <td>Configuration, logging, authentication, vault, TLS enforcement</td>
 <td>Everything</td>
@@ -932,9 +942,9 @@ body {
 </tr>
 <tr>
 <td><strong>SP.Audit</strong></td>
-<td>Audit queries, analytics, identity-account resolution, HTML/text report generation</td>
-<td><code>Invoke-SPCampaignAudit.ps1</code>, <code>Invoke-SPCampaignSearch.ps1</code>, governance reports, the Audit GUI tab</td>
-<td>The core reporting engine.</td>
+<td>Audit queries, analytics, identity-account resolution, HTML/text report generation, governance trend queries, governance dashboard</td>
+<td><code>Invoke-SPCampaignAudit.ps1</code>, <code>Invoke-SPCampaignSearch.ps1</code>, <code>Invoke-SPGovernanceMetrics.ps1</code>, governance reports, the Audit GUI tab</td>
+<td>The core reporting engine. Includes SP.GovernanceTrendQuery for dashboard data + alerts.</td>
 </tr>
 <tr>
 <td><strong>SP.DeltaCert</strong></td>
@@ -967,13 +977,19 @@ body {
 <td>Infrastructure -- you never call this directly. Component files: <code>RC00-Framework.ps1</code> through <code>RC06-GroupTable.ps1</code>.</td>
 </tr>
 <tr>
+<td><strong>SP.Reconciliation</strong></td>
+<td>ISC-side reconciliation operand builder/exporter</td>
+<td><code>Invoke-SPIscReconciliation.ps1</code></td>
+<td>Pure builder -- no ISC API dependency for the builder itself.</td>
+</tr>
+<tr>
 <td><strong>SP.Gui</strong></td>
 <td>WPF window construction, GUI bridge (translates button clicks to module calls), SDK bridge</td>
 <td><code>Show-SPDashboard.ps1</code></td>
 <td>Infrastructure for the GUI.</td>
 </tr>
 </tbody></table>
-<p><strong>Module dependency chain:</strong> <code>SP.Core</code> (config, auth, logging) --&gt; <code>SP.Api</code> (HTTP + ISC endpoints) --&gt; domain modules (<code>SP.Audit</code>, <code>SP.DeltaCert</code>, <code>SP.DisconnectedApps</code>, <code>SP.Sdk</code>, <code>SP.Testing</code>) --&gt; <code>SP.AdaptiveReports</code> + <code>SP.ReportComponents</code> (report rendering) --&gt; <code>SP.Gui</code> (presentation).</p>
+<p><strong>Module dependency chain:</strong> <code>SP.Shared</code> (HTML helpers, cache service, identity service -- no dependencies) --&gt; <code>SP.Core</code> (config, auth, logging) --&gt; <code>SP.Api</code> (HTTP + ISC endpoints) --&gt; domain modules (<code>SP.Audit</code>, <code>SP.DeltaCert</code>, <code>SP.DisconnectedApps</code>, <code>SP.Sdk</code>, <code>SP.Testing</code>) --&gt; <code>SP.AdaptiveReports</code> + <code>SP.ReportComponents</code> (report rendering) --&gt; <code>SP.Gui</code> (presentation).</p>
 </div>
 <div id="section-found-2-day-1-deployment-checklist" class="report-section" style="display:none">
 <h2>3.2 Day 1 Deployment Checklist</h2>
@@ -1009,7 +1025,7 @@ body {
 <tr>
 <td><strong>Authentication</strong></td>
 <td><code>Mode</code></td>
-<td><code>ConfigFile</code>, <code>Vault</code>, or <code>Token</code> — see §5.</td>
+<td><code>ConfigFile</code>, <code>Vault</code>, <code>DpapiCredential</code>, <code>ScheduledVault</code>, or <code>Token</code> — see §5.</td>
 </tr>
 <tr>
 <td></td>
@@ -1128,23 +1144,128 @@ body {
 </tr>
 <tr>
 <td><strong>DailyEvidence</strong></td>
-<td><code>OutputPath</code>, <code>DefaultDaysBack</code>, <code>DefaultSlaHours</code>, <code>HighRiskThreshold</code></td>
-<td>Daily evidence report output location and defaults.</td>
+<td><code>OutputPath</code></td>
+<td>Daily evidence report output directory (default <code>.\Audit\daily-evidence</code>).</td>
 </tr>
 <tr>
 <td></td>
-<td><code>Thresholds.*</code></td>
-<td>GREEN/YELLOW thresholds for each of the 6 KPIs (completion rate, overdue attestations, revocation execution, remediation SLA, high-risk pending, reviewer health).</td>
+<td><code>DefaultDaysBack</code></td>
+<td>Campaign look-back window in days (default <code>1</code>).</td>
 </tr>
 <tr>
 <td></td>
-<td><code>ConfidenceScoreGrade.*</code></td>
-<td>Score-to-grade mapping for the Governance Confidence Score (A/B/C/D/F).</td>
+<td><code>DefaultSlaHours</code></td>
+<td>Remediation SLA threshold in hours (default <code>48</code>).</td>
 </tr>
 <tr>
-<td><strong>Metrics / Governance / Leadership</strong></td>
+<td></td>
+<td><code>HighRiskThreshold</code></td>
+<td>Risk score at or above which an identity is flagged high-risk (default <code>70</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>EvidenceDetailLimit</code></td>
+<td>Max rows shown per evidence register table in the HTML report (default <code>50</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.CompletionRate</code></td>
+<td><code>{ "Green": 95, "Yellow": 80 }</code> -- campaign completion percentage.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.OverdueAttestations</code></td>
+<td><code>{ "Green": 0, "Yellow": 2 }</code> -- count of overdue attestations.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.RevocationExecution</code></td>
+<td><code>{ "Green": 95, "Yellow": 80 }</code> -- revocation execution percentage.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.RemediationSla</code></td>
+<td><code>{ "Green": 95, "Yellow": 80 }</code> -- remediation within SLA percentage.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.HighRiskPending</code></td>
+<td><code>{ "Green": 0, "Yellow": 3 }</code> -- count of high-risk items still pending.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Thresholds.ReviewerHealth</code></td>
+<td><code>{ "GreenMaxAtRisk": 0, "YellowMaxAtRisk": 2 }</code> -- reviewers flagged at-risk.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>ConfidenceScoreGrade</code></td>
+<td>Score-to-grade mapping: <code>{ "A": 90, "B": 80, "C": 70, "D": 60 }</code>. Scores below D threshold receive an F.</td>
+</tr>
+<tr>
+<td><strong>GovernancePolicy</strong></td>
+<td><code>Enabled</code></td>
+<td>Master switch for policy evaluation (<code>true</code>/<code>false</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies</code></td>
+<td>Array of policy objects. Each policy has <code>Id</code>, <code>Name</code>, <code>Description</code>, <code>Type</code>, <code>Scope</code> (where applicable), <code>Severity</code> (<code>Critical</code>/<code>Warning</code>), and type-specific thresholds.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies[]: POL-001</code></td>
+<td><strong>Privileged Access Review Frequency</strong> -- all privileged entitlements reviewed within <code>MaxDaysSinceReview</code> days (default 90). Severity: Critical.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies[]: POL-002</code></td>
+<td><strong>Source Coverage Minimum</strong> -- every source has at least <code>MinCoveragePercent</code>% entitlement review coverage (default 75). Severity: Warning.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies[]: POL-003</code></td>
+<td><strong>Identity Risk Ceiling</strong> -- no identity remains at high risk (above <code>MaxRiskScore</code>, default 70) for more than 30 days. Severity: Critical.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies[]: POL-004</code></td>
+<td><strong>Stale Access Limit</strong> -- no more than <code>MaxStalePercent</code>% of entitlements classified as stale (default 10). Severity: Warning.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>Policies[]: POL-005</code></td>
+<td><strong>Reviewer Performance Floor</strong> -- no reviewer has a reputation score below <code>MinReputationScore</code> (default 40). Severity: Warning.</td>
+</tr>
+<tr>
+<td><strong>Metrics</strong></td>
+<td><code>Path</code></td>
+<td>KPI time-series storage directory (default <code>.\Audit\metrics</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>RetentionDays</code></td>
+<td>How long metric snapshots are retained (default <code>365</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>AutoCapture</code></td>
+<td>When <code>true</code>, scripts that produce KPIs automatically persist them to the metrics store.</td>
+</tr>
+<tr>
+<td></td>
+<td><code>CampaignTrendPath</code></td>
+<td>Storage directory for campaign-trend data (default <code>.\Audit\metrics\campaign-trend</code>).</td>
+</tr>
+<tr>
+<td></td>
+<td><code>CampaignTrendRetentionDays</code></td>
+<td>Retention for campaign-trend data (default <code>1825</code> -- 5 years).</td>
+</tr>
+<tr>
+<td><strong>Governance / Leadership</strong></td>
 <td>various</td>
-<td>KPI persistence, governance report depth, leadership band mapping.</td>
+<td>Governance report depth, leadership band mapping.</td>
 </tr>
 <tr>
 <td><strong>Retention</strong></td>
@@ -1161,7 +1282,7 @@ body {
 </div>
 <div id="section-found-authentication" class="report-section" style="display:none">
 <h2>5. Authentication</h2>
-<p>The toolkit authenticates to ISC three ways, selected by <code>Authentication.Mode</code>: <strong><code>ConfigFile</code></strong> and <strong><code>Vault</code></strong> both use an OAuth <strong>Personal Access Token (PAT)</strong>; <strong><code>Token</code></strong> uses a short-lived browser bearer token. Read §5.1 first to create the credential, then pick a storage mode (§5.2–§5.4).</p>
+<p>The toolkit authenticates to ISC five ways, selected by <code>Authentication.Mode</code>: <strong><code>ConfigFile</code></strong>, <strong><code>Vault</code></strong>, <strong><code>DpapiCredential</code></strong>, and <strong><code>ScheduledVault</code></strong> all use an OAuth <strong>Personal Access Token (PAT)</strong>; <strong><code>Token</code></strong> uses a short-lived browser bearer token. Read §5.1 first to create the credential, then pick a storage mode (§5.2–§5.6).</p>
 <h3 id="5-1-the-isc-credential-a-personal-access-token-pat">5.1 The ISC credential: a Personal Access Token (PAT)</h3>
 <p>For anything beyond a quick browser-token run, the toolkit uses the OAuth 2.0 <strong><code>client_credentials</code></strong> grant. In the ISC admin console this is created as a <strong>Personal Access Token</strong> — despite the name, it issues a <strong><code>ClientId</code> + <code>ClientSecret</code></strong> pair and is the standard non-interactive service credential. Create it under <strong>Admin → Preferences → Personal Access Tokens</strong> (or <strong>Security Settings → API Management</strong> with <code>ORG_ADMIN</code>).</p>
 <p>A PAT <strong>inherits the permissions of the identity that creates it</strong>, then the selected <strong>scopes</strong> further restrict it. Create it as a <strong><code>CERT_ADMIN</code></strong> (campaigns + certifications — all the toolkit needs) or <strong><code>ORG_ADMIN</code></strong>, and grant the scopes that match your intended use:</p>
@@ -1198,12 +1319,120 @@ body {
 <p>Then set <code>Authentication.Mode = "Vault"</code>. The vault is created at <code>Authentication.Vault.VaultPath</code> (default <code>.\Data\sp-vault.enc</code>); at runtime the toolkit prompts for (or is given) the passphrase to unlock it.</p>
 <p><strong>How the encryption works.</strong> The vault is authenticated encryption — <strong>AES-256-CBC for confidentiality plus HMAC-SHA256 for integrity</strong> (encrypt-then-MAC, so tampering is detected before decryption). The passphrase is stretched with <strong>PBKDF2 (<code>Rfc2898DeriveBytes</code>, 600,000 iterations</strong> — tunable via <code>Vault.Pbkdf2Iterations</code>) into a 64-byte key that is split into a separate 32-byte AES key and 32-byte HMAC key. Each save uses a fresh random 32-byte salt and 16-byte IV, so the on-disk blob is <code>[salt][IV][HMAC][ciphertext]</code>. <strong>What it supports:</strong> storing the ISC <code>ClientId</code> + <code>ClientSecret</code> under a named key (<code>Vault.CredentialKey</code>, default <code>sailpoint-isc</code>), rotation/re-keying by re-running <code>New-SPVault.ps1</code> (it warns before overwriting), and a custom vault path for shared/team locations. The <code>*.enc</code> file is gitignored.</p>
 <div class="callout callout-warning"><div class="callout-label">Important</div><p><strong>Store the passphrase in a password manager.</strong> It is never logged and cannot be recovered — lose it and you must recreate the vault (and rotate the PAT secret).</p></div>
-<h3 id="5-3-1-vault-vs-configfile-for-scheduled-tasks">5.3.1 Vault vs. ConfigFile for scheduled tasks</h3>
-<p>The vault requires an <strong>interactive passphrase prompt</strong> at runtime. This makes it unsuitable for fully unattended scheduled tasks (Task Scheduler, cron) where no human is present to type the passphrase.</p>
-<p>For <strong>non-interactive scheduled tasks</strong>, use <code>ConfigFile</code> mode with <code>settings.local.json</code> and restrict file permissions to the service account:</p>
-<pre><code># Restrict settings.local.json to the service account only
-icacls .\Config\settings.local.json /inheritance:r /grant:r "DOMAIN\svc-sailpoint:(R)"</code></pre>
-<p>Use the vault for interactive runs and demos. Use ConfigFile (with restricted permissions) for automation.</p>
+<h3 id="5-4-dpapicredential-automation-option-a-windows-dpapi">5.4 DpapiCredential (automation option A -- Windows DPAPI)</h3>
+<p>Uses Windows DPAPI via PowerShell's <code>Export-CliXml</code> to store the PAT credential encrypted to the <strong>current Windows user + machine</strong>. No passphrase needed at runtime -- fully unattended. Set up once as the service account:</p>
+<pre><code>.\Scripts\New-SPVault.ps1 -Mode DpapiCredential    # prompts for ClientId + Secret, saves encrypted</code></pre>
+<p>Then set <code>Authentication.Mode = "DpapiCredential"</code>. The credential file is created at <code>Authentication.DpapiCredential.Path</code> (default <code>.\Data\sp-dpapi-credential.xml</code>).</p>
+<p><strong>Security properties:</strong></p>
+<ul><li>Encrypted to the Windows user account + machine via DPAPI</li><li>If the file is copied to another machine or user, decryption fails</li><li>No passphrase needed at runtime -- suitable for Task Scheduler</li><li><strong>Risk:</strong> Mimikatz and similar credential dumping tools can extract DPAPI master keys from process memory. Some EDR/endpoint protection systems flag DPAPI operations in non-interactive sessions. Discuss with your SOC/EDR team before deploying.</li></ul>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>When to use:</strong> when your EDR team approves DPAPI-based credential storage, or in environments without aggressive endpoint monitoring. Simplest automation setup.</p></div>
+<h3 id="5-5-scheduledvault-automation-option-b-machine-bound-key-dpapi-optional">5.5 ScheduledVault (automation option B -- machine-bound key, DPAPI optional)</h3>
+<p>Stores the vault passphrase encrypted with a <strong>machine-derived key</strong> using the toolkit's own AES-256-CBC crypto (same as the vault). The key mixes in a <strong>per-install random secret</strong> so it is <strong>not derivable</strong> from public machine, user, and domain values. Requires the regular vault (§5.3) first.</p>
+<div class="callout callout-danger"><div class="callout-label">Security</div><p><strong>Important (this was a security gap):</strong> earlier versions derived the key purely from a SHA-256 of machine, user, domain, and a salt shipped in the repo -- all <em>public</em> values. Anyone who copied the key file and the vault file could recompute the key and <strong>decrypt offline on any machine</strong>. The per-install secret closes that hole.</p></div>
+<pre><code># Step 1: Set up the regular vault first (if not already done)
+.\Scripts\New-SPVault.ps1 -Mode Vault
+
+# Step 2: Create the scheduled key (recommended: DPAPI-protected secret -- the default)
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault
+
+#   ...or EDR-quiet (no DPAPI):
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault -KeyProtection AclFile</code></pre>
+<p>Then set <code>Authentication.Mode = "ScheduledVault"</code>. The key is at <code>Authentication.ScheduledVault.KeyPath</code> (default <code>.\Data\sp-scheduled-key.enc</code>); the per-install secret is at <code>.\Data\.sv-secret</code> (gitignored -- never commit it).</p>
+<p><strong>How it works:</strong></p>
+<ol><li>Your vault passphrase is encrypted with AES-256-CBC + PBKDF2 (same as the vault)</li><li>The encryption key is a SHA-256 over machine, user, domain, a static salt, AND the per-install secret</li><li>At runtime the key is reconstructed, the passphrase is decrypted, and the vault opens -- no human input</li><li>Copying the files to another machine or user fails to decrypt (different identity; and in Dpapi mode the secret itself will not unprotect off-box)</li></ol>
+<p><strong>Key-protection modes</strong> (<code>-KeyProtection</code>, or <code>Authentication.ScheduledVault.KeyProtection</code>):</p>
+<table>
+<thead><tr>
+<th>Mode</th>
+<th>How the per-install secret is stored</th>
+<th>Off-box decryption if every file is exfiltrated?</th>
+<th>EDR / SOC</th>
+</tr></thead><tbody>
+<tr>
+<td><strong><code>Dpapi</code></strong> (default, recommended)</td>
+<td>DPAPI-protected (CurrentUser)</td>
+<td>No -- DPAPI will not unprotect off the box or user</td>
+<td>ProtectedData calls may be flagged</td>
+</tr>
+<tr>
+<td><strong><code>AclFile</code></strong> (EDR-quiet)</td>
+<td>Raw random blob in an NTFS-ACL-locked file (no DPAPI)</td>
+<td>Possible -- if the attacker can also read the ACL-locked secret file</td>
+<td>No DPAPI, so no endpoint alerts</td>
+</tr>
+</tbody></table>
+<p>Both are far stronger than the old public-only key. <strong>Prefer <code>Dpapi</code></strong> unless your SOC/EDR team prohibits DPAPI; in that case <code>AclFile</code> still removes the "derivable from the repo" weakness while staying endpoint-quiet -- just keep the secret file's ACLs sound.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> <code>DpapiCredential</code> (§5.4) remains the simplest genuinely-secure unattended mode. Use ScheduledVault when you specifically want the AES-vault plus machine-binding model.</p></div>
+<h3 id="5-3-1-choosing-an-automation-mode">5.3.1 Choosing an automation mode</h3>
+<table>
+<thead><tr>
+<th>Mode</th>
+<th>Setup</th>
+<th>Passphrase at runtime?</th>
+<th>DPAPI?</th>
+<th>EDR risk</th>
+<th>Best for</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>ConfigFile</strong></td>
+<td>Edit JSON</td>
+<td>No</td>
+<td>No</td>
+<td>None</td>
+<td>Dev/mock only (secret in plain text)</td>
+</tr>
+<tr>
+<td><strong>Vault</strong></td>
+<td><code>New-SPVault.ps1</code></td>
+<td>YES (interactive)</td>
+<td>No</td>
+<td>None</td>
+<td>Interactive use, demos</td>
+</tr>
+<tr>
+<td><strong>DpapiCredential</strong></td>
+<td><code>New-SPVault.ps1 -Mode DpapiCredential</code></td>
+<td>No</td>
+<td>YES</td>
+<td>Mimikatz-flaggable</td>
+<td>Automation with EDR approval</td>
+</tr>
+<tr>
+<td><strong>ScheduledVault</strong></td>
+<td><code>New-SPVault.ps1 -Mode ScheduledVault [-KeyProtection Dpapi/AclFile]</code></td>
+<td>No</td>
+<td>Optional</td>
+<td>Dpapi: flaggable / AclFile: none</td>
+<td>Automation; machine-bound AES vault</td>
+</tr>
+<tr>
+<td><strong>BrowserToken</strong></td>
+<td>F12 copy-paste</td>
+<td>No (expires in ~12 min)</td>
+<td>No</td>
+<td>None</td>
+<td>Quick one-off queries</td>
+</tr>
+</tbody></table>
+<p>For <strong>scheduled tasks</strong> (Task Scheduler, cron), use <code>DpapiCredential</code> or <code>ScheduledVault</code>. Both are fully unattended. Your SOC/EDR team decides which is acceptable.</p>
+<p><strong>Task Scheduler setup</strong> (same for both modes):</p>
+<pre><code># 1. Log in as the service account and run the one-time setup
+.\Scripts\New-SPVault.ps1 -Mode DpapiCredential   # or -Mode ScheduledVault
+
+# 2. Create the scheduled task (as admin)
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\GovernanceToolkit\Scripts\Run-DailyGovernance.ps1' `
+    -WorkingDirectory 'C:\GovernanceToolkit'
+
+$triggers = @(
+    New-ScheduledTaskTrigger -Daily -At '08:00'
+    New-ScheduledTaskTrigger -Daily -At '12:00'
+    New-ScheduledTaskTrigger -Daily -At '17:00'
+)
+
+Register-ScheduledTask -TaskName 'SailPoint-GovernanceToolkit' `
+    -Action $action -Trigger $triggers `
+    -User 'DOMAIN\svc-sailpoint' -RunLevel Highest</code></pre>
 <h3 id="5-3-2-credential-rotation-procedure">5.3.2 Credential Rotation Procedure</h3>
 <p>When your ISC PAT expires or is compromised, follow this procedure:</p>
 <ol><li><strong>Create a new PAT</strong> in the ISC admin console (Admin &gt; Preferences &gt; Personal Access Tokens) with the same scopes as the old one.</li><li><strong>Update the credential store.</strong> If using the vault, re-run <code>New-SPVault.ps1</code> (it warns before overwriting). If using ConfigFile, update <code>ClientId</code> and <code>ClientSecret</code> in <code>settings.local.json</code>.</li><li><strong>Test connectivity</strong> with <code>Test-SPConnectivity.ps1</code> to confirm the new credential works.</li><li><strong>Verify scheduled tasks</strong> still run successfully -- trigger the orchestrator manually once (<code>Invoke-SPDailyOrchestrator.ps1 -SkipCleanup -SkipDeltaCert ...</code>) and confirm exit code 0.</li><li><strong>Delete the old PAT</strong> in the ISC admin console once the new one is confirmed working.</li></ol>
@@ -1766,7 +1995,7 @@ pwsh -NoProfile -File Start-MockServer.ps1
 <p><strong>Conventions used in every entry below</strong></p>
 <ul><li><strong>Required</strong> parameters are marked <em>(required)</em>; everything else has a default (usually from <code>settings.json</code>).</li><li>Most scripts accept <code>-ConfigPath</code>, <code>-Token</code> / <code>-TokenExpiryMinutes</code>, and <code>-OutputMode</code>; these shared parameters are described once here and not repeated:</li><li><code>-ConfigPath &lt;file&gt;</code> — use a specific settings file (default <code>..\Config\settings.json</code>).</li><li><code>-Token &lt;jwt&gt;</code> — a browser bearer token from the ISC admin console (F12 → Network → copy the <code>Authorization</code> value). Bypasses OAuth; the <code>Bearer </code> prefix is stripped automatically. <code>-TokenExpiryMinutes</code> (default 10) sets when it's treated as expired.</li><li><code>-OutputMode</code> — <code>Console</code> (default), <code>JSON</code>, <code>Both</code>, and where noted <code>CSV</code>/<code>HTML</code>.</li><li><code>-Help</code> on any script prints its full comment-based help.</li><li><strong>Scope note:</strong> scripts that read <strong>account activities</strong> (<code>/v3/account-activities</code>) require <code>sp:scopes:all</code> or a browser token — noted per script.</li></ul>
 <h3 id="contents">Contents</h3>
-<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day + cross-campaign decision dates)</strong>, <strong>cache/snapshot validator</strong>, <strong>per-entitlement decision history</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (audit/IAG; + lean v2)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
+<ol><li><a href="#1-setup--diagnostics">Setup &amp; diagnostics</a> — <code>New-SPVault</code>, <code>Test-SPConnectivity</code>, <code>Show-SPDashboard</code></li><li><a href="#2-campaign-testing--audit">Campaign testing &amp; audit</a> — <strong>creating/activating campaigns</strong>, <code>Invoke-GovernanceTest</code>, <code>Invoke-SPCampaignAudit</code>, <code>Invoke-SPCampaignSearch</code>, <strong><code>Invoke-SPCampaignClose</code></strong></li><li><a href="#3-delta-certification">Delta certification</a> — <code>Invoke-SPADDeltaCert</code>, <code>Invoke-SPDeltaCertEscalate</code>, <strong><code>Invoke-SPEscalationMailer</code></strong>, <code>Invoke-SPDeltaReport</code></li><li><a href="#4-disconnected-applications">Disconnected applications</a> — <code>Invoke-SPDisconnectedAppCert</code>, <code>Invoke-SPDisconnectedAppBatch</code>, <code>Invoke-SPDisconnectedAppRegistry</code></li><li><a href="#5-governance--reporting">Governance &amp; reporting</a> — health check, metrics, report, data quality, distribution, <strong>campaign diff (day-over-day + cross-campaign decision dates)</strong>, <strong>cache/snapshot validator</strong>, <strong>per-entitlement decision history</strong>, <strong>campaign KPI trend / program trend</strong>, <strong>executive cert tracker + attestation evidence</strong>, <strong>daily evidence report (audit/IAG; + lean v2)</strong>, weekly digest, <strong>AD↔ISC↔HR reconciliation export (non-expiring change-detection cache)</strong>, ~~adaptive reports~~ (deprecated)</li><li><a href="#6-sdk-features">SDK features</a> — <code>Invoke-SPSdkCampaignTemplates</code>, <code>Invoke-SPSdkWorkItems</code>, <code>Invoke-SPSdkWorkflows</code></li><li><a href="#7-operations--scheduling">Operations &amp; scheduling</a> — <code>Invoke-SPDailyOrchestrator</code>, <code>Invoke-SPScheduledCampaign</code>, <code>Invoke-SPRetention</code></li></ol>
 </div>
 <div id="section-cli-setup-diagnostics" class="report-section" style="display:none">
 <h2>1. Setup &amp; diagnostics</h2>
@@ -2018,6 +2247,61 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 .\Scripts\Invoke-SPCampaignSearch.ps1 -SourceCoverage -OutputMode HTML
 .\Scripts\Invoke-SPCampaignSearch.ps1 -CompareIds 'camp-001','camp-002' -OutputMode CSV</code></pre>
 <p><strong>Related GUI:</strong> Audit tab (campaign query dialog).</p>
+<h3 id="invoke-spcampaignclose-ps1"><code>Invoke-SPCampaignClose.ps1</code></h3>
+<p><strong>Purpose:</strong> find and optionally <strong>complete</strong> certification campaigns from the command line. Safe by default -- without <code>-SetCompleted</code> it is purely a read-only listing. Designed for closing out daily attestation campaigns that have run their course.</p>
+<p><strong>When to use:</strong> end-of-day or next-morning cleanup of completed daily campaigns. Also useful for closing stale campaigns that reviewers have finished but ISC hasn't auto-completed.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-CampaignName</code> / <code>-CampaignNameStartsWith</code> / <code>-CampaignNameContains</code></td>
+<td>Campaign name filters (same precedence as all toolkit scripts).</td>
+</tr>
+<tr>
+<td><code>-Status &lt;list&gt;</code></td>
+<td>Filter by status (default: all statuses). Example: <code>-Status ACTIVE</code>.</td>
+</tr>
+<tr>
+<td><code>-DaysBack &lt;n&gt;</code></td>
+<td>Look-back window (default 1).</td>
+</tr>
+<tr>
+<td><code>-SetCompleted</code></td>
+<td>Actually complete the matching campaigns. Without this, the script only lists them.</td>
+</tr>
+<tr>
+<td><code>-Force</code></td>
+<td>Skip the confirmation prompt when completing more than 5 campaigns.</td>
+</tr>
+</tbody></table>
+<p><strong>Safety:</strong></p>
+<ul><li>Without <code>-SetCompleted</code>: read-only listing -- no API writes</li><li>With <code>-WhatIf -SetCompleted</code>: shows what would be completed without doing it</li><li>More than 5 matches: requires typing "YES" to confirm (or <code>-Force</code>)</li><li>Requires <code>Safety.AllowCompleteCampaign = true</code> in <code>settings.json</code></li><li>Pending (undecided) items maintain current access when a campaign is completed</li></ul>
+<pre><code># List active daily campaigns from the last day (read-only)
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation' -Status ACTIVE -DaysBack 1 -Token $token
+
+# Dry run -- see what would be completed
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation Monday' -Status ACTIVE -DaysBack 1 -SetCompleted -WhatIf -Token $token
+
+# Complete a specific day's campaign
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily Attestation Monday' -Status ACTIVE -DaysBack 1 -SetCompleted -Token $token
+
+# Close all daily campaigns from the last 7 days (skip confirmation)
+.\Scripts\Invoke-SPCampaignClose.ps1 -CampaignNameContains 'Daily' -Status ACTIVE -DaysBack 7 -SetCompleted -Force -Token $token</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>WARNING:</strong> Completing a campaign makes all undecided items maintain current access. Always run without <code>-SetCompleted</code> first to review what will be closed and how many items are still pending. The script shows pending item counts in both listing and WhatIf modes.</p></div>
+<table>
+<thead><tr>
+<th><em>Exit codes:</em> 0 success</th>
+<th>1 no matches</th>
+<th>2 parameter</th>
+<th>3 auth</th>
+<th>4 config</th>
+<th>5 completion failed.</th>
+</tr></thead><tbody>
+</tbody></table>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Least-privilege PAT scopes:</strong></p>
+<ul><li><strong>Read-only listing</strong> (without <code>-SetCompleted</code>): <code>idn:campaign:read</code> + <code>idn:campaign-report:read</code></li><li><strong>Complete campaigns</strong> (with <code>-SetCompleted</code>): <code>idn:campaign:manage</code> (includes read)</li><li><strong>Browser token</strong> (<code>-Token</code>): works for both -- browser tokens carry full admin scope.</li><li>The PAT user must have <strong>ORG_ADMIN</strong> or <strong>CERT_ADMIN</strong> user level. A standard user will receive 403 even with the correct scopes.</li></ul></div>
 </div>
 <div id="section-cli-delta-certification" class="report-section" style="display:none">
 <h2>3. Delta certification</h2>
@@ -2111,19 +2395,124 @@ if ($c.Success) { Start-SPCampaign -CampaignId $c.Data.id }</code></pre>
 </tr>
 <tr>
 <td><code>-EmailList</code> / <code>-EmailListPath &lt;p&gt;</code></td>
-<td>Write a copy-paste <strong>email-queue</strong> text file for nudging people <em>outside the tool</em>: two <code>;</code>-separated lines — (1) the <strong>managers behind</strong> on their attestation, (2) the <strong>skip-level / escalation path</strong> (each manager's manager). De-duplicated, resolvable emails only; produced even under <code>-WhatIf</code>.</td>
+<td>Write a copy-paste <strong>email-queue</strong> text file with: (1) global <code>;</code>-separated email lines (managers behind + skip-level path), and (2) <strong>per-skip-level-manager breakdown tables</strong> showing which reviewers under each manager still need to act. Produced even under <code>-WhatIf</code>.</td>
+</tr>
+<tr>
+<td><code>-EmailHtml</code> / <code>-EmailHtmlPath &lt;p&gt;</code></td>
+<td>Write a <strong>self-contained HTML escalation report</strong> grouping late reviewers by skip-level manager with clean tables (reviewer, email, campaign, hours open, reason, status). Includes an "Email Quick-Copy" footer with the <code>;</code>-separated lines. Professional styling, suitable for email attachment or SharePoint.</td>
+</tr>
+<tr>
+<td><code>-EmailHtmlManagers</code> / <code>-EmailHtmlManagersPath &lt;dir&gt;</code></td>
+<td>Generate <strong>individual HTML email templates per skip-level manager</strong> -- one personalized file per manager ("Hi Jane, you have direct reports who have not completed...") with a clean table (Reviewer, Campaign, Pending Items). Output: <code>escalation-managers\{name}.html</code> + <code>_manifest.json</code> for future SMTP automation.</td>
 </tr>
 </tbody></table>
 <pre><code># Live escalation
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -Token $jwt
 
-# Dry-run + the copy-paste email queue (managers behind + escalation path)
+# Dry-run + the copy-paste email queue (managers behind + skip-level breakdown)
 .\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailList
 
+# Dry-run + HTML escalation report (grouped by skip-level manager)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -StaleHours 24 -WhatIf -EmailHtml
+
+# Full package: CSV chain + text email queue + HTML report
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList -EmailHtml
+
+# Scope to Wednesday campaigns only
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Wednesday' -DaysBack 1 -WhatIf -Csv -EmailList -EmailHtml
+
 # Full org-chart audit: the chain spreadsheet AND the email lines
-.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList</code></pre>
-<div class="callout callout-info"><div class="callout-label">Note</div><p><strong><code>-EmailList</code> — the email queue.</strong> Writes <code>escalation-emails-*.txt</code> to <code>DeltaCert.OutputPath</code>: a labelled header plus <strong>two ready-to-paste lines</strong> — the managers behind on their attestation, and the skip-level/escalation path — each a <code>;</code>-separated list for pasting into an email client's To/CC. Pair with <code>-Csv</code> for the full per-cert chain. Both are read-only reporting artifacts (no ISC writes), so they're safe to generate under <code>-WhatIf</code>.</p></div>
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -DaysBack 30 -WhatIf -Csv -EmailList
+
+# Generate individual per-manager email templates (for SMTP automation)
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Thursday' -DaysBack 1 -WhatIf -EmailHtmlManagers
+
+# Everything: CSV + text queue + consolidated HTML + per-manager templates
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Daily Attestation' -DaysBack 1 -WhatIf -Csv -EmailList -EmailHtml -EmailHtmlManagers</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong><code>-EmailList</code> — the email queue + skip-level breakdown.</strong> Writes <code>escalation-emails-*.txt</code> to <code>DeltaCert.OutputPath</code>: labelled header, two global <code>;</code>-separated email lines (managers behind + escalation path), then a <strong>per-skip-level-manager section</strong> with text tables showing each manager's outstanding reviewers, their campaigns, hours open, and escalation reason.</p>
+<p><strong><code>-EmailHtml</code> — the HTML alternative.</strong> Writes <code>escalation-report-*.html</code> to <code>DeltaCert.OutputPath</code>: a clean, self-contained HTML report grouping late reviewers by skip-level manager. Each group shows the manager's name/email, count of outstanding reviewers, and a color-coded table. Includes an "Email Quick-Copy" footer with the <code>;</code>-separated lines for To/CC. Both artifacts are read-only (no ISC writes) and safe under <code>-WhatIf</code>.</p>
+<p><strong><code>-EmailHtmlManagers</code> -- per-manager SMTP templates.</strong> Writes one HTML file per skip-level manager to <code>escalation-managers\</code> with a personalized greeting, their outstanding reviewers table (Reviewer, Campaign, Pending Items), and totals. Plus <code>_manifest.json</code> listing every generated file with recipient email, identity ID, and counts -- the SMTP automation hook. A future send script reads the manifest and delivers each file to its recipient without reassigning in ISC. Read-only, safe under <code>-WhatIf</code>.</p></div>
 <p><strong>Related GUI:</strong> Delta Cert tab → Escalate.</p>
+<h3 id="invoke-spescalationmailer-ps1"><code>Invoke-SPEscalationMailer.ps1</code></h3>
+<p><strong>Purpose:</strong> sends the personalized escalation HTML emails generated by <code>Invoke-SPDeltaCertEscalate.ps1</code> via SMTP. Reads the <code>_email-routing.csv</code> from the most recent escalation run and delivers each manager's HTML file to their email address. Designed as the second half of a two-step pipeline.</p>
+<p><strong>When to use:</strong> after running <code>Invoke-SPDeltaCertEscalate.ps1 -EmailHtmlManagers</code> to generate the per-manager HTML files. Run with <code>-WhatIf</code> first to preview recipients.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-RoutingCsvPath &lt;path&gt;</code></td>
+<td>Explicit path to <code>_email-routing.csv</code>. If omitted, auto-discovers from the latest escalation run.</td>
+</tr>
+<tr>
+<td><code>-EscalationDir &lt;dir&gt;</code></td>
+<td>Base directory to search for the latest timestamped run folder.</td>
+</tr>
+<tr>
+<td><code>-SmtpServer &lt;host&gt;</code></td>
+<td>SMTP server (overrides <code>Notification.Smtp.Server</code> in settings.json).</td>
+</tr>
+<tr>
+<td><code>-SmtpPort &lt;n&gt;</code></td>
+<td>SMTP port (default 587).</td>
+</tr>
+<tr>
+<td><code>-From &lt;email&gt;</code></td>
+<td>Sender address (overrides <code>Notification.Smtp.From</code>).</td>
+</tr>
+<tr>
+<td><code>-UseSsl</code></td>
+<td>Enable TLS.</td>
+</tr>
+<tr>
+<td><code>-Credential &lt;PSCredential&gt;</code></td>
+<td>SMTP authentication credentials.</td>
+</tr>
+<tr>
+<td><code>-Subject &lt;text&gt;</code></td>
+<td>Email subject line (default: "Action Required: Pending Attestation Review").</td>
+</tr>
+<tr>
+<td><code>-SubjectPrefix &lt;text&gt;</code></td>
+<td>Prepend to subject (e.g., <code>[IAM]</code> or <code>[GOVERNANCE]</code>).</td>
+</tr>
+<tr>
+<td><code>-Levels 2,3</code></td>
+<td>Only send to specific org levels (default: all rows).</td>
+</tr>
+<tr>
+<td><code>-SkipAllOutstanding</code></td>
+<td>Don't send the <code>all-outstanding.html</code> blast email.</td>
+</tr>
+</tbody></table>
+<pre><code># Full pipeline: generate + preview + send
+# Step 1: Generate escalation HTML
+.\Scripts\Invoke-SPDeltaCertEscalate.ps1 -CampaignNameContains 'Daily' -DaysBack 1 -Status ACTIVE -WhatIf -EmailHtmlManagers -MaxEscalationLevels 3 -Token $token
+
+# Step 2: Preview what would be sent (dry run -- no emails)
+.\Scripts\Invoke-SPEscalationMailer.ps1 -WhatIf
+
+# Step 3: Send only level 2 managers (direct managers)
+.\Scripts\Invoke-SPEscalationMailer.ps1 -Levels 2
+
+# Step 4: Send all levels with explicit SMTP
+.\Scripts\Invoke-SPEscalationMailer.ps1 -SmtpServer smtp.company.com -From governance@company.com -UseSsl -SubjectPrefix '[IAM]'
+
+# Step 5: Send level 3 (directors) only, skip the all-outstanding blast
+.\Scripts\Invoke-SPEscalationMailer.ps1 -Levels 3 -SkipAllOutstanding</code></pre>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>SMTP configuration:</strong> The mailer reads SMTP settings from <code>Notification.Smtp</code> in <code>settings.json</code> (Server, Port, From, UseSsl). Override any of these with explicit parameters. If no SMTP config exists and no parameters are provided, the script errors with exit code 4.</p>
+<p><strong>Send log:</strong> Each run appends to <code>_send-log.csv</code> in the escalation run folder with: Timestamp, Level, ManagerEmail, ManagerName, HtmlFile, Status (Sent/Failed), Error.</p></div>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Least-privilege PAT scopes:</strong> None required -- this script only reads local files and sends email via SMTP. No ISC API calls are made. Only needs network access to the SMTP server.</p></div>
+<table>
+<thead><tr>
+<th><em>Exit codes:</em> 0 all sent</th>
+<th>1 some failed</th>
+<th>2 parameter</th>
+<th>4 config/SMTP</th>
+<th>5 no routing CSV found.</th>
+</tr></thead><tbody>
+</tbody></table>
 <h3 id="invoke-spdeltareport-ps1"><code>Invoke-SPDeltaReport.ps1</code></h3>
 <p><strong>Purpose:</strong> a lightweight <strong>daily change report</strong> (1–2 page HTML + JSONL for SIEM) — grants, revocations, recently-created delta campaigns, pending certs, and anomalies in the window. Not a full audit — just "what changed today." <strong>When to use:</strong> quick daily operations review / SIEM feed.</p>
 <table>
@@ -2367,9 +2756,76 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td><code>-OutputMode</code></td>
 <td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
 </tr>
+<tr>
+<td><code>-IncludeDashboard</code></td>
+<td>Generate a governance trend dashboard HTML (KPI cards, SVG sparklines, direction arrows, alerts).</td>
+</tr>
+<tr>
+<td><code>-DashboardPeriod</code></td>
+<td><code>Last7Days</code>/<code>Last30Days</code>/<code>Last90Days</code>/<code>AllTime</code> (default Last30Days).</td>
+</tr>
 </tbody></table>
-<pre><code>.\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeCompletionForecast -OutputMode Both</code></pre>
+<pre><code># Capture + trend + completion forecast
+.\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeCompletionForecast -OutputMode Both
+
+# Capture + governance trend dashboard
+.\Scripts\Invoke-SPGovernanceMetrics.ps1 -IncludeDashboard -DashboardPeriod Last90Days</code></pre>
 <p><strong>Related GUI:</strong> Governance tab → Metrics.</p>
+<h3 id="invoke-spgovernanceheartbeat-ps1"><code>Invoke-SPGovernanceHeartbeat.ps1</code></h3>
+<p><strong>Purpose:</strong> lightweight governance pulse check -- captures only campaign-level KPIs (active/completed/overdue counts, average completion %) via a single API call. No item- level fetching, so it runs in seconds. Designed for high-frequency scheduling (every 4 hours) to produce finer-grained sparkline data.</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-OutputPath</code></td>
+<td>Override output directory.</td>
+</tr>
+<tr>
+<td><code>-IncludeDashboard</code></td>
+<td>Also generate the trend dashboard HTML.</td>
+</tr>
+<tr>
+<td><code>-DashboardPeriod</code></td>
+<td><code>Last7Days</code>/<code>Last30Days</code>/<code>Last90Days</code> (default Last7Days).</td>
+</tr>
+<tr>
+<td><code>-DaysBack</code></td>
+<td>Campaign lookback window (default 90).</td>
+</tr>
+</tbody></table>
+<pre><code># Quick heartbeat capture
+.\Scripts\Invoke-SPGovernanceHeartbeat.ps1
+
+# Heartbeat + mini dashboard
+.\Scripts\Invoke-SPGovernanceHeartbeat.ps1 -IncludeDashboard -DashboardPeriod Last7Days</code></pre>
+<h3 id="cache-management-commands">Cache Management Commands</h3>
+<h3 id="stalled-reviewer-detection">Stalled Reviewer Detection</h3>
+<p>Detect reviewers who have made zero progress across campaigns for 3+ consecutive days:</p>
+<pre><code># Detect stalled reviewers
+$stalled = Get-SPStalledReviewers -ConsecutiveDays 3
+$stalled.Data.StalledReviewers | Format-Table Reviewer, CampaignCount, StalledDays, Severity
+
+# Generate accountability HTML report
+Export-SPStalledReviewerHtml -StalledData $stalled.Data -OutputPath '.\Reports\'</code></pre>
+<p>Multi-campaign stalls (RED severity) typically indicate a reviewer who is OOO, has departed, or whose campaigns need reassignment. The daily orchestrator runs this automatically as Step 11.</p>
+<h3 id="cache-management-commands">Cache Management Commands</h3>
+<p>The toolkit caches identity details, account data, and campaign items to reduce API calls. All caches support inspection and clearing via <code>SP.Shared</code> functions:</p>
+<pre><code># Inspect a specific cache store
+Get-SPCacheStoreInfo -Store 'SPIdentity'
+
+# View all cache stores
+Get-SPCacheStoreSummary
+
+# Validate JSONL integrity
+Test-SPCacheStoreIntegrity -Store 'SPIdentity'
+
+# Clear identity cache (for SOX-critical evidence runs)
+Clear-SPIdentityCache
+
+# Clear campaign item cache
+Clear-SPAuditItemCache -CampaignId 'campaign-id-here'</code></pre>
 <h3 id="invoke-spgovernancereport-ps1"><code>Invoke-SPGovernanceReport.ps1</code></h3>
 <p><strong>Purpose:</strong> the "one report to rule them all" — assembles audit, leadership rollup, policy compliance, and data quality into one output directory with a manifest. What an auditor/ governance lead runs for a complete posture snapshot.</p>
 <table>
@@ -3000,8 +3456,35 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <pre><code>.\Scripts\Invoke-SPWeeklyDigest.ps1 -OutputMode HTML</code></pre>
 <p><strong>Related GUI:</strong> Governance tab.</p>
 <h3 id="invoke-spdailyevidencereport-ps1"><code>Invoke-SPDailyEvidenceReport.ps1</code></h3>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Three complementary versions</strong> -- all coexist, produce separate output files, and can run in any combination. They are NOT sequential replacements.</p>
+<table>
+<thead><tr>
+<th>Version</th>
+<th>Script</th>
+<th>Best for</th>
+<th>Key feature</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>V1</strong></td>
+<td><code>Invoke-SPDailyEvidenceReport.ps1</code></td>
+<td>Standalone daily compliance dashboard</td>
+<td>6-KPI tiles, Domino Tracker, Governance Confidence Score, evidence registers. Works for any campaign on any schedule.</td>
+</tr>
+<tr>
+<td><strong>V2</strong></td>
+<td><code>Invoke-SPDailyEvidenceReportV2.ps1</code></td>
+<td>Lean per-campaign audit evidence</td>
+<td>Donut chart, source-aware remediation (Deprovisioned/Queued/Pending), decision register with justification. No KPI dashboard.</td>
+</tr>
+<tr>
+<td><strong>V3</strong></td>
+<td><code>Invoke-SPDailyEvidenceReportV3.ps1</code></td>
+<td>Day-over-day delta tracking</td>
+<td>Everything V2 has + KPI dashboard + access change tracking (added/removed/changed) + reviewer timeliness aging. Requires recurring daily campaign model.</td>
+</tr>
+</tbody></table>
+<p><strong>Quick decision:</strong> Use V1 for "what is governance posture today?" Use V3 for "what changed since yesterday?" Use V2 for a clean audit artifact without KPI overhead.</p></div>
 <p><strong>Purpose:</strong> a daily executive governance dashboard with six KPIs, a Governance Confidence Score, a cascading-risk "Domino Tracker", and audit/IAG evidence registers. Designed to satisfy <strong>Step 6: Evidence and Reporting</strong> of the IAM governance program -- a single report that answers whether campaigns are completing, attestations are on time, revocations are being enforced, remediation is timely, high-risk access is being reviewed, and reviewers are performing responsibly.</p>
-<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>A leaner v2 exists</strong> — <code>Invoke-SPDailyEvidenceReportV2.ps1</code> (below) drops the KPI dashboard, Confidence Score, Domino Tracker, and the Past-Due / High-Risk / Reviewer-Performance registers, keeping only audit-grade evidence. Both scripts coexist; run whichever you prefer.</p></div>
 <p><strong>When to use:</strong> daily, scheduled after the daily orchestrator. Also useful on-demand with <code>-DaysBack 7</code> for a weekly evidence summary or <code>-CampaignNameContains 'Tuesday'</code> to scope to a specific campaign day.</p>
 <p><strong>KPI dashboard (above the fold -- one screen):</strong></p>
 <table>
@@ -3113,15 +3596,38 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td><code>Console</code>/<code>HTML</code>/<code>JSON</code>/<code>Both</code>.</td>
 </tr>
 </tbody></table>
-<pre><code># Daily evidence report (default 1-day window)
+<pre><code># Daily compliance dashboard (default 1-day window, console + HTML)
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -Token $token -OutputMode Both
 
 # Scope to a specific day's campaigns
 .\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Tuesday' -DaysBack 7 -Token $token
 
-# Dry run -- see what steps would execute
-.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf</code></pre>
+# Full campaign name match with custom thresholds
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignName 'Daily Attestation Manager Campaign - Wednesday, June 11 2026' -SlaHours 24 -HighRiskThreshold 80 -Token $token -OutputMode Both
+
+# Weekly evidence catch-up (last 7 days, all campaigns)
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -DaysBack 7 -Token $token -OutputMode HTML
+
+# Prefix match for a campaign series
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameStartsWith 'Daily Attestation' -Token $token -OutputMode Both
+
+# Dry run -- see what steps would execute without API calls
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -WhatIf
+
+# JSON output for pipeline/automation consumption
+.\Scripts\Invoke-SPDailyEvidenceReport.ps1 -CampaignNameContains 'Wednesday' -Token $token -OutputMode JSON</code></pre>
 <p><strong>Thresholds</strong> are configurable in <code>settings.json</code> under the <code>DailyEvidence.Thresholds</code> section. The script uses sensible defaults if the section is missing. See Foundations for the settings reference.</p>
+<p><strong>Output files:</strong></p>
+<ul><li><code>Audit\daily-evidence\daily-evidence-{timestamp}.html</code> -- self-contained HTML dashboard + evidence</li><li><code>Audit\daily-evidence\daily-evidence-audit.jsonl</code> -- append-only JSONL evidence trail (every run)</li></ul>
+<table>
+<thead><tr>
+<th><em>Exit codes:</em> 0 all KPIs green + confidence A/B</th>
+<th>1 any KPI yellow or confidence C</th>
+<th>5 any KPI red, confidence D/F, or critical failure</th>
+<th>2/3/4 parameter/auth/config.</th>
+</tr></thead><tbody>
+</tbody></table>
+<p><strong>Also available via GUI:</strong> Governance tab &gt; "Daily Evidence" button.</p>
 <h3 id="invoke-spdailyevidencereportv2-ps1"><code>Invoke-SPDailyEvidenceReportV2.ps1</code></h3>
 <p><strong>Purpose:</strong> the <strong>v2</strong> daily certification evidence report — a leaner, leadership-grade rewrite of the report above. It <strong>drops</strong> the six-KPI dashboard, the Governance Confidence Score, the Domino Tracker, and the Past-Due / High-Risk / Reviewer-Performance registers, and presents only the evidence that holds up in an audit. The original <code>Invoke-SPDailyEvidenceReport.ps1</code> is unchanged — <strong>run either</strong>. Output: <code>daily-evidence-v2-*.html</code> (+ <code>daily-evidence-v2-audit.jsonl</code>), so it never clobbers the v1 output.</p>
 <p><strong>Layout (top to bottom):</strong></p>
@@ -3230,6 +3736,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <p><strong>Output:</strong> <code>daily-evidence-v3-{timestamp}.html</code> (+ <code>daily-evidence-v3-audit.jsonl</code>). <strong>Related:</strong> <code>Invoke-SPCampaignDiff.ps1</code> (the scope-diff this hybridizes), <code>Invoke-SPDailyEvidenceReportV2.ps1</code> (the current-state sibling — both remain available).</p>
 <h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ---- DEPRECATED</h3>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. An IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecation timeline:</strong> Deprecated as of June 2026. Will be removed in a future release. <strong>Migration:</strong> Use <code>Invoke-SPCertTracker.ps1</code> (executive tracker), <code>Invoke-SPCampaignTrendReport.ps1</code> (KPI trend), or <code>Invoke-SPCampaignDiff.ps1</code> (day-over-day diff) instead.</p></div>
 <p><strong>Purpose:</strong> generate <strong>adaptive, composable HTML reports</strong> over your governance data — a reusable component engine (KPI cards, heatmap, top-N bars, drill-down tree, group table) plus a <strong>baseline report library</strong> (entitlement inventory, privileged review, orphaned/disabled access, separation-of-duties, certification roster, access-cert attestation, governance executive summary). <strong>Additive</strong> — it sits alongside the existing reports; nothing is replaced. <strong>When to use:</strong> richer, presentation-ready governance views; ad-hoc analysis of entitlement assignment or campaign coverage; as the source for tiered leadership distribution (see <code>Invoke-SPReportDistribution</code>).</p>
 <p><strong>Anchor — what becomes a "group" and its "members":</strong></p>
 <ul><li><code>Entitlement</code> (default) — group = an entitlement / access profile / role; members = the identities holding it. Drives inventory, top-N most-assigned, privileged- entitlement review, disabled-still-has-access, and SoD toxic combinations.</li><li><code>Campaign</code> — group = a certification campaign; members = the identities under it.</li></ul>
@@ -3458,11 +3965,23 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 <tr>
 <td><code>-Skip*</code> switches</td>
-<td>Skip any step (<code>-SkipValidation</code>, <code>-SkipCleanup</code>, <code>-SkipDeltaCert</code>, <code>-SkipDeltaReport</code>, <code>-SkipEscalation</code>, <code>-SkipHealthCheck</code>, …).</td>
+<td>Skip any step (<code>-SkipValidation</code>, <code>-SkipCleanup</code>, <code>-SkipDeltaCert</code>, <code>-SkipDeltaReport</code>, <code>-SkipEscalation</code>, <code>-SkipHealthCheck</code>, ...).</td>
+</tr>
+<tr>
+<td><code>-IncludeDashboard</code></td>
+<td>Generate a governance trend dashboard as Step 11 (after log retention, before daily summary).</td>
+</tr>
+<tr>
+<td><code>-DashboardPeriod</code></td>
+<td><code>Last7Days</code>/<code>Last30Days</code>/<code>Last90Days</code>/<code>AllTime</code> (default Last30Days).</td>
 </tr>
 </tbody></table>
-<pre><code>.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt</code></pre>
-<p><strong>Related GUI:</strong> <em>(operational — typically scheduled, not interactive)</em>.</p>
+<pre><code># Standard daily run
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt
+
+# Daily run with governance dashboard
+.\Scripts\Invoke-SPDailyOrchestrator.ps1 -SourceId 'src-ad-001' -Token $jwt -IncludeDashboard</code></pre>
+<p><strong>Related GUI:</strong> <em>(operational -- typically scheduled, not interactive)</em>.</p>
 <h3 id="invoke-spscheduledcampaign-ps1"><code>Invoke-SPScheduledCampaign.ps1</code></h3>
 <p><strong>Purpose:</strong> runs campaigns from <strong>saved JSON templates</strong> on a cadence — loads templates from <code>Config/campaign-templates/</code>, checks last-run state (<code>.schedule-state.json</code>), and creates campaigns for those that are due. <strong>When to use:</strong> scheduled, alongside the orchestrator, for recurring (e.g. quarterly) campaigns.</p>
 <table>
@@ -3778,7 +4297,8 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </div>
 <div id="section-gui-governance-tab" class="report-section" style="display:none">
 <h2>5. Governance tab</h2>
-<p><strong>Purpose:</strong> run governance health checks and generate governance reports/dashboards. <strong>When to use:</strong> posture checks, audit prep, KPI/dashboard generation.</p>
+<p><strong>Purpose:</strong> run governance health checks, generate governance reports/dashboards, and perform daily operational checks (campaign diffs, certification tracking, evidence generation, disconnected-app SLA monitoring). <strong>When to use:</strong> posture checks, audit prep, KPI/dashboard generation, daily governance operations.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Health badges auto-populate.</strong> When <code>Governance.HealthCheckOnStartup = true</code> in <code>settings.json</code> (toggle on the <a href="#8-settings-tab">Settings tab</a> via <strong>Health Check on Startup</strong>), the six health badges on this tab auto-populate when the tab loads instead of showing "?". Disable the setting if startup speed matters more than at-a-glance health status.</p></div>
 <table>
 <thead><tr>
 <th>Control</th>
@@ -3801,7 +4321,43 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td>Open the <code>Reports\</code> folder / reload the report list.</td>
 </tr>
 </tbody></table>
-<p><strong>Leadership Reports</strong> (flat, per-band): <code>BtnDistributionPreview</code> / <code>BtnDistributionGenerate</code> / <code>BtnDistributionSend</code> — generates per-leader HTML files grouped by org band and optionally emails each leader their report.</p>
+<p><strong>Campaign Diff / Cert Tracker / Daily Evidence</strong></p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Campaign Diff</strong> (<code>BtnCampaignDiff</code>)</td>
+<td>Runs <code>Invoke-SPCampaignDiff.ps1</code> against active campaigns -- captures a snapshot, diffs it against the prior snapshot, and auto-opens the HTML scope-diff report showing Added/Removed/Changed access. Output: <code>Audit\diff\</code>.</td>
+</tr>
+<tr>
+<td><strong>Cert Tracker</strong> (<code>BtnCertTracker</code>)</td>
+<td>Runs <code>Invoke-SPCertTracker.ps1</code> to generate an executive certification tracker board showing campaign progress, reviewer engagement, and compliance metrics. Output: <code>Audit\tracker\</code>.</td>
+</tr>
+<tr>
+<td><strong>Daily Evidence</strong> (<code>BtnDailyEvidence</code>)</td>
+<td>Runs <code>Invoke-SPDailyEvidenceReportV3.ps1 -OutputMode Both</code> to produce the full day-over-day evidence report with KPI dashboard, domino tracker, reviewer timeliness, and access change tracking. Output: <code>Audit\daily-evidence\</code>.</td>
+</tr>
+</tbody></table>
+<p><strong>When to use each:</strong></p>
+<ul><li><strong>Campaign Diff</strong> -- daily, to see what access changed since the last campaign run.</li><li><strong>Cert Tracker</strong> -- for executive visibility into certification campaign status.</li><li><strong>Daily Evidence</strong> -- daily governance evidence generation (the recommended V3 version).</li></ul>
+<p><strong>Disconnected Apps</strong> (governance operations)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>View SLA</strong> (<code>BtnViewSla</code>)</td>
+<td>Checks each enabled disconnected app's snapshot age against its configured SLA days. Shows pass/fail per app in the status bar. Use for a quick SLA compliance check on disconnected application feeds.</td>
+</tr>
+<tr>
+<td><strong>Batch Monitor</strong> (<code>BtnRunDisconnectedBatch</code>)</td>
+<td>Runs the disconnected-app certification pipeline in the background. Now monitors the background process and reports exit code in the status bar when complete (previously fire-and-forget).</td>
+</tr>
+</tbody></table>
+<p><strong>Leadership Reports</strong> (flat, per-band): <code>BtnDistributionPreview</code> / <code>BtnDistributionGenerate</code> / <code>BtnDistributionSend</code> -- generates per-leader HTML files grouped by org band and optionally emails each leader their report.</p>
 <p><strong>Hierarchical Drill-Down Reports</strong> (new): generates one self-contained HTML report per leader at or above the selected level, showing their full org subtree with collapsible sections and decision counts that aggregate upward.</p>
 <table>
 <thead><tr>
@@ -3822,7 +4378,7 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 </tr>
 <tr>
 <td><strong>Preview</strong> (<code>BtnHierPreview</code>)</td>
-<td>Instantly shows matching campaign count — no files written.</td>
+<td>Instantly shows matching campaign count -- no files written.</td>
 </tr>
 <tr>
 <td><strong>Generate Drill-Down Reports</strong> (<code>BtnHierGenerate</code>)</td>
@@ -3852,7 +4408,29 @@ Clear-SPAuditItemCache -CampaignId '&lt;id&gt;'    # just one</code></pre>
 <td>Show org hierarchy + counts only, hide individual names (turns blue when active)</td>
 </tr>
 </tbody></table>
-<p><strong>Related CLI:</strong> <code>Invoke-SPGovernanceHealthCheck.ps1</code>, <code>Invoke-SPGovernanceReport.ps1</code>, <code>Invoke-SPGovernanceMetrics.ps1</code>, <code>Invoke-SPDataQualityReport.ps1</code>, <code>Invoke-SPHierarchicalReport.ps1</code>.</p>
+<p><strong>Utility Row</strong> (R5 additions)</p>
+<table>
+<thead><tr>
+<th>Control</th>
+<th>What it does</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Entitlement History</strong> (<code>BtnEntitlementHistory</code>)</td>
+<td>Runs <code>Invoke-SPEntitlementHistory.ps1</code> to build a multi-snapshot timeline showing how entitlement decisions evolved across successive campaigns. Generates an HTML report and auto-opens it in the default browser. Output: <code>Audit\entitlement-history\</code>.</td>
+</tr>
+<tr>
+<td><strong>Validate Cache</strong> (<code>BtnValidateCache</code>)</td>
+<td>Runs <code>Invoke-SPCacheValidate.ps1</code> to perform SHA-256 integrity validation and schema checks on all toolkit cache files. Results are displayed in the status bar (pass count, warning count, error count). Does not generate an HTML report -- this is a diagnostic action.</td>
+</tr>
+<tr>
+<td><strong>ISC Reconciliation</strong> (<code>BtnIscReconciliation</code>)</td>
+<td>Runs <code>Invoke-SPIscReconciliation.ps1</code> to reconcile local governance data against ISC source-of-truth. Produces a structured export of discrepancies. <em>(Added alongside the other R5 utility-row buttons; see the CLI playbook for full parameter reference.)</em></td>
+</tr>
+</tbody></table>
+<p><strong>When to use each:</strong></p>
+<ul><li><strong>Entitlement History</strong> -- before or after a campaign cycle, to understand decision drift over time (e.g., was an entitlement approved in Q1 but revoked in Q2?).</li><li><strong>Validate Cache</strong> -- when troubleshooting stale or corrupted data, or as a pre-flight check before a major reporting run.</li><li><strong>ISC Reconciliation</strong> -- to verify that the toolkit's local cache and reports match the live ISC tenant state.</li></ul>
+<p><strong>Related CLI:</strong> <code>Invoke-SPGovernanceHealthCheck.ps1</code>, <code>Invoke-SPGovernanceReport.ps1</code>, <code>Invoke-SPGovernanceMetrics.ps1</code> (add <code>-IncludeDashboard</code> for trend dashboard), <code>Invoke-SPGovernanceHeartbeat.ps1</code> (lightweight high-frequency capture), <code>Invoke-SPDataQualityReport.ps1</code>, <code>Invoke-SPHierarchicalReport.ps1</code>, <code>Invoke-SPCampaignDiff.ps1</code>, <code>Invoke-SPCertTracker.ps1</code>, <code>Invoke-SPDailyEvidenceReportV3.ps1</code>, <code>Invoke-SPEntitlementHistory.ps1</code>, <code>Invoke-SPCacheValidate.ps1</code>, <code>Invoke-SPIscReconciliation.ps1</code>.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Governance Trend Dashboard:</strong> The CLI command <code>Invoke-SPGovernanceMetrics.ps1 -IncludeDashboard</code> generates a self-contained HTML dashboard with KPI cards, inline SVG sparklines, direction arrows, and alert callouts. This is currently CLI-only; a dedicated GUI tab for trend visualization is planned.</p></div>
 </div>
 <div id="section-gui-sdk-features-tab" class="report-section" style="display:none">
 <h2>6. SDK Features tab</h2>
@@ -4715,6 +5293,35 @@ Skip-level manager receives: "You have a new certification to review"
 <ol><li>Detects a new grant (same as current delta cert)</li><li>Creates or references a campaign template scoped to that specific entitlement ID</li><li>Triggers the template to generate a campaign for only that entitlement</li></ol>
 <p>This approach would give managers a single-item queue ("Should Alice keep Finance-Admins?") rather than a 50-item queue. It is documented as a planned enhancement in future-features-modernization.md.</p>
 <p>Until that work is done, the current delta cert meaningfully reduces the <em>frequency</em> of broad reviews (daily targeted vs. quarterly comprehensive) even if it cannot yet reduce the <em>scope</em> of each review to a single entitlement.</p>
+</div>
+<div id="section-dc-stalled-reviewer-detection" class="report-section" style="display:none">
+<h2>14. Stalled Reviewer Detection</h2>
+<p>Beyond per-campaign escalation, the toolkit detects reviewers who are <strong>persistently non-responsive across ALL their campaigns</strong> over multiple days. This catches the scenario where a manager is on PTO, has departed, or is ignoring their entire certification queue.</p>
+<pre><code># Check for chronic stalling (3+ days zero progress)
+$stalled = Get-SPStalledReviewers -ConsecutiveDays 3
+$stalled.Data.StalledReviewers | Format-Table Reviewer, CampaignCount, StalledDays, Severity
+
+# Generate accountability report
+Export-SPStalledReviewerHtml -StalledData $stalled.Data -OutputPath '.\Reports\'</code></pre>
+<p><strong>Severity levels:</strong></p>
+<ul><li><strong>RED (Multi-Campaign):</strong> Reviewer stalled in 2+ campaigns simultaneously. Likely OOO or departed. Campaign reassignment recommended.</li><li><strong>Amber (Single-Campaign):</strong> Stalled in one campaign only. May be workload or deprioritization.</li></ul>
+<p>The daily orchestrator runs this automatically as Step 11. The weekly digest includes the top 3 stalled reviewers in its Governance Summary section.</p>
+</div>
+<div id="section-dc-identity-cache-management" class="report-section" style="display:none">
+<h2>15. Identity Cache Management</h2>
+<p>Delta cert resolves identity details (name, email, manager, active status) via the ISC API and caches results in <code>identities.jsonl</code> under the <code>.cache</code> directory. The cache is backed by <code>SP.IdentityService</code> (part of <code>SP.Shared</code>) with a configurable TTL (default 24 hours via <code>Audit.IdentityCacheTtlMinutes</code>).</p>
+<p><strong>When to clear the cache:</strong></p>
+<ul><li>After a reorg or bulk termination (stale manager chains produce incorrect escalation targets)</li><li>Before SOX-critical evidence generation (ensures fresh data from ISC)</li><li>After manually correcting identity data in ISC</li></ul>
+<pre><code># Clear all identity caches (memory + disk)
+Clear-SPIdentityCache
+
+# Inspect cache health
+Get-SPCacheStoreInfo -Store 'SPIdentity'
+
+# Validate JSONL integrity
+Test-SPCacheStoreIntegrity -Store 'SPIdentity'</code></pre>
+<p><strong>TTL tuning:</strong> The 24-hour default means a termination processed at 9 AM will not be reflected until the next day. For same-day termination SLAs, set <code>Audit.IdentityCacheTtlMinutes</code> to 480 (8 hours) or clear the cache before evidence runs.</p>
+<p><strong>Security:</strong> <code>identities.jsonl</code> contains PII (names, emails). Restrict the <code>.cache</code> directory to the service account. The toolkit warns at startup if ACLs are too permissive.</p>
 <p><em>Related playbooks: CLI Playbook · GUI Playbook · Foundations</em></p>
 </div>
 
@@ -4723,7 +5330,7 @@ Skip-level manager receives: "You have a new certification to review"
 
 <script>
 
-var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-1-architecture-at-a-glance", "found-2-day-1-deployment-checklist", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "found-notification-setup", "found-report-catalog", "found-error-reference", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab", "dc-overview", "dc-what-problem-delta-cert-solves-and-what-it-doesn-t", "dc-the-most-important-concept-read-this-first", "dc-two-modes-delta-daily-and-full-quarterly", "dc-configuration-reference", "dc-running-the-commands", "dc-how-escalation-works-and-yes-isc-sends-the-email", "dc-scheduling-escalation-correctly-the-timing-trap", "dc-understanding-the-campaign-types", "dc-the-jsonl-audit-trail", "dc-limitations", "dc-troubleshooting", "dc-gotchas-by-experience-level", "dc-recommended-operational-calendar", "dc-the-path-to-true-entitlement-scoped-certification"];
+var sections = ["found-overview", "found-what-the-toolkit-is", "found-prerequisites", "found-installation", "found-1-architecture-at-a-glance", "found-2-day-1-deployment-checklist", "found-configuration", "found-authentication", "found-environments-mock-vs-real", "found-the-safety-model-read-before-mutating-anything", "found-output-reports-and-logs", "found-glossary-isc-terms", "found-getting-help-exit-codes", "found-notification-setup", "found-report-catalog", "found-error-reference", "cli-overview", "cli-setup-diagnostics", "cli-campaign-testing-audit", "cli-delta-certification", "cli-disconnected-applications", "cli-governance-reporting", "cli-sdk-features", "cli-operations-scheduling", "gui-overview", "gui-campaigns-tab", "gui-evidence-tab", "gui-audit-tab", "gui-delta-cert-tab", "gui-governance-tab", "gui-sdk-features-tab", "gui-adaptive-reports-tab", "gui-settings-tab", "dc-overview", "dc-what-problem-delta-cert-solves-and-what-it-doesn-t", "dc-the-most-important-concept-read-this-first", "dc-two-modes-delta-daily-and-full-quarterly", "dc-configuration-reference", "dc-running-the-commands", "dc-how-escalation-works-and-yes-isc-sends-the-email", "dc-scheduling-escalation-correctly-the-timing-trap", "dc-understanding-the-campaign-types", "dc-the-jsonl-audit-trail", "dc-limitations", "dc-troubleshooting", "dc-gotchas-by-experience-level", "dc-recommended-operational-calendar", "dc-the-path-to-true-entitlement-scoped-certification", "dc-stalled-reviewer-detection", "dc-identity-cache-management"];
 function showSection(id) {
     sections.forEach(function(s) {
         var el = document.getElementById('section-' + s);

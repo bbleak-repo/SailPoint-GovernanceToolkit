@@ -23,7 +23,8 @@
         },
         "ScheduledVault": {
             "KeyPath": ".\\Data\\sp-scheduled-key.enc",
-            "_note": "AES-encrypted vault passphrase using machine-derived key. No DPAPI. Run New-SPVault.ps1 -Mode ScheduledVault to create."
+            "KeyProtection": "Dpapi",
+            "_note": "AES-encrypted vault passphrase + a per-install secret (Data\\.sv-secret). KeyProtection: 'Dpapi' (recommended -- bound to box/user, not off-box decryptable; may alert EDR) or 'AclFile' (EDR-quiet -- ACL-locked secret, no DPAPI). Run New-SPVault.ps1 -Mode ScheduledVault [-KeyProtection Dpapi|AclFile]."
         }
     },
     "Logging": {
