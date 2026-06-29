@@ -132,6 +132,27 @@ function Get-PendingReviewers {
     return @($names)
 }
 
+function Get-ReviewerStreak {
+    # Longest run of CONSECUTIVE calendar days a reviewer was pending (a missing day's report OR a
+    # not-pending day breaks the run). Also returns the total distinct days pending. DistinctDates is
+    # sorted [datetime]; ByDate maps 'yyyy-MM-dd' -> HashSet of pending reviewer names.
+    param([string]$Name, $DistinctDates, $ByDate)
+    $max = 0; $cur = 0; $total = 0
+    $prev = $null; $prevPending = $false; $curStart = $null; $maxStart = $null; $maxEnd = $null
+    foreach ($dt in $DistinctDates) {
+        $pending = $ByDate[$dt.ToString('yyyy-MM-dd')].Contains($Name)
+        if ($pending) {
+            $total++
+            if ($prevPending -and $null -ne $prev -and ($dt - $prev).Days -eq 1) { $cur++ }
+            else { $cur = 1; $curStart = $dt }
+            if ($cur -gt $max) { $max = $cur; $maxStart = $curStart; $maxEnd = $dt }
+        }
+        else { $cur = 0 }
+        $prev = $dt; $prevPending = $pending
+    }
+    return @{ Max = $max; Start = $maxStart; End = $maxEnd; Total = $total }
+}
+
 # ---------------------------------------------------------------------------
 # Inline-SVG chart builders (no JS -- Word/email safe), V7-style palette.
 # ---------------------------------------------------------------------------
@@ -251,11 +272,42 @@ $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $
 $shown = if ($Top -gt 0) { @($rows | Select-Object -First $Top) } else { $rows }
 $dailyCounts = @($reports | ForEach-Object { $_.Reviewers.Count })
 
+# ---- consecutive missed-review streaks (calendar-day adjacency) ----
+# Collapse to distinct calendar dates: a reviewer is "pending that day" if pending in any report that day.
+$byDate = [ordered]@{}
+foreach ($rep in $reports) {
+    $k = $rep.Date.ToString('yyyy-MM-dd')
+    if (-not $byDate.Contains($k)) { $byDate[$k] = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase) }
+    foreach ($n in $rep.Reviewers) { [void]$byDate[$k].Add($n) }
+}
+$distinctDates = @($byDate.Keys | ForEach-Object { [datetime]$_ } | Sort-Object)
+$distinctCount = $distinctDates.Count
+# Rule: fewer than 3 report files -> flag at 2+ consecutive days; 3+ files -> flag at 3+ in a row.
+$streakThreshold = if ($reports.Count -lt 3) { 2 } else { 3 }
+$streakRows = @($rows | ForEach-Object {
+    $s = Get-ReviewerStreak -Name $_.Name -DistinctDates $distinctDates -ByDate $byDate
+    [pscustomobject]@{
+        Name      = $_.Name
+        Streak    = $s.Max
+        Window    = if ($s.Max -ge 1 -and $null -ne $s.Start) { "$($s.Start.ToString('yyyy-MM-dd')) to $($s.End.ToString('yyyy-MM-dd'))" } else { '-' }
+        TotalDays = $s.Total
+        Flagged   = ($s.Max -ge $streakThreshold)
+    }
+} | Sort-Object -Property @{Expression='Flagged';Descending=$true}, @{Expression='Streak';Descending=$true}, @{Expression='TotalDays';Descending=$true}, @{Expression='Name'})
+$flaggedCount = @($streakRows | Where-Object Flagged).Count
+
 # ---- Console ----
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
     Write-Host "Pending-Reviewer scrape: $total report(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)" -ForegroundColor Cyan
     $shown | Select-Object Name, Count, @{N='OutOf';E={$total}}, @{N='Pct';E={"$($_.Pct)%"}} | Format-Table -AutoSize | Out-String | Write-Host
+    if ($flaggedCount -gt 0) {
+        Write-Host "Missed-review streaks (>= $streakThreshold consecutive day(s)): $flaggedCount reviewer(s) flagged" -ForegroundColor Yellow
+        $streakRows | Where-Object Flagged | Select-Object Name, Streak, Window, TotalDays | Format-Table -AutoSize | Out-String | Write-Host
+    }
+    else {
+        Write-Host "Missed-review streaks: none reached the $streakThreshold-consecutive-day threshold." -ForegroundColor Green
+    }
 }
 
 # ---- HTML ----
@@ -269,6 +321,13 @@ if ($OutputMode -in @('HTML', 'Both')) {
     $barSvg  = New-SvgChronicBars -Rows $shown -Total $total
     $heatSvg = New-SvgHeatmap -Reviewers $reviewerOrder -Dates $dateLabels -Grid $grid
     $trendSvg = New-SvgDailyTrend -Dates $dateLabels -Counts $dailyCounts
+
+    $thresholdDesc = if ($reports.Count -lt 3) { 'fewer than 3 reports &rarr; 2+ consecutive days' } else { '3+ consecutive days' }
+    $streakTableRows = ($streakRows | ForEach-Object {
+        $st = if ($_.Flagged) { "<strong style='color:#c0392b'>&#9888; Flagged</strong>" } else { 'ok' }
+        $bg = if ($_.Flagged) { " style='background:#fdecea'" } else { '' }
+        "<tr$bg><td>$(ConvertTo-Safe $_.Name)</td><td style='text-align:right'>$($_.Streak)</td><td>$(ConvertTo-Safe $_.Window)</td><td style='text-align:right'>$($_.TotalDays)</td><td>$st</td></tr>"
+    }) -join "`n"
 
     $tableRows = ($shown | ForEach-Object {
         "<tr><td>$(ConvertTo-Safe $_.Name)</td><td style='text-align:right'>$($_.Count)</td><td style='text-align:right'>$total</td><td style='text-align:right'>$($_.Pct)%</td><td>$(ConvertTo-Safe (($grid[$_.Name] | Sort-Object) -join ', '))</td></tr>"
@@ -292,10 +351,17 @@ table.report th{background:#f6f8fa;text-align:left}
 <h2>1. Chronic Pending &mdash; appearances out of $total report(s)</h2>
 $barSvg
 
-<h2>2. Reviewer &times; Date Heatmap &mdash; pending (red) by day</h2>
+<h2>2. Missed-Review Streak Flags &mdash; flagged at &ge; $streakThreshold consecutive day(s)</h2>
+<div class='note'>Rule: $thresholdDesc. Data window: $distinctCount day(s) across $($reports.Count) report(s). Flagged: $flaggedCount reviewer(s). A missing report day or a not-pending day breaks a streak. (High non-consecutive totals already show in section 1 and the heatmap.)</div>
+<table class='report'><thead><tr><th>Reviewer</th><th>Longest Streak (days in a row)</th><th>Streak Window</th><th>Total Days Pending (of $distinctCount)</th><th>Status</th></tr></thead>
+<tbody>
+$streakTableRows
+</tbody></table>
+
+<h2>3. Reviewer &times; Date Heatmap &mdash; pending (red) by day</h2>
 <div style='overflow-x:auto'>$heatSvg</div>
 
-<h2>3. Daily Distinct-Pending Trend</h2>
+<h2>4. Daily Distinct-Pending Trend</h2>
 <div style='overflow-x:auto'>$trendSvg</div>
 
 <h2>Detail</h2>
