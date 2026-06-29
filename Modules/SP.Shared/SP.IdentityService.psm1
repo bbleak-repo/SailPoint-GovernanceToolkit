@@ -256,8 +256,9 @@ function Import-SPIdentityCacheFromDisk {
         # corruption if the process crashes mid-compaction.
         $tmpFile = "$($info.File).tmp"
         Write-SPHtmlFile -Path $tmpFile -Content $sb.ToString()
-        if (Test-Path $info.File) { Remove-Item $info.File -Force }
-        Move-Item -Path $tmpFile -Destination $info.File -Force
+        # Atomic replace (no Remove-then-Move gap that could lose the cache file on crash).
+        if (Test-Path $info.File) { [System.IO.File]::Replace($tmpFile, $info.File, [NullString]::Value) }
+        else { Move-Item -Path $tmpFile -Destination $info.File -Force }
     } catch { }
 }
 

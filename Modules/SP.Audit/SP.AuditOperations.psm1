@@ -2071,11 +2071,13 @@ function Save-SPGovernanceMetrics {
         if ($keptLines.Count -gt 0) { $content += "`n" }
         [System.IO.File]::WriteAllText($tmpPath, $content, $utf8NoBom)
 
-        # Atomic rename
+        # Atomic replace: no Remove-then-Move gap that could lose the file on crash.
         if (Test-Path -Path $filePath) {
-            Remove-Item -Path $filePath -Force
+            [System.IO.File]::Replace($tmpPath, $filePath, [NullString]::Value)
         }
-        Move-Item -Path $tmpPath -Destination $filePath -Force
+        else {
+            Move-Item -Path $tmpPath -Destination $filePath -Force
+        }
     }
     catch {
         # Clean up tmp on failure
@@ -2373,9 +2375,12 @@ function Get-SPGovernanceMetricsTrend {
             $changePct = [math]::Round(($totalChange / [math]::Abs($firstPeriodAvg)) * 100, 1)
         }
 
+        # "Lower is better" metrics (stale access, at-risk reviewers, overdue campaigns) invert the
+        # Improving/Declining label -- a RISE in these is a DECLINE in governance posture.
+        $lowerIsBetter = (([string]$metricName).ToLowerInvariant() -match 'stale|atrisk|overdue')
         $direction = 'Stable'
-        if ($changePct -gt 2)  { $direction = 'Improving' }
-        if ($changePct -lt -2) { $direction = 'Declining' }
+        if ($changePct -gt 2)      { $direction = if ($lowerIsBetter) { 'Declining' } else { 'Improving' } }
+        elseif ($changePct -lt -2) { $direction = if ($lowerIsBetter) { 'Improving' } else { 'Declining' } }
 
         $trends[$metricName] = @{
             Periods          = @($periods)
