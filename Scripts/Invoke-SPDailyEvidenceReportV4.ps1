@@ -1325,17 +1325,21 @@ try {
             $d = $audit['Decisions']
             if ($null -eq $d -or $null -eq $d['Pending']) { continue }
             foreach ($pending in @($d['Pending'])) {
-                $pId = $pending.IdentityId
-                if ($null -ne $pId -and $highRiskIds.ContainsKey($pId)) {
+                # NOTE: do NOT name this $pId -- PowerShell variable names are case-insensitive, so
+                # $pId collides with the read-only automatic $PID. The old name silently failed to
+                # assign (leaving the process id), so this lookup never matched and High-Risk Exposure
+                # found nothing. Use $riskIdId.
+                $riskIdId = $pending.IdentityId
+                if ($null -ne $riskIdId -and $highRiskIds.ContainsKey($riskIdId)) {
                     $highRiskPending.Add([PSCustomObject]@{
-                        IdentityId   = $pId
+                        IdentityId   = $riskIdId
                         IdentityName = $pending.IdentityName
-                        RiskScore    = $highRiskIds[$pId].RiskScore
+                        RiskScore    = $highRiskIds[$riskIdId].RiskScore
                         AccessName   = $pending.AccessName
                         SourceName   = if ($null -ne $pending.SourceName) { $pending.SourceName } else { '' }
                         CampaignName = $audit['CampaignName']
                     })
-                    $highRiskPendingIdentityIds[$pId] = $true
+                    $highRiskPendingIdentityIds[$riskIdId] = $true
                 }
             }
         }

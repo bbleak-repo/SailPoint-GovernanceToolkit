@@ -588,6 +588,12 @@ try {
                 ReviewerActions = $reviewerActions
                 CertRoster      = $certRoster
                 ItemsFromCache  = $itemsFromCache
+                # WI-4 (G1): capture-provenance so the COMPLETED render can warn when a campaign
+                # was sealed WITHOUT a prior ACTIVE-state snapshot (unverified). (Ported from V4 --
+                # V4b had the roster for attribution but was missing this provenance + the banner.)
+                CaptureCapturedWhileActive = [bool]$rosterResult.CapturedWhileActive
+                CaptureSealed              = [bool]$rosterResult.Sealed
+                CaptureSource              = [string]$rosterResult.Source
             }
             $auditList.Add($campaignAudit)
         }
@@ -1324,17 +1330,21 @@ try {
             $d = $audit['Decisions']
             if ($null -eq $d -or $null -eq $d['Pending']) { continue }
             foreach ($pending in @($d['Pending'])) {
-                $pId = $pending.IdentityId
-                if ($null -ne $pId -and $highRiskIds.ContainsKey($pId)) {
+                # NOTE: do NOT name this $pId -- PowerShell variable names are case-insensitive, so
+                # $pId collides with the read-only automatic $PID. The old name silently failed to
+                # assign (leaving the process id), so this lookup never matched and High-Risk Exposure
+                # found nothing. Use $riskIdId.
+                $riskIdId = $pending.IdentityId
+                if ($null -ne $riskIdId -and $highRiskIds.ContainsKey($riskIdId)) {
                     $highRiskPending.Add([PSCustomObject]@{
-                        IdentityId   = $pId
+                        IdentityId   = $riskIdId
                         IdentityName = $pending.IdentityName
-                        RiskScore    = $highRiskIds[$pId].RiskScore
+                        RiskScore    = $highRiskIds[$riskIdId].RiskScore
                         AccessName   = $pending.AccessName
                         SourceName   = if ($null -ne $pending.SourceName) { $pending.SourceName } else { '' }
                         CampaignName = $audit['CampaignName']
                     })
-                    $highRiskPendingIdentityIds[$pId] = $true
+                    $highRiskPendingIdentityIds[$riskIdId] = $true
                 }
             }
         }
@@ -1962,6 +1972,11 @@ foreach ($audit in $campaignAudits) {
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
         [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml $audit['CampaignName']) + '</div>')
+        # WI-4 (G1): visible provenance banner. When the campaign was sealed WITHOUT a prior
+        # ACTIVE-state capture, the COMPLETED item data is ISC post-completion data being trusted
+        # without an honest snapshot -- mark the completion unverified. (Ported from V4.)
+        $capActive = if ($audit.ContainsKey('CaptureCapturedWhileActive')) { [bool]$audit['CaptureCapturedWhileActive'] } else { $false }
+        if (-not $capActive) { [void]$sb.AppendLine('<div class="s-red" style="border:1px solid #c0392b;background:#fdecea;padding:6px 8px;margin:4px 0;font-size:12px;font-weight:600">&#9888; No active-state capture -- completion unverified. ISC post-completion data is being trusted without a sealed ACTIVE-state snapshot.</div>') }
         # Warn if any undecided items have no assigned reviewer
         $unassignedEntry = $pendingByReviewer['(Unassigned)']
         if ($null -ne $unassignedEntry -and $unassignedEntry.PendingCount -gt 0) {
