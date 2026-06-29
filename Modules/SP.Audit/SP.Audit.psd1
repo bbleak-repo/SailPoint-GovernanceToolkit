@@ -66,6 +66,7 @@
         'Resolve-SPDecisionDateDisplay'
         'Get-SPReviewerCompletion'
         'Get-SPForceSignedReviewerCount'
+        'Resolve-SPRosterSignOffProvenance'
         'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'

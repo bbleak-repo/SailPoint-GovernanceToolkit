@@ -356,3 +356,106 @@ Describe "CC-005: Get-SPForceSignedReviewerCount (genuine sign-off vs admin forc
 }
 
 #endregion
+
+#region CC-006: Sealed-while-active force-close -- provenance enrichment un-defeats the correction
+# ---------------------------------------------------------------------------
+
+Describe "CC-006: Resolve-SPRosterSignOffProvenance (sealed force-close gap)" {
+
+    BeforeAll {
+        $script:ChDir6    = Join-Path (Join-Path $PSScriptRoot 'TestData') 'CacheHonesty'
+        $script:Fixtures6 = Get-Content (Join-Path $ChDir6 'mock-fixtures.json') -Raw | ConvertFrom-Json
+
+        # The two LIVE (post-close) force-signed certs for camp-ch-forceclose-001: both read
+        # phase SIGNED with signedBy = the admin (id != reviewer.id).
+        $script:LiveCerts6 = @($Fixtures6.certifications | Where-Object { $_.campaign.id -eq 'camp-ch-forceclose-001' })
+
+        # A faithful ACTIVE-state SEAL: same certs, but captured BEFORE sign-off, so SignedById
+        # is '' (indeterminate) -- exactly the roster Get-SPCachedCampaignRoster prefers.
+        $script:SealedRoster6 = foreach ($c in $LiveCerts6) {
+            [pscustomobject]@{
+                CertificationId   = $c.id
+                CertificationName = $c.name
+                ReviewerName      = $c.reviewer.name
+                ReviewerId        = $c.reviewer.id
+                ReviewerEmail     = ''
+                Classification    = 'Primary'
+                SignedById        = ''   # captured while ACTIVE -> no sign-off yet
+                SignedByName      = ''
+            }
+        }
+        $script:SealedRoster6 = @($SealedRoster6)
+    }
+
+    It "Reproduces the gap: the raw SEALED roster (SignedById='') yields force-signed 0 (correction inert)" {
+        Get-SPForceSignedReviewerCount -Roster $SealedRoster6 | Should -Be 0
+    }
+
+    It "Enrichment stamps the live admin signedBy onto the sealed entries, keeping the ASSIGNED reviewer" {
+        $enriched = Resolve-SPRosterSignOffProvenance -Roster $SealedRoster6 -Certifications $LiveCerts6
+        @($enriched).Count | Should -Be 2
+        foreach ($e in $enriched) {
+            $e.SignedById   | Should -Be 'id-ch-admin-001'
+            $e.SignedByName | Should -Be 'System ForceClose'
+        }
+        # ASSIGNED reviewer is preserved from the seal (NOT overwritten by the admin).
+        @($enriched | Where-Object { $_.ReviewerId -eq 'id-ch-rv-011' }).Count | Should -Be 1
+        @($enriched | Where-Object { $_.ReviewerId -eq 'id-ch-rv-012' }).Count | Should -Be 1
+    }
+
+    It "After enrichment the genuine-sign-off correction works on the sealed path: force-signed 2 => genuine 0/2" {
+        $enriched = Resolve-SPRosterSignOffProvenance -Roster $SealedRoster6 -Certifications $LiveCerts6
+        $force    = Get-SPForceSignedReviewerCount -Roster $enriched
+        $force | Should -Be 2
+        $genuine = [math]::Max(0, 2 - $force)   # Phase-based SIGNED tally is 2 (ISC force-sign lie)
+        $rvc = Get-SPReviewerCompletion -Signed $genuine -Total 2
+        $rvc.CombinedLabel | Should -Be '0% (0/2)'
+        $rvc.SeverityClass | Should -Be 'red'
+    }
+
+    It "End-to-end via Get-SPCachedCampaignRoster: a SEALED roster file on disk + enrichment corrects the count" {
+        # Write a faithful sealed roster file (lacking signedBy) into an isolated cache dir.
+        $sealFile = Join-Path $TestDrive 'roster-camp-ch-forceclose-001.json'
+        ([pscustomobject]@{ CapturedWhileActive = $true; Entries = $SealedRoster6 } |
+            ConvertTo-Json -Depth 6) | Set-Content $sealFile -Encoding UTF8
+
+        $camp = $Fixtures6.campaigns | Where-Object { $_.id -eq 'camp-ch-forceclose-001' }
+        $res  = Get-SPCachedCampaignRoster -Campaign $camp -Certifications $LiveCerts6 -CachePath $TestDrive
+        $res.Success | Should -BeTrue
+        $res.Sealed  | Should -BeTrue -Because "the on-disk seal must be preferred over live certs"
+
+        # Sealed roster as-read is indeterminate -> the correction would be inert...
+        Get-SPForceSignedReviewerCount -Roster @($res.Data) | Should -Be 0
+        # ...until we stamp provenance from the live certs (exactly what V4/V4b now do).
+        $enriched = Resolve-SPRosterSignOffProvenance -Roster @($res.Data) -Certifications $LiveCerts6
+        Get-SPForceSignedReviewerCount -Roster $enriched | Should -Be 2
+    }
+
+    It "A genuine manual sign-off survives enrichment as NOT force-signed (signedBy.id == reviewer.id)" {
+        $genuineCert = [pscustomobject]@{
+            id       = 'cert-genuine-1'
+            reviewer = [pscustomobject]@{ id = 'id-rv-genuine'; name = 'Grace Genuine' }
+            signedBy = [pscustomobject]@{ id = 'id-rv-genuine'; name = 'Grace Genuine' }
+        }
+        $sealed = @([pscustomobject]@{ CertificationId = 'cert-genuine-1'; ReviewerId = 'id-rv-genuine'; ReviewerName = 'Grace Genuine'; SignedById = '' })
+        $enriched = Resolve-SPRosterSignOffProvenance -Roster $sealed -Certifications @($genuineCert)
+        $enriched[0].SignedById | Should -Be 'id-rv-genuine'
+        Get-SPForceSignedReviewerCount -Roster $enriched | Should -Be 0
+    }
+
+    It "Does NOT override provenance already present, and does not mutate the input roster" {
+        $live   = @([pscustomobject]@{ id = 'cert-x'; signedBy = [pscustomobject]@{ id = 'id-admin'; name = 'Admin' } })
+        $sealed = @([pscustomobject]@{ CertificationId = 'cert-x'; ReviewerId = 'id-rv-x'; ReviewerName = 'X'; SignedById = 'id-rv-x'; SignedByName = 'X' })
+        $enriched = Resolve-SPRosterSignOffProvenance -Roster $sealed -Certifications $live
+        $enriched[0].SignedById | Should -Be 'id-rv-x' -Because "existing provenance must be preserved, not overwritten"
+        $sealed[0].SignedById   | Should -Be 'id-rv-x' -Because "the input roster must not be mutated"
+    }
+
+    It "No live certs / no match => roster returned unchanged (still indeterminate, no false positive)" {
+        (Resolve-SPRosterSignOffProvenance -Roster $SealedRoster6 -Certifications @()).Count | Should -Be 2
+        Get-SPForceSignedReviewerCount -Roster (Resolve-SPRosterSignOffProvenance -Roster $SealedRoster6 -Certifications @()) | Should -Be 0
+        Resolve-SPRosterSignOffProvenance -Roster $null -Certifications $LiveCerts6 | Should -BeNullOrEmpty
+    }
+}
+
+#endregion

@@ -405,6 +405,111 @@ function Get-SPForceSignedReviewerCount {
     return [int]$seen.Count
 }
 
+function Resolve-SPRosterSignOffProvenance {
+    <#
+    .SYNOPSIS
+        Stamps sign-off provenance (signedBy) from the LIVE certs onto a cert roster whose
+        own provenance is indeterminate, so the genuine-sign-off correction is not inert for
+        a force-closed campaign that was SEALED while ACTIVE.
+    .DESCRIPTION
+        Honesty\consistency (sealed force-close gap). Get-SPForceSignedReviewerCount reads
+        SignedById off the cert roster. But Get-SPCachedCampaignRoster PREFERS the ACTIVE-state
+        SEALED roster, whose entries were captured BEFORE any cert was signed and therefore
+        carry SignedById='' (indeterminate). For a force-closed COMPLETED campaign that was
+        sealed while active -- the core cache-honesty path -- the force-sign count is then 0,
+        so the exec / KPI / Section A reviewer % is NOT corrected and stays at the inflated
+        Phase=='SIGNED' tally (ISC force-signs every cert at close). Meanwhile the live certs
+        (post-close) DO carry signedBy = the admin who force-closed.
+
+        This pure helper reconciles the two: it keeps the SEALED entry's ASSIGNED reviewer
+        (the honest ACTIVE-state attribution) and fills in the MISSING SignedById/SignedByName
+        from the matching live cert (by CertificationId). It enriches ONLY entries whose own
+        SignedById is empty/whitespace -- a roster that already carries provenance (live
+        fallback, or a genuine manual sign-off) is returned untouched, so this never
+        overrides nor invents provenance. Conservative + additive: with no live certs, or no
+        CertificationId match, the entry is returned exactly as-is (still indeterminate ->
+        still contributes ZERO to the force-sign count, never a false positive).
+
+        After enrichment a force-signed reviewer (admin signedBy.id != assigned reviewer.id)
+        is detectable by Get-SPForceSignedReviewerCount even on the sealed path, so the
+        canonical reviewer-completion figure and the "Reviewers who did not complete" section
+        can no longer disagree for a sealed-while-active force-close. Returns a NEW array of
+        roster entries (the originals are not mutated); same shape as the input entries.
+    .PARAMETER Roster
+        The sealed/live cert roster (array of ConvertTo-SPCertRosterEntry-shaped entries,
+        carrying CertificationId + ReviewerId + SignedById). $null/empty -> @().
+    .PARAMETER Certifications
+        The LIVE cert set for the same campaign (each carrying .id + .signedBy). Used only to
+        source MISSING sign-off provenance. $null/empty -> the roster is returned unchanged.
+    .OUTPUTS
+        [object[]] roster entries, with empty SignedById/SignedByName filled from live certs
+        where a CertificationId match exists.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [object[]]$Roster,
+        [object[]]$Certifications
+    )
+
+    if ($null -eq $Roster) { return @() }
+    if ($null -eq $Certifications -or @($Certifications).Count -eq 0) { return @($Roster) }
+
+    # Build certId -> @{ Id; Name } sign-off map from the live certs (null-safe, PS 5.1).
+    $signMap = @{}
+    foreach ($cert in $Certifications) {
+        if ($null -eq $cert) { continue }
+        $cid = ''
+        if ($null -ne $cert.PSObject.Properties['id']) { $cid = [string]$cert.id }
+        if ([string]::IsNullOrWhiteSpace($cid)) { continue }
+        $sbId = ''; $sbName = ''
+        if ($null -ne $cert.PSObject.Properties['signedBy'] -and $null -ne $cert.signedBy) {
+            $sb = $cert.signedBy
+            if ($null -ne $sb.PSObject.Properties['id'])   { $sbId   = [string]$sb.id }
+            if ($null -ne $sb.PSObject.Properties['name']) { $sbName = [string]$sb.name }
+        }
+        # Last writer wins on duplicate cert ids; only record when provenance is present.
+        if (-not [string]::IsNullOrWhiteSpace($sbId)) {
+            $signMap[$cid] = @{ Id = $sbId; Name = $sbName }
+        }
+    }
+
+    $out = New-Object System.Collections.ArrayList
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { [void]$out.Add($re); continue }
+
+        $existing = ''
+        if ($null -ne $re.PSObject.Properties['SignedById']) { $existing = [string]$re.SignedById }
+
+        # Already has provenance, or no CertificationId to match -> pass through untouched.
+        $cid = ''
+        if ($null -ne $re.PSObject.Properties['CertificationId']) { $cid = [string]$re.CertificationId }
+        if (-not [string]::IsNullOrWhiteSpace($existing) -or
+            [string]::IsNullOrWhiteSpace($cid) -or
+            -not $signMap.ContainsKey($cid)) {
+            [void]$out.Add($re); continue
+        }
+
+        # Clone the entry (do NOT mutate the input) and stamp the missing provenance.
+        $clone = $re.PSObject.Copy()
+        $prov  = $signMap[$cid]
+        if ($null -ne $clone.PSObject.Properties['SignedById']) {
+            $clone.SignedById = $prov.Id
+        }
+        else {
+            $clone | Add-Member -NotePropertyName 'SignedById' -NotePropertyValue $prov.Id -Force
+        }
+        if ($null -ne $clone.PSObject.Properties['SignedByName']) {
+            $clone.SignedByName = $prov.Name
+        }
+        else {
+            $clone | Add-Member -NotePropertyName 'SignedByName' -NotePropertyValue $prov.Name -Force
+        }
+        [void]$out.Add($clone)
+    }
+    return @($out.ToArray())
+}
+
 function Get-SPDecisionBucket {
     <#
     .SYNOPSIS
@@ -3321,6 +3426,7 @@ Export-ModuleMember -Function @(
     'Resolve-SPDecisionDateDisplay',
     'Get-SPReviewerCompletion',
     'Get-SPForceSignedReviewerCount',
+    'Resolve-SPRosterSignOffProvenance',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',

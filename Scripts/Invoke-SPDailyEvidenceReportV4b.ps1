@@ -571,6 +571,13 @@ try {
             # ASSIGNED reviewer (item.CertificationId -> roster), not item.reviewedBy.
             $rosterResult = Get-SPCachedCampaignRoster -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
             $certRoster = if ($rosterResult.Success) { @($rosterResult.Data) } else { @() }
+            # Sealed force-close gap: an ACTIVE-state seal captures certs BEFORE any sign-off,
+            # so its entries carry SignedById='' (indeterminate) and the genuine-sign-off
+            # correction (Get-SPForceSignedReviewerCount) would be inert for a force-closed
+            # COMPLETED campaign sealed while active. Stamp the missing sign-off provenance
+            # from the LIVE (post-close) certs so the correction is not defeated -- additive,
+            # keeps the sealed ASSIGNED reviewer, only fills MISSING provenance.
+            $certRoster = @(Resolve-SPRosterSignOffProvenance -Roster $certRoster -Certifications $certifications)
 
             $campaignAudit = @{
                 CampaignName    = $campName
