@@ -1691,8 +1691,12 @@ $certReviewerMap = @{}
 $allApprovedCount = 0
 $allRevoked = [System.Collections.Generic.List[object]]::new()
 $allPendingCount = 0
+$itemsFromCacheCount = 0
 foreach ($audit in $campaignAudits) {
     $d = $audit['Decisions']
+    if ($audit['ItemsFromCache'] -eq $true) {
+        $itemsFromCacheCount += @($d['Approved']).Count + @($d['Revoked']).Count + @($d['Pending']).Count
+    }
     foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
         foreach ($it in @($d[$grp])) {
             if ($null -eq $it) { continue }
@@ -1775,7 +1779,7 @@ summary{cursor:pointer}
 [void]$sb.AppendLine('<h1>Daily Evidence Report</h1>')
 [void]$sb.AppendLine('<div class="meta">SailPoint ISC Governance Toolkit | Report generated: ' + (ConvertTo-SafeHtml $genStr) + ' | Period: Last ' + $effectiveDaysBack + ' day(s)' + $envName2 + '</div>')
 $cachedCampaigns = @($campaignAudits | Where-Object { $_['ItemsFromCache'] -eq $true })
-$cacheNote = if ($NoCache) { ' | Items: fresh (no-cache mode)' } elseif ($cachedCampaigns.Count -gt 0) { " | Items: $($cachedCampaigns.Count) of $($campaignAudits.Count) from cache" } else { ' | Items: all fresh' }
+$cacheNote = if ($NoCache) { ' | Items: fresh (no-cache mode)' } elseif ($cachedCampaigns.Count -gt 0) { " | Items: $itemsFromCacheCount of $aggTotal from cache ($($cachedCampaigns.Count) of $($campaignAudits.Count) campaign(s))" } else { ' | Items: all fresh' }
 [void]$sb.AppendLine('<div class="status-line">' + ('{0:N0}' -f $aggDecided) + ' / ' + ('{0:N0}' -f $aggTotal) + ' decisions made (' + $aggPct + '%) &middot; ' + $activeCount + ' active campaign(s)' + (ConvertTo-SafeHtml $cacheNote) + '</div>')
 [void]$sb.AppendLine('</div>')
 
