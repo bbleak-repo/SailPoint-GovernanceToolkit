@@ -376,9 +376,17 @@ function Get-SPIdentityDetail {
         $result = Invoke-SPApiRequest -Method GET -Endpoint "/search/identities/$IdentityId" `
             -CorrelationID $CorrelationID
 
-        if (-not $result.Success -or $null -eq $result.Data) {
-            # Transient miss -- cache in memory only, do not persist to disk
-            Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
+        if (-not $result.Success) {
+            # TRANSIENT failure (API error / network) -- do NOT cache. The SPIdentity store has
+            # no TTL, so caching a negative here would un-resolve this identity for the whole
+            # session after a single blip; returning uncached lets the next call retry.
+            return $emptyResult
+        }
+        if ($null -eq $result.Data) {
+            # Genuine not-found (search succeeded, returned nothing). Cache in memory with a
+            # SHORT TTL so it isn't re-queried every call but still recovers if the identity
+            # later appears (vs. the old no-expiry negative that stuck for the session).
+            Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -TtlMinutes 10 -NoPersist
             return $emptyResult
         }
 
@@ -477,8 +485,8 @@ function Get-SPIdentityDetail {
             -Message "Get-SPIdentityDetail failed for '$IdentityId': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Get-SPIdentityDetail' `
             -CorrelationID $CorrelationID
-        # Transient miss -- cache in memory only, do not persist to disk
-        Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
+        # TRANSIENT failure (exception) -- do NOT cache, so the next call retries instead of
+        # being stuck with a sticky session-long negative.
         return $emptyResult
     }
 }
@@ -526,7 +534,7 @@ function Search-SPIdentityByEmail {
     _EnsureSPIdentityStore
 
     # Check SPEmailLookup cache store first
-    $cacheKey = "${AttributeField}:$($AttributeValue.ToLower())"
+    $cacheKey = "${AttributeField}:$($AttributeValue.ToLowerInvariant())"
     $cached = Get-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey
     if ($null -ne $cached) {
         return $cached
@@ -549,15 +557,21 @@ function Search-SPIdentityByEmail {
         $result = Invoke-SPApiRequest -Method POST -Endpoint '/search' `
             -Body $searchBody -CorrelationID $CorrelationID
 
-        if (-not $result.Success -or $null -eq $result.Data) {
-            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+        if (-not $result.Success) {
+            # TRANSIENT failure -- do NOT cache (the no-TTL store would stick for the session).
+            return $emptyResult
+        }
+        if ($null -eq $result.Data) {
+            # Genuine empty response -- short-TTL negative so it recovers later.
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult -TtlMinutes 10
             return $emptyResult
         }
 
         # POST /v3/search returns an array
         $hits = @($result.Data)
         if ($hits.Count -eq 0) {
-            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+            # Genuine not-found -- cache with a short TTL (negative results should expire).
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult -TtlMinutes 10
             return $emptyResult
         }
 
@@ -571,7 +585,8 @@ function Search-SPIdentityByEmail {
         }
 
         if ([string]::IsNullOrWhiteSpace($identityId)) {
-            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+            # Hit had no usable id -- treat as not-found, short-TTL negative.
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult -TtlMinutes 10
             return $emptyResult
         }
 
@@ -598,7 +613,7 @@ function Search-SPIdentityByEmail {
         Write-SPLog -Message "Search-SPIdentityByEmail failed for '$AttributeValue': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Search-SPIdentityByEmail' `
             -CorrelationID $CorrelationID
-        Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+        # TRANSIENT failure (exception) -- do NOT cache, so the next call retries.
         return $emptyResult
     }
 }

@@ -2307,7 +2307,13 @@ function Get-SPGovernanceMetricsTrend {
                 $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
                 $weekNum = $cal.GetWeekOfYear($Dt, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek,
                     [System.DayOfWeek]::Monday)
-                return "$($Dt.ToString('yyyy'))-W$($weekNum.ToString('D2'))"
+                # ISO week-numbering YEAR (see SP.GovernanceTrendQuery._TQ_GetPeriodKey): pairing the
+                # week number with $Dt.Year collides across the year boundary. Apply the standard
+                # Dec/Jan correction (PS 5.1 has no [ISOWeek]).
+                $weekYear = $Dt.Year
+                if ($weekNum -ge 52 -and $Dt.Month -eq 1)     { $weekYear = $Dt.Year - 1 }
+                elseif ($weekNum -eq 1 -and $Dt.Month -eq 12)  { $weekYear = $Dt.Year + 1 }
+                return "$($weekYear.ToString('D4'))-W$($weekNum.ToString('D2'))"
             }
             'Monthly' { return $Dt.ToString('yyyy-MM') }
         }

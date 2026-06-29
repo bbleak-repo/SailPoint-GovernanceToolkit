@@ -428,9 +428,11 @@ function Export-SPCacheStore {
             TtlMinutes = $ttlVal
         }
 
-        $jsonArgs = @{ InputObject = $rec; Depth = 6 }
-        if ($Compress) { $jsonArgs['Compress'] = $true }
-        [void]$sb.AppendLine((ConvertTo-Json @jsonArgs))
+        # JSONL requires exactly ONE record per physical line. ConvertTo-Json WITHOUT -Compress
+        # emits multi-line (pretty) JSON, which Import-SPCacheStore (reads line-by-line) silently
+        # fails to parse -> every record is lost. So each record is ALWAYS written single-line,
+        # regardless of the -Compress switch (kept only for call-signature back-compat).
+        [void]$sb.AppendLine((ConvertTo-Json -InputObject $rec -Depth 6 -Compress))
     }
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

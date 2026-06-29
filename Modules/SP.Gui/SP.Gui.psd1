@@ -91,7 +91,16 @@
         'Invoke-SPGuiGovernanceDashboard',
         'Invoke-SPGuiStalledReviewers',
         'Get-SPGuiCacheHealth',
-        'Complete-SPGuiCampaigns'
+        'Complete-SPGuiCampaigns',
+        # Governance-tab button bridges -- wired in MainWindow but were missing from the
+        # manifest export, so every new button failed at runtime ("term not recognized")
+        # in the fresh import runspace. (MacBook-validation fix.)
+        'Invoke-SPGuiCampaignDiff',
+        'Invoke-SPGuiCertTracker',
+        'Invoke-SPGuiDailyEvidence',
+        'Invoke-SPGuiEntitlementHistory',
+        'Invoke-SPGuiCacheValidate',
+        'Invoke-SPGuiIscReconciliation'
     )
 
     # Cmdlets to export from this module

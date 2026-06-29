@@ -549,6 +549,11 @@ function Get-SPAuthToken {
         #    this guard covers the same-process corner case.
         if (-not $Force) {
             try {
+                # Load config HERE so the tenant guard actually has the configured tenant URL.
+                # (Previously $config was first assigned below this block, so $configTenantUrl
+                # was always '' and the cross-tenant mismatch eviction never fired -- a cached
+                # tenant-A token could be served to a tenant-B-configured instance.)
+                if ($null -eq $config) { $config = Get-SPConfig }
                 # Determine the configured tenant URL for this toolkit instance
                 $configTenantUrl = ''
                 if ($null -ne $config -and
@@ -606,7 +611,7 @@ function Get-SPAuthToken {
         Write-SPLog -Message 'Acquiring new OAuth 2.0 token' -Severity 'INFO' `
             -Component 'SP.Auth' -Action 'GetAuthToken' -CorrelationID $CorrelationID
 
-        $config = Get-SPConfig
+        if ($null -eq $config) { $config = Get-SPConfig }
         $mode   = $config.Authentication.Mode
 
         # Resolve credentials based on mode
