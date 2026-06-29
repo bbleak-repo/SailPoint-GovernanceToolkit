@@ -405,6 +405,83 @@ function Get-SPForceSignedReviewerCount {
     return [int]$seen.Count
 }
 
+function Get-SPDistinctReviewerSignOff {
+    <#
+    .SYNOPSIS
+        Collapses a ReviewerActions Primary+Reassigned list to DISTINCT-by-reviewer
+        Signed and Total counts, so the Phase-based sign-off tally is on the SAME
+        distinct-by-reviewer basis as Get-SPForceSignedReviewerCount and the
+        "Reviewers who did not complete" section.
+    .DESCRIPTION
+        Honesty/consistency (multi-cert reassigned over-statement). Group-SPReviewerActions
+        aggregates PRIMARY reviewers by name (ONE entry per reviewer) but emits ONE
+        REASSIGNED entry PER CERT. The daily-evidence render counted Phase=='SIGNED'
+        entries directly --
+            $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+        -- so a delegate holding N force-signed reassigned certs was tallied N times. The
+        genuine-sign-off correction (Get-SPForceSignedReviewerCount) is DISTINCT-by-
+        ReviewerId, counting that delegate ONCE, so signed=N minus forceSigned=1 left a
+        spurious N-1 "signed" reviewers. For a delegate with 2 force-signed reassigned
+        certs that gave signed=2, forceSigned=1, corrected=max(0,2-1)=1 over total=2 =>
+        50%, when the honest genuine sign-off is 0% -- re-introducing exactly the
+        over-statement this feature targets (the distinct-keyed accountability section
+        would list that delegate while exec/KPI/Section A showed 50%). An admin force-close
+        is not a reviewer sign-off (honest-numbers doctrine), and per-cert duplication must
+        not re-introduce that inconsistency.
+
+        This pure helper keys each reviewer-action entry by a stable identity (ReviewerId
+        when present, else display Name, else Email, else a positional fallback so a
+        genuinely identity-less entry is still counted as its own distinct reviewer) and
+        returns:
+            Total  = distinct reviewers across all entries
+            Signed = distinct reviewers with >= 1 Phase=='SIGNED' entry
+        so the caller's `$signed - forceSigned` subtraction AND `$signed / $total`
+        percentage are both distinct-by-reviewer, matching the correction and the
+        accountability section. For PRIMARY-only / single-cert rosters (already name-
+        aggregated, the camp-ch-forceclose-001 shape) the counts are byte-for-byte
+        identical to the old per-entry tally -- additive. Returns a plain [pscustomobject]
+        (NOT the @{Success;Data;Error} envelope), like its sibling pure helpers.
+    .PARAMETER Reviewers
+        The combined ReviewerActions list (Group-SPReviewerActions Primary + Reassigned
+        entries). Each entry carries at least .Phase and .Name; .ReviewerId / .Email are
+        used for the identity key when present. $null/empty -> Signed 0 / Total 0.
+    .OUTPUTS
+        [pscustomobject] with Signed [int] and Total [int].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [object[]]$Reviewers
+    )
+
+    $totalSeen  = @{}
+    $signedSeen = @{}
+    if ($null -ne $Reviewers) {
+        $idx = 0
+        foreach ($rv in $Reviewers) {
+            if ($null -eq $rv) { continue }
+            $idx++
+            $rId = ''; $rName = ''; $rEmail = ''; $phase = ''
+            if ($null -ne $rv.PSObject.Properties['ReviewerId']) { $rId    = [string]$rv.ReviewerId }
+            if ($null -ne $rv.PSObject.Properties['Name'])       { $rName  = [string]$rv.Name }
+            if ($null -ne $rv.PSObject.Properties['Email'])      { $rEmail = [string]$rv.Email }
+            if ($null -ne $rv.PSObject.Properties['Phase'])      { $phase  = [string]$rv.Phase }
+            $key =
+                if (-not [string]::IsNullOrWhiteSpace($rId))    { 'id:' + $rId }
+                elseif (-not [string]::IsNullOrWhiteSpace($rName))  { 'nm:' + $rName }
+                elseif (-not [string]::IsNullOrWhiteSpace($rEmail)) { 'em:' + $rEmail }
+                else { 'ix:' + $idx }
+            if (-not $totalSeen.ContainsKey($key)) { $totalSeen[$key] = $true }
+            if ($phase -eq 'SIGNED' -and -not $signedSeen.ContainsKey($key)) { $signedSeen[$key] = $true }
+        }
+    }
+
+    return [pscustomobject]@{
+        Signed = [int]$signedSeen.Count
+        Total  = [int]$totalSeen.Count
+    }
+}
+
 function Resolve-SPRosterSignOffProvenance {
     <#
     .SYNOPSIS
@@ -3426,6 +3503,7 @@ Export-ModuleMember -Function @(
     'Resolve-SPDecisionDateDisplay',
     'Get-SPReviewerCompletion',
     'Get-SPForceSignedReviewerCount',
+    'Get-SPDistinctReviewerSignOff',
     'Resolve-SPRosterSignOffProvenance',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',

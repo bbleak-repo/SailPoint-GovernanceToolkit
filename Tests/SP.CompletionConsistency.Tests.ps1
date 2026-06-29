@@ -459,3 +459,108 @@ Describe "CC-006: Resolve-SPRosterSignOffProvenance (sealed force-close gap)" {
 }
 
 #endregion
+
+#region CC-007: Get-SPDistinctReviewerSignOff -- multi-cert reassigned reviewer over-statement
+# ---------------------------------------------------------------------------
+
+Describe "CC-007: Get-SPDistinctReviewerSignOff (per-cert reassigned over-statement)" {
+
+    It "Counts a delegate holding 2 force-signed REASSIGNED certs ONCE (distinct), not per-cert" {
+        # Group-SPReviewerActions emits ONE Reassigned entry PER CERT, so the same delegate
+        # appears twice (both Phase=SIGNED at a force-close).
+        $allRevw = @(
+            [pscustomobject]@{ Name = 'Dana Delegate'; Email = 'dana@x'; Phase = 'SIGNED' }
+            [pscustomobject]@{ Name = 'Dana Delegate'; Email = 'dana@x'; Phase = 'SIGNED' }
+        )
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $so.Total  | Should -Be 1
+        $so.Signed | Should -Be 1
+    }
+
+    It "End-to-end honesty: 2 force-signed reassigned certs => genuine 0/1 (0%), NOT the old 50%" {
+        # The render: Phase-based distinct signed = 1, force-signed (distinct by ReviewerId) = 1.
+        $allRevw = @(
+            [pscustomobject]@{ Name = 'Dana Delegate'; Email = 'dana@x'; Phase = 'SIGNED' }
+            [pscustomobject]@{ Name = 'Dana Delegate'; Email = 'dana@x'; Phase = 'SIGNED' }
+        )
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-dana'; ReviewerName = 'Dana Delegate'; SignedById = 'id-admin'; CertificationId = 'cert-a' }
+            [pscustomobject]@{ ReviewerId = 'id-dana'; ReviewerName = 'Dana Delegate'; SignedById = 'id-admin'; CertificationId = 'cert-b' }
+        )
+        $so    = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $force = Get-SPForceSignedReviewerCount -Roster $roster
+        $force | Should -Be 1
+        $genuine = [math]::Max(0, $so.Signed - $force)
+        $rvc = Get-SPReviewerCompletion -Signed $genuine -Total $so.Total
+        $rvc.CombinedLabel | Should -Be '0% (0/1)'
+        $rvc.PercentLabel  | Should -Be '0%'
+        $rvc.SeverityClass | Should -Be 'red'
+    }
+
+    It "Regression guard: the OLD per-cert tally would have over-stated this to 50%" {
+        # Documents the defect this fix closes: raw per-cert signed = 2, force-signed distinct = 1,
+        # corrected = 1 over per-cert total = 2 => 50%, while the distinct path honestly reads 0%.
+        $allRevw = @(
+            [pscustomobject]@{ Name = 'Dana Delegate'; Phase = 'SIGNED' }
+            [pscustomobject]@{ Name = 'Dana Delegate'; Phase = 'SIGNED' }
+        )
+        $perCertSigned = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+        $perCertTotal  = @($allRevw).Count
+        $force = 1
+        $oldPct = [math]::Round([math]::Max(0, $perCertSigned - $force) / $perCertTotal * 100, 0)
+        $oldPct | Should -Be 50 -Because "this is the over-statement being eliminated"
+
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $newPct = (Get-SPReviewerCompletion -Signed ([math]::Max(0, $so.Signed - $force)) -Total $so.Total).Pct
+        $newPct | Should -Be 0 -Because "the distinct-by-reviewer basis is honest"
+    }
+
+    It "A genuinely-signed primary reviewer is preserved (distinct signed 1 / total 1)" {
+        $allRevw = @( [pscustomobject]@{ Name = 'Pat Primary'; Phase = 'SIGNED' } )
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $so.Signed | Should -Be 1
+        $so.Total  | Should -Be 1
+    }
+
+    It "Two DISTINCT reviewers are not merged; only the SIGNED one counts as signed" {
+        $allRevw = @(
+            [pscustomobject]@{ Name = 'Alice'; Phase = 'SIGNED' }
+            [pscustomobject]@{ Name = 'Bob';   Phase = 'REVIEW' }
+        )
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $so.Total  | Should -Be 2
+        $so.Signed | Should -Be 1
+    }
+
+    It "camp-ch-forceclose-001 shape (two Primary, single cert each) is byte-for-byte unchanged" {
+        # Primary reviewers are already name-aggregated (one entry each) => distinct == per-cert.
+        $allRevw = @(
+            [pscustomobject]@{ Name = 'Quinn ForceSigned'; Phase = 'SIGNED' }
+            [pscustomobject]@{ Name = 'Rita Undecided';    Phase = 'SIGNED' }
+        )
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $so.Signed | Should -Be (@($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count)
+        $so.Total  | Should -Be (@($allRevw).Count)
+    }
+
+    It "ReviewerId (when present) trumps a shared display Name -- two same-named people stay distinct" {
+        $allRevw = @(
+            [pscustomobject]@{ ReviewerId = 'id-1'; Name = 'Sam Smith'; Phase = 'SIGNED' }
+            [pscustomobject]@{ ReviewerId = 'id-2'; Name = 'Sam Smith'; Phase = 'REVIEW' }
+        )
+        $so = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+        $so.Total  | Should -Be 2
+        $so.Signed | Should -Be 1
+    }
+
+    It "Null / empty list => Signed 0 / Total 0 (no throw)" {
+        $a = Get-SPDistinctReviewerSignOff -Reviewers $null
+        $a.Signed | Should -Be 0
+        $a.Total  | Should -Be 0
+        $b = Get-SPDistinctReviewerSignOff -Reviewers @()
+        $b.Signed | Should -Be 0
+        $b.Total  | Should -Be 0
+    }
+}
+
+#endregion
