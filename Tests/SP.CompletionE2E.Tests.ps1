@@ -141,7 +141,8 @@ BeforeAll {
             foreach ($rr in $pendingR) {
                 $pCnt = $rr.PendingCount; $tCnt = $rr.TotalCount
                 # COMP-REVIEWER-COMPLETENESS: CompletionReason-driven note (mirrors V4/V4b render).
-                if ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+                if ($pCnt -eq 0 -and $tCnt -gt 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+                elseif ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'force-closed by admin - reviewer never signed off' }
                 elseif ($pCnt -eq $tCnt) { $phCls = 's-red'; $note = 'No decisions made' }
                 else { $phCls = 's-amber'; $note = "$($tCnt - $pCnt) of $tCnt decided" }
                 [void]$sb.AppendLine("<tr><td style='font-weight:600'>" + (Get-E2ESafeHtml $rr.Name) + "</td><td>" + (Get-E2ESafeHtml $rr.Email) + "</td><td style='text-align:right;font-weight:600' class='$phCls'>$pCnt</td><td style='text-align:right'>$tCnt</td><td>$note</td></tr>")

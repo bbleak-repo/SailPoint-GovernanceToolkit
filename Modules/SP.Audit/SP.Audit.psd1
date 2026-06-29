@@ -65,6 +65,7 @@
         'Get-SPClosedIncompleteQualifier'
         'Resolve-SPDecisionDateDisplay'
         'Get-SPReviewerCompletion'
+        'Get-SPForceSignedReviewerCount'
         'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'
         'Get-SPRevocationDisposition'

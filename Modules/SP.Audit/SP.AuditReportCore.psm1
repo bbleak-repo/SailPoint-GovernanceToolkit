@@ -347,6 +347,64 @@ function Get-SPReviewerCompletion {
     }
 }
 
+function Get-SPForceSignedReviewerCount {
+    <#
+    .SYNOPSIS
+        Counts the DISTINCT cert-assigned reviewers whose certs were ADMIN force-signed
+        (signedBy.id != reviewer.id) so the canonical sign-off figure can exclude them.
+    .DESCRIPTION
+        Honesty/consistency (genuine sign-off): the daily-evidence canonical reviewer-
+        completion figure took its Signed count from cert Phase=='SIGNED' alone. ISC force-
+        signs EVERY cert at a force-close, so a campaign closed by an admin reads phase
+        SIGNED for reviewers who never signed -- inflating the exec "Reviewers Signed Off",
+        the KPI "Reviewer Completion", and Section A "Reviewer %" to 100% green, while the
+        SAME report's "Reviewers who did not complete" section lists those very reviewers.
+        An admin force-close is NOT a reviewer sign-off (honest-numbers doctrine).
+
+        This pure helper walks the sealed/live cert roster (ConvertTo-SPCertRosterEntry
+        entries, which carry ReviewerId + SignedById) and counts each DISTINCT reviewer for
+        whom there is POSITIVE force-close evidence: SignedById is non-empty AND != ReviewerId.
+        Distinct-by ReviewerId (falling back to ReviewerName) so a reviewer with several
+        force-signed certs is counted once, matching the by-name aggregation of the Phase-
+        based Signed tally it is subtracted from. Mirrors EXACTLY the $forceSigned predicate
+        Group-SPCompletedPendingByReviewer uses to surface finished-but-unsigned reviewers,
+        so the count and that section can never disagree.
+
+        Conservative by construction: an empty SignedById (sealed/ACTIVE roster lacking
+        signedBy) is INDETERMINATE -- never treated as force-close evidence -- so a genuine
+        manual sign-off (SignedById == ReviewerId) and a roster without provenance both add
+        ZERO, leaving the Phase-based figure unchanged. Returns a plain [int] (NOT the
+        @{Success;Data;Error} envelope), matching the sibling pure functions.
+    .PARAMETER Roster
+        The sealed/live cert roster (array of ConvertTo-SPCertRosterEntry objects). $null or
+        empty -> 0.
+    .OUTPUTS
+        [int] count of distinct force-signed reviewers.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [object[]]$Roster
+    )
+
+    if ($null -eq $Roster) { return 0 }
+
+    $seen = @{}
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { continue }
+        $rId = ''; $signedById = ''; $rName = ''
+        if ($null -ne $re.PSObject.Properties['ReviewerId'])   { $rId        = [string]$re.ReviewerId }
+        if ($null -ne $re.PSObject.Properties['SignedById'])   { $signedById = [string]$re.SignedById }
+        if ($null -ne $re.PSObject.Properties['ReviewerName']) { $rName      = [string]$re.ReviewerName }
+        # Positive force-close evidence ONLY: signedBy present AND not the assigned reviewer.
+        $forceSigned = (-not [string]::IsNullOrWhiteSpace($signedById)) -and ($signedById -ne $rId)
+        if (-not $forceSigned) { continue }
+        $key = if (-not [string]::IsNullOrWhiteSpace($rId)) { 'id:' + $rId } else { 'nm:' + $rName }
+        if (-not $seen.ContainsKey($key)) { $seen[$key] = $true }
+    }
+    return [int]$seen.Count
+}
+
 function Get-SPDecisionBucket {
     <#
     .SYNOPSIS
@@ -3262,6 +3320,7 @@ Export-ModuleMember -Function @(
     'Get-SPClosedIncompleteQualifier',
     'Resolve-SPDecisionDateDisplay',
     'Get-SPReviewerCompletion',
+    'Get-SPForceSignedReviewerCount',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',

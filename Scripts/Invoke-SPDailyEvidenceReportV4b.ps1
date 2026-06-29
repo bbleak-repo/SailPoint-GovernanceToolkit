@@ -1824,6 +1824,14 @@ foreach ($audit in $campaignAudits) {
     $allRevw = @($primary) + @($reassigned)
     $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
     $totRev = @($allRevw).Count
+    # Honest sign-off (genuine vs force-close): ISC force-signs every cert at a force-close,
+    # so cert Phase=='SIGNED' alone over-states real reviewer sign-off. Subtract reviewers whose
+    # certs were ADMIN force-signed (signedBy.id != reviewer.id, POSITIVE evidence only) from the
+    # Phase-based count so an admin force-close never reads as a reviewer sign-off and the exec
+    # box agrees with the "Reviewers who did not complete" section. Additive -- $totRev unchanged.
+    $certRosterExec = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+    $forceSignedExec = Get-SPForceSignedReviewerCount -Roster $certRosterExec
+    $signed = [math]::Max(0, $signed - $forceSignedExec)
     # Canonical reviewer-completion figure/format (one helper feeds exec, KPI, and Section A).
     $rvc = Get-SPReviewerCompletion -Signed $signed -Total $totRev
     $revCompPct = $rvc.Pct
@@ -1954,6 +1962,12 @@ foreach ($audit in $campaignAudits) {
     $allRevwA    = @($primaryA) + @($reassignedA)
     $signedA     = @($allRevwA | Where-Object { $_.Phase -eq 'SIGNED' }).Count
     $totRevA     = @($allRevwA).Count
+    # Honest sign-off (genuine vs force-close): exclude admin force-signed certs (signedBy.id !=
+    # reviewer.id) from the Phase-based count so Section A's "Reviewer %" matches the exec box and
+    # cannot assert sign-off for a force-closed reviewer the same report lists as not-completed.
+    $certRosterA      = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+    $forceSignedA     = Get-SPForceSignedReviewerCount -Roster $certRosterA
+    $signedA          = [math]::Max(0, $signedA - $forceSignedA)
     $rvcA        = Get-SPReviewerCompletion -Signed $signedA -Total $totRevA
     $rvLabel     = $rvcA.CombinedLabel
     $rvCls       = switch ($rvcA.SeverityClass) { 'green' { 's-green' } 'amber' { 's-amber' } 'red' { 's-red' } default { 's-amber' } }
@@ -2043,7 +2057,8 @@ foreach ($audit in $campaignAudits) {
             # reviewer who decided everything (PendingCount==0) reads as "all decided - not signed off"
             # rather than an empty/0 cell. Force-close finished-but-unsigned = amber (non-completion,
             # but work was done); no decisions = red; partial = amber.
-            if ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+            if ($pCnt -eq 0 -and $tCnt -gt 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+            elseif ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'force-closed by admin - reviewer never signed off' }
             elseif ($pCnt -eq $tCnt) { $phCls = 's-red'; $note = 'No decisions made' }
             else { $phCls = 's-amber'; $note = "$($tCnt - $pCnt) of $tCnt decided" }
             $rowBg = if ($rr.Name -eq '(Unassigned)') { " style='background:#fdecec'" } else { '' }

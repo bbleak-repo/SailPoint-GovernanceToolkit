@@ -296,3 +296,63 @@ Describe "CC-004: Get-SPReviewerCompletion canonical reviewer-completion figure/
 }
 
 #endregion
+
+#region CC-005: Get-SPForceSignedReviewerCount excludes admin force-close from genuine sign-off
+# ---------------------------------------------------------------------------
+
+Describe "CC-005: Get-SPForceSignedReviewerCount (genuine sign-off vs admin force-close)" {
+
+    It "Counts a force-signed reviewer (signedBy.id != reviewer.id) as NOT a genuine sign-off" {
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-ch-rv-011'; ReviewerName = 'Quinn ForceSigned'; SignedById = 'id-ch-admin-001' }
+            [pscustomobject]@{ ReviewerId = 'id-ch-rv-012'; ReviewerName = 'Rita Undecided';    SignedById = 'id-ch-admin-001' }
+        )
+        Get-SPForceSignedReviewerCount -Roster $roster | Should -Be 2
+    }
+
+    It "The faithful force-close render: Phase-based signed (2) minus force-signed (2) => genuine 0/2 (0%)" {
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-ch-rv-011'; ReviewerName = 'Quinn ForceSigned'; SignedById = 'id-ch-admin-001' }
+            [pscustomobject]@{ ReviewerId = 'id-ch-rv-012'; ReviewerName = 'Rita Undecided';    SignedById = 'id-ch-admin-001' }
+        )
+        $signedPhase = 2   # both certs read Phase=SIGNED (the ISC force-sign lie)
+        $force = Get-SPForceSignedReviewerCount -Roster $roster
+        $genuine = [math]::Max(0, $signedPhase - $force)
+        $rvc = Get-SPReviewerCompletion -Signed $genuine -Total 2
+        $rvc.FractionLabel | Should -Be '0 / 2'
+        $rvc.PercentLabel  | Should -Be '0%'
+        $rvc.CombinedLabel | Should -Be '0% (0/2)'
+        $rvc.SeverityClass | Should -Be 'red'
+    }
+
+    It "A genuine manual sign-off (signedBy.id == reviewer.id) is NOT counted as force-signed" {
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-rv-1'; ReviewerName = 'Alice'; SignedById = 'id-rv-1' }
+            [pscustomobject]@{ ReviewerId = 'id-rv-2'; ReviewerName = 'Bob';   SignedById = 'id-rv-2' }
+        )
+        Get-SPForceSignedReviewerCount -Roster $roster | Should -Be 0
+    }
+
+    It "An indeterminate roster (empty SignedById) is NOT positive force-close evidence => 0" {
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-rv-1'; ReviewerName = 'Alice'; SignedById = '' }
+            [pscustomobject]@{ ReviewerId = 'id-rv-2'; ReviewerName = 'Bob' }
+        )
+        Get-SPForceSignedReviewerCount -Roster $roster | Should -Be 0
+    }
+
+    It "A reviewer with several force-signed certs is counted ONCE (distinct by ReviewerId)" {
+        $roster = @(
+            [pscustomobject]@{ ReviewerId = 'id-rv-1'; ReviewerName = 'Alice'; SignedById = 'id-admin' }
+            [pscustomobject]@{ ReviewerId = 'id-rv-1'; ReviewerName = 'Alice'; SignedById = 'id-admin' }
+        )
+        Get-SPForceSignedReviewerCount -Roster $roster | Should -Be 1
+    }
+
+    It "Null / empty roster => 0 (no throw)" {
+        Get-SPForceSignedReviewerCount -Roster $null | Should -Be 0
+        Get-SPForceSignedReviewerCount -Roster @()   | Should -Be 0
+    }
+}
+
+#endregion
