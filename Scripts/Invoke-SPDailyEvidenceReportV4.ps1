@@ -1802,7 +1802,9 @@ foreach ($audit in $campaignAudits) {
     $allRevw = @($primary) + @($reassigned)
     $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
     $totRev = @($allRevw).Count
-    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
+    # Canonical reviewer-completion figure/format (one helper feeds exec, KPI, and Section A).
+    $rvc = Get-SPReviewerCompletion -Signed $signed -Total $totRev
+    $revCompPct = $rvc.Pct
     $reassignCnt = @($reassigned).Count
     $revItems = @($d['Revoked'])
     $totRevoked = $revItems.Count
@@ -1850,7 +1852,7 @@ foreach ($audit in $campaignAudits) {
 <tr><td colspan="2" style="padding:12px 16px;background:$stColor;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$cStatusUp</span></td></tr>
 $qualSubRow
 <tr>
-<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$signed / $totRev</span><br>Reviewers Signed Off</td>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$($rvc.FractionLabel)</span><br>Reviewers Signed Off</td>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$('{0:N0}' -f $decided) / $('{0:N0}' -f $tot)</span><br>Items Decided ($pct%)</td>
 </tr>
 </table>
@@ -1880,7 +1882,7 @@ $remBlock
 <td style="width:33%;vertical-align:top;padding-left:12px">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Key Indicators</p>
 <table style="width:100%;border-collapse:collapse;font-size:12px">
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$revCompPct%</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$($rvc.PercentLabel)</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$pendColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Pending Items</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$pendColor">$('{0:N0}' -f $pend)</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Deprovisioned (AD)</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
 <tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Reassignments</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$reassignCnt</td></tr>
@@ -1916,12 +1918,25 @@ foreach ($audit in $campaignAudits) {
         $rvLabel = "$rvPct% ($rvCompletedCount2/$rvTotalCount2)"
     }
     $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
+    # Canonical reviewer-completion: recompute from the SAME source the exec/KPI surfaces use
+    # (sealed roster ReviewerActions Primary+Reassigned, sign-off = Phase 'SIGNED') so Section A
+    # cannot disagree with the exec box / Key Indicators. Replaces the "-" default with the
+    # canonical "0% (0/2)" combined label. Additive -- the ReviewerRecords block above is retained.
+    $ra2A = $audit['ReviewerActions']
+    $primaryA    = if ($null -ne $ra2A -and $null -ne $ra2A['Primary'])    { @($ra2A['Primary']) }    else { @() }
+    $reassignedA = if ($null -ne $ra2A -and $null -ne $ra2A['Reassigned']) { @($ra2A['Reassigned']) } else { @() }
+    $allRevwA    = @($primaryA) + @($reassignedA)
+    $signedA     = @($allRevwA | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+    $totRevA     = @($allRevwA).Count
+    $rvcA        = Get-SPReviewerCompletion -Signed $signedA -Total $totRevA
+    $rvLabel     = $rvcA.CombinedLabel
+    $rvCls       = switch ($rvcA.SeverityClass) { 'green' { 's-green' } 'amber' { 's-amber' } 'red' { 's-red' } default { 's-amber' } }
     $cr = & $fmtDt ([string]$audit['Created'])
     $cmp = & $fmtDt ([string]$audit['Completed'])
     # Closed-incomplete honest qualifier (Section A): sub-line inside the Status cell so the
-    # 10-column row shape is unchanged. Uses reviewer-completion ($rvCompletedCount2/$rvTotalCount2)
-    # and honest undecided ($p). Additive -- the ISC status text ($cs) is retained.
-    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $rvCompletedCount2 -ReviewersTotal $rvTotalCount2 -UndecidedCount $p
+    # 10-column row shape is unchanged. Uses the canonical reviewer figure ($signedA/$totRevA,
+    # matching the exec caption) and honest undecided ($p). Additive -- the ISC status text ($cs) is retained.
+    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $signedA -ReviewersTotal $totRevA -UndecidedCount $p
     if ($qA.IsClosedIncomplete) {
         $cs = $cs + "<br><span class='s-amber' style='font-size:10px'>" + (ConvertTo-SafeHtml $qA.Caption) + "</span>"
     }

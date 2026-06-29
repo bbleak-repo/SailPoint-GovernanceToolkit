@@ -248,3 +248,51 @@ Describe "CC-003: Get-SPClosedIncompleteQualifier (closed-incomplete signal)" {
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region CC-004: Get-SPReviewerCompletion canonical reviewer-completion figure/format
+# ---------------------------------------------------------------------------
+
+Describe "CC-004: Get-SPReviewerCompletion canonical reviewer-completion figure/format" {
+
+    It "Signed 0 / Total 2 => Pct 0 and the three surface labels are consistent (no '-')" {
+        $r = Get-SPReviewerCompletion -Signed 0 -Total 2
+        $r.Pct           | Should -Be 0
+        $r.HasReviewers  | Should -Be $true
+        $r.PercentLabel  | Should -Be '0%'
+        $r.FractionLabel | Should -Be '0 / 2'
+        $r.CombinedLabel | Should -Be '0% (0/2)'
+        $r.CombinedLabel | Should -Not -Be '-'
+    }
+
+    It "Cross-surface agreement: Section A combined label embeds the KPI % and the exec fraction" {
+        $r = Get-SPReviewerCompletion -Signed 0 -Total 2
+        # KPI '0%' is the prefix of Section A '0% (0/2)'.
+        $r.CombinedLabel.StartsWith($r.PercentLabel) | Should -Be $true
+        # Exact form ties KPI/exec/Section A together so they cannot disagree.
+        $r.CombinedLabel | Should -Be '0% (0/2)'
+    }
+
+    It "Signed 2 / Total 2 => 100% green, exact labels" {
+        $r = Get-SPReviewerCompletion -Signed 2 -Total 2
+        $r.Pct           | Should -Be 100
+        $r.SeverityClass | Should -Be 'green'
+        $r.PercentLabel  | Should -Be '100%'
+        $r.CombinedLabel | Should -Be '100% (2/2)'
+    }
+
+    It "Signed 1 / Total 2 => 50% amber" {
+        $r = Get-SPReviewerCompletion -Signed 1 -Total 2
+        $r.Pct           | Should -Be 50
+        $r.SeverityClass | Should -Be 'amber'
+    }
+
+    It "Total 0 => no reviewers, Pct 0, severity 'none' (no divide-by-zero)" {
+        $r = Get-SPReviewerCompletion -Signed 0 -Total 0
+        $r.HasReviewers  | Should -Be $false
+        $r.Pct           | Should -Be 0
+        $r.SeverityClass | Should -Be 'none'
+    }
+}
+
+#endregion

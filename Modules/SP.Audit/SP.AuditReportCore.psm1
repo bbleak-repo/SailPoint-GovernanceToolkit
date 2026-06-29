@@ -205,6 +205,63 @@ function Get-SPClosedIncompleteQualifier {
     }
 }
 
+function Get-SPReviewerCompletion {
+    <#
+    .SYNOPSIS
+        Returns ONE canonical reviewer-completion figure + the three label formats
+        the daily-evidence render needs, so the exec box, Section A, and Key
+        Indicators can never disagree.
+    .DESCRIPTION
+        Honesty/consistency (reviewer-% split): three surfaces previously rendered
+        the reviewer-completion concept from two different data sources, so Section A
+        showed "-" while the exec box showed "0 / 2" and Key Indicators showed "0%"
+        for the very same campaign. This pure helper takes the canonical figure
+        (Signed = sealed-roster reviewers with Phase=='SIGNED', over Total = the
+        sealed roster = ReviewerActions Primary+Reassigned) and emits the percent,
+        fraction, and combined labels each surface needs from a single computation.
+
+        Per the honest-numbers doctrine a reviewer who decided every item but never
+        signed off is NOT complete, so completion is measured by sign-off, mirroring
+        the two surfaces (exec + KPI) that already agreed.
+
+        Pct          = round(Signed/Total*100) or 0 when Total is 0 (no divide-by-zero)
+        HasReviewers = Total -gt 0
+        PercentLabel = "<Pct>%"                 (Key Indicators surface)
+        FractionLabel= "<Signed> / <Total>"     (exec "Reviewers Signed Off" surface)
+        CombinedLabel= "<Pct>% (<Signed>/<Total>)" (Section A "Reviewer %" surface)
+        SeverityClass= none (no reviewers) / green (>=100) / amber (>=50) / red,
+                       thresholds chosen to match the existing exec/KPI revCompColor.
+    .PARAMETER Signed
+        Count of cert-assigned reviewers who actually signed off (Phase=='SIGNED').
+    .PARAMETER Total
+        Count of cert-assigned reviewers (the sealed roster total).
+    .OUTPUTS
+        [pscustomobject] with Signed, Total, Pct, HasReviewers, PercentLabel,
+        FractionLabel, CombinedLabel, SeverityClass.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [int]$Signed,
+        [int]$Total
+    )
+
+    $pct = if ($Total -gt 0) { [int][math]::Round($Signed / $Total * 100, 0) } else { 0 }
+    $hasReviewers = [bool]($Total -gt 0)
+    $severity = if (-not $hasReviewers) { 'none' } elseif ($pct -ge 100) { 'green' } elseif ($pct -ge 50) { 'amber' } else { 'red' }
+
+    return [pscustomobject]@{
+        Signed        = [int]$Signed
+        Total         = [int]$Total
+        Pct           = [int]$pct
+        HasReviewers  = [bool]$hasReviewers
+        PercentLabel  = "$pct%"
+        FractionLabel = "$Signed / $Total"
+        CombinedLabel = "$pct% ($Signed/$Total)"
+        SeverityClass = [string]$severity
+    }
+}
+
 function Get-SPDecisionBucket {
     <#
     .SYNOPSIS
@@ -3118,6 +3175,7 @@ Export-ModuleMember -Function @(
     'ConvertTo-SPCanonicalDecision',
     'Test-SPAutoApproveMarker',
     'Get-SPClosedIncompleteQualifier',
+    'Get-SPReviewerCompletion',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
