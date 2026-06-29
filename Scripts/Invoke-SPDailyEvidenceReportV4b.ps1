@@ -711,6 +711,12 @@ try {
         # Provenance of the fallback: true exactly when no signed reviewer was found,
         # i.e. the placeholder is the campaign Created timestamp (NOT a decision time).
         $fallbackIsCreated = ($fallbackDate -eq [string]$audit['Created'])
+        # Precompute the provenance tag as a statement-assignment. The inline
+        # `(if (...) {...} else {...})` form used AS a command argument is a runtime
+        # CommandNotFoundException in Windows PowerShell 5.1 (fires during argument
+        # evaluation, before Add-Member, so -ErrorAction cannot suppress it). The
+        # statement-assignment form below is legal and stamps the tag reliably.
+        $fallbackProv = if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }
 
         # Collect truly-new scope items (Added = in current but NOT in prior campaign).
         # For COMPLETED campaigns, new scope items with APPROVE may be auto-decided.
@@ -723,7 +729,7 @@ try {
                 $itemDate = [string](Get-V4Prop $a 'DecisionDate' '')
                 if ([string]::IsNullOrWhiteSpace($itemDate)) {
                     $a | Add-Member -NotePropertyName 'DecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
-                    $a | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue (if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }) -Force -ErrorAction SilentlyContinue
+                    $a | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue $fallbackProv -Force -ErrorAction SilentlyContinue
                 }
                 $v4NewlyApproved.Add($a)
                 if (-not [string]::IsNullOrWhiteSpace($aKey)) { $v4SeenKeys[$aKey] = $true }
@@ -751,7 +757,7 @@ try {
                     $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
                     if ([string]::IsNullOrWhiteSpace($ndDate)) {
                         $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
-                        $nd | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue (if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }) -Force -ErrorAction SilentlyContinue
+                        $nd | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue $fallbackProv -Force -ErrorAction SilentlyContinue
                     }
                     $v4NewlyDecided.Add($nd)
                     if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
