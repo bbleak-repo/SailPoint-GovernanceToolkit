@@ -708,6 +708,9 @@ try {
                 $fallbackDate = [string]$signedReviewers[0].SignOffDate
             }
         }
+        # Provenance of the fallback: true exactly when no signed reviewer was found,
+        # i.e. the placeholder is the campaign Created timestamp (NOT a decision time).
+        $fallbackIsCreated = ($fallbackDate -eq [string]$audit['Created'])
 
         # Collect truly-new scope items (Added = in current but NOT in prior campaign).
         # For COMPLETED campaigns, new scope items with APPROVE may be auto-decided.
@@ -720,6 +723,7 @@ try {
                 $itemDate = [string](Get-V4Prop $a 'DecisionDate' '')
                 if ([string]::IsNullOrWhiteSpace($itemDate)) {
                     $a | Add-Member -NotePropertyName 'DecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                    $a | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue (if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }) -Force -ErrorAction SilentlyContinue
                 }
                 $v4NewlyApproved.Add($a)
                 if (-not [string]::IsNullOrWhiteSpace($aKey)) { $v4SeenKeys[$aKey] = $true }
@@ -747,6 +751,7 @@ try {
                     $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
                     if ([string]::IsNullOrWhiteSpace($ndDate)) {
                         $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                        $nd | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue (if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }) -Force -ErrorAction SilentlyContinue
                     }
                     $v4NewlyDecided.Add($nd)
                     if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
@@ -1835,6 +1840,9 @@ foreach ($audit in $campaignAudits) {
     $remColor = if ($totRevoked -eq 0) { '#777777' } elseif ($remPct -ge 100) { '#339933' } elseif ($remPct -ge 50) { '#FF9900' } else { '#CC3333' }
     $donutSvg = & $donut $apct $rpct $ppct $tot
     $createdFmt = & $fmtDt ([string]$audit['Created'])
+    # Completion date (honest): surfaced only when the API provides one; never invented.
+    $completedFmt = & $fmtDt ([string]$audit['Completed'])
+    $completedRow = if (-not [string]::IsNullOrWhiteSpace([string]$audit['Completed'])) { '<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Completed</td><td style="padding:6px 8px;color:#2c3e50">' + $completedFmt + '</td></tr>' } else { '' }
     # Closed-incomplete honest qualifier: a force-closed COMPLETED campaign with reviewers
     # who never signed OR items never manually decided (auto-approved => undecided/$pend).
     # Additive sub-row under the (retained) ISC status badge so green != clean pass.
@@ -1872,6 +1880,7 @@ $qualSubRow
 <table style="width:100%;border-collapse:collapse;font-size:13px">
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555;width:120px">Campaign</td><td style="padding:6px 8px;color:#2c3e50">$cName</td></tr>
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555">Created</td><td style="padding:6px 8px;color:#2c3e50">$createdFmt</td></tr>
+$completedRow
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555">Reviewers</td><td style="padding:6px 8px;color:#2c3e50">$totRev ($($primary.Count) primary, $reassignCnt reassigned)</td></tr>
 </table>
 </td>
@@ -2101,7 +2110,8 @@ else {
         $rvw = ConvertTo-SafeHtml $rvwName
         $ddRaw = [string]$it.DecisionDate
         if ([string]::IsNullOrWhiteSpace($ddRaw) -and $cid -and $certReviewerMap.ContainsKey($cid)) { $ddRaw = [string]$certReviewerMap[$cid].SignOff }
-        $dd = & $fmtDt $ddRaw
+        $ddDisp = Resolve-SPDecisionDateDisplay -RawDate $ddRaw -CampaignCreated ([string]$audit['Created'])
+        $dd = if ($ddDisp.IsGenuine) { & $fmtDt $ddDisp.Display } else { $ddDisp.Display }
         [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $it.IdentityName) + '</td><td>' + $acct + '</td><td>' + (ConvertTo-SafeHtml $it.AccessName) + $pb + '</td><td>' + (ConvertTo-SafeHtml $it.SourceName) + '</td><td>' + $rvw + '</td><td>' + (ConvertTo-SafeHtml $dd) + '</td><td>' + (ConvertTo-SafeHtml $just) + '</td><td>' + $rem + '</td></tr>')
     }
 }
@@ -2125,7 +2135,9 @@ else {
         $ndSource = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'SourceName' ''))
         $ndReview = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'ReviewerName' ''))
         $ndDateRaw = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
-        $ndDate   = & $fmtDt $ndDateRaw
+        $ndProv   = [string](Get-V4Prop $nd 'DecisionDateProvenance' '')
+        $ndDisp   = Resolve-SPDecisionDateDisplay -RawDate $ndDateRaw -Provenance $ndProv
+        $ndDate   = if ($ndDisp.IsGenuine) { & $fmtDt $ndDisp.Display } else { $ndDisp.Display }
         $ndPriv   = $false; try { $ndPriv = [bool](Get-V4Prop $nd 'Privileged' $false) } catch { }
         $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td>' + (ConvertTo-SafeHtml $ndDate) + '</td><td>' + $ndPrivBadge + '</td></tr>')
@@ -2154,7 +2166,9 @@ else {
         $naSource = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'SourceName' ''))
         $naReview = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'ReviewerName' ''))
         $naDateRaw = [string](Get-V4Prop $na 'DecisionDate' '')
-        $naDate   = & $fmtDt $naDateRaw
+        $naProv   = [string](Get-V4Prop $na 'DecisionDateProvenance' '')
+        $naDisp   = Resolve-SPDecisionDateDisplay -RawDate $naDateRaw -Provenance $naProv
+        $naDate   = if ($naDisp.IsGenuine) { & $fmtDt $naDisp.Display } else { $naDisp.Display }
         $naPriv   = $false; try { $naPriv = [bool](Get-V4Prop $na 'Privileged' $false) } catch { }
         $naPrivBadge = if ($naPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $naIdent + '</td><td>' + $naAccess + '</td><td>' + $naSource + '</td><td>' + $naReview + '</td><td>' + (ConvertTo-SafeHtml $naDate) + '</td><td>' + $naPrivBadge + '</td></tr>')

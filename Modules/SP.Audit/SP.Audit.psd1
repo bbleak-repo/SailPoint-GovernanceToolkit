@@ -63,6 +63,7 @@
         'ConvertTo-SPCanonicalDecision'
         'Test-SPAutoApproveMarker'
         'Get-SPClosedIncompleteQualifier'
+        'Resolve-SPDecisionDateDisplay'
         'Get-SPReviewerCompletion'
         'Get-SPDecisionBucket'
         'Test-SPConnectedADSource'

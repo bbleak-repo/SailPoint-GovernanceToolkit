@@ -205,6 +205,91 @@ function Get-SPClosedIncompleteQualifier {
     }
 }
 
+function Resolve-SPDecisionDateDisplay {
+    <#
+    .SYNOPSIS
+        Decides whether a raw decision date is a GENUINE decision time or a
+        created/placeholder substitute, and returns what the render should show.
+    .DESCRIPTION
+        Honesty/consistency (decision-date provenance): when an item carries no real
+        decision date the daily-evidence builder injects a fallback so the row still
+        renders. A signed reviewer's SignOffDate is a defensible fallback, but the
+        campaign CREATED timestamp is NOT a decision time -- presenting it as one makes
+        every undecided item look as if it was decided at campaign creation. This pure
+        helper takes the raw date plus an optional provenance tag (and/or the campaign
+        Created value as a value-based safety net) and tells the caller whether the date
+        is genuine; when it is not, the caller renders the placeholder ("-") instead.
+
+        Logic (IsGenuine = the date is a real decision time, not a created/placeholder
+        substitute):
+          - blank/whitespace RawDate                                  -> IsGenuine $false
+          - Provenance (case-insensitive) in campaign-created/created/
+            placeholder/fallback-created                              -> IsGenuine $false
+          - CampaignCreated non-blank AND RawDate value-equals it     -> IsGenuine $false
+            (parse BOTH with [datetime]::TryParse and compare instants; if either fails
+            to parse, compare .Trim() ordinal-ignore-case)
+          - otherwise                                                 -> IsGenuine $true
+        Display = Placeholder when not genuine, else RawDate verbatim (the caller still
+        runs its own $fmtDt scriptblock over a genuine Display to format it).
+    .PARAMETER RawDate
+        The raw decision-date string carried on the item.
+    .PARAMETER Provenance
+        Optional provenance tag stamped at injection time (e.g. 'campaign-created',
+        'signoff'). Empty when unknown.
+    .PARAMETER CampaignCreated
+        Optional campaign Created timestamp; when RawDate equals it (by value) the date
+        is treated as a created placeholder even without a provenance tag.
+    .PARAMETER Placeholder
+        What to display when the date is not genuine. Defaults to '-'.
+    .OUTPUTS
+        [pscustomobject] with IsGenuine [bool] and Display [string].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$RawDate,
+        [string]$Provenance = '',
+        [string]$CampaignCreated = '',
+        [string]$Placeholder = '-'
+    )
+
+    $isGenuine = $true
+
+    if ([string]::IsNullOrWhiteSpace($RawDate)) {
+        $isGenuine = $false
+    }
+    else {
+        $prov = if ($null -ne $Provenance) { ([string]$Provenance).Trim().ToLowerInvariant() } else { '' }
+        $createdMarkers = @('campaign-created', 'created', 'placeholder', 'fallback-created')
+        if ($createdMarkers -contains $prov) {
+            $isGenuine = $false
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($CampaignCreated)) {
+            $rawDt = [datetime]::MinValue
+            $createdDt = [datetime]::MinValue
+            $rawOk = [datetime]::TryParse($RawDate, [ref]$rawDt)
+            $createdOk = [datetime]::TryParse($CampaignCreated, [ref]$createdDt)
+            if ($rawOk -and $createdOk) {
+                if ($rawDt -eq $createdDt) {
+                    $isGenuine = $false
+                }
+            }
+            else {
+                if ([string]::Equals($RawDate.Trim(), $CampaignCreated.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isGenuine = $false
+                }
+            }
+        }
+    }
+
+    $display = if ($isGenuine) { [string]$RawDate } else { [string]$Placeholder }
+
+    return [pscustomobject]@{
+        IsGenuine = [bool]$isGenuine
+        Display   = [string]$display
+    }
+}
+
 function Get-SPReviewerCompletion {
     <#
     .SYNOPSIS
@@ -3175,6 +3260,7 @@ Export-ModuleMember -Function @(
     'ConvertTo-SPCanonicalDecision',
     'Test-SPAutoApproveMarker',
     'Get-SPClosedIncompleteQualifier',
+    'Resolve-SPDecisionDateDisplay',
     'Get-SPReviewerCompletion',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
