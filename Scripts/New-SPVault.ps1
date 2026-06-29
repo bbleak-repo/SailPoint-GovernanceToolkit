@@ -29,9 +29,11 @@
       same user on the same machine that created it.
 
     ScheduledVault:
-      Uses the toolkit's own AES-256-CBC encryption to encrypt the vault
-      passphrase with a machine-derived key (SHA-256 of machine name + username
-      + domain + static salt). No DPAPI involved -- no Mimikatz/EDR concerns.
+      Uses the toolkit's own AES-256-CBC encryption to encrypt the vault passphrase
+      with a machine-derived key (SHA-256 of machine + user + domain + static salt +
+      a per-install DPAPI-protected random secret). The secret makes the key
+      non-derivable and prevents off-box offline decryption of an exfiltrated key file.
+      For the simplest secure unattended mode, prefer DpapiCredential.
 
       Requires the regular Vault to be set up first. This mode automates the
       passphrase entry for unattended scheduled task execution.
@@ -640,20 +642,13 @@ elseif ($Mode -eq 'ScheduledVault') {
     # Generate the machine-derived passphrase
     Write-Host "  Generating machine-derived key..." -ForegroundColor Cyan
 
+    # Machine-derived passphrase -- delegated to the single shared implementation in SP.Auth so
+    # setup and runtime (Get-SPCredentialsFromScheduledVault) stay in lockstep, INCLUDING the
+    # per-install DPAPI-protected secret that makes the key non-derivable. (This was previously
+    # inlined here as a weak SHA-256 of public machine/user/domain values.)
     $machineName = [Environment]::MachineName
     $userName    = [Environment]::UserName
-    $domainName  = [Environment]::UserDomainName
-    $staticSalt  = 'SailPoint-GovernanceToolkit-ScheduledVault-v1'
-
-    $combined = "$machineName|$userName|$domainName|$staticSalt"
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($combined))
-    }
-    finally {
-        $sha.Dispose()
-    }
-    $machinePassphrase = ($hash | ForEach-Object { $_.ToString('x2') }) -join ''
+    $machinePassphrase = Get-SPMachineDerivedPassphrase
 
     # Encrypt the vault passphrase using the machine-derived passphrase
     Write-Host "  Encrypting vault passphrase with machine-derived key..." -ForegroundColor Cyan
@@ -706,7 +701,7 @@ elseif ($Mode -eq 'ScheduledVault') {
     Write-Host "  Scheduled vault key created at $keyPath." -ForegroundColor White
     Write-Host "  This key is derived from machine '$machineName' + user '$userName'" -ForegroundColor White
     Write-Host "  and can only be used by this account on this machine." -ForegroundColor White
-    Write-Host "  No DPAPI is used -- this is pure AES-256 encryption." -ForegroundColor White
+    Write-Host "  AES-256 + a per-install DPAPI-protected secret (Data\.sv-secret) -- not decryptable off-box." -ForegroundColor White
     Write-Host ''
     Write-Host '  Next steps:' -ForegroundColor White
     Write-Host "    1. Set Authentication.Mode = 'ScheduledVault' in settings.json" -ForegroundColor White

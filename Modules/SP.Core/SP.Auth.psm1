@@ -329,36 +329,115 @@ function Get-SPCredentialsFromDpapi {
     }
 }
 
+function Get-SPScheduledVaultSecret {
+    <#
+    .SYNOPSIS
+        Returns the per-install random secret (base64) that strengthens the ScheduledVault
+        machine-derived passphrase so it is NOT derivable from public machine/user/domain values.
+    .DESCRIPTION
+        On first use this generates a 256-bit cryptographically-random secret, DPAPI-protects it
+        (CurrentUser scope), and persists it to Data\.sv-secret with a current-user-only ACL.
+        Subsequent calls read + unprotect it. Because it is DPAPI-protected, the secret cannot be
+        decrypted off the originating box/user even if the file is copied -- which closes the
+        "exfiltrate the files, decrypt offline anywhere" weakness of a purely derived key.
+
+        Deleting Data\.sv-secret invalidates any existing ScheduledVault key (re-run
+        New-SPVault.ps1 -Mode ScheduledVault). Running as a different user fails to unprotect it.
+    .OUTPUTS
+        [string] base64-encoded 256-bit secret.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        # Override the secret file location (testing / non-default layouts). Defaults to Data\.sv-secret.
+        [Parameter()]
+        [string]$SecretPath
+    )
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    if ([string]::IsNullOrWhiteSpace($SecretPath)) {
+        $toolkitRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+        $SecretPath  = Join-Path (Join-Path $toolkitRoot 'Data') '.sv-secret'
+    }
+    $dataDir    = Split-Path -Parent $SecretPath
+    $secretPath = $SecretPath
+    $scope      = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+
+    if (Test-Path -LiteralPath $secretPath -PathType Leaf) {
+        try {
+            $protected = [System.IO.File]::ReadAllBytes($secretPath)
+            $plain     = [System.Security.Cryptography.ProtectedData]::Unprotect($protected, $null, $scope)
+            return [Convert]::ToBase64String($plain)
+        }
+        catch {
+            throw ("Failed to read the ScheduledVault per-install secret (Data\.sv-secret). It can " +
+                   "only be decrypted by the user/machine that created it. Re-run " +
+                   "New-SPVault.ps1 -Mode ScheduledVault as the scheduled-task account. Error: $($_.Exception.Message)")
+        }
+    }
+
+    # First use: generate, DPAPI-protect, persist, then restrict the ACL to the current user.
+    if (-not (Test-Path -LiteralPath $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force -WhatIf:$false | Out-Null
+    }
+    $bytes = New-Object byte[] 32
+    $rng   = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+
+    $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
+    [System.IO.File]::WriteAllBytes($secretPath, $protected)
+
+    try {
+        $acl = Get-Acl -LiteralPath $secretPath
+        $acl.SetAccessRuleProtection($true, $false)
+        $me  = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+        Set-Acl -LiteralPath $secretPath -AclObject $acl
+    } catch { }
+
+    return [Convert]::ToBase64String($bytes)
+}
+
 function Get-SPMachineDerivedPassphrase {
     <#
     .SYNOPSIS
-        Generates a deterministic passphrase from machine-specific identifiers
+        Generates a passphrase from machine identifiers + a per-install DPAPI-protected secret
     .DESCRIPTION
-        Combines the machine name, username, domain name, and a static salt, then
-        computes SHA-256 to produce a 64-character hex string. This string serves
-        as the passphrase for encrypting/decrypting the vault passphrase in
-        ScheduledVault mode.
+        Combines the machine name, username, domain name, a static salt, AND a per-install random
+        secret (see Get-SPScheduledVaultSecret), then computes SHA-256 to produce a 64-character
+        hex string used to encrypt/decrypt the vault passphrase in ScheduledVault mode.
 
-        The resulting passphrase is bound to the specific machine + user + domain
-        combination. If the encrypted key file is moved to a different machine or
-        run under a different user, the derived passphrase will differ and
-        decryption will fail.
+        SECURITY: the per-install secret is what makes this key non-derivable. It is a 256-bit
+        random value stored DPAPI-protected (CurrentUser), so the passphrase CANNOT be
+        reconstructed from the (public) machine/user/domain values alone, and CANNOT be decrypted
+        off the originating box/user even if every key/vault/secret file is exfiltrated. Without
+        the secret-mixing the key would be fully derivable from public information -- do not remove it.
 
-        No DPAPI is involved -- this is pure SHA-256 hashing of environment
-        identifiers. Mimikatz cannot extract these values.
+        The passphrase is bound to the machine + user that created the secret; moving the files to
+        another machine or running as a different user causes decryption to fail (by design). For
+        the simplest secure unattended mode, prefer DpapiCredential.
     .OUTPUTS
         [string] 64-character lowercase hex string
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param()
+    param(
+        # Override the per-install secret file location (testing). Defaults to Data\.sv-secret.
+        [Parameter()]
+        [string]$SecretPath
+    )
 
-    $machineName = [Environment]::MachineName
-    $userName    = [Environment]::UserName
-    $domainName  = [Environment]::UserDomainName
-    $staticSalt  = 'SailPoint-GovernanceToolkit-ScheduledVault-v1'
+    $machineName   = [Environment]::MachineName
+    $userName      = [Environment]::UserName
+    $domainName    = [Environment]::UserDomainName
+    $staticSalt    = 'SailPoint-GovernanceToolkit-ScheduledVault-v1'
+    # Per-install, DPAPI-protected random secret -- this is what makes the derived key
+    # non-derivable from the (public) machine/user/domain values. Do not remove.
+    $installSecret = if ([string]::IsNullOrWhiteSpace($SecretPath)) { Get-SPScheduledVaultSecret }
+                     else { Get-SPScheduledVaultSecret -SecretPath $SecretPath }
 
-    $combined = "$machineName|$userName|$domainName|$staticSalt"
+    $combined = "$machineName|$userName|$domainName|$staticSalt|$installSecret"
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($combined))
@@ -386,10 +465,12 @@ function Get-SPCredentialsFromScheduledVault {
 
         Security notes:
         - Uses the toolkit's own AES-256-CBC + PBKDF2 (same crypto as SP.Vault)
-        - Key derived from: machine name + username + domain + static salt (SHA-256)
-        - If the key file is copied to another machine/user: decryption fails
-        - No DPAPI involvement -- no Mimikatz / EDR concerns
+        - Key derived from: machine + user + domain + static salt + a per-install
+          DPAPI-protected random secret (SHA-256). The secret is what makes the key
+          non-derivable and prevents off-box offline decryption of an exfiltrated key file.
+        - If the key/secret files are copied to another machine/user: decryption fails
         - Requires the regular vault to be set up first
+        - For the simplest secure unattended mode, prefer DpapiCredential
     .OUTPUTS
         [hashtable] @{ClientId=[string]; ClientSecret=[string]; OAuthTokenUrl=[string]}
     #>
@@ -866,5 +947,7 @@ function Clear-SPAuthToken {
 Export-ModuleMember -Function @(
     'Get-SPAuthToken',
     'Set-SPBrowserToken',
-    'Clear-SPAuthToken'
+    'Clear-SPAuthToken',
+    'Get-SPMachineDerivedPassphrase',
+    'Get-SPScheduledVaultSecret'
 )
