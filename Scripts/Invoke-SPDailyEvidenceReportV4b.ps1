@@ -1829,6 +1829,14 @@ foreach ($audit in $campaignAudits) {
     $remColor = if ($totRevoked -eq 0) { '#777777' } elseif ($remPct -ge 100) { '#339933' } elseif ($remPct -ge 50) { '#FF9900' } else { '#CC3333' }
     $donutSvg = & $donut $apct $rpct $ppct $tot
     $createdFmt = & $fmtDt ([string]$audit['Created'])
+    # Closed-incomplete honest qualifier: a force-closed COMPLETED campaign with reviewers
+    # who never signed OR items never manually decided (auto-approved => undecided/$pend).
+    # Additive sub-row under the (retained) ISC status badge so green != clean pass.
+    $qExec = Get-SPClosedIncompleteQualifier -Status $cStatusRaw -ReviewersSigned $signed -ReviewersTotal $totRev -UndecidedCount $pend
+    $qualSubRow = ''
+    if ($qExec.IsClosedIncomplete) {
+        $qualSubRow = '<tr><td colspan="2" style="padding:6px 8px;border:1px solid #b9770e;background:#fff8e1;color:#7a5200;font-size:11px;font-weight:600;border-radius:0 0 6px 6px">&#9888; ' + (ConvertTo-SafeHtml $qExec.Caption) + '</td></tr>'
+    }
     if ($totRevoked -gt 0) {
         $remBlock = @"
 <div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked deprovisioned (connected AD)</span></div>
@@ -1847,6 +1855,7 @@ foreach ($audit in $campaignAudits) {
 <td style="width:50%;vertical-align:top;padding-right:16px">
 <table style="width:100%;border-collapse:collapse;font-size:13px">
 <tr><td colspan="2" style="padding:12px 16px;background:$stColor;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$cStatusUp</span></td></tr>
+$qualSubRow
 <tr>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$signed / $totRev</span><br>Reviewers Signed Off</td>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$('{0:N0}' -f $decided) / $('{0:N0}' -f $tot)</span><br>Items Decided ($pct%)</td>
@@ -1916,6 +1925,13 @@ foreach ($audit in $campaignAudits) {
     $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
     $cr = & $fmtDt ([string]$audit['Created'])
     $cmp = & $fmtDt ([string]$audit['Completed'])
+    # Closed-incomplete honest qualifier (Section A): sub-line inside the Status cell so the
+    # 10-column row shape is unchanged. Uses reviewer-completion ($rvCompletedCount2/$rvTotalCount2)
+    # and honest undecided ($p). Additive -- the ISC status text ($cs) is retained.
+    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $rvCompletedCount2 -ReviewersTotal $rvTotalCount2 -UndecidedCount $p
+    if ($qA.IsClosedIncomplete) {
+        $cs = $cs + "<br><span class='s-amber' style='font-size:10px'>" + (ConvertTo-SafeHtml $qA.Caption) + "</span>"
+    }
     [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td>$cr</td><td>$cmp</td></tr>")
 }
 [void]$sb.AppendLine('</tbody></table></div>')

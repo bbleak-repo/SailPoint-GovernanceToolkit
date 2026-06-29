@@ -206,3 +206,45 @@ Describe "CC-002: ConvertTo-SPCanonicalDecision shared classifier" {
 }
 
 #endregion
+
+# ---------------------------------------------------------------------------
+#region CC-003: Get-SPClosedIncompleteQualifier honest closed-incomplete signal
+# ---------------------------------------------------------------------------
+
+Describe "CC-003: Get-SPClosedIncompleteQualifier (closed-incomplete signal)" {
+
+    It "COMPLETED 2/3 signed + 4 undecided => closed-incomplete with exact caption" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'COMPLETED' -ReviewersSigned 2 -ReviewersTotal 3 -UndecidedCount 4
+        $q.IsClosedIncomplete | Should -Be $true
+        $q.Caption | Should -Be 'Closed with incomplete work - 2 of 3 reviewers signed off, 4 items never manually decided'
+    }
+
+    It "COMPLETED 3/3 signed + 0 undecided => clean (not closed-incomplete, empty caption)" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'COMPLETED' -ReviewersSigned 3 -ReviewersTotal 3 -UndecidedCount 0
+        $q.IsClosedIncomplete | Should -Be $false
+        $q.Caption | Should -Be ''
+    }
+
+    It "COMPLETING 3/3 signed + 1 undecided => closed-incomplete (items-only)" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'COMPLETING' -ReviewersSigned 3 -ReviewersTotal 3 -UndecidedCount 1
+        $q.IsClosedIncomplete | Should -Be $true
+    }
+
+    It "COMPLETED 1/3 signed + 0 undecided => closed-incomplete (reviewer-only)" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'COMPLETED' -ReviewersSigned 1 -ReviewersTotal 3 -UndecidedCount 0
+        $q.IsClosedIncomplete | Should -Be $true
+    }
+
+    It "ACTIVE 0/3 signed + 5 undecided => NOT closed-incomplete (campaign still open)" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'ACTIVE' -ReviewersSigned 0 -ReviewersTotal 3 -UndecidedCount 5
+        $q.IsClosedIncomplete | Should -Be $false
+        $q.Caption | Should -Be ''
+    }
+
+    It "COMPLETED with 0 reviewers total + 0 undecided => NOT closed-incomplete" {
+        $q = Get-SPClosedIncompleteQualifier -Status 'COMPLETED' -ReviewersSigned 0 -ReviewersTotal 0 -UndecidedCount 0
+        $q.IsClosedIncomplete | Should -Be $false
+    }
+}
+
+#endregion

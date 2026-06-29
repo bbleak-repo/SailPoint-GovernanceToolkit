@@ -144,6 +144,67 @@ function Test-SPAutoApproveMarker {
     return $false
 }
 
+function Get-SPClosedIncompleteQualifier {
+    <#
+    .SYNOPSIS
+        Decides whether a COMPLETED/COMPLETING campaign was actually closed with
+        incomplete work, and returns an honest caption for the render.
+    .DESCRIPTION
+        Honesty/consistency (closed-incomplete signal): a force-closed-incomplete
+        campaign reports an ISC status of COMPLETED, which renders as a clean green
+        badge. That hides two facts: (a) not every assigned reviewer signed off, and
+        (b) items were never manually decided (auto-approved at force-close, which the
+        honest classifier counts as Pending/undecided -- never as a real approval).
+        This pure helper takes the honest numbers the caller already computes and
+        returns a flag + caption so BOTH V4 and V4b can append an amber qualifier next
+        to the (intentionally retained) ISC status badge.
+
+        Logic:
+          isCompleted        = Status (upper-invariant) in COMPLETED / COMPLETING
+          reviewersIncomplete = ReviewersTotal -gt 0 -and ReviewersSigned -lt ReviewersTotal
+          itemsIncomplete     = UndecidedCount -gt 0
+          IsClosedIncomplete  = isCompleted -and (reviewersIncomplete -or itemsIncomplete)
+        Caption is only populated when IsClosedIncomplete is $true; otherwise ''.
+        UndecidedCount must be the honest Group-SPAuditDecisions Pending bucket (with
+        auto-approved already reclassified as Pending), so the honest-numbers doctrine
+        is satisfied by what the caller passes in.
+    .PARAMETER Status
+        The campaign/ISC status string (e.g. 'COMPLETED', 'ACTIVE', 'COMPLETING').
+    .PARAMETER ReviewersSigned
+        Count of cert-assigned reviewers who actually signed off.
+    .PARAMETER ReviewersTotal
+        Count of cert-assigned reviewers (the sealed roster total).
+    .PARAMETER UndecidedCount
+        Honest undecided/pending item count (auto-approved already counted here).
+    .OUTPUTS
+        [pscustomobject] with IsClosedIncomplete [bool] and Caption [string].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Status,
+        [int]$ReviewersSigned,
+        [int]$ReviewersTotal,
+        [int]$UndecidedCount
+    )
+
+    $st = if ($null -ne $Status) { ([string]$Status).ToUpperInvariant() } else { '' }
+    $isCompleted = @('COMPLETED', 'COMPLETING') -contains $st
+    $reviewersIncomplete = ($ReviewersTotal -gt 0 -and $ReviewersSigned -lt $ReviewersTotal)
+    $itemsIncomplete = ($UndecidedCount -gt 0)
+    $isClosedIncomplete = ($isCompleted -and ($reviewersIncomplete -or $itemsIncomplete))
+
+    $caption = ''
+    if ($isClosedIncomplete) {
+        $caption = "Closed with incomplete work - $ReviewersSigned of $ReviewersTotal reviewers signed off, $UndecidedCount items never manually decided"
+    }
+
+    return [pscustomobject]@{
+        IsClosedIncomplete = [bool]$isClosedIncomplete
+        Caption            = [string]$caption
+    }
+}
+
 function Get-SPDecisionBucket {
     <#
     .SYNOPSIS
@@ -3056,6 +3117,7 @@ Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'ConvertTo-SPCanonicalDecision',
     'Test-SPAutoApproveMarker',
+    'Get-SPClosedIncompleteQualifier',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',
