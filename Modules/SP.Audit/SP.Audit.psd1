@@ -48,6 +48,7 @@
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
         'Get-SPCachedCampaignRoster'
+        'Get-SPCachedCampaignSeries'
         'Get-SPAuditEffectiveCacheTtl'
         'Clear-SPAuditItemCache'
         'Clear-SPAuditAccountCache'
