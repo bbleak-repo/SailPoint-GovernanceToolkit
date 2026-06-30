@@ -53,19 +53,31 @@ BeforeAll {
     }
 
     # Wrap raw items + roster into a series instance hashtable (raw Items path).
+    # PRODUCTION-SHAPED: each raw item is wrapped in a { CertificationId; Item } envelope keyed by a
+    # per-CERTIFICATION id that is DISTINCT from the campaign id ("<CampaignId>-cert" by default) --
+    # mirroring how ConvertTo-SPCertRosterEntry / the jsonl writer key the cache (roster + item
+    # wrappers carry $Cert.id, NOT the campaign id). This way the roster<->item cert-id join is
+    # actually exercised (the engine must derive the per-item cert id from the wrapper, never force
+    # the campaign id). Pass -CertId to override (e.g. to match a roster keyed by a specific cert).
     function New-SADInstance {
         param(
             [int]$OrderIndex, [string]$CampaignId, [string]$CampaignName,
             [string]$Status = 'COMPLETED', [bool]$Unverified = $false,
-            [object[]]$Items = @(), [object[]]$Roster = @()
+            [object[]]$Items = @(), [object[]]$Roster = @(), [string]$CertId
         )
+        $effCertId = if ($PSBoundParameters.ContainsKey('CertId') -and -not [string]::IsNullOrWhiteSpace($CertId)) { $CertId } else { "$CampaignId-cert" }
+        $wrapped = @()
+        foreach ($it in @($Items)) {
+            if ($null -eq $it) { continue }
+            $wrapped += [PSCustomObject]@{ CertificationId = $effCertId; CampaignName = $CampaignName; Item = $it }
+        }
         @{
             OrderIndex   = $OrderIndex
             CampaignId   = $CampaignId
             CampaignName = $CampaignName
             Status       = $Status
             Unverified   = $Unverified
-            Items        = $Items
+            Items        = $wrapped
             Roster       = $Roster
         }
     }
@@ -224,8 +236,10 @@ Describe 'SAD-08 reviewer rollups (roster attribution + deterministic sort)' {
         # WINS over item.reviewedBy (the only correct attribution for an undecided null-reviewedBy
         # item, and consistently applied to the decided item too). So both the newly-attested and
         # persistently-undecided items in the newest instance attribute to Carol via the Roster.
+        # Roster keyed by the per-CERT id ('certNew-cert'), DISTINCT from the campaign id ('certNew') --
+        # production-shaped, so the engine must derive the per-item cert id from the wrapper to join.
         $roster = @(
-            [PSCustomObject]@{ CertificationId = 'certNew'; ReviewerName = 'Carol Cert'; ReviewerId = 'rv-carol'; ReviewerEmail = 'carol@x.io' }
+            [PSCustomObject]@{ CertificationId = 'certNew-cert'; ReviewerName = 'Carol Cert'; ReviewerId = 'rv-carol'; ReviewerEmail = 'carol@x.io' }
         )
         # Identity 1: undecided prior -> genuine approve newest (NewlyAttested).
         $p1a = New-JdoeItem -ItemId 'p1a' -Decision $null
@@ -235,7 +249,7 @@ Describe 'SAD-08 reviewer rollups (roster attribution + deterministic sort)' {
         $u2b = New-SADItem -ItemId 'u2b' -IdentityId 'id-2' -IdentityName 'Two' -AccessId 'ent-2' -AccessName 'G2' -AccessType 'ENTITLEMENT' -NativeIdentity 'CN=2' -SourceId 'src-ad' -SourceName 'AD' -Decision $null -Comment '' -ReviewedBy $null -DecisionDate ''
 
         $i1 = New-SADInstance -OrderIndex 1 -CampaignId 'certOld' -CampaignName 'C-1' -Items @($p1a, $u2a) -Roster @(
-            [PSCustomObject]@{ CertificationId = 'certOld'; ReviewerName = 'Old Rev'; ReviewerId = 'rv-old'; ReviewerEmail = 'old@x.io' }
+            [PSCustomObject]@{ CertificationId = 'certOld-cert'; ReviewerName = 'Old Rev'; ReviewerId = 'rv-old'; ReviewerEmail = 'old@x.io' }
         )
         $i2 = New-SADInstance -OrderIndex 2 -CampaignId 'certNew' -CampaignName 'C-2' -Items @($p1b, $u2b) -Roster $roster
 

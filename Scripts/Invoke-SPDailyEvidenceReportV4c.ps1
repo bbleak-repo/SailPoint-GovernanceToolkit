@@ -598,9 +598,14 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
         Write-Host '    (no recurring series found)' -ForegroundColor DarkGray
     }
     foreach ($sd in $seriesDataList) {
-        $c = Get-SPObjectProperty -Object $sd -Name 'Counts' -Default @{}
-        $na = [int](Get-SPObjectProperty -Object $c -Name 'NewlyAttested' -Default 0)
-        $pu = [int](Get-SPObjectProperty -Object $c -Name 'PersistentlyUndecided' -Default 0)
+        # Reconcile with the HTML: count from the SAME Test-V4cItemShown-filtered set the KPI band
+        # uses, not the engine's RAW Counts. Otherwise, when a series has Unverified instances and
+        # -IncludeUnverified is OFF (default), the console would include items the HTML excludes and
+        # the two surfaces would report different newly-attested totals for the same run.
+        $sdItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+        $shownItems = @($sdItems | Where-Object { Test-V4cItemShown $_ })
+        $na = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
+        $pu = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
         $stem = [string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default '')
         Write-Host "    - $stem : newly-attested=$na  persistently-undecided=$pu" -ForegroundColor DarkGray
     }

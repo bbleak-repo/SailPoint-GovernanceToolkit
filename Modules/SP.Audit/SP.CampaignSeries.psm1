@@ -861,8 +861,14 @@ function Get-SPSeriesAttestationDelta {
                 $roster   = @(Get-SPSeriesProp $inst 'Roster')
                 foreach ($raw in $rawItems) {
                     if ($null -eq $raw) { continue }
+                    # Do NOT force the CAMPAIGN id as the cert id: production rosters are keyed by the
+                    # per-CERTIFICATION id ($Cert.id via ConvertTo-SPCertRosterEntry) and the item
+                    # wrappers carry that same per-cert CertificationId. Binding -CertificationId to the
+                    # campaign id would make the campaign id win, miss the roster lookup, and collapse
+                    # every item to '(Unassigned)'. Let Resolve derive the per-item cert id from the
+                    # wrapper so the sealed-roster join actually fires (cert-assigned reviewer wins).
                     $st = Resolve-SPSeriesItemState -Item $raw -Roster $roster `
-                        -CertificationId $campaignId -Unverified $instUnverified -Status $status
+                        -Unverified $instUnverified -Status $status
                     if ($null -ne $st) { $states.Add($st) }
                 }
             }
