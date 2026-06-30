@@ -462,12 +462,21 @@ foreach ($sd in $seriesDataList) {
     [void]$sb.AppendLine("<div class='series-head'>$(ConvertTo-SPHtmlSafe $stem)$seriesBadge</div>")
     [void]$sb.AppendLine("<p class='meta'>Period type: <strong>$(ConvertTo-SPHtmlSafe $periodType)</strong> &nbsp;|&nbsp; Instances in window: <strong>$instCount</strong> &nbsp;|&nbsp; Newest: $(ConvertTo-SPHtmlSafe $newestName)</p>")
 
-    # KPI band from honest counts.
+    # KPI band from honest counts. Render from the SAME filtered set the detail tables
+    # use (Test-V4cItemShown), so the headline reconciles with the evidence rows below:
+    # when -IncludeUnverified is OFF (default) Unverified items are excluded from BOTH the
+    # KPI and the rows; when ON, every item is shown in both. (Honesty doctrine: the number
+    # a reader sees must reconcile against the rows it summarizes.)
+    $kpiShownItems = @($items | Where-Object { Test-V4cItemShown $_ })
+    $kpiNewlyAttested = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
+    $kpiPersistentlyUndecided = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
+    $kpiDecisionChanged = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsDecisionChanged' -Default $false) }).Count
+    $kpiNewlyInScope = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsNewlyInScope' -Default $false) }).Count
     [void]$sb.AppendLine("<div>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:#0a7d2c;'>$([int](Get-SPObjectProperty -Object $counts -Name 'NewlyAttested' -Default 0))</span><span class='l'>Newly Attested</span></span>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:#b00020;'>$([int](Get-SPObjectProperty -Object $counts -Name 'PersistentlyUndecided' -Default 0))</span><span class='l'>Persistently Undecided</span></span>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n'>$([int](Get-SPObjectProperty -Object $counts -Name 'DecisionChanged' -Default 0))</span><span class='l'>Decision Changes</span></span>")
-    [void]$sb.AppendLine("<span class='kpi'><span class='n'>$([int](Get-SPObjectProperty -Object $counts -Name 'NewlyInScope' -Default 0))</span><span class='l'>Newly In Scope</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:#0a7d2c;'>$kpiNewlyAttested</span><span class='l'>Newly Attested</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n' style='color:#b00020;'>$kpiPersistentlyUndecided</span><span class='l'>Persistently Undecided</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n'>$kpiDecisionChanged</span><span class='l'>Decision Changes</span></span>")
+    [void]$sb.AppendLine("<span class='kpi'><span class='n'>$kpiNewlyInScope</span><span class='l'>Newly In Scope</span></span>")
     [void]$sb.AppendLine("</div>")
 
     if ((-not $IncludeUnverified) -and $unvInstCount -gt 0) {
@@ -609,7 +618,9 @@ if ($OutputMode -eq 'JSON' -or $OutputMode -eq 'Both') {
         Series        = @($seriesDataList)
         CorrelationID = $correlationID
         GeneratedAt   = $genDate
-        HtmlReport    = $htmlFile
+        # Only advertise the HTML artifact when it was actually written to disk (HTML/Both);
+        # a JSON-only run writes no HTML file, so reporting a path would be a false reference.
+        HtmlReport    = if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') { $htmlFile } else { $null }
     }
 
     if ($OutputMode -eq 'JSON') {
