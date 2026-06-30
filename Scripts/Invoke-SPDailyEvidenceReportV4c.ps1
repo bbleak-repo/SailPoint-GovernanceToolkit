@@ -403,6 +403,79 @@ function Get-V4cUnverifiedBadge {
     return ''
 }
 
+# Helper: reconcile a per-reviewer rollup against the -IncludeUnverified gate. Drops items the
+# gate hides (exactly as the HTML tables do via Test-V4cItemShown), recomputes the cluster Count,
+# and omits clusters that become empty -- so the JSON rollup mirrors the rendered tables.
+function Get-V4cReconcileRollup {
+    param([object[]]$Rollup)
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($rv in @($Rollup)) {
+        if ($null -eq $rv) { continue }
+        $rvItems = @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())
+        $rvShown = @($rvItems | Where-Object { Test-V4cItemShown $_ })
+        if ($rvShown.Count -eq 0) { continue }
+        $out.Add([ordered]@{
+                ReviewerName  = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '(Unassigned)')
+                ReviewerId    = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerId' -Default '')
+                ReviewerEmail = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerEmail' -Default '')
+                Count         = [int]$rvShown.Count
+                Items         = @($rvShown)
+            })
+    }
+    return @($out.ToArray())
+}
+
+# Helper: project an engine series Data object onto the JSON surface so its headline (Counts +
+# reviewer rollups + Items) RECONCILES with the rendered HTML/console under the -IncludeUnverified
+# gate. When the gate is OFF (default) Unverified items are excluded from the headline numbers
+# exactly as the HTML KPI band and console summary exclude them, so a machine consumer reading the
+# JSON never sees an inflated count vs the report it summarizes. The raw pre-gate engine Counts are
+# preserved under EngineCounts for audit. When the gate is ON the reconciled values equal the
+# engine values (every item is shown). (Honesty doctrine: the headline a reader sees -- human OR
+# machine -- must reconcile against the rows it summarizes.)
+function Get-V4cJsonSeriesProjection {
+    param([object]$Series)
+
+    $allItems = @(Get-SPObjectProperty -Object $Series -Name 'Items' -Default @())
+    $shownItems = @($allItems | Where-Object { Test-V4cItemShown $_ })
+
+    # Recompute Counts by Classification from the SHOWN set (the same by-classification method the
+    # engine uses, just over the gated rows).
+    $recCounts = [ordered]@{
+        NewlyInScope           = 0
+        DecisionChanged        = 0
+        NewlyAttested          = 0
+        AlreadyAttestedEarlier = 0
+        PersistentlyUndecided  = 0
+        OtherDecided           = 0
+        Total                  = 0
+    }
+    foreach ($it in $shownItems) {
+        $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
+        if ($recCounts.Contains($cls)) { $recCounts[$cls] = [int]$recCounts[$cls] + 1 }
+        $recCounts['Total'] = [int]$recCounts['Total'] + 1
+    }
+
+    return [ordered]@{
+        SeriesStem              = [string](Get-SPObjectProperty -Object $Series -Name 'SeriesStem' -Default '')
+        NormalizedStem          = [string](Get-SPObjectProperty -Object $Series -Name 'NormalizedStem' -Default '')
+        PeriodType              = [string](Get-SPObjectProperty -Object $Series -Name 'PeriodType' -Default '')
+        InstanceCount           = [int](Get-SPObjectProperty -Object $Series -Name 'InstanceCount' -Default 0)
+        NewestCampaignId        = [string](Get-SPObjectProperty -Object $Series -Name 'NewestCampaignId' -Default '')
+        NewestCampaignName      = [string](Get-SPObjectProperty -Object $Series -Name 'NewestCampaignName' -Default '')
+        NewestOrderIndex        = [int](Get-SPObjectProperty -Object $Series -Name 'NewestOrderIndex' -Default -1)
+        Unverified              = [bool](Get-SPObjectProperty -Object $Series -Name 'Unverified' -Default $false)
+        UnverifiedInstanceCount = [int](Get-SPObjectProperty -Object $Series -Name 'UnverifiedInstanceCount' -Default 0)
+        IncludeUnverified       = [bool]$IncludeUnverified
+        UnverifiedItemsExcluded = [int]($allItems.Count - $shownItems.Count)
+        Counts                  = $recCounts
+        EngineCounts            = (Get-SPObjectProperty -Object $Series -Name 'Counts' -Default @{})
+        NewlyAttestedByReviewer         = (Get-V4cReconcileRollup (Get-SPObjectProperty -Object $Series -Name 'NewlyAttestedByReviewer' -Default @()))
+        PersistentlyUndecidedByReviewer = (Get-V4cReconcileRollup (Get-SPObjectProperty -Object $Series -Name 'PersistentlyUndecidedByReviewer' -Default @()))
+        Items                   = @($shownItems)
+    }
+}
+
 $css = @'
 body{font-family:Segoe UI,Arial,sans-serif;color:#1c2b3a;margin:24px;background:#fff;max-width:1200px;}
 h1{font-size:22px;color:#1f3a5f;border-bottom:2px solid #1f3a5f;padding-bottom:6px;margin-bottom:4px;}
@@ -617,15 +690,24 @@ if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
 #region Step 6: JSON output
 
 if ($OutputMode -eq 'JSON' -or $OutputMode -eq 'Both') {
+    # Reconcile the JSON headline with the rendered HTML/console: project each series through the
+    # -IncludeUnverified gate (Get-V4cJsonSeriesProjection) so the machine surface reports the SAME
+    # honest Counts + reviewer rollups + Items the human surfaces show. When -IncludeUnverified is
+    # OFF (default) Unverified items are excluded from the JSON headline exactly as they are from
+    # the HTML KPI band and console summary; the raw pre-gate engine Counts stay under EngineCounts
+    # for audit. Without this the JSON headline could over-state newly-attested vs the report it
+    # summarizes when a series carries Unverified instances.
+    $jsonSeries = @($seriesDataList | ForEach-Object { Get-V4cJsonSeriesProjection -Series $_ })
     $jsonResult = [ordered]@{
-        Version       = 'V4c'
-        SeriesCount   = $seriesDataList.Count
-        Series        = @($seriesDataList)
-        CorrelationID = $correlationID
-        GeneratedAt   = $genDate
+        Version           = 'V4c'
+        SeriesCount       = $seriesDataList.Count
+        IncludeUnverified = [bool]$IncludeUnverified
+        Series            = @($jsonSeries)
+        CorrelationID     = $correlationID
+        GeneratedAt       = $genDate
         # Only advertise the HTML artifact when it was actually written to disk (HTML/Both);
         # a JSON-only run writes no HTML file, so reporting a path would be a false reference.
-        HtmlReport    = if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') { $htmlFile } else { $null }
+        HtmlReport        = if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') { $htmlFile } else { $null }
     }
 
     if ($OutputMode -eq 'JSON') {
