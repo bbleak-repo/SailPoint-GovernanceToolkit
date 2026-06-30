@@ -295,6 +295,7 @@
         'Group-SPCampaignSeries'
         'Get-SPSeriesItemKey'
         'Resolve-SPSeriesItemState'
+        'Get-SPSeriesAttestationDelta'
     )
 
     # Do not export variables or aliases from nested modules

@@ -745,9 +745,375 @@ function Resolve-SPSeriesItemState {
 
 #endregion
 
+#region Public: series attestation delta (V4c)
+
+function Get-SPSeriesAttestationDelta {
+    <#
+    .SYNOPSIS
+        PURE cross-instance decision-transition engine for a recurring campaign SERIES: walks the
+        chronologically-ordered instances oldest->newest and flags, per identity+access item, the
+        FIRST GENUINE reviewer approval in the window (the honest "newly attested" headline), plus
+        already-attested-earlier, newly-in-scope, decision-changed, and persistently-undecided.
+    .DESCRIPTION
+        Consumes the same honest item-state model produced by Resolve-SPSeriesItemState (which it
+        also calls for any instance that supplies raw Items+Roster instead of pre-resolved
+        ItemStates). PURE: it never invokes an instance's .LoadItems/.LoadRoster closures -- that IO
+        is the caller/report layer's job; materialized Items/Roster arrive already loaded.
+
+        Each -Instances element (read defensively via Get-SPSeriesProp) carries
+        OrderIndex/CampaignId/CampaignName/Status/Unverified/PeriodToken plus EITHER pre-resolved
+        `ItemStates` (pscustomobject states from Resolve-SPSeriesItemState) OR raw `Items`+`Roster`.
+        Instances are sorted ascending by OrderIndex (missing -> stable input order); the LAST is the
+        newest, the rest are the priors.
+
+        Five INDEPENDENT boolean facts are computed per cross-instance ItemKey (the source of truth):
+          IsNewlyInScope         - absent from all priors, present in newest.
+          IsAlreadyAttestedEarlier - genuinely approved in some PRIOR instance (excludes it from newly-attested).
+          IsNewlyAttested        - present in >=1 prior AND no prior was genuinely decided (every prior
+                                   HonestDecision 'Undecided') AND present + genuinely APPROVED in the newest.
+          IsDecisionChanged      - the genuine HonestDecision set across the window holds BOTH Approved and Revoked.
+          IsPersistentlyUndecided- no instance anywhere is genuinely decided.
+        Plus PriorAutoApprovedMasked (audit flag) - a prior instance carried an auto-approved-at-close
+        (idNowAutoApproved) APPROVE that the honest classifier demoted, so it did NOT mask the genuine
+        first-time approval in the newest. The honesty guard needs NO new code here: Resolve-SPSeriesItemState
+        already demotes an idNowAutoApproved approval to IsGenuineApproval=$false / HonestDecision='Undecided'
+        / IsAutoApproved=$true, so a prior auto-approval never satisfies IsAlreadyAttestedEarlier and a current
+        auto-approval never satisfies IsNewlyAttested.
+
+        A single Classification label is derived by precedence
+        NewlyInScope > DecisionChanged > NewlyAttested > AlreadyAttestedEarlier > PersistentlyUndecided > OtherDecided.
+    .PARAMETER Instances
+        The chronologically-orderable series instances (PSCustomObject or hashtable). Empty allowed
+        (-> Success with zero counts). The reader's MinInstances=2 normally guarantees >=2; the engine
+        does NOT re-enforce it (a single instance falls entirely to NewlyInScope).
+    .PARAMETER SeriesStem
+        Passthrough series display stem, recorded on the output Data.
+    .PARAMETER NormalizedStem
+        Passthrough normalized grouping stem, recorded on the output Data.
+    .PARAMETER PeriodType
+        Passthrough series cadence (Daily/Weekly/Monthly/Quarterly/Annual/Unknown), recorded on Data.
+    .PARAMETER IdentityProperty
+        Accepted for signature parity / forward-compat (the identity-id property override). Note:
+        Resolve-SPSeriesItemState resolves identity via its built-in identityId->id chain and does not
+        currently take an override, so this is recorded only and not threaded into the resolve path.
+    .PARAMETER CorrelationID
+        Optional correlation id for the summary Write-SPLog (when SP.Core's logger is in-session).
+    .OUTPUTS
+        [hashtable] @{ Success; Data; Error } where Data is an [ordered] hashtable
+        @{ SeriesStem; NormalizedStem; PeriodType; InstanceCount; NewestCampaignId; NewestCampaignName;
+           NewestOrderIndex; Counts; Items; NewlyAttestedByReviewer; PersistentlyUndecidedByReviewer;
+           Unverified; UnverifiedInstanceCount }.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Instances,
+        [string]$SeriesStem,
+        [string]$NormalizedStem,
+        [string]$PeriodType,
+        [string]$IdentityProperty,
+        [string]$CorrelationID
+    )
+    try {
+        # --- 1. Sort instances ascending by OrderIndex; missing -> stable input order. -----------
+        $indexed = New-Object System.Collections.Generic.List[object]
+        $ii = 0
+        foreach ($inst in @($Instances)) {
+            if ($null -eq $inst) { $ii++; continue }
+            $oiRaw = Get-SPSeriesProp $inst 'OrderIndex'
+            $hasOrder = $false; $order = 0
+            if ($null -ne $oiRaw -and -not [string]::IsNullOrWhiteSpace([string]$oiRaw)) {
+                $parsed = 0
+                if ([int]::TryParse([string]$oiRaw, [ref]$parsed)) { $hasOrder = $true; $order = $parsed }
+            }
+            $indexed.Add([pscustomobject]@{ Inst = $inst; InputIndex = $ii; HasOrder = $hasOrder; Order = $order })
+            $ii++
+        }
+        # Single composite-key sort (PS 5.1-safe): primary numeric (OrderIndex when present else input
+        # position), tie-broken by input position so equal/absent indices stay stable.
+        $sorted = @($indexed | Sort-Object -Property @{ Expression = {
+                    $primary = if ($_.HasOrder) { $_.Order } else { $_.InputIndex }
+                    '{0}|{1}' -f ($primary.ToString('D12')), ($_.InputIndex.ToString('D12'))
+                } })
+
+        # --- 2. Resolve each instance's items to honest states + per-instance ItemKey map. -------
+        # Each map element: @{ EffectiveOrderIndex; CampaignId; CampaignName; Status; Unverified;
+        #   States = @{ ItemKey -> state } } (deduped per instance: prefer a genuinely-decided state).
+        $instMaps = New-Object System.Collections.Generic.List[object]
+        $unverifiedInstanceCount = 0
+        foreach ($entry in $sorted) {
+            $inst = $entry.Inst
+            $effOrder = if ($entry.HasOrder) { $entry.Order } else { $entry.InputIndex }
+            $campaignId   = [string](Get-SPSeriesProp $inst 'CampaignId' '')
+            $campaignName = [string](Get-SPSeriesProp $inst 'CampaignName' '')
+            $status       = [string](Get-SPSeriesProp $inst 'Status' '')
+            $instUnverified = [bool](Get-SPSeriesProp $inst 'Unverified' $false)
+            if ($instUnverified) { $unverifiedInstanceCount++ }
+
+            # Pre-resolved ItemStates win; otherwise resolve raw Items through the shared classifier.
+            $states = New-Object System.Collections.Generic.List[object]
+            $preResolved = Get-SPSeriesProp $inst 'ItemStates'
+            if ($null -ne $preResolved) {
+                foreach ($st in @($preResolved)) { if ($null -ne $st) { $states.Add($st) } }
+            }
+            else {
+                $rawItems = @(Get-SPSeriesProp $inst 'Items')
+                $roster   = @(Get-SPSeriesProp $inst 'Roster')
+                foreach ($raw in $rawItems) {
+                    if ($null -eq $raw) { continue }
+                    $st = Resolve-SPSeriesItemState -Item $raw -Roster $roster `
+                        -CertificationId $campaignId -Unverified $instUnverified -Status $status
+                    if ($null -ne $st) { $states.Add($st) }
+                }
+            }
+
+            # Skip blank ItemKey; dedupe a repeated key within this instance (prefer genuine decision).
+            $map = @{}
+            foreach ($st in $states) {
+                $k = [string](Get-SPSeriesProp $st 'ItemKey' '')
+                if ([string]::IsNullOrWhiteSpace($k)) { continue }
+                if (-not $map.ContainsKey($k)) { $map[$k] = $st }
+                else {
+                    $existing = $map[$k]
+                    $existingGenuine = [bool](Get-SPSeriesProp $existing 'IsGenuineDecision' $false)
+                    $candGenuine     = [bool](Get-SPSeriesProp $st 'IsGenuineDecision' $false)
+                    if ($candGenuine -and -not $existingGenuine) { $map[$k] = $st }
+                }
+            }
+
+            $instMaps.Add([pscustomobject]@{
+                    EffectiveOrderIndex = [int]$effOrder
+                    CampaignId          = $campaignId
+                    CampaignName        = $campaignName
+                    Status              = $status
+                    Unverified          = $instUnverified
+                    States              = $map
+                })
+        }
+
+        $n = $instMaps.Count
+        $counts = [ordered]@{
+            NewlyInScope           = 0
+            DecisionChanged        = 0
+            NewlyAttested          = 0
+            AlreadyAttestedEarlier = 0
+            PersistentlyUndecided  = 0
+            OtherDecided           = 0
+            Total                  = 0
+        }
+        $items = New-Object System.Collections.Generic.List[object]
+
+        $newestMap     = if ($n -gt 0) { $instMaps[$n - 1] } else { $null }
+        $priorMaps     = if ($n -gt 1) { $instMaps.GetRange(0, $n - 1) } else { (New-Object System.Collections.Generic.List[object]) }
+        $newestCampId  = if ($null -ne $newestMap) { $newestMap.CampaignId } else { '' }
+        $newestCampNm  = if ($null -ne $newestMap) { $newestMap.CampaignName } else { '' }
+        $newestOrder   = if ($null -ne $newestMap) { $newestMap.EffectiveOrderIndex } else { -1 }
+
+        # --- 3. Union of all ItemKeys across instances. -----------------------------------------
+        $keySet = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($im in $instMaps) { foreach ($k in $im.States.Keys) { [void]$keySet.Add($k) } }
+
+        # --- 4. Per-item cross-instance classification. -----------------------------------------
+        foreach ($key in $keySet) {
+            $newestState = if ($null -ne $newestMap -and $newestMap.States.ContainsKey($key)) { $newestMap.States[$key] } else { $null }
+            $presentNewest = ($null -ne $newestState)
+
+            $priorStates = New-Object System.Collections.Generic.List[object]
+            foreach ($pm in $priorMaps) { if ($pm.States.ContainsKey($key)) { $priorStates.Add($pm.States[$key]) } }
+            $presentPrior = ($priorStates.Count -gt 0)
+
+            # Timeline across ALL instances (Present flag distinguishes a gap from a real entry).
+            $timeline = New-Object System.Collections.Generic.List[object]
+            $firstSeen = -1; $lastSeen = -1; $firstGenuineApproval = -1
+            $itemUnverified = $false
+            $anyGenuineDecisionAll = $false
+            $hasApproved = $false; $hasRevoked = $false
+            $latestPresentState = $null
+            foreach ($im in $instMaps) {
+                $present = $im.States.ContainsKey($key)
+                $st = if ($present) { $im.States[$key] } else { $null }
+                if ($present) {
+                    if ($firstSeen -lt 0) { $firstSeen = $im.EffectiveOrderIndex }
+                    $lastSeen = $im.EffectiveOrderIndex
+                    $latestPresentState = $st
+                    if ([bool](Get-SPSeriesProp $st 'Unverified' $false)) { $itemUnverified = $true }
+                    $genDec = [bool](Get-SPSeriesProp $st 'IsGenuineDecision' $false)
+                    if ($genDec) {
+                        $anyGenuineDecisionAll = $true
+                        $hd = [string](Get-SPSeriesProp $st 'HonestDecision' '')
+                        if ($hd -eq 'Approved') { $hasApproved = $true }
+                        elseif ($hd -eq 'Revoked') { $hasRevoked = $true }
+                    }
+                    if ($firstGenuineApproval -lt 0 -and [bool](Get-SPSeriesProp $st 'IsGenuineApproval' $false)) {
+                        $firstGenuineApproval = $im.EffectiveOrderIndex
+                    }
+                }
+                $timeline.Add([ordered]@{
+                        OrderIndex        = [int]$im.EffectiveOrderIndex
+                        CampaignId        = [string]$im.CampaignId
+                        CampaignName      = [string]$im.CampaignName
+                        HonestDecision    = if ($present) { [string](Get-SPSeriesProp $st 'HonestDecision' '') } else { '' }
+                        IsGenuineApproval = if ($present) { [bool](Get-SPSeriesProp $st 'IsGenuineApproval' $false) } else { $false }
+                        IsAutoApproved    = if ($present) { [bool](Get-SPSeriesProp $st 'IsAutoApproved' $false) } else { $false }
+                        ReviewerName      = if ($present) { [string](Get-SPSeriesProp $st 'ReviewerName' '') } else { '' }
+                        Unverified        = if ($present) { [bool](Get-SPSeriesProp $st 'Unverified' $false) } else { $false }
+                        Present           = [bool]$present
+                    })
+            }
+
+            # Prior-only aggregates.
+            $priorAnyGenuineDecision = $false
+            $priorAnyGenuineApproval = $false
+            $priorAnyAutoApproved    = $false
+            foreach ($ps in $priorStates) {
+                if ([bool](Get-SPSeriesProp $ps 'IsGenuineDecision' $false)) { $priorAnyGenuineDecision = $true }
+                if ([bool](Get-SPSeriesProp $ps 'IsGenuineApproval' $false)) { $priorAnyGenuineApproval = $true }
+                if ([bool](Get-SPSeriesProp $ps 'IsAutoApproved' $false))    { $priorAnyAutoApproved = $true }
+            }
+            $newestGenuineApproval = $presentNewest -and [bool](Get-SPSeriesProp $newestState 'IsGenuineApproval' $false)
+
+            # Five independent facts (source of truth).
+            $isNewlyInScope         = ((-not $presentPrior) -and $presentNewest)
+            $isAlreadyAttested      = $priorAnyGenuineApproval
+            $isNewlyAttested        = ($presentPrior -and (-not $priorAnyGenuineDecision) -and $newestGenuineApproval)
+            $isDecisionChanged      = ($hasApproved -and $hasRevoked)
+            $isPersistentlyUndecided = (-not $anyGenuineDecisionAll)
+            $priorAutoApprovedMasked = ($presentPrior -and $priorAnyAutoApproved -and (-not $priorAnyGenuineApproval) -and $newestGenuineApproval)
+
+            # Classification by precedence.
+            $classification =
+                if ($isNewlyInScope) { 'NewlyInScope' }
+                elseif ($isDecisionChanged) { 'DecisionChanged' }
+                elseif ($isNewlyAttested) { 'NewlyAttested' }
+                elseif ($isAlreadyAttested) { 'AlreadyAttestedEarlier' }
+                elseif ($isPersistentlyUndecided) { 'PersistentlyUndecided' }
+                else { 'OtherDecided' }
+
+            # Display / current state: prefer newest-present, else the latest-present prior.
+            $displayState = if ($presentNewest) { $newestState } else { $latestPresentState }
+            $currentState = $displayState
+
+            $rec = [ordered]@{
+                ItemKey                        = [string]$key
+                IdentityId                     = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'IdentityId' '') } else { '' }
+                IdentityName                   = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'IdentityName' '') } else { '' }
+                AccessId                       = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'AccessId' '') } else { '' }
+                AccessName                     = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'AccessName' '') } else { '' }
+                AccessType                     = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'AccessType' '') } else { '' }
+                SourceId                       = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'SourceId' '') } else { '' }
+                SourceName                     = if ($null -ne $displayState) { [string](Get-SPSeriesProp $displayState 'SourceName' '') } else { '' }
+                Classification                 = [string]$classification
+                IsNewlyInScope                 = [bool]$isNewlyInScope
+                IsAlreadyAttestedEarlier       = [bool]$isAlreadyAttested
+                IsNewlyAttested                = [bool]$isNewlyAttested
+                IsDecisionChanged              = [bool]$isDecisionChanged
+                IsPersistentlyUndecided        = [bool]$isPersistentlyUndecided
+                PriorAutoApprovedMasked        = [bool]$priorAutoApprovedMasked
+                FirstSeenOrderIndex            = [int]$firstSeen
+                LastSeenOrderIndex             = [int]$lastSeen
+                FirstGenuineApprovalOrderIndex = [int]$firstGenuineApproval
+                CurrentHonestDecision          = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'HonestDecision' '') } else { '' }
+                CurrentIsGenuineApproval       = if ($null -ne $currentState) { [bool](Get-SPSeriesProp $currentState 'IsGenuineApproval' $false) } else { $false }
+                CurrentReviewerName            = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerName' '') } else { '' }
+                CurrentReviewerId              = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerId' '') } else { '' }
+                CurrentReviewerEmail           = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerEmail' '') } else { '' }
+                CurrentReviewerSource          = if ($null -ne $currentState) { [string](Get-SPSeriesProp $currentState 'ReviewerSource' '') } else { '' }
+                CurrentUnverified              = if ($null -ne $currentState) { [bool](Get-SPSeriesProp $currentState 'Unverified' $false) } else { $false }
+                Unverified                     = [bool]$itemUnverified
+                Timeline                       = @($timeline.ToArray())
+            }
+            $items.Add($rec)
+
+            if ($counts.Contains($classification)) { $counts[$classification] = [int]$counts[$classification] + 1 }
+            $counts['Total'] = [int]$counts['Total'] + 1
+        }
+
+        # Deterministic item order: by ItemKey.
+        $sortedItems = @($items.ToArray() | Sort-Object -Property @{ Expression = { [string]$_.ItemKey } })
+
+        # --- 5. Per-reviewer rollups (attributed to the newest/latest-present reviewer). ---------
+        $newlyAttestedRollup = New-SPSeriesReviewerRollup -Items $sortedItems -Classification 'NewlyAttested'
+        $persistentRollup    = New-SPSeriesReviewerRollup -Items $sortedItems -Classification 'PersistentlyUndecided'
+
+        $data = [ordered]@{
+            SeriesStem                       = [string]$SeriesStem
+            NormalizedStem                   = [string]$NormalizedStem
+            PeriodType                       = [string]$PeriodType
+            InstanceCount                    = [int]$n
+            NewestCampaignId                 = [string]$newestCampId
+            NewestCampaignName               = [string]$newestCampNm
+            NewestOrderIndex                 = [int]$newestOrder
+            Counts                           = $counts
+            Items                            = $sortedItems
+            NewlyAttestedByReviewer          = $newlyAttestedRollup
+            PersistentlyUndecidedByReviewer  = $persistentRollup
+            Unverified                       = [bool]($unverifiedInstanceCount -gt 0)
+            UnverifiedInstanceCount          = [int]$unverifiedInstanceCount
+        }
+
+        if (Get-Command Write-SPLog -ErrorAction Ignore) {
+            $logArgs = @{
+                Message   = "Series '$NormalizedStem': $n instance(s), $($counts['Total']) item(s), $($counts['NewlyAttested']) newly attested, $($counts['PersistentlyUndecided']) persistently undecided"
+                Severity  = 'Info'
+                Component = 'SP.CampaignSeries'
+                Action    = 'Get-SPSeriesAttestationDelta'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $logArgs['CorrelationID'] = $CorrelationID }
+            Write-SPLog @logArgs
+        }
+        return @{ Success = $true; Data = $data; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPSeriesAttestationDelta failed: $($_.Exception.Message)" } }
+}
+
+function New-SPSeriesReviewerRollup {
+    # Internal: group the items of a single Classification by their CURRENT (newest/latest-present)
+    # attributed reviewer. Deterministic: clusters sorted by ReviewerName then ReviewerId, Items by
+    # ItemKey. Each cluster: @{ ReviewerName; ReviewerId; ReviewerEmail; Count; Items }.
+    param([object[]]$Items, [string]$Classification)
+    $buckets = @{}
+    foreach ($it in @($Items)) {
+        if ($null -eq $it) { continue }
+        if ([string](Get-SPSeriesProp $it 'Classification' '') -ne $Classification) { continue }
+        $rName  = [string](Get-SPSeriesProp $it 'CurrentReviewerName' '')
+        $rId    = [string](Get-SPSeriesProp $it 'CurrentReviewerId' '')
+        $rEmail = [string](Get-SPSeriesProp $it 'CurrentReviewerEmail' '')
+        $bk = '{0}|{1}' -f $rId, $rName
+        if (-not $buckets.ContainsKey($bk)) {
+            $buckets[$bk] = [pscustomobject]@{
+                ReviewerName  = $rName
+                ReviewerId    = $rId
+                ReviewerEmail = $rEmail
+                Members       = (New-Object System.Collections.Generic.List[object])
+            }
+        }
+        $buckets[$bk].Members.Add($it)
+    }
+    $out = New-Object System.Collections.Generic.List[object]
+    $orderedKeys = @($buckets.Keys | Sort-Object -Property @{ Expression = {
+                $b = $buckets[$_]
+                '{0}|{1}' -f ([string]$b.ReviewerName), ([string]$b.ReviewerId)
+            } })
+    foreach ($bk in $orderedKeys) {
+        $b = $buckets[$bk]
+        $mem = @($b.Members.ToArray() | Sort-Object -Property @{ Expression = { [string](Get-SPSeriesProp $_ 'ItemKey' '') } })
+        $out.Add([ordered]@{
+                ReviewerName  = [string]$b.ReviewerName
+                ReviewerId    = [string]$b.ReviewerId
+                ReviewerEmail = [string]$b.ReviewerEmail
+                Count         = [int]@($mem).Count
+                Items         = @($mem)
+            })
+    }
+    return @($out.ToArray())
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPCampaignSeriesKey',
     'Group-SPCampaignSeries',
     'Get-SPSeriesItemKey',
-    'Resolve-SPSeriesItemState'
+    'Resolve-SPSeriesItemState',
+    'Get-SPSeriesAttestationDelta'
 )
