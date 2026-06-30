@@ -351,7 +351,403 @@ function Group-SPCampaignSeries {
 
 #endregion
 
+#region Public: per-item key + honest state (V4c)
+
+function Get-SPSeriesUnwrapItem {
+    # Accept EITHER a cache wrapper (carries .Item, plus CertificationId/Name/CampaignName per
+    # the jsonl shape written at SP.AuditQueries.psm1:7346-7351) OR a raw ISC item. If the passed
+    # object carries a non-null 'Item' property, unwrap it; otherwise return it verbatim. Pure.
+    param([object]$Object)
+    if ($null -eq $Object) { return $null }
+    $inner = Get-SPSeriesProp $Object 'Item'
+    if ($null -ne $inner) { return $inner }
+    return $Object
+}
+
+function Get-SPSeriesItemFacts {
+    <#
+        Internal field extractor shared by Get-SPSeriesItemKey and Resolve-SPSeriesItemState.
+        Mirrors the raw-item field extraction in Group-SPAuditDecisions
+        (SP.AuditReportCore.psm1 lines 769-889): identity id, access node (accessSummary.access
+        else flat .access), access id/type/name, account (nativeIdentity + sourceId), and the
+        source id/name precedence chain (account -> entitlement/accessProfile/role -> access.source).
+        Returns a plain hashtable of extracted facts plus the composed cross-instance ItemKey.
+        $Item is assumed ALREADY UNWRAPPED. Null-safe throughout (PS 5.1 / StrictMode 1).
+    #>
+    param([object]$Item, [string]$IdentityProperty)
+    $facts = @{
+        IdentityId     = ''
+        IdentityName   = ''
+        AccessId       = ''
+        AccessName     = ''
+        AccessType     = ''
+        SourceId       = ''
+        SourceName     = ''
+        NativeIdentity = ''
+        ItemKey        = ''
+    }
+    if ($null -eq $Item) { return $facts }
+
+    # Identity id: identitySummary.identityId else identitySummary.id (caller may override the
+    # primary property name via -IdentityProperty). Name for display only (never in the key).
+    $idSummary = Get-SPSeriesProp $Item 'identitySummary'
+    $identityId = ''
+    if ($null -ne $idSummary) {
+        $idProps = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::IsNullOrWhiteSpace($IdentityProperty)) { $idProps.Add($IdentityProperty) }
+        $idProps.Add('identityId'); $idProps.Add('id')
+        foreach ($p in $idProps) {
+            $v = [string](Get-SPSeriesProp $idSummary $p '')
+            if (-not [string]::IsNullOrWhiteSpace($v)) { $identityId = $v; break }
+        }
+        $facts.IdentityName = [string](Get-SPSeriesProp $idSummary 'name' '')
+    }
+    $facts.IdentityId = $identityId.Trim()
+
+    # Access node: real ISC nests it under accessSummary.access; the simplified/mock shape uses
+    # a flat .access. Read whichever is present.
+    $accessSummary = Get-SPSeriesProp $Item 'accessSummary'
+    $accessObj = $null
+    if ($null -ne $accessSummary) { $accessObj = Get-SPSeriesProp $accessSummary 'access' }
+    if ($null -eq $accessObj) { $accessObj = Get-SPSeriesProp $Item 'access' }
+
+    # Entitlement/accessProfile/role node -- carries the SOURCE (sourceName/sourceId) for ISC.
+    $entObj = $null
+    if ($null -ne $accessSummary) {
+        foreach ($ak in @('entitlement', 'accessProfile', 'role')) {
+            $cand = Get-SPSeriesProp $accessSummary $ak
+            if ($null -ne $cand) { $entObj = $cand; break }
+        }
+    }
+
+    if ($null -ne $accessObj) {
+        $facts.AccessId   = [string](Get-SPSeriesProp $accessObj 'id' '')
+        $facts.AccessType = [string](Get-SPSeriesProp $accessObj 'type' '')
+        $facts.AccessName = [string](Get-SPSeriesProp $accessObj 'name' '')
+    }
+
+    # Account node (account-level discrimination): nativeIdentity + sourceId.
+    $account = Get-SPSeriesProp $Item 'account'
+    $accountSourceId = ''
+    if ($null -ne $account) {
+        $facts.NativeIdentity = [string](Get-SPSeriesProp $account 'nativeIdentity' '')
+        $accountSourceId = [string](Get-SPSeriesProp $account 'sourceId' '')
+        if ([string]::IsNullOrWhiteSpace($accountSourceId)) {
+            $accSrc = Get-SPSeriesProp $account 'source'
+            if ($null -ne $accSrc) { $accountSourceId = [string](Get-SPSeriesProp $accSrc 'id' '') }
+        }
+    }
+
+    # Source id precedence chain: account.sourceId -> entitlement.sourceId -> access.source.id.
+    $sourceId = ''
+    if (-not [string]::IsNullOrWhiteSpace($accountSourceId)) { $sourceId = $accountSourceId }
+    if ([string]::IsNullOrWhiteSpace($sourceId) -and $null -ne $entObj) {
+        $sourceId = [string](Get-SPSeriesProp $entObj 'sourceId' '')
+    }
+    if ([string]::IsNullOrWhiteSpace($sourceId) -and $null -ne $accessObj) {
+        $accSource = Get-SPSeriesProp $accessObj 'source'
+        if ($null -ne $accSource) { $sourceId = [string](Get-SPSeriesProp $accSource 'id' '') }
+    }
+    $facts.SourceId = $sourceId
+
+    # Source name (name-derived fallback): entitlement.sourceName -> access.source.name -> account.sourceName.
+    $sourceName = ''
+    if ($null -ne $entObj) { $sourceName = [string](Get-SPSeriesProp $entObj 'sourceName' '') }
+    if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $accessObj) {
+        $accSource = Get-SPSeriesProp $accessObj 'source'
+        if ($null -ne $accSource) { $sourceName = [string](Get-SPSeriesProp $accSource 'name' '') }
+    }
+    if ([string]::IsNullOrWhiteSpace($sourceName) -and $null -ne $account) {
+        $sourceName = [string](Get-SPSeriesProp $account 'sourceName' '')
+    }
+    $facts.SourceName = $sourceName
+
+    # Compose the STABLE cross-instance key `idPart|accessPart|sourcePart`. Immutable IDs win over
+    # names so an entitlement/source RENAME does not churn the key (same rationale as the snapshot
+    # Key at SP.CampaignDelta.psm1:207-212). Lower-case ONLY name-derived fallback components so
+    # human case variance collapses; leave GUID/id components verbatim.
+    $idPart = $facts.IdentityId
+    $accessId = $facts.AccessId
+    $accessName = $facts.AccessName
+    $accessType = $facts.AccessType
+    $nativeIdentity = $facts.NativeIdentity
+
+    # Return '' (never throw) when identityId AND every access discriminator are blank.
+    if ([string]::IsNullOrWhiteSpace($idPart) -and
+        [string]::IsNullOrWhiteSpace($accessId) -and
+        [string]::IsNullOrWhiteSpace($accessName) -and
+        [string]::IsNullOrWhiteSpace($nativeIdentity)) {
+        $facts.ItemKey = ''
+        return $facts
+    }
+
+    $accessPart = ''
+    if (-not [string]::IsNullOrWhiteSpace($accessId)) {
+        $accessPart = $accessId.Trim()
+    }
+    elseif ($accessType.ToUpperInvariant() -eq 'ACCOUNT' -or [string]::IsNullOrWhiteSpace($accessName)) {
+        $accessPart = 'account:' + $nativeIdentity.Trim().ToLowerInvariant()
+    }
+    else {
+        $accessPart = $accessName.Trim().ToLowerInvariant()
+    }
+
+    $sourcePart = ''
+    if (-not [string]::IsNullOrWhiteSpace($sourceId)) { $sourcePart = $sourceId.Trim() }
+    else { $sourcePart = $sourceName.Trim().ToLowerInvariant() }
+
+    $facts.ItemKey = ('{0}|{1}|{2}' -f $idPart, $accessPart, $sourcePart)
+    return $facts
+}
+
+function Get-SPSeriesItemKey {
+    <#
+    .SYNOPSIS
+        Compute a STABLE cross-instance item key for a certification access-review item, so the
+        SAME identity+access pairs JOIN across recurring campaign instances even though the ISC
+        item id differs in every campaign. PURE / deterministic / hot-path-safe (no IO, no log).
+    .DESCRIPTION
+        Accepts EITHER a cache wrapper (@{Item;CertificationId;CertificationName;CampaignName}, the
+        jsonl shape written at SP.AuditQueries.psm1:7346-7351) OR a raw ISC item; a non-null .Item
+        property is unwrapped first. Mirrors the raw-item field extraction in Group-SPAuditDecisions
+        (identityId, access node, access id/type/name, account nativeIdentity, source id/name).
+
+        Composes `idPart|accessPart|sourcePart` where idPart = trimmed identityId; accessPart =
+        accessId if present, else 'account:'+nativeIdentity for an ACCOUNT-level item (or when the
+        access name is blank), else the access name; sourcePart = the resolved source id, else the
+        source name. Immutable IDs win over names so a rename does not churn the key; only the
+        name-derived fallback components are lower-cased. Returns '' (never throws) when identityId
+        AND every access discriminator are blank.
+    .PARAMETER Item
+        The cache wrapper or raw ISC access-review item (PSCustomObject or hashtable).
+    .PARAMETER IdentityProperty
+        OPTIONAL override for the identitySummary property name read for the identity id (the
+        built-in chain is identityId -> id). When supplied it is tried FIRST.
+    .PARAMETER CertificationId
+        Accepted for signature parity with Resolve-SPSeriesItemState; NOT part of the key (the key
+        must be cert-independent so instances join), so it is intentionally unused here.
+    .OUTPUTS
+        [string] the stable cross-instance key, or '' when no discriminator is available.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][AllowNull()][object]$Item,
+        [string]$IdentityProperty,
+        [string]$CertificationId
+    )
+    $raw = Get-SPSeriesUnwrapItem $Item
+    $facts = Get-SPSeriesItemFacts -Item $raw -IdentityProperty $IdentityProperty
+    return [string]$facts.ItemKey
+}
+
+function Resolve-SPSeriesItemState {
+    <#
+    .SYNOPSIS
+        Resolve the HONEST per-item decision state + reviewer attribution for a certification
+        access-review item, for the V4c series-attestation walk. PURE: classifies/attributes only
+        what it is given (the cache layer supplies the sealed roster + ACTIVE-state cached items).
+    .DESCRIPTION
+        Unwraps a cache wrapper as Get-SPSeriesItemKey does and derives CertificationId from the
+        wrapper when -CertificationId is not supplied. Reuses the SINGLE shared honest classifier
+        (ConvertTo-SPCanonicalDecision, guarded): a genuine reviewer Approve/Revoke stays
+        Approved/Revoked, but pending OR auto-approved-at-close (idNowAutoApproved) is demoted to
+        'Pending' and surfaced here as HonestDecision 'Undecided' -- NEVER a genuine approval.
+
+        Reviewer attribution mirrors the $resolveAssigned closure in Group-SPCompletedPendingByReviewer:
+        if the item's cert is in the sealed Roster, the cert-ASSIGNED reviewer wins (ReviewerSource
+        'roster') -- the ONLY correct attribution for an undecided item whose item.reviewedBy is null;
+        else it falls back to item.reviewedBy ONLY when present (a genuinely-decided item,
+        ReviewerSource 'item'); else '(Unassigned)' (ReviewerSource 'none'). item.reviewedBy is NEVER
+        read when null.
+    .PARAMETER Item
+        The cache wrapper or raw ISC access-review item.
+    .PARAMETER Roster
+        The sealed cert roster (ConvertTo-SPCertRosterEntry-shaped entries:
+        CertificationId / ReviewerName / ReviewerId / ReviewerEmail).
+    .PARAMETER CertificationId
+        The item's certification id; derived from the wrapper when omitted.
+    .PARAMETER Unverified
+        Propagated provenance flag from the instance meta (CapturedWhileActive / Unverified).
+    .PARAMETER Status
+        Optional instance status (e.g. ACTIVE/COMPLETED); accepted for caller context, recorded only.
+    .OUTPUTS
+        [pscustomobject] the honest item-state record (ItemKey, identity/access/source fields,
+        RawDecision, HonestDecision, IsGenuineApproval, IsGenuineDecision, IsAutoApproved,
+        DecisionDate, reviewer attribution, Unverified).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][AllowNull()][object]$Item,
+        [AllowEmptyCollection()][object[]]$Roster = @(),
+        [string]$CertificationId,
+        [bool]$Unverified = $false,
+        [string]$Status
+    )
+
+    # Derive the cert id from the wrapper when the caller did not supply one (do this BEFORE unwrap).
+    $certId = ''
+    if ($PSBoundParameters.ContainsKey('CertificationId') -and -not [string]::IsNullOrWhiteSpace($CertificationId)) {
+        $certId = [string]$CertificationId
+    }
+    else {
+        $certId = [string](Get-SPSeriesProp $Item 'CertificationId' '')
+    }
+
+    $raw = Get-SPSeriesUnwrapItem $Item
+    $facts = Get-SPSeriesItemFacts -Item $raw
+
+    # Raw decision string (mirror SP.AuditReportCore.psm1 lines 908-924): flat string or nested
+    # {value/decision/type/name}.
+    $decision = ''
+    $decRaw = Get-SPSeriesProp $raw 'decision'
+    if ($null -ne $decRaw) {
+        if ($decRaw -is [string]) {
+            $decision = $decRaw
+        }
+        else {
+            foreach ($prop in @('value', 'decision', 'type', 'name')) {
+                $cand = Get-SPSeriesProp $decRaw $prop ''
+                if (-not [string]::IsNullOrWhiteSpace([string]$cand)) { $decision = [string]$cand; break }
+            }
+        }
+    }
+
+    # Justification = item.comment else item.comments (mirror lines 793-811).
+    $justification = ''
+    $cmt = Get-SPSeriesProp $raw 'comment'
+    if (-not [string]::IsNullOrWhiteSpace([string]$cmt)) {
+        $justification = [string]$cmt
+    }
+    else {
+        $cm = Get-SPSeriesProp $raw 'comments'
+        if ($null -ne $cm) {
+            if ($cm -is [string]) {
+                $justification = $cm
+            }
+            elseif ($cm -is [System.Collections.IEnumerable]) {
+                $parts = @()
+                foreach ($c in $cm) {
+                    if ($null -eq $c) { continue }
+                    if ($c -is [string]) { $parts += $c }
+                    else {
+                        $cc = Get-SPSeriesProp $c 'comment'
+                        $tt = Get-SPSeriesProp $c 'text'
+                        if (-not [string]::IsNullOrWhiteSpace([string]$cc)) { $parts += [string]$cc }
+                        elseif (-not [string]::IsNullOrWhiteSpace([string]$tt)) { $parts += [string]$tt }
+                    }
+                }
+                $justification = ($parts -join '; ')
+            }
+        }
+    }
+
+    $decisionDate = [string](Get-SPSeriesProp $raw 'decisionDate' '')
+
+    # HONEST decision via the single shared classifier (demotes pending AND idNowAutoApproved-APPROVE
+    # to 'Pending'). Guarded so the module does not hard-depend on it being pre-imported; the inline
+    # fallback mirrors the same three-bucket logic when the classifier is not in-session.
+    $canon = 'Pending'
+    if (Get-Command ConvertTo-SPCanonicalDecision -ErrorAction Ignore) {
+        $canon = ConvertTo-SPCanonicalDecision -Decision $decision -Justification $justification
+    }
+    else {
+        $decUp = ([string]$decision).ToUpperInvariant()
+        if ($decUp -in @('APPROVE', 'APPROVED', 'CERTIFY')) {
+            $isMarker = $false
+            if (Get-Command Test-SPAutoApproveMarker -ErrorAction Ignore) {
+                $isMarker = [bool](Test-SPAutoApproveMarker -Justification $justification)
+            }
+            elseif (-not [string]::IsNullOrEmpty($justification)) {
+                $isMarker = ($justification.IndexOf('idNowAutoApproved', [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+            }
+            $canon = if ($isMarker) { 'Pending' } else { 'Approved' }
+        }
+        elseif ($decUp -in @('REVOKE', 'REVOKED', 'DENY', 'REJECT', 'EXCEPTION')) {
+            $canon = 'Revoked'
+        }
+        else { $canon = 'Pending' }
+    }
+
+    $honestDecision   = if ($canon -eq 'Pending') { 'Undecided' } else { $canon }
+    $isGenuineApprove = ($canon -eq 'Approved')
+    $isGenuineDecide  = ($canon -in @('Approved', 'Revoked'))
+    # Auto-approved-at-close: the raw decision is an APPROVE family value yet the honest classifier
+    # demoted it to Pending (only the idNowAutoApproved marker does that) -- equivalent to
+    # Test-SPAutoApproveMarker but avoids a second call.
+    $decUpper = ([string]$decision).ToUpperInvariant()
+    $isAutoApproved = (($decUpper -in @('APPROVE', 'APPROVED', 'CERTIFY')) -and ($canon -eq 'Pending'))
+
+    # Reviewer attribution. Index the roster by CertificationId (first entry wins); a cert in the
+    # sealed roster -> the cert-ASSIGNED reviewer (the correct attribution for an undecided item
+    # whose item.reviewedBy is null). Else fall back to item.reviewedBy ONLY when present. Else
+    # '(Unassigned)'. NEVER read item.reviewedBy when it is null.
+    $rosterByCertId = @{}
+    foreach ($re in @($Roster)) {
+        if ($null -eq $re) { continue }
+        $rcId = [string](Get-SPSeriesProp $re 'CertificationId' '')
+        if ([string]::IsNullOrWhiteSpace($rcId)) { continue }
+        if (-not $rosterByCertId.ContainsKey($rcId)) { $rosterByCertId[$rcId] = $re }
+    }
+
+    $reviewerName = ''; $reviewerId = ''; $reviewerEmail = ''; $reviewerSource = 'none'
+    $matched = $false
+    if (-not [string]::IsNullOrWhiteSpace($certId) -and $rosterByCertId.ContainsKey($certId)) {
+        $re = $rosterByCertId[$certId]
+        $rn = [string](Get-SPSeriesProp $re 'ReviewerName' '')
+        if (-not [string]::IsNullOrWhiteSpace($rn)) {
+            $reviewerName   = $rn
+            $reviewerId     = [string](Get-SPSeriesProp $re 'ReviewerId' '')
+            $reviewerEmail  = [string](Get-SPSeriesProp $re 'ReviewerEmail' '')
+            $reviewerSource = 'roster'
+            $matched = $true
+        }
+    }
+    if (-not $matched) {
+        $rb = Get-SPSeriesProp $raw 'reviewedBy'   # only read further when non-null
+        if ($null -ne $rb) {
+            $rn = [string](Get-SPSeriesProp $rb 'name' '')
+            if (-not [string]::IsNullOrWhiteSpace($rn)) {
+                $reviewerName   = $rn
+                $reviewerId     = [string](Get-SPSeriesProp $rb 'id' '')
+                $reviewerEmail  = [string](Get-SPSeriesProp $rb 'email' '')
+                $reviewerSource = 'item'
+                $matched = $true
+            }
+        }
+    }
+    if (-not $matched) { $reviewerName = '(Unassigned)'; $reviewerSource = 'none' }
+
+    return [pscustomobject]@{
+        ItemKey           = [string]$facts.ItemKey
+        IdentityId        = [string]$facts.IdentityId
+        IdentityName      = [string]$facts.IdentityName
+        AccessId          = [string]$facts.AccessId
+        AccessName        = [string]$facts.AccessName
+        AccessType        = [string]$facts.AccessType
+        SourceId          = [string]$facts.SourceId
+        SourceName        = [string]$facts.SourceName
+        CertificationId   = [string]$certId
+        RawDecision       = [string]$decision
+        HonestDecision    = [string]$honestDecision
+        IsGenuineApproval = [bool]$isGenuineApprove
+        IsGenuineDecision = [bool]$isGenuineDecide
+        IsAutoApproved    = [bool]$isAutoApproved
+        DecisionDate      = [string]$decisionDate
+        ReviewerId        = [string]$reviewerId
+        ReviewerName      = [string]$reviewerName
+        ReviewerEmail     = [string]$reviewerEmail
+        ReviewerSource    = [string]$reviewerSource
+        Unverified        = [bool]$Unverified
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Get-SPCampaignSeriesKey',
-    'Group-SPCampaignSeries'
+    'Group-SPCampaignSeries',
+    'Get-SPSeriesItemKey',
+    'Resolve-SPSeriesItemState'
 )

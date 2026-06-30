@@ -293,6 +293,8 @@
         # SP.CampaignSeries - recurring series derivation (V4c)
         'Get-SPCampaignSeriesKey'
         'Group-SPCampaignSeries'
+        'Get-SPSeriesItemKey'
+        'Resolve-SPSeriesItemState'
     )
 
     # Do not export variables or aliases from nested modules
