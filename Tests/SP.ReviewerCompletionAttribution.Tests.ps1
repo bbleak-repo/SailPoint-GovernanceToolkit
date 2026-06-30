@@ -62,7 +62,7 @@ BeforeAll {
     # the cert roster (empty CachePath => Live fallback built from the supplied certs), then
     # attribute pending items to the cert-assigned reviewer.
     function Invoke-CompletedAttribution {
-        param($CampaignId, $CachePath)
+        param($CampaignId, $CachePath, [switch]$IncludeUnsignedComplete)
         $camp  = $Fixtures.campaigns | Where-Object { $_.id -eq $CampaignId }
         $certs = @($Fixtures.certifications | Where-Object { $_.campaign.id -eq $CampaignId })
         $wrapped = @()
@@ -74,12 +74,15 @@ BeforeAll {
         $dec    = Group-SPAuditDecisions -Items $wrapped
         $roster = Get-SPCachedCampaignRoster -Campaign $camp -Certifications $certs -CachePath $CachePath
         $roster.Success | Should -BeTrue -Because "roster live fallback must succeed for $CampaignId"
+        # COMP-REVIEWER-COMPLETENESS: forward the opt-in switch so RCA-06 can exercise the
+        # finished-but-unsigned surfacing while RCA-02..05/07 keep the default (off) path.
         return Group-SPCompletedPendingByReviewer `
             -PendingItems @($dec.Pending) `
             -DecidedItems (@($dec.Approved) + @($dec.Revoked)) `
             -Roster @($roster.Data) `
             -PrimaryReviewers @() `
-            -ReassignedAwayNames @{}
+            -ReassignedAwayNames @{} `
+            -IncludeUnsignedComplete:$IncludeUnsignedComplete
     }
 }
 
@@ -150,5 +153,37 @@ Describe "RCA -- COMPLETED reviewer completion attribution (R0)" {
             $expectedTotal = [int]$r.decidedCount + [int]$r.undecidedCount + [int]$r.autoApprovedCount
             $result[$r.reviewerName].TotalCount | Should -Be $expectedTotal -Because "TotalCount for $($r.reviewerName)"
         }
+    }
+
+    It "RCA-06 force-close (camp-ch-forceclose-001) WITH -IncludeUnsignedComplete: finished-but-unsigned (Quinn) AND undecided (Rita) both surface as non-completion" {
+        # The force-close entry uses a distinct 'forceCloseReviewers' property (NOT 'reviewers'),
+        # so read it directly -- Get-TruthReviewers returns @() for it by design.
+        $truthCamp = $Truth.campaigns | Where-Object { $_.campaignId -eq 'camp-ch-forceclose-001' }
+        $fc = @($truthCamp.forceCloseReviewers)
+        $quinnTruth = $fc | Where-Object { $_.reviewerId -eq 'id-ch-rv-011' }
+        $ritaTruth  = $fc | Where-Object { $_.reviewerId -eq 'id-ch-rv-012' }
+
+        $result = Invoke-CompletedAttribution -CampaignId 'camp-ch-forceclose-001' -CachePath $TestDrive -IncludeUnsignedComplete
+
+        # Quinn decided all 4 items but was force-signed -> finished-but-unsigned, PendingCount 0.
+        $result.Contains($quinnTruth.reviewerName) | Should -BeTrue -Because "Quinn was force-signed (signedBy.id != reviewer.id) so she did not complete"
+        $result[$quinnTruth.reviewerName].PendingCount | Should -Be 0 -Because "Quinn decided every item"
+        $result[$quinnTruth.reviewerName].CompletionReason | Should -Be 'finished-but-unsigned'
+        $result[$quinnTruth.reviewerName].TotalCount | Should -Be ([int]$quinnTruth.decidedCount) -Because "TotalCount is her decided count"
+
+        # Rita left undecided/auto-approved work -> still attributed via the pending loop.
+        $expectedRitaPending = [int]$ritaTruth.undecidedCount + [int]$ritaTruth.autoApprovedCount
+        $result.Contains($ritaTruth.reviewerName) | Should -BeTrue -Because "Rita has $expectedRitaPending undecided/auto item(s)"
+        $result[$ritaTruth.reviewerName].PendingCount | Should -Be $expectedRitaPending
+        $result[$ritaTruth.reviewerName].CompletionReason | Should -Be 'undecided-auto-approved'
+    }
+
+    It "RCA-07 force-close WITHOUT the switch: Quinn (finished-but-unsigned) is ABSENT -- default behaviour unchanged (opt-in contract)" {
+        $truthCamp  = $Truth.campaigns | Where-Object { $_.campaignId -eq 'camp-ch-forceclose-001' }
+        $quinnTruth = @($truthCamp.forceCloseReviewers) | Where-Object { $_.reviewerId -eq 'id-ch-rv-011' }
+
+        $result = Invoke-CompletedAttribution -CampaignId 'camp-ch-forceclose-001' -CachePath $TestDrive
+
+        $result.Contains($quinnTruth.reviewerName) | Should -BeFalse -Because "without -IncludeUnsignedComplete the finished-but-unsigned reviewer is NOT surfaced (default path identical)"
     }
 }

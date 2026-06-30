@@ -6,8 +6,10 @@
                                         "camp-active-001":  "camp-ch-active-001",
                                         "camp-completed-001":  "camp-ch-completed-001",
                                         "camp-transition-001":  "camp-ch-transition-001",
-                                        "reassignment-fixture":  "camp-ch-reassign-001"
+                                        "reassignment-fixture":  "camp-ch-reassign-001",
+                                        "camp-forceclose-001":  "camp-ch-forceclose-001"
                                     },
+                  "forceCloseRule":  "A force-closed cert is force-SIGNED by an admin/system identity (cert.signedBy.id != cert.reviewer.id; forceSigned=true, manuallySignedOff=false), so the cert's ASSIGNED reviewer can be did-not-complete even when undecided==0 AND auto==0 (finished-but-unsigned): completion needs the reviewer's OWN manual sign-off, which the force-close pre-empts. Because that case violates the generic completeFormula, camp-ch-forceclose-001 records its reviewers under the dedicated 'forceCloseReviewers' shape (NOT 'reviewers'/'expectedActive') so Get-TruthReviewers skips it and the generic MF loops stay green; the force-close WI asserts forceCloseReviewers directly.",
                   "planIdMappingRationale":  "The plan literal IDs camp-active-001 / camp-completed-001 ALREADY EXIST in the live mock seed-data.json with conflicting data and are load-bearing for existing mock tests (Tests/Integration/Test-SailPointWorkflow.ps1, Tests/Smoke/Invoke-SmokeTest.ps1). Per the additive prime directive they are NOT mutated; a new collision-free camp-ch-* namespace (ch = cache-honesty) is introduced instead. Downstream WI-1/WI-11 consume this truth file, so the IDs are decoupled from the plan literals.",
                   "classifierRules":  "Mirrors Group-SPAuditDecisions (Modules/SP.Audit/SP.AuditReportCore.psm1 switch at ~line 404): decision in {APPROVE,APPROVED,CERTIFY} AND justification/comment does NOT contain idNowAutoApproved =\u003e APPROVED (decided). decision in {APPROVE,...} WITH comment containing idNowAutoApproved =\u003e PENDING (auto-approved; counts as NOT complete). decision in {REVOKE,REVOKED,DENY,REJECT,EXCEPTION} =\u003e REVOKED (decided). null/empty/missing/UNDECIDED decision =\u003e PENDING (genuinely undecided). reviewerName is read from reviewedBy.name (OBJECT form), which is null for pending items.",
                   "reviewerCompleteRule":  "A cert\u0027s ASSIGNED reviewer SHOULD show COMPLETE iff that cert has zero undecided items (no null-decision AND no idNowAutoApproved), else INCOMPLETE. Attribution is by item.CertificationId -\u003e cert.reviewer (the sealed assigned reviewer), NEVER item.reviewedBy (null for pending items, which today collapses every undecided item into a single (Unassigned) row).",
@@ -172,6 +174,44 @@
                                                 "shouldAppearInIncompleteList":  false
                                             }
                                         ]
+                      },
+                      {
+                          "campaignId":  "camp-ch-forceclose-001",
+                          "status":  "COMPLETED",
+                          "forceClosed":  true,
+                          "note":  "FORCE-CLOSED COMPLETED campaign: both certs force-signed by System ForceClose (signedBy.id=id-ch-admin-001 != cert.reviewer.id), so BOTH reviewers did-not-complete for DISTINCT reasons. Quinn finished deciding all 4 items (undecided=0, auto=0) but never manually signed off before the force-close (finished-but-unsigned), so the generic completeFormula (shouldShowComplete == undecided==0 AND auto==0) does NOT hold for her. To express force-close non-completion additively without rewiring MF-04, this entry uses a distinct property name 'forceCloseReviewers' (NOT 'reviewers'/'expectedActive') so Get-TruthReviewers returns @() and the generic MF-02/03/04/09/10 loops skip it; the downstream force-close WI asserts against forceCloseReviewers directly.",
+                          "forceCloseReviewers":  [
+                                                      {
+                                                          "reviewerId":  "id-ch-rv-011",
+                                                          "reviewerName":  "Quinn ForceSigned",
+                                                          "certId":  "cert-ch-forceclose-001",
+                                                          "decidedCount":  4,
+                                                          "undecidedCount":  0,
+                                                          "autoApprovedCount":  0,
+                                                          "reassignedAway":  false,
+                                                          "shouldShowComplete":  false,
+                                                          "shouldAppearInIncompleteList":  true,
+                                                          "manuallySignedOff":  false,
+                                                          "signedByForceClose":  true,
+                                                          "completionReason":  "finished-but-unsigned",
+                                                          "reasonDetail":  "Decided all 4 items (3 APPROVE + 1 REVOKE) but the cert was force-signed by System ForceClose before she manually signed off; completion requires reviewer sign-off, which never happened. ISC shows decisionsMade 4/4 yet manuallySignedOff is false."
+                                                      },
+                                                      {
+                                                          "reviewerId":  "id-ch-rv-012",
+                                                          "reviewerName":  "Rita Undecided",
+                                                          "certId":  "cert-ch-forceclose-002",
+                                                          "decidedCount":  1,
+                                                          "undecidedCount":  1,
+                                                          "autoApprovedCount":  2,
+                                                          "reassignedAway":  false,
+                                                          "shouldShowComplete":  false,
+                                                          "shouldAppearInIncompleteList":  true,
+                                                          "manuallySignedOff":  false,
+                                                          "signedByForceClose":  true,
+                                                          "completionReason":  "undecided-auto-approved",
+                                                          "reasonDetail":  "Left 3 of 4 items unreviewed (1 genuinely undecided + 2 idNowAutoApproved at force-close); decided only 1 item. ISC inflated decisionsMade to 4/4 to present the cert as fully decided."
+                                                      }
+                                                  ]
                       }
                   ]
 }

@@ -81,7 +81,7 @@ BeforeAll {
 Describe "MF -- Cache-honesty mock fixtures" {
 
     It "MF-01 (a) fixtures parse and all 4 camp-ch-* campaigns are present with the expected status" {
-        @($Fixtures.campaigns | Where-Object { $_.id -like 'camp-ch-*' }).Count | Should -Be 4
+        @($Fixtures.campaigns | Where-Object { $_.id -like 'camp-ch-*' }).Count | Should -Be 5
         $ids = @($Fixtures.campaigns | ForEach-Object { $_.id })
         foreach ($tc in $Truth.campaigns) {
             $ids | Should -Contain $tc.campaignId

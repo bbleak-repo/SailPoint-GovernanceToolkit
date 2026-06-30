@@ -144,6 +144,449 @@ function Test-SPAutoApproveMarker {
     return $false
 }
 
+function Get-SPClosedIncompleteQualifier {
+    <#
+    .SYNOPSIS
+        Decides whether a COMPLETED/COMPLETING campaign was actually closed with
+        incomplete work, and returns an honest caption for the render.
+    .DESCRIPTION
+        Honesty/consistency (closed-incomplete signal): a force-closed-incomplete
+        campaign reports an ISC status of COMPLETED, which renders as a clean green
+        badge. That hides two facts: (a) not every assigned reviewer signed off, and
+        (b) items were never manually decided (auto-approved at force-close, which the
+        honest classifier counts as Pending/undecided -- never as a real approval).
+        This pure helper takes the honest numbers the caller already computes and
+        returns a flag + caption so BOTH V4 and V4b can append an amber qualifier next
+        to the (intentionally retained) ISC status badge.
+
+        Logic:
+          isCompleted        = Status (upper-invariant) in COMPLETED / COMPLETING
+          reviewersIncomplete = ReviewersTotal -gt 0 -and ReviewersSigned -lt ReviewersTotal
+          itemsIncomplete     = UndecidedCount -gt 0
+          IsClosedIncomplete  = isCompleted -and (reviewersIncomplete -or itemsIncomplete)
+        Caption is only populated when IsClosedIncomplete is $true; otherwise ''.
+        UndecidedCount must be the honest Group-SPAuditDecisions Pending bucket (with
+        auto-approved already reclassified as Pending), so the honest-numbers doctrine
+        is satisfied by what the caller passes in.
+    .PARAMETER Status
+        The campaign/ISC status string (e.g. 'COMPLETED', 'ACTIVE', 'COMPLETING').
+    .PARAMETER ReviewersSigned
+        Count of cert-assigned reviewers who actually signed off.
+    .PARAMETER ReviewersTotal
+        Count of cert-assigned reviewers (the sealed roster total).
+    .PARAMETER UndecidedCount
+        Honest undecided/pending item count (auto-approved already counted here).
+    .OUTPUTS
+        [pscustomobject] with IsClosedIncomplete [bool] and Caption [string].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Status,
+        [int]$ReviewersSigned,
+        [int]$ReviewersTotal,
+        [int]$UndecidedCount
+    )
+
+    $st = if ($null -ne $Status) { ([string]$Status).ToUpperInvariant() } else { '' }
+    $isCompleted = @('COMPLETED', 'COMPLETING') -contains $st
+    $reviewersIncomplete = ($ReviewersTotal -gt 0 -and $ReviewersSigned -lt $ReviewersTotal)
+    $itemsIncomplete = ($UndecidedCount -gt 0)
+    $isClosedIncomplete = ($isCompleted -and ($reviewersIncomplete -or $itemsIncomplete))
+
+    $caption = ''
+    if ($isClosedIncomplete) {
+        $caption = "Closed with incomplete work - $ReviewersSigned of $ReviewersTotal reviewers signed off, $UndecidedCount items never manually decided"
+    }
+
+    return [pscustomobject]@{
+        IsClosedIncomplete = [bool]$isClosedIncomplete
+        Caption            = [string]$caption
+    }
+}
+
+function Resolve-SPDecisionDateDisplay {
+    <#
+    .SYNOPSIS
+        Decides whether a raw decision date is a GENUINE decision time or a
+        created/placeholder substitute, and returns what the render should show.
+    .DESCRIPTION
+        Honesty/consistency (decision-date provenance): when an item carries no real
+        decision date the daily-evidence builder injects a fallback so the row still
+        renders. A signed reviewer's SignOffDate is a defensible fallback, but the
+        campaign CREATED timestamp is NOT a decision time -- presenting it as one makes
+        every undecided item look as if it was decided at campaign creation. This pure
+        helper takes the raw date plus an optional provenance tag (and/or the campaign
+        Created value as a value-based safety net) and tells the caller whether the date
+        is genuine; when it is not, the caller renders the placeholder ("-") instead.
+
+        Logic (IsGenuine = the date is a real decision time, not a created/placeholder
+        substitute):
+          - blank/whitespace RawDate                                  -> IsGenuine $false
+          - Provenance (case-insensitive) in campaign-created/created/
+            placeholder/fallback-created                              -> IsGenuine $false
+          - CampaignCreated non-blank AND RawDate value-equals it     -> IsGenuine $false
+            (parse BOTH with [datetime]::TryParse and compare instants; if either fails
+            to parse, compare .Trim() ordinal-ignore-case)
+          - otherwise                                                 -> IsGenuine $true
+        Display = Placeholder when not genuine, else RawDate verbatim (the caller still
+        runs its own $fmtDt scriptblock over a genuine Display to format it).
+    .PARAMETER RawDate
+        The raw decision-date string carried on the item.
+    .PARAMETER Provenance
+        Optional provenance tag stamped at injection time (e.g. 'campaign-created',
+        'signoff'). Empty when unknown.
+    .PARAMETER CampaignCreated
+        Optional campaign Created timestamp; when RawDate equals it (by value) the date
+        is treated as a created placeholder even without a provenance tag.
+    .PARAMETER Placeholder
+        What to display when the date is not genuine. Defaults to '-'.
+    .OUTPUTS
+        [pscustomobject] with IsGenuine [bool] and Display [string].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$RawDate,
+        [string]$Provenance = '',
+        [string]$CampaignCreated = '',
+        [string]$Placeholder = '-'
+    )
+
+    $isGenuine = $true
+
+    if ([string]::IsNullOrWhiteSpace($RawDate)) {
+        $isGenuine = $false
+    }
+    else {
+        $prov = if ($null -ne $Provenance) { ([string]$Provenance).Trim().ToLowerInvariant() } else { '' }
+        $createdMarkers = @('campaign-created', 'created', 'placeholder', 'fallback-created')
+        if ($createdMarkers -contains $prov) {
+            $isGenuine = $false
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($CampaignCreated)) {
+            $rawDt = [datetime]::MinValue
+            $createdDt = [datetime]::MinValue
+            $rawOk = [datetime]::TryParse($RawDate, [ref]$rawDt)
+            $createdOk = [datetime]::TryParse($CampaignCreated, [ref]$createdDt)
+            if ($rawOk -and $createdOk) {
+                if ($rawDt -eq $createdDt) {
+                    $isGenuine = $false
+                }
+            }
+            else {
+                if ([string]::Equals($RawDate.Trim(), $CampaignCreated.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isGenuine = $false
+                }
+            }
+        }
+    }
+
+    $display = if ($isGenuine) { [string]$RawDate } else { [string]$Placeholder }
+
+    return [pscustomobject]@{
+        IsGenuine = [bool]$isGenuine
+        Display   = [string]$display
+    }
+}
+
+function Get-SPReviewerCompletion {
+    <#
+    .SYNOPSIS
+        Returns ONE canonical reviewer-completion figure + the three label formats
+        the daily-evidence render needs, so the exec box, Section A, and Key
+        Indicators can never disagree.
+    .DESCRIPTION
+        Honesty/consistency (reviewer-% split): three surfaces previously rendered
+        the reviewer-completion concept from two different data sources, so Section A
+        showed "-" while the exec box showed "0 / 2" and Key Indicators showed "0%"
+        for the very same campaign. This pure helper takes the canonical figure
+        (Signed = sealed-roster reviewers with Phase=='SIGNED', over Total = the
+        sealed roster = ReviewerActions Primary+Reassigned) and emits the percent,
+        fraction, and combined labels each surface needs from a single computation.
+
+        Per the honest-numbers doctrine a reviewer who decided every item but never
+        signed off is NOT complete, so completion is measured by sign-off, mirroring
+        the two surfaces (exec + KPI) that already agreed.
+
+        Pct          = round(Signed/Total*100) or 0 when Total is 0 (no divide-by-zero)
+        HasReviewers = Total -gt 0
+        PercentLabel = "<Pct>%"                 (Key Indicators surface)
+        FractionLabel= "<Signed> / <Total>"     (exec "Reviewers Signed Off" surface)
+        CombinedLabel= "<Pct>% (<Signed>/<Total>)" (Section A "Reviewer %" surface)
+        SeverityClass= none (no reviewers) / green (>=100) / amber (>=50) / red,
+                       thresholds chosen to match the existing exec/KPI revCompColor.
+    .PARAMETER Signed
+        Count of cert-assigned reviewers who actually signed off (Phase=='SIGNED').
+    .PARAMETER Total
+        Count of cert-assigned reviewers (the sealed roster total).
+    .OUTPUTS
+        [pscustomobject] with Signed, Total, Pct, HasReviewers, PercentLabel,
+        FractionLabel, CombinedLabel, SeverityClass.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [int]$Signed,
+        [int]$Total
+    )
+
+    $pct = if ($Total -gt 0) { [int][math]::Round($Signed / $Total * 100, 0) } else { 0 }
+    $hasReviewers = [bool]($Total -gt 0)
+    $severity = if (-not $hasReviewers) { 'none' } elseif ($pct -ge 100) { 'green' } elseif ($pct -ge 50) { 'amber' } else { 'red' }
+
+    return [pscustomobject]@{
+        Signed        = [int]$Signed
+        Total         = [int]$Total
+        Pct           = [int]$pct
+        HasReviewers  = [bool]$hasReviewers
+        PercentLabel  = "$pct%"
+        FractionLabel = "$Signed / $Total"
+        CombinedLabel = "$pct% ($Signed/$Total)"
+        SeverityClass = [string]$severity
+    }
+}
+
+function Get-SPForceSignedReviewerCount {
+    <#
+    .SYNOPSIS
+        Counts the DISTINCT cert-assigned reviewers whose certs were ADMIN force-signed
+        (signedBy.id != reviewer.id) so the canonical sign-off figure can exclude them.
+    .DESCRIPTION
+        Honesty/consistency (genuine sign-off): the daily-evidence canonical reviewer-
+        completion figure took its Signed count from cert Phase=='SIGNED' alone. ISC force-
+        signs EVERY cert at a force-close, so a campaign closed by an admin reads phase
+        SIGNED for reviewers who never signed -- inflating the exec "Reviewers Signed Off",
+        the KPI "Reviewer Completion", and Section A "Reviewer %" to 100% green, while the
+        SAME report's "Reviewers who did not complete" section lists those very reviewers.
+        An admin force-close is NOT a reviewer sign-off (honest-numbers doctrine).
+
+        This pure helper walks the sealed/live cert roster (ConvertTo-SPCertRosterEntry
+        entries, which carry ReviewerId + SignedById) and counts each DISTINCT reviewer for
+        whom there is POSITIVE force-close evidence: SignedById is non-empty AND != ReviewerId.
+        Distinct-by ReviewerId (falling back to ReviewerName) so a reviewer with several
+        force-signed certs is counted once, matching the by-name aggregation of the Phase-
+        based Signed tally it is subtracted from. Mirrors EXACTLY the $forceSigned predicate
+        Group-SPCompletedPendingByReviewer uses to surface finished-but-unsigned reviewers,
+        so the count and that section can never disagree.
+
+        Conservative by construction: an empty SignedById (sealed/ACTIVE roster lacking
+        signedBy) is INDETERMINATE -- never treated as force-close evidence -- so a genuine
+        manual sign-off (SignedById == ReviewerId) and a roster without provenance both add
+        ZERO, leaving the Phase-based figure unchanged. Returns a plain [int] (NOT the
+        @{Success;Data;Error} envelope), matching the sibling pure functions.
+    .PARAMETER Roster
+        The sealed/live cert roster (array of ConvertTo-SPCertRosterEntry objects). $null or
+        empty -> 0.
+    .OUTPUTS
+        [int] count of distinct force-signed reviewers.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [object[]]$Roster
+    )
+
+    if ($null -eq $Roster) { return 0 }
+
+    $seen = @{}
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { continue }
+        $rId = ''; $signedById = ''; $rName = ''
+        if ($null -ne $re.PSObject.Properties['ReviewerId'])   { $rId        = [string]$re.ReviewerId }
+        if ($null -ne $re.PSObject.Properties['SignedById'])   { $signedById = [string]$re.SignedById }
+        if ($null -ne $re.PSObject.Properties['ReviewerName']) { $rName      = [string]$re.ReviewerName }
+        # Positive force-close evidence ONLY: signedBy present AND not the assigned reviewer.
+        $forceSigned = (-not [string]::IsNullOrWhiteSpace($signedById)) -and ($signedById -ne $rId)
+        if (-not $forceSigned) { continue }
+        $key = if (-not [string]::IsNullOrWhiteSpace($rId)) { 'id:' + $rId } else { 'nm:' + $rName }
+        if (-not $seen.ContainsKey($key)) { $seen[$key] = $true }
+    }
+    return [int]$seen.Count
+}
+
+function Get-SPDistinctReviewerSignOff {
+    <#
+    .SYNOPSIS
+        Collapses a ReviewerActions Primary+Reassigned list to DISTINCT-by-reviewer
+        Signed and Total counts, so the Phase-based sign-off tally is on the SAME
+        distinct-by-reviewer basis as Get-SPForceSignedReviewerCount and the
+        "Reviewers who did not complete" section.
+    .DESCRIPTION
+        Honesty/consistency (multi-cert reassigned over-statement). Group-SPReviewerActions
+        aggregates PRIMARY reviewers by name (ONE entry per reviewer) but emits ONE
+        REASSIGNED entry PER CERT. The daily-evidence render counted Phase=='SIGNED'
+        entries directly --
+            $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
+        -- so a delegate holding N force-signed reassigned certs was tallied N times. The
+        genuine-sign-off correction (Get-SPForceSignedReviewerCount) is DISTINCT-by-
+        ReviewerId, counting that delegate ONCE, so signed=N minus forceSigned=1 left a
+        spurious N-1 "signed" reviewers. For a delegate with 2 force-signed reassigned
+        certs that gave signed=2, forceSigned=1, corrected=max(0,2-1)=1 over total=2 =>
+        50%, when the honest genuine sign-off is 0% -- re-introducing exactly the
+        over-statement this feature targets (the distinct-keyed accountability section
+        would list that delegate while exec/KPI/Section A showed 50%). An admin force-close
+        is not a reviewer sign-off (honest-numbers doctrine), and per-cert duplication must
+        not re-introduce that inconsistency.
+
+        This pure helper keys each reviewer-action entry by a stable identity (ReviewerId
+        when present, else display Name, else Email, else a positional fallback so a
+        genuinely identity-less entry is still counted as its own distinct reviewer) and
+        returns:
+            Total  = distinct reviewers across all entries
+            Signed = distinct reviewers with >= 1 Phase=='SIGNED' entry
+        so the caller's `$signed - forceSigned` subtraction AND `$signed / $total`
+        percentage are both distinct-by-reviewer, matching the correction and the
+        accountability section. For PRIMARY-only / single-cert rosters (already name-
+        aggregated, the camp-ch-forceclose-001 shape) the counts are byte-for-byte
+        identical to the old per-entry tally -- additive. Returns a plain [pscustomobject]
+        (NOT the @{Success;Data;Error} envelope), like its sibling pure helpers.
+    .PARAMETER Reviewers
+        The combined ReviewerActions list (Group-SPReviewerActions Primary + Reassigned
+        entries). Each entry carries at least .Phase and .Name; .ReviewerId / .Email are
+        used for the identity key when present. $null/empty -> Signed 0 / Total 0.
+    .OUTPUTS
+        [pscustomobject] with Signed [int] and Total [int].
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [object[]]$Reviewers
+    )
+
+    $totalSeen  = @{}
+    $signedSeen = @{}
+    if ($null -ne $Reviewers) {
+        $idx = 0
+        foreach ($rv in $Reviewers) {
+            if ($null -eq $rv) { continue }
+            $idx++
+            $rId = ''; $rName = ''; $rEmail = ''; $phase = ''
+            if ($null -ne $rv.PSObject.Properties['ReviewerId']) { $rId    = [string]$rv.ReviewerId }
+            if ($null -ne $rv.PSObject.Properties['Name'])       { $rName  = [string]$rv.Name }
+            if ($null -ne $rv.PSObject.Properties['Email'])      { $rEmail = [string]$rv.Email }
+            if ($null -ne $rv.PSObject.Properties['Phase'])      { $phase  = [string]$rv.Phase }
+            $key =
+                if (-not [string]::IsNullOrWhiteSpace($rId))    { 'id:' + $rId }
+                elseif (-not [string]::IsNullOrWhiteSpace($rName))  { 'nm:' + $rName }
+                elseif (-not [string]::IsNullOrWhiteSpace($rEmail)) { 'em:' + $rEmail }
+                else { 'ix:' + $idx }
+            if (-not $totalSeen.ContainsKey($key)) { $totalSeen[$key] = $true }
+            if ($phase -eq 'SIGNED' -and -not $signedSeen.ContainsKey($key)) { $signedSeen[$key] = $true }
+        }
+    }
+
+    return [pscustomobject]@{
+        Signed = [int]$signedSeen.Count
+        Total  = [int]$totalSeen.Count
+    }
+}
+
+function Resolve-SPRosterSignOffProvenance {
+    <#
+    .SYNOPSIS
+        Stamps sign-off provenance (signedBy) from the LIVE certs onto a cert roster whose
+        own provenance is indeterminate, so the genuine-sign-off correction is not inert for
+        a force-closed campaign that was SEALED while ACTIVE.
+    .DESCRIPTION
+        Honesty\consistency (sealed force-close gap). Get-SPForceSignedReviewerCount reads
+        SignedById off the cert roster. But Get-SPCachedCampaignRoster PREFERS the ACTIVE-state
+        SEALED roster, whose entries were captured BEFORE any cert was signed and therefore
+        carry SignedById='' (indeterminate). For a force-closed COMPLETED campaign that was
+        sealed while active -- the core cache-honesty path -- the force-sign count is then 0,
+        so the exec / KPI / Section A reviewer % is NOT corrected and stays at the inflated
+        Phase=='SIGNED' tally (ISC force-signs every cert at close). Meanwhile the live certs
+        (post-close) DO carry signedBy = the admin who force-closed.
+
+        This pure helper reconciles the two: it keeps the SEALED entry's ASSIGNED reviewer
+        (the honest ACTIVE-state attribution) and fills in the MISSING SignedById/SignedByName
+        from the matching live cert (by CertificationId). It enriches ONLY entries whose own
+        SignedById is empty/whitespace -- a roster that already carries provenance (live
+        fallback, or a genuine manual sign-off) is returned untouched, so this never
+        overrides nor invents provenance. Conservative + additive: with no live certs, or no
+        CertificationId match, the entry is returned exactly as-is (still indeterminate ->
+        still contributes ZERO to the force-sign count, never a false positive).
+
+        After enrichment a force-signed reviewer (admin signedBy.id != assigned reviewer.id)
+        is detectable by Get-SPForceSignedReviewerCount even on the sealed path, so the
+        canonical reviewer-completion figure and the "Reviewers who did not complete" section
+        can no longer disagree for a sealed-while-active force-close. Returns a NEW array of
+        roster entries (the originals are not mutated); same shape as the input entries.
+    .PARAMETER Roster
+        The sealed/live cert roster (array of ConvertTo-SPCertRosterEntry-shaped entries,
+        carrying CertificationId + ReviewerId + SignedById). $null/empty -> @().
+    .PARAMETER Certifications
+        The LIVE cert set for the same campaign (each carrying .id + .signedBy). Used only to
+        source MISSING sign-off provenance. $null/empty -> the roster is returned unchanged.
+    .OUTPUTS
+        [object[]] roster entries, with empty SignedById/SignedByName filled from live certs
+        where a CertificationId match exists.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [object[]]$Roster,
+        [object[]]$Certifications
+    )
+
+    if ($null -eq $Roster) { return @() }
+    if ($null -eq $Certifications -or @($Certifications).Count -eq 0) { return @($Roster) }
+
+    # Build certId -> @{ Id; Name } sign-off map from the live certs (null-safe, PS 5.1).
+    $signMap = @{}
+    foreach ($cert in $Certifications) {
+        if ($null -eq $cert) { continue }
+        $cid = ''
+        if ($null -ne $cert.PSObject.Properties['id']) { $cid = [string]$cert.id }
+        if ([string]::IsNullOrWhiteSpace($cid)) { continue }
+        $sbId = ''; $sbName = ''
+        if ($null -ne $cert.PSObject.Properties['signedBy'] -and $null -ne $cert.signedBy) {
+            $sb = $cert.signedBy
+            if ($null -ne $sb.PSObject.Properties['id'])   { $sbId   = [string]$sb.id }
+            if ($null -ne $sb.PSObject.Properties['name']) { $sbName = [string]$sb.name }
+        }
+        # Last writer wins on duplicate cert ids; only record when provenance is present.
+        if (-not [string]::IsNullOrWhiteSpace($sbId)) {
+            $signMap[$cid] = @{ Id = $sbId; Name = $sbName }
+        }
+    }
+
+    $out = New-Object System.Collections.ArrayList
+    foreach ($re in $Roster) {
+        if ($null -eq $re) { [void]$out.Add($re); continue }
+
+        $existing = ''
+        if ($null -ne $re.PSObject.Properties['SignedById']) { $existing = [string]$re.SignedById }
+
+        # Already has provenance, or no CertificationId to match -> pass through untouched.
+        $cid = ''
+        if ($null -ne $re.PSObject.Properties['CertificationId']) { $cid = [string]$re.CertificationId }
+        if (-not [string]::IsNullOrWhiteSpace($existing) -or
+            [string]::IsNullOrWhiteSpace($cid) -or
+            -not $signMap.ContainsKey($cid)) {
+            [void]$out.Add($re); continue
+        }
+
+        # Clone the entry (do NOT mutate the input) and stamp the missing provenance.
+        $clone = $re.PSObject.Copy()
+        $prov  = $signMap[$cid]
+        if ($null -ne $clone.PSObject.Properties['SignedById']) {
+            $clone.SignedById = $prov.Id
+        }
+        else {
+            $clone | Add-Member -NotePropertyName 'SignedById' -NotePropertyValue $prov.Id -Force
+        }
+        if ($null -ne $clone.PSObject.Properties['SignedByName']) {
+            $clone.SignedByName = $prov.Name
+        }
+        else {
+            $clone | Add-Member -NotePropertyName 'SignedByName' -NotePropertyValue $prov.Name -Force
+        }
+        [void]$out.Add($clone)
+    }
+    return @($out.ToArray())
+}
+
 function Get-SPDecisionBucket {
     <#
     .SYNOPSIS
@@ -739,6 +1182,18 @@ function Group-SPCompletedPendingByReviewer {
         Reviewer identity IDs whose certs were reassigned away -- skipped by ID (companion
         to ReassignedAwayNames). An ID match excludes only the reassigned-away person and
         will NOT wrongly drop an innocent same-named reviewer. Default empty -> no effect.
+    .PARAMETER IncludeUnsignedComplete
+        OPT-IN (COMP-REVIEWER-COMPLETENESS). When set, also surface reviewers who DECIDED
+        every item but never manually signed off -- the cert was force-signed by someone else
+        (signedBy.id != reviewer.id) at a force-close. These have NO pending items so they are
+        invisible to the default path, yet they did NOT complete (completion = sign-off AND
+        items-decided). For each roster entry not already in the pending map (and not reassigned
+        away), a row is added ONLY when there is POSITIVE evidence of a force-close: SignedById
+        is non-empty AND SignedById != ReviewerId (CompletionReason='finished-but-unsigned',
+        PendingCount=0). A manual sign-off (SignedById == ReviewerId) or an indeterminate sealed
+        roster (SignedById empty) adds NO row, so genuinely-complete reviewers stay absent and
+        sealed rosters lacking signedBy never fabricate rows. DEFAULT (switch off) is byte-for-
+        byte identical to today -- the additive contract RCA-02/07 lock.
     .OUTPUTS
         [System.Collections.Specialized.OrderedDictionary] keyed by reviewer Name, each
         value @{ Name; Email; ReviewerId; PendingCount; TotalCount }. Drop-in replacement
@@ -769,7 +1224,10 @@ function Group-SPCompletedPendingByReviewer {
         [switch]$KeyByReviewerId,
 
         [Parameter()]
-        [hashtable]$ReassignedAwayIds = @{}
+        [hashtable]$ReassignedAwayIds = @{},
+
+        [Parameter()]
+        [switch]$IncludeUnsignedComplete
     )
 
     # Index the roster by CertificationId for O(1) cert -> assigned-reviewer lookup.
@@ -834,7 +1292,11 @@ function Group-SPCompletedPendingByReviewer {
         if (-not [string]::IsNullOrWhiteSpace([string]$info.ReviewerId) -and $ReassignedAwayIds.ContainsKey([string]$info.ReviewerId)) { continue }
         $key = & $deriveKey $info
         if (-not $pendingByReviewer.Contains($key)) {
-            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0 }
+            # CompletionReason (COMP-REVIEWER-COMPLETENESS): every row carries WHY the reviewer
+            # did not complete. A row built from pending items has PendingCount>0 -> undecided/
+            # auto-approved work was left; the finished-but-unsigned roster loop below adds the
+            # other reason for force-signed reviewers who decided everything.
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = ''; ReviewerId = ''; PendingCount = 0; TotalCount = 0; CompletionReason = 'undecided-auto-approved' }
         }
         # Name = first non-empty display name seen for this key (a renamed reviewer keeps one
         # row with one display name).
@@ -847,6 +1309,38 @@ function Group-SPCompletedPendingByReviewer {
         }
         if ([string]::IsNullOrWhiteSpace([string]$pendingByReviewer[$key].ReviewerId) -and -not [string]::IsNullOrWhiteSpace($info.ReviewerId)) {
             $pendingByReviewer[$key].ReviewerId = $info.ReviewerId
+        }
+    }
+
+    # Finished-but-unsigned surfacing (COMP-REVIEWER-COMPLETENESS, OPT-IN). After the pending
+    # accumulation (so a reviewer with ANY undecided work already has a row) and BEFORE the
+    # TotalCount loop (so newly-added rows still get their decided count filled), walk the roster
+    # and add a row for each cert-assigned reviewer who left NO pending items yet did NOT complete
+    # because the cert was force-signed by someone else (signedBy.id != reviewer.id). Only POSITIVE
+    # force-close evidence adds a row: a manual sign-off or an indeterminate sealed roster (empty
+    # SignedById) is left absent, so genuinely-complete reviewers stay out and sealed rosters that
+    # lack signedBy never fabricate rows. Default (switch off) skips this entirely.
+    if ($IncludeUnsignedComplete) {
+        foreach ($re in $Roster) {
+            if ($null -eq $re) { continue }
+            $rName = ''; $rId = ''; $rEmail = ''
+            if ($null -ne $re.PSObject.Properties['ReviewerName'])  { $rName  = [string]$re.ReviewerName }
+            if ($null -ne $re.PSObject.Properties['ReviewerId'])    { $rId    = [string]$re.ReviewerId }
+            if ($null -ne $re.PSObject.Properties['ReviewerEmail']) { $rEmail = [string]$re.ReviewerEmail }
+            $signedById = ''
+            if ($null -ne $re.PSObject.Properties['SignedById']) { $signedById = [string]$re.SignedById }
+            $info = @{ Name = $rName; ReviewerId = $rId; Email = $rEmail }
+            if ([string]::IsNullOrWhiteSpace([string]$info.Name)) { $info.Name = '(Unassigned)' }
+            # Reassigned-away exclusion (mirror the pending loop) -- their work moved on.
+            if ($ReassignedAwayNames.ContainsKey($info.Name)) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($rId) -and $ReassignedAwayIds.ContainsKey($rId)) { continue }
+            $key = & $deriveKey $info
+            # Already has pending work -> already attributed; do not overwrite its reason.
+            if ($pendingByReviewer.Contains($key)) { continue }
+            # Classify sign-off. Only a force-close (positive evidence) is surfaced here.
+            $forceSigned    = (-not [string]::IsNullOrWhiteSpace($signedById)) -and ($signedById -ne $rId)
+            if (-not $forceSigned) { continue }
+            $pendingByReviewer[$key] = @{ Name = $info.Name; Email = $rEmail; ReviewerId = $rId; PendingCount = 0; TotalCount = 0; CompletionReason = 'finished-but-unsigned' }
         }
     }
 
@@ -3005,6 +3499,12 @@ Export-ModuleMember -Function @(
     'Group-SPAuditDecisions',
     'ConvertTo-SPCanonicalDecision',
     'Test-SPAutoApproveMarker',
+    'Get-SPClosedIncompleteQualifier',
+    'Resolve-SPDecisionDateDisplay',
+    'Get-SPReviewerCompletion',
+    'Get-SPForceSignedReviewerCount',
+    'Get-SPDistinctReviewerSignOff',
+    'Resolve-SPRosterSignOffProvenance',
     'Get-SPDecisionBucket',
     'Test-SPConnectedADSource',
     'Get-SPRevocationDisposition',

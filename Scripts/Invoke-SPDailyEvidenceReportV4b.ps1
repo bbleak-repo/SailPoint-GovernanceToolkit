@@ -571,6 +571,13 @@ try {
             # ASSIGNED reviewer (item.CertificationId -> roster), not item.reviewedBy.
             $rosterResult = Get-SPCachedCampaignRoster -Campaign $campaign -Certifications $certifications -CorrelationID $correlationID
             $certRoster = if ($rosterResult.Success) { @($rosterResult.Data) } else { @() }
+            # Sealed force-close gap: an ACTIVE-state seal captures certs BEFORE any sign-off,
+            # so its entries carry SignedById='' (indeterminate) and the genuine-sign-off
+            # correction (Get-SPForceSignedReviewerCount) would be inert for a force-closed
+            # COMPLETED campaign sealed while active. Stamp the missing sign-off provenance
+            # from the LIVE (post-close) certs so the correction is not defeated -- additive,
+            # keeps the sealed ASSIGNED reviewer, only fills MISSING provenance.
+            $certRoster = @(Resolve-SPRosterSignOffProvenance -Roster $certRoster -Certifications $certifications)
 
             $campaignAudit = @{
                 CampaignName    = $campName
@@ -708,6 +715,15 @@ try {
                 $fallbackDate = [string]$signedReviewers[0].SignOffDate
             }
         }
+        # Provenance of the fallback: true exactly when no signed reviewer was found,
+        # i.e. the placeholder is the campaign Created timestamp (NOT a decision time).
+        $fallbackIsCreated = ($fallbackDate -eq [string]$audit['Created'])
+        # Precompute the provenance tag as a statement-assignment. The inline
+        # `(if (...) {...} else {...})` form used AS a command argument is a runtime
+        # CommandNotFoundException in Windows PowerShell 5.1 (fires during argument
+        # evaluation, before Add-Member, so -ErrorAction cannot suppress it). The
+        # statement-assignment form below is legal and stamps the tag reliably.
+        $fallbackProv = if ($fallbackIsCreated) { 'campaign-created' } else { 'signoff' }
 
         # Collect truly-new scope items (Added = in current but NOT in prior campaign).
         # For COMPLETED campaigns, new scope items with APPROVE may be auto-decided.
@@ -720,6 +736,7 @@ try {
                 $itemDate = [string](Get-V4Prop $a 'DecisionDate' '')
                 if ([string]::IsNullOrWhiteSpace($itemDate)) {
                     $a | Add-Member -NotePropertyName 'DecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                    $a | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue $fallbackProv -Force -ErrorAction SilentlyContinue
                 }
                 $v4NewlyApproved.Add($a)
                 if (-not [string]::IsNullOrWhiteSpace($aKey)) { $v4SeenKeys[$aKey] = $true }
@@ -747,6 +764,7 @@ try {
                     $ndDate = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
                     if ([string]::IsNullOrWhiteSpace($ndDate)) {
                         $nd | Add-Member -NotePropertyName 'CurrDecisionDate' -NotePropertyValue $fallbackDate -Force -ErrorAction SilentlyContinue
+                        $nd | Add-Member -NotePropertyName 'DecisionDateProvenance' -NotePropertyValue $fallbackProv -Force -ErrorAction SilentlyContinue
                     }
                     $v4NewlyDecided.Add($nd)
                     if (-not [string]::IsNullOrWhiteSpace($ndKey)) { $v4SeenKeys[$ndKey] = $true }
@@ -1691,8 +1709,12 @@ $certReviewerMap = @{}
 $allApprovedCount = 0
 $allRevoked = [System.Collections.Generic.List[object]]::new()
 $allPendingCount = 0
+$itemsFromCacheCount = 0
 foreach ($audit in $campaignAudits) {
     $d = $audit['Decisions']
+    if ($audit['ItemsFromCache'] -eq $true) {
+        $itemsFromCacheCount += @($d['Approved']).Count + @($d['Revoked']).Count + @($d['Pending']).Count
+    }
     foreach ($grp in @('Approved', 'Revoked', 'Pending')) {
         foreach ($it in @($d[$grp])) {
             if ($null -eq $it) { continue }
@@ -1775,7 +1797,7 @@ summary{cursor:pointer}
 [void]$sb.AppendLine('<h1>Daily Evidence Report</h1>')
 [void]$sb.AppendLine('<div class="meta">SailPoint ISC Governance Toolkit | Report generated: ' + (ConvertTo-SafeHtml $genStr) + ' | Period: Last ' + $effectiveDaysBack + ' day(s)' + $envName2 + '</div>')
 $cachedCampaigns = @($campaignAudits | Where-Object { $_['ItemsFromCache'] -eq $true })
-$cacheNote = if ($NoCache) { ' | Items: fresh (no-cache mode)' } elseif ($cachedCampaigns.Count -gt 0) { " | Items: $($cachedCampaigns.Count) of $($campaignAudits.Count) from cache" } else { ' | Items: all fresh' }
+$cacheNote = if ($NoCache) { ' | Items: fresh (no-cache mode)' } elseif ($cachedCampaigns.Count -gt 0) { " | Items: $itemsFromCacheCount of $aggTotal from cache ($($cachedCampaigns.Count) of $($campaignAudits.Count) campaign(s))" } else { ' | Items: all fresh' }
 [void]$sb.AppendLine('<div class="status-line">' + ('{0:N0}' -f $aggDecided) + ' / ' + ('{0:N0}' -f $aggTotal) + ' decisions made (' + $aggPct + '%) &middot; ' + $activeCount + ' active campaign(s)' + (ConvertTo-SafeHtml $cacheNote) + '</div>')
 [void]$sb.AppendLine('</div>')
 
@@ -1807,9 +1829,29 @@ foreach ($audit in $campaignAudits) {
     $primary = if ($null -ne $ra -and $null -ne $ra['Primary']) { @($ra['Primary']) } else { @() }
     $reassigned = if ($null -ne $ra -and $null -ne $ra['Reassigned']) { @($ra['Reassigned']) } else { @() }
     $allRevw = @($primary) + @($reassigned)
-    $signed = @($allRevw | Where-Object { $_.Phase -eq 'SIGNED' }).Count
     $totRev = @($allRevw).Count
-    $revCompPct = if ($totRev -gt 0) { [math]::Round($signed / $totRev * 100, 0) } else { 0 }
+    # Distinct-by-reviewer sign-off basis: Group-SPReviewerActions emits ONE Reassigned entry
+    # PER CERT, so a delegate holding several force-signed reassigned certs would be tallied once
+    # PER CERT by a raw Phase=='SIGNED' count, while the genuine-sign-off correction below
+    # (Get-SPForceSignedReviewerCount) is DISTINCT-by-reviewer -- leaving a spurious residual that
+    # OVER-states completion (2 certs => signed 2 - force 1 = 1 over 2 => 50%, when honest is 0%).
+    # Collapse signed+total to the SAME distinct-by-reviewer basis the correction and the
+    # "Reviewers who did not complete" section use. Additive: $totRev (the "Reviewers: N" display
+    # count) is untouched; $signed / $totRevSignOff feed ONLY the sign-off % and qualifier.
+    $soDistinctExec = Get-SPDistinctReviewerSignOff -Reviewers $allRevw
+    $signed = $soDistinctExec.Signed
+    $totRevSignOff = $soDistinctExec.Total
+    # Honest sign-off (genuine vs force-close): ISC force-signs every cert at a force-close,
+    # so cert Phase=='SIGNED' alone over-states real reviewer sign-off. Subtract reviewers whose
+    # certs were ADMIN force-signed (signedBy.id != reviewer.id, POSITIVE evidence only) from the
+    # Phase-based count so an admin force-close never reads as a reviewer sign-off and the exec
+    # box agrees with the "Reviewers who did not complete" section. Additive -- $totRev unchanged.
+    $certRosterExec = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+    $forceSignedExec = Get-SPForceSignedReviewerCount -Roster $certRosterExec
+    $signed = [math]::Max(0, $signed - $forceSignedExec)
+    # Canonical reviewer-completion figure/format (one helper feeds exec, KPI, and Section A).
+    $rvc = Get-SPReviewerCompletion -Signed $signed -Total $totRevSignOff
+    $revCompPct = $rvc.Pct
     $reassignCnt = @($reassigned).Count
     $revItems = @($d['Revoked'])
     $totRevoked = $revItems.Count
@@ -1829,6 +1871,17 @@ foreach ($audit in $campaignAudits) {
     $remColor = if ($totRevoked -eq 0) { '#777777' } elseif ($remPct -ge 100) { '#339933' } elseif ($remPct -ge 50) { '#FF9900' } else { '#CC3333' }
     $donutSvg = & $donut $apct $rpct $ppct $tot
     $createdFmt = & $fmtDt ([string]$audit['Created'])
+    # Completion date (honest): surfaced only when the API provides one; never invented.
+    $completedFmt = & $fmtDt ([string]$audit['Completed'])
+    $completedRow = if (-not [string]::IsNullOrWhiteSpace([string]$audit['Completed'])) { '<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Completed</td><td style="padding:6px 8px;color:#2c3e50">' + $completedFmt + '</td></tr>' } else { '' }
+    # Closed-incomplete honest qualifier: a force-closed COMPLETED campaign with reviewers
+    # who never signed OR items never manually decided (auto-approved => undecided/$pend).
+    # Additive sub-row under the (retained) ISC status badge so green != clean pass.
+    $qExec = Get-SPClosedIncompleteQualifier -Status $cStatusRaw -ReviewersSigned $signed -ReviewersTotal $totRevSignOff -UndecidedCount $pend
+    $qualSubRow = ''
+    if ($qExec.IsClosedIncomplete) {
+        $qualSubRow = '<tr><td colspan="2" style="padding:6px 8px;border:1px solid #b9770e;background:#fff8e1;color:#7a5200;font-size:11px;font-weight:600;border-radius:0 0 6px 6px">&#9888; ' + (ConvertTo-SafeHtml $qExec.Caption) + '</td></tr>'
+    }
     if ($totRevoked -gt 0) {
         $remBlock = @"
 <div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked deprovisioned (connected AD)</span></div>
@@ -1847,8 +1900,9 @@ foreach ($audit in $campaignAudits) {
 <td style="width:50%;vertical-align:top;padding-right:16px">
 <table style="width:100%;border-collapse:collapse;font-size:13px">
 <tr><td colspan="2" style="padding:12px 16px;background:$stColor;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$cStatusUp</span></td></tr>
+$qualSubRow
 <tr>
-<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$signed / $totRev</span><br>Reviewers Signed Off</td>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$($rvc.FractionLabel)</span><br>Reviewers Signed Off</td>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$('{0:N0}' -f $decided) / $('{0:N0}' -f $tot)</span><br>Items Decided ($pct%)</td>
 </tr>
 </table>
@@ -1857,6 +1911,7 @@ foreach ($audit in $campaignAudits) {
 <table style="width:100%;border-collapse:collapse;font-size:13px">
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555;width:120px">Campaign</td><td style="padding:6px 8px;color:#2c3e50">$cName</td></tr>
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555">Created</td><td style="padding:6px 8px;color:#2c3e50">$createdFmt</td></tr>
+$completedRow
 <tr><td style="padding:6px 8px;font-weight:bold;color:#555">Reviewers</td><td style="padding:6px 8px;color:#2c3e50">$totRev ($($primary.Count) primary, $reassignCnt reassigned)</td></tr>
 </table>
 </td>
@@ -1878,7 +1933,7 @@ $remBlock
 <td style="width:33%;vertical-align:top;padding-left:12px">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Key Indicators</p>
 <table style="width:100%;border-collapse:collapse;font-size:12px">
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$revCompPct%</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$($rvc.PercentLabel)</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$pendColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Pending Items</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$pendColor">$('{0:N0}' -f $pend)</td></tr>
 <tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Deprovisioned (AD)</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
 <tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Reassignments</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$reassignCnt</td></tr>
@@ -1914,8 +1969,38 @@ foreach ($audit in $campaignAudits) {
         $rvLabel = "$rvPct% ($rvCompletedCount2/$rvTotalCount2)"
     }
     $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
+    # Canonical reviewer-completion: recompute from the SAME source the exec/KPI surfaces use
+    # (sealed roster ReviewerActions Primary+Reassigned, sign-off = Phase 'SIGNED') so Section A
+    # cannot disagree with the exec box / Key Indicators. Replaces the "-" default with the
+    # canonical "0% (0/2)" combined label. Additive -- the ReviewerRecords block above is retained.
+    $ra2A = $audit['ReviewerActions']
+    $primaryA    = if ($null -ne $ra2A -and $null -ne $ra2A['Primary'])    { @($ra2A['Primary']) }    else { @() }
+    $reassignedA = if ($null -ne $ra2A -and $null -ne $ra2A['Reassigned']) { @($ra2A['Reassigned']) } else { @() }
+    $allRevwA    = @($primaryA) + @($reassignedA)
+    # Distinct-by-reviewer sign-off basis (mirrors the exec box): collapse the per-cert Reassigned
+    # entries so a delegate with several force-signed reassigned certs is counted ONCE, matching the
+    # DISTINCT force-sign correction and the distinct-keyed "Reviewers who did not complete" section.
+    $soDistinctA = Get-SPDistinctReviewerSignOff -Reviewers $allRevwA
+    $signedA     = $soDistinctA.Signed
+    $totRevA     = $soDistinctA.Total
+    # Honest sign-off (genuine vs force-close): exclude admin force-signed certs (signedBy.id !=
+    # reviewer.id) from the Phase-based count so Section A's "Reviewer %" matches the exec box and
+    # cannot assert sign-off for a force-closed reviewer the same report lists as not-completed.
+    $certRosterA      = if ($audit.ContainsKey('CertRoster')) { @($audit['CertRoster']) } else { @() }
+    $forceSignedA     = Get-SPForceSignedReviewerCount -Roster $certRosterA
+    $signedA          = [math]::Max(0, $signedA - $forceSignedA)
+    $rvcA        = Get-SPReviewerCompletion -Signed $signedA -Total $totRevA
+    $rvLabel     = $rvcA.CombinedLabel
+    $rvCls       = switch ($rvcA.SeverityClass) { 'green' { 's-green' } 'amber' { 's-amber' } 'red' { 's-red' } default { 's-amber' } }
     $cr = & $fmtDt ([string]$audit['Created'])
     $cmp = & $fmtDt ([string]$audit['Completed'])
+    # Closed-incomplete honest qualifier (Section A): sub-line inside the Status cell so the
+    # 10-column row shape is unchanged. Uses the canonical reviewer figure ($signedA/$totRevA,
+    # matching the exec caption) and honest undecided ($p). Additive -- the ISC status text ($cs) is retained.
+    $qA = Get-SPClosedIncompleteQualifier -Status ([string]$audit['Status']) -ReviewersSigned $signedA -ReviewersTotal $totRevA -UndecidedCount $p
+    if ($qA.IsClosedIncomplete) {
+        $cs = $cs + "<br><span class='s-amber' style='font-size:10px'>" + (ConvertTo-SafeHtml $qA.Caption) + "</span>"
+    }
     [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td>$cr</td><td>$cmp</td></tr>")
 }
 [void]$sb.AppendLine('</tbody></table></div>')
@@ -1967,7 +2052,8 @@ foreach ($audit in $campaignAudits) {
             -PrimaryReviewers $primary `
             -ReassignedAwayNames $reassignedAwayNames `
             -KeyByReviewerId `
-            -ReassignedAwayIds $reassignedAwayIds
+            -ReassignedAwayIds $reassignedAwayIds `
+            -IncludeUnsignedComplete
         $pendingR = @($pendingByReviewer.Values | Sort-Object { $_.Name })
         if ($pendingR.Count -eq 0 -and $reassigned.Count -eq 0) { continue }
         $anyRev = $true
@@ -1982,13 +2068,20 @@ foreach ($audit in $campaignAudits) {
         if ($null -ne $unassignedEntry -and $unassignedEntry.PendingCount -gt 0) {
             [void]$sb.AppendLine('<p style="background:#fdecec;border:1px solid #f5c6cb;border-radius:4px;padding:8px 12px;color:#721c24;font-size:12px;margin:6px 0"><strong>WARNING:</strong> ' + $unassignedEntry.PendingCount + ' undecided item(s) have no assigned reviewer and will never be reviewed.</p>')
         }
-        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Undecided Items by Reviewer ($($pendingR.Count) reviewer(s) with undecided items)</summary>")
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Reviewers who did not complete ($($pendingR.Count))</summary>")
+        [void]$sb.AppendLine("<div style='font-size:11px;color:#777;margin-bottom:4px'>Includes reviewers with undecided items AND reviewers who decided everything but never signed off (force-closed).</div>")
         [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Undecided Items</th><th style="text-align:right">Total Items</th><th>Note</th></tr></thead><tbody>')
         if ($pendingR.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">No undecided items found (all items were decided before close).</td></tr>') }
         else { foreach ($rr in $pendingR) {
             $pCnt = $rr.PendingCount; $tCnt = $rr.TotalCount
-            $phCls = if ($pCnt -eq $tCnt) { 's-red' } else { 's-amber' }
-            $note = if ($pCnt -eq $tCnt) { 'No decisions made' } else { "$($tCnt - $pCnt) of $tCnt decided" }
+            # COMP-REVIEWER-COMPLETENESS: note + colour driven by CompletionReason so a force-signed
+            # reviewer who decided everything (PendingCount==0) reads as "all decided - not signed off"
+            # rather than an empty/0 cell. Force-close finished-but-unsigned = amber (non-completion,
+            # but work was done); no decisions = red; partial = amber.
+            if ($pCnt -eq 0 -and $tCnt -gt 0) { $phCls = 's-amber'; $note = 'all decided - not signed off (auto-closed)' }
+            elseif ($pCnt -eq 0) { $phCls = 's-amber'; $note = 'force-closed by admin - reviewer never signed off' }
+            elseif ($pCnt -eq $tCnt) { $phCls = 's-red'; $note = 'No decisions made' }
+            else { $phCls = 's-amber'; $note = "$($tCnt - $pCnt) of $tCnt decided" }
             $rowBg = if ($rr.Name -eq '(Unassigned)') { " style='background:#fdecec'" } else { '' }
             [void]$sb.AppendLine("<tr$rowBg><td style='font-weight:600'>" + (ConvertTo-SafeHtml $rr.Name) + "</td><td>" + (ConvertTo-SafeHtml $rr.Email) + "</td><td style='text-align:right;font-weight:600' class='$phCls'>$pCnt</td><td style='text-align:right'>$tCnt</td><td>$note</td></tr>")
         } }
@@ -2059,7 +2152,8 @@ else {
         $rvw = ConvertTo-SafeHtml $rvwName
         $ddRaw = [string]$it.DecisionDate
         if ([string]::IsNullOrWhiteSpace($ddRaw) -and $cid -and $certReviewerMap.ContainsKey($cid)) { $ddRaw = [string]$certReviewerMap[$cid].SignOff }
-        $dd = & $fmtDt $ddRaw
+        $ddDisp = Resolve-SPDecisionDateDisplay -RawDate $ddRaw -CampaignCreated ([string]$audit['Created'])
+        $dd = if ($ddDisp.IsGenuine) { & $fmtDt $ddDisp.Display } else { $ddDisp.Display }
         [void]$sb.AppendLine('<tr><td>' + (ConvertTo-SafeHtml $it.IdentityName) + '</td><td>' + $acct + '</td><td>' + (ConvertTo-SafeHtml $it.AccessName) + $pb + '</td><td>' + (ConvertTo-SafeHtml $it.SourceName) + '</td><td>' + $rvw + '</td><td>' + (ConvertTo-SafeHtml $dd) + '</td><td>' + (ConvertTo-SafeHtml $just) + '</td><td>' + $rem + '</td></tr>')
     }
 }
@@ -2083,7 +2177,9 @@ else {
         $ndSource = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'SourceName' ''))
         $ndReview = ConvertTo-SafeHtml ([string](Get-V4Prop $nd 'ReviewerName' ''))
         $ndDateRaw = [string](Get-V4Prop $nd 'CurrDecisionDate' '')
-        $ndDate   = & $fmtDt $ndDateRaw
+        $ndProv   = [string](Get-V4Prop $nd 'DecisionDateProvenance' '')
+        $ndDisp   = Resolve-SPDecisionDateDisplay -RawDate $ndDateRaw -Provenance $ndProv
+        $ndDate   = if ($ndDisp.IsGenuine) { & $fmtDt $ndDisp.Display } else { $ndDisp.Display }
         $ndPriv   = $false; try { $ndPriv = [bool](Get-V4Prop $nd 'Privileged' $false) } catch { }
         $ndPrivBadge = if ($ndPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $ndIdent + '</td><td>' + $ndAccess + '</td><td>' + $ndSource + '</td><td>' + $ndReview + '</td><td>' + (ConvertTo-SafeHtml $ndDate) + '</td><td>' + $ndPrivBadge + '</td></tr>')
@@ -2112,7 +2208,9 @@ else {
         $naSource = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'SourceName' ''))
         $naReview = ConvertTo-SafeHtml ([string](Get-V4Prop $na 'ReviewerName' ''))
         $naDateRaw = [string](Get-V4Prop $na 'DecisionDate' '')
-        $naDate   = & $fmtDt $naDateRaw
+        $naProv   = [string](Get-V4Prop $na 'DecisionDateProvenance' '')
+        $naDisp   = Resolve-SPDecisionDateDisplay -RawDate $naDateRaw -Provenance $naProv
+        $naDate   = if ($naDisp.IsGenuine) { & $fmtDt $naDisp.Display } else { $naDisp.Display }
         $naPriv   = $false; try { $naPriv = [bool](Get-V4Prop $na 'Privileged' $false) } catch { }
         $naPrivBadge = if ($naPriv) { '<span class="badge badge-priv">PRIV</span>' } else { '' }
         [void]$sb.AppendLine('<tr><td>' + $naIdent + '</td><td>' + $naAccess + '</td><td>' + $naSource + '</td><td>' + $naReview + '</td><td>' + (ConvertTo-SafeHtml $naDate) + '</td><td>' + $naPrivBadge + '</td></tr>')
