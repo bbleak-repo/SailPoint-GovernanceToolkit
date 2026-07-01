@@ -107,8 +107,11 @@ Describe "V4E-04: V4b-EXACT section chrome (Decision Summary + footer + regressi
         # Regression guard: the already-shipped V4b chrome must still be present.
         $content | Should -Match '<h2>Certification Scope</h2>'
         $content | Should -Match 'class="execbox"'
-        $content | Should -Match '<h2>A\. Series Attestation Summary</h2>'
+        $content | Should -Match '<h2>A\. Campaign Completion Evidence \(by instance\)</h2>'
         $content | Should -Match '<h2>B\. Reviewer Accountability</h2>'
+        # Section A is now a per-INSTANCE V4b completion table -- assert its V4b column headers.
+        $content | Should -Match 'Total Items'
+        $content | Should -Match 'Items Decided %'
     }
 }
 

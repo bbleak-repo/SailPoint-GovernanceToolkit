@@ -414,6 +414,8 @@ foreach ($series in $seriesList) {
                 Status       = $inst.Status
                 Unverified   = $inst.Unverified
                 PeriodToken  = $inst.PeriodToken
+                ChronoKey    = $inst.ChronoKey
+                CachedAt     = $inst.CachedAt
                 Items        = @($loadedItems)
                 Roster       = @($loadedRoster)
             })
@@ -434,29 +436,62 @@ foreach ($series in $seriesList) {
         continue
     }
 
-    # Newest-instance single-day completion panel (V4b-faithful). REUSE the already-built honest
-    # engines inside Get-SPSeriesInstanceCompletion (ConvertTo-SPCanonicalDecision via
-    # Resolve-SPSeriesItemState / genuine reviewer sign-off from Group-SPCompletedPendingByReviewer /
-    # source-aware Get-SPRevocationDisposition) -- NO engine changes. Additive: attach to the ordered
-    # Data map so ONLY the HTML render layer reads it. Get-V4eJsonSeriesProjection builds JSON from
-    # explicit keys, so this new key never leaks into the JSON/console headline (reconciliation kept).
-    $newestInst = @($deltaInstances.ToArray() | Sort-Object OrderIndex -Descending | Select-Object -First 1)
-    $newestInst = if ($newestInst.Count -gt 0) { $newestInst[0] } else { $null }
-    $newestCompletion = $null
-    $newestUnverified = $false
-    if ($null -ne $newestInst) {
-        $newestUnverified = [bool]$newestInst.Unverified
+    # Per-INSTANCE single-day completion (V4b-faithful). REUSE the already-built honest engines inside
+    # Get-SPSeriesInstanceCompletion (ConvertTo-SPCanonicalDecision via Resolve-SPSeriesItemState /
+    # genuine reviewer sign-off from Group-SPCompletedPendingByReviewer / source-aware
+    # Get-SPRevocationDisposition) -- NO engine changes. Compute completion for EVERY instance in the
+    # window (identical engine + args to the exec box), build a newest-first list, and DERIVE the
+    # newest-instance exec-box contract from that same list so nothing is computed twice. Additive:
+    # attach to the ordered Data map so ONLY the HTML render layer reads it. Get-V4eJsonSeriesProjection
+    # builds JSON from explicit keys, so these new keys never leak into the JSON/console headline
+    # (reconciliation kept).
+    $instanceCompletionList = New-Object System.Collections.Generic.List[object]
+    foreach ($di in @($deltaInstances.ToArray())) {
         $icRes = $null
         try {
-            $icRes = Get-SPSeriesInstanceCompletion -Items @($newestInst.Items) -Roster @($newestInst.Roster) `
-                -Status ([string]$newestInst.Status) -Unverified ([bool]$newestInst.Unverified) -CorrelationID $correlationID
+            $icRes = Get-SPSeriesInstanceCompletion -Items @($di.Items) -Roster @($di.Roster) `
+                -Status ([string]$di.Status) -Unverified ([bool]$di.Unverified) -CorrelationID $correlationID
         } catch {
             Write-Host "    WARN: instance completion threw for series '$($series.NormalizedStem)': $($_.Exception.Message)" -ForegroundColor Yellow
         }
-        if ($null -ne $icRes -and $icRes.Success) { $newestCompletion = $icRes.Data }
+        $comp = $null
+        if ($null -ne $icRes -and $icRes.Success) { $comp = $icRes.Data }
+        if ($null -eq $comp) {
+            # Zero-fill default (mirrors the render-layer default map) so a failed instance never throws.
+            $comp = [ordered]@{
+                Status = ''; Total = 0; Approved = 0; Revoked = 0; Undecided = 0
+                ItemsDecided = 0; ItemsDecidedPct = 0; ReviewersSigned = 0; ReviewersTotal = 0
+                Removal = [ordered]@{ Deprovisioned = 0; Queued = 0; Pending = 0 }
+            }
+        }
+        $isDone = (([string]$di.Status).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING'))
+        $completedAt = $null
+        if ($isDone -and ($di.CachedAt -is [datetime]) -and ($di.CachedAt -ne [datetime]::MinValue)) {
+            $completedAt = $di.CachedAt
+        }
+        $instanceCompletionList.Add([ordered]@{
+                CampaignName = [string]$di.CampaignName
+                Status       = [string]$di.Status
+                Unverified   = [bool]$di.Unverified
+                OrderIndex   = [int]$di.OrderIndex
+                Completion   = $comp
+                Created      = $di.ChronoKey
+                Completed    = $completedAt
+            })
     }
-    $dr.Data['NewestInstanceCompletion'] = $newestCompletion
-    $dr.Data['NewestInstanceUnverified'] = [bool]$newestUnverified
+    # Sort newest-first by OrderIndex. NOTE: Sort-Object -Property 'OrderIndex' does NOT extract the
+    # key from an [ordered]/hashtable entry in PS 5.1 (it sorts on the whole dictionary), so use an
+    # explicit scriptblock expression to read the integer key.
+    $instanceCompletions = @($instanceCompletionList.ToArray() | Sort-Object -Property @{ Expression = { [int]$_['OrderIndex'] } } -Descending)
+    $dr.Data['InstanceCompletions'] = $instanceCompletions
+    if ($instanceCompletions.Count -gt 0) {
+        $dr.Data['NewestInstanceCompletion'] = $instanceCompletions[0].Completion
+        $dr.Data['NewestInstanceUnverified'] = [bool]$instanceCompletions[0].Unverified
+    }
+    else {
+        $dr.Data['NewestInstanceCompletion'] = $null
+        $dr.Data['NewestInstanceUnverified'] = $false
+    }
 
     $seriesResults.Add($dr.Data)
     $na = [int]$dr.Data.Counts['NewlyAttested']
@@ -694,6 +729,14 @@ $donut = {
 "@
 }
 
+# V4b date formatter lambda (VERBATIM from Invoke-SPDailyEvidenceReportV4b.ps1 lines 1672-1676).
+# Fed a string (blank -> '-'); used by Section A's Created/Completed columns. Defined once here.
+$fmtDt = {
+    param([string]$s)
+    if ([string]::IsNullOrWhiteSpace($s)) { return '-' }
+    try { return ([datetime]::Parse($s)).ToString('yyyy-MM-dd HH:mm') } catch { return $s }
+}
+
 # PER-SERIES BODY = PLACEHOLDER (SCAFFOLD-V4E). Later items replace this loop with the verbatim
 # V4b execbox / Section A / Section B / Decision Summary chrome rebound to series-attestation data.
 if ($seriesDataList.Count -eq 0) {
@@ -913,43 +956,72 @@ $coverageStat
     [void]$sb.AppendLine('<!-- SCAFFOLD-V4E: Section B / Decision Summary pending for ' + (ConvertTo-SafeHtml $stem) + ' -->')
 }
 
-# ---- A. Series Attestation Summary (V4b table.report chrome, rebound to series counts) ----
-# ONE summary row per series across ALL series. Counts are RECOMPUTED from the SAME
-# Test-V4eItemShown-gated item set the exec box / Key Indicators use (honesty reconciliation:
-# Section A rows must equal the per-series exec-box figures). DROP the V4b per-campaign machinery
-# (no KPI/SLA/reviewer-completion/domino) -- this is a pure series count roll-up.
+# ---- A. Campaign Completion Evidence (by instance) (V4b table.report chrome, rebound per instance) ----
+# ONE row per INSTANCE in the window (newest first), grouped by series with a subhead when >1 series.
+# The day-by-day multi-day completion view. Numbers come from Get-SPSeriesInstanceCompletion (the SAME
+# honest engine + args the newest-instance exec box uses), so the newest row's Items Decided / Total
+# reconciles byte-for-byte with the exec box, and the total row count across series equals the
+# Certification Scope 'campaign instances' count. V4b-EXACT table.report markup + s-* cell classes.
 if ($seriesDataList.Count -gt 0) {
-    [void]$sb.AppendLine('<div class="section"><h2>A. Series Attestation Summary</h2>')
-    [void]$sb.AppendLine('<table class="report"><thead><tr><th>Series</th><th>Period</th><th>Instances</th><th>Newly Attested</th><th>Already Attested</th><th>Persistently Undecided</th><th>Decision Changes</th><th>Newly In Scope</th><th>Newest</th></tr></thead><tbody>')
+    [void]$sb.AppendLine('<div class="section"><h2>A. Campaign Completion Evidence (by instance)</h2>')
+    $multiSeries = $seriesDataList.Count -gt 1
     foreach ($sd in $seriesDataList) {
-        $allItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
-        $shownItems = @($allItems | Where-Object { Test-V4eItemShown $_ })
-        $clsCounts = [ordered]@{
-            NewlyInScope           = 0
-            DecisionChanged        = 0
-            NewlyAttested          = 0
-            AlreadyAttestedEarlier = 0
-            PersistentlyUndecided  = 0
-            OtherDecided           = 0
+        if ($multiSeries) {
+            [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))) + '</div>')
         }
-        foreach ($it in $shownItems) {
-            $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
-            if ($clsCounts.Contains($cls)) { $clsCounts[$cls] = [int]$clsCounts[$cls] + 1 }
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Undecided</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
+        $comps = @(Get-SPObjectProperty -Object $sd -Name 'InstanceCompletions' -Default @())
+        foreach ($e in $comps) {
+            $ic = $e.Completion
+            $t = [int]$ic['Total']; $a = [int]$ic['Approved']; $r = [int]$ic['Revoked']; $p = [int]$ic['Undecided']
+            $pc = [int]$ic['ItemsDecidedPct']
+            $pcCls = if ($pc -ge 80) { 's-green' } elseif ($pc -ge 50) { 's-amber' } else { 's-red' }
+
+            # Reviewer % via the SAME guarded Get-SPReviewerCompletion the exec box uses.
+            $icSigned = [int]$ic['ReviewersSigned']; $icTotalRev = [int]$ic['ReviewersTotal']
+            $rvcA = $null
+            if (Get-Command Get-SPReviewerCompletion -ErrorAction Ignore) {
+                $rvcA = Get-SPReviewerCompletion -Signed $icSigned -Total $icTotalRev
+            }
+            if ($null -ne $rvcA) {
+                $rvLabel = [string]$rvcA.CombinedLabel
+                $rvCls = switch ($rvcA.SeverityClass) { 'green' { 's-green' } 'amber' { 's-amber' } 'red' { 's-red' } default { 's-amber' } }
+            }
+            else {
+                $rvPct = if ($icTotalRev -gt 0) { [math]::Round($icSigned / $icTotalRev * 100, 0) } else { 0 }
+                $rvLabel = "$rvPct% ($icSigned/$icTotalRev)"
+                $rvCls = if ($rvPct -ge 80) { 's-green' } elseif ($rvPct -ge 50) { 's-amber' } else { 's-red' }
+            }
+
+            # Campaign (instance) name; badge Unverified instances when off-gate (NEVER drop the row).
+            $cn = ConvertTo-SafeHtml ([string]$e.CampaignName)
+            if ([bool]$e.Unverified -and -not $IncludeUnverified) {
+                $cn = $cn + " <span class='badge badge-amber'>Unverified</span>"
+            }
+
+            # Status cell (fall back to the instance status when the engine status is blank), plus the
+            # optional closed-incomplete honest qualifier sub-line (keeps the 10-column shape).
+            $icStatus = [string]$ic['Status']
+            if ([string]::IsNullOrWhiteSpace($icStatus)) { $icStatus = [string]$e.Status }
+            $cs = ConvertTo-SafeHtml $icStatus
+            if (Get-Command Get-SPClosedIncompleteQualifier -ErrorAction Ignore) {
+                $qA = Get-SPClosedIncompleteQualifier -Status $icStatus -ReviewersSigned $icSigned -ReviewersTotal $icTotalRev -UndecidedCount $p
+                if ($qA.IsClosedIncomplete) {
+                    $cs = $cs + "<br><span class='s-amber' style='font-size:10px'>" + (ConvertTo-SafeHtml $qA.Caption) + "</span>"
+                }
+            }
+
+            # Created / Completed via the V4b $fmtDt lambda (blank -> '-').
+            $crStr = if ($e.Created -is [datetime] -and $e.Created -ne [datetime]::MinValue) { $e.Created.ToString('o') } else { '' }
+            $cmpStr = if ($e.Completed -is [datetime] -and $e.Completed -ne [datetime]::MinValue) { $e.Completed.ToString('o') } else { '' }
+            $cr = & $fmtDt $crStr
+            $cmp = & $fmtDt $cmpStr
+
+            [void]$sb.AppendLine("<tr><td>$cn</td><td>$cs</td><td>$('{0:N0}' -f $t)</td><td>$('{0:N0}' -f $a)</td><td class='s-red'>$('{0:N0}' -f $r)</td><td>$('{0:N0}' -f $p)</td><td class='$pcCls'>$pc%</td><td class='$rvCls'>$rvLabel</td><td>$cr</td><td>$cmp</td></tr>")
         }
-        $cNA = [int]$clsCounts['NewlyAttested']
-        $cAA = [int]$clsCounts['AlreadyAttestedEarlier']
-        $cPU = [int]$clsCounts['PersistentlyUndecided']
-        $cDC = [int]$clsCounts['DecisionChanged']
-        $cNS = [int]$clsCounts['NewlyInScope']
-
-        $sName   = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))
-        $sPeriod = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'PeriodType' -Default ''))
-        $sInst   = [int](Get-SPObjectProperty -Object $sd -Name 'InstanceCount' -Default 0)
-        $sNewest = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'NewestCampaignName' -Default ''))
-
-        [void]$sb.AppendLine("<tr><td>$sName</td><td>$sPeriod</td><td>$('{0:N0}' -f $sInst)</td><td class='s-green'>$('{0:N0}' -f $cNA)</td><td>$('{0:N0}' -f $cAA)</td><td class='s-red'>$('{0:N0}' -f $cPU)</td><td class='s-amber'>$('{0:N0}' -f $cDC)</td><td>$('{0:N0}' -f $cNS)</td><td>$sNewest</td></tr>")
+        [void]$sb.AppendLine('</tbody></table>')
     }
-    [void]$sb.AppendLine('</tbody></table></div>')
+    [void]$sb.AppendLine('</div>')
 }
 
 # ---- B. Reviewer Accountability (V4b Section-B chrome, rebound to series reviewer rollups) ----
