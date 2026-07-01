@@ -1114,6 +1114,215 @@ function New-SPSeriesReviewerRollup {
     return @($out.ToArray())
 }
 
+function Get-SPSeriesInstanceCompletion {
+    <#
+    .SYNOPSIS
+        PURE per-campaign HONEST completion + source-aware removal status for ONE materialized
+        series instance -- the SAME numbers V4b computes today, produced by REUSING the existing
+        honest engines (ConvertTo-SPCanonicalDecision via Resolve-SPSeriesItemState, the genuine
+        reviewer sign-off from Group-SPCompletedPendingByReviewer, and Get-SPRevocationDisposition).
+    .DESCRIPTION
+        The single-day per-campaign completion panel that V4e renders for the NEWEST instance of a
+        recurring series. It takes the already-materialized cache inputs for ONE instance (the
+        wrapped items from the reader's .LoadItems closure + the sealed roster Entries from
+        .LoadRoster) and returns the honest counts every V4b surface agrees on:
+
+          * Honest per-item decision -- each wrapper is resolved through Resolve-SPSeriesItemState,
+            which routes the raw decision through the SINGLE shared classifier
+            (ConvertTo-SPCanonicalDecision): a genuine reviewer Approve/Revoke stays Approved/Revoked
+            but a pending OR auto-approved-at-close (idNowAutoApproved) APPROVE is demoted to
+            'Undecided' -- NEVER a real approval. Approved / Revoked / Undecided are tallied by
+            HonestDecision; Total is their sum; ItemsDecided = Approved + Revoked; ItemsDecidedPct is
+            the EXACT V4b formula ([math]::Round(decided/total*100,0), 0 when total 0).
+
+          * Genuine reviewer sign-off (admin force-close is NOT a sign-off -- same rule as V4b):
+            ReviewersTotal = distinct sealed-roster reviewers (keyed ReviewerId else ReviewerName, the
+            same distinct key as Get-SPForceSignedReviewerCount). Group-SPCompletedPendingByReviewer
+            (-KeyByReviewerId -IncludeUnsignedComplete) returns the reviewers who did NOT complete
+            (left undecided/auto-approved work OR were force-closed by someone else); ReviewersSigned =
+            ReviewersTotal minus the DISTINCT roster reviewers appearing in that dictionary (never < 0).
+
+          * Removal status for REVOKED items only -- each revoked wrapper's raw item is unwrapped and
+            its sourceType (item.sourceType else entitlement/accessProfile/role.sourceType) + completed
+            flag are read exactly as Group-SPAuditDecisions does, then classified by the single source
+            of truth Get-SPRevocationDisposition: Removed -> Deprovisioned (completed on a connected AD
+            source), Queued -> Queued (completed on any other source, recorded not confirmed), else
+            Pending.
+
+        PURE: no API/IO/GUI in the body -- the caller does the BOM-safe cache reads via the reader's
+        .LoadItems/.LoadRoster closures (mirroring Get-SPSeriesAttestationDelta, which likewise takes
+        already-materialized Items/Roster). Cross-module calls are guarded with Get-Command so the
+        function degrades gracefully rather than hard-failing when an engine is not in-session, and the
+        whole body is wrapped in try/catch so it NEVER throws (returns @{Success=$false;Error} instead).
+    .PARAMETER Items
+        The materialized wrapped cache items for this instance (the reader's .LoadItems output:
+        @{ CertificationId; CertificationName; CampaignName; Item } envelopes). Empty allowed
+        (-> Success with all-zero counts).
+    .PARAMETER Roster
+        The sealed roster Entries for this instance (the reader's .LoadRoster output, shape per
+        ConvertTo-SPCertRosterEntry: CertificationId / ReviewerName / ReviewerId / ReviewerEmail
+        [/ SignedById]). Empty allowed.
+    .PARAMETER Status
+        Optional instance status (e.g. ACTIVE/COMPLETED) -- recorded on Data.Status only.
+    .PARAMETER Unverified
+        Propagated provenance flag from the instance meta (CapturedWhileActive / Unverified),
+        threaded into Resolve-SPSeriesItemState for parity with the series engine.
+    .PARAMETER CorrelationID
+        Optional correlation id for the summary Write-SPLog (when SP.Core's logger is in-session).
+    .OUTPUTS
+        [hashtable] @{ Success; Data; Error } where Data is an [ordered] hashtable
+        @{ Status; Total; Approved; Revoked; Undecided; ItemsDecided; ItemsDecidedPct;
+           ReviewersSigned; ReviewersTotal; Removal = @{ Deprovisioned; Queued; Pending } }.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]]$Items = @(),
+        [Parameter()][AllowEmptyCollection()][object[]]$Roster = @(),
+        [string]$Status,
+        [bool]$Unverified = $false,
+        [string]$CorrelationID
+    )
+    try {
+        $approved = 0; $revoked = 0; $undecided = 0
+        $deprovisioned = 0; $queued = 0; $pending = 0
+        $pendingWrapped = New-Object System.Collections.Generic.List[object]
+        $decidedWrapped = New-Object System.Collections.Generic.List[object]
+
+        $canResolve  = [bool](Get-Command Resolve-SPSeriesItemState -ErrorAction Ignore)
+        $canDispose  = [bool](Get-Command Get-SPRevocationDisposition -ErrorAction Ignore)
+
+        # Defensive one-level flatten: the reader's .LoadItems returns `, $list.ToArray()`, so a
+        # caller materializing with `@(& $inst.LoadItems)` (the V4e / E2E idiom) yields a SINGLE
+        # element that is itself the item array. The series engine tolerates that via whole-array
+        # member enumeration; this per-item walk unwraps it explicitly so a nested wrapper array is
+        # expanded while an already-flat wrapper list (each a PSCustomObject/hashtable) is unchanged.
+        $flatItems = New-Object System.Collections.Generic.List[object]
+        foreach ($el in @($Items)) {
+            if ($null -eq $el) { continue }
+            if (($el -is [System.Collections.IEnumerable]) -and ($el -isnot [string]) -and ($el -isnot [System.Collections.IDictionary])) {
+                foreach ($sub in $el) { if ($null -ne $sub) { $flatItems.Add($sub) } }
+            }
+            else { $flatItems.Add($el) }
+        }
+
+        foreach ($w in $flatItems) {
+            if ($null -eq $w) { continue }
+
+            # (1) Honest per-item decision via the shared classifier (guarded).
+            $honest = 'Undecided'; $srcName = ''
+            if ($canResolve) {
+                $state = Resolve-SPSeriesItemState -Item $w -Roster $Roster -Unverified $Unverified -Status $Status
+                if ($null -ne $state) {
+                    $honest  = [string](Get-SPSeriesProp $state 'HonestDecision' 'Undecided')
+                    $srcName = [string](Get-SPSeriesProp $state 'SourceName' '')
+                }
+            }
+            switch ($honest) {
+                'Approved' { $approved++;  $decidedWrapped.Add($w) }
+                'Revoked'  { $revoked++;   $decidedWrapped.Add($w) }
+                default    { $undecided++; $pendingWrapped.Add($w) }
+            }
+
+            # (3) Removal status for REVOKED items only -- unwrap the raw item and read sourceType /
+            # completed EXACTLY as Group-SPAuditDecisions does, then classify via the single source of
+            # truth. Only revoked items carry a removal disposition (non-REVOKE -> 'NA', ignored).
+            if ($honest -eq 'Revoked' -and $canDispose) {
+                $rawItem  = Get-SPSeriesUnwrapItem $w
+                $srcType  = [string](Get-SPSeriesProp $rawItem 'sourceType' '')
+                if ([string]::IsNullOrWhiteSpace($srcType)) {
+                    $accSum = Get-SPSeriesProp $rawItem 'accessSummary'
+                    if ($null -ne $accSum) {
+                        foreach ($ak in @('entitlement', 'accessProfile', 'role')) {
+                            $cand = Get-SPSeriesProp $accSum $ak
+                            if ($null -ne $cand) {
+                                $st = [string](Get-SPSeriesProp $cand 'sourceType' '')
+                                if (-not [string]::IsNullOrWhiteSpace($st)) { $srcType = $st; break }
+                            }
+                        }
+                    }
+                }
+                $completed = Get-SPSeriesProp $rawItem 'completed'
+                $disp = Get-SPRevocationDisposition -Decision 'REVOKE' -Completed $completed -SourceType $srcType -SourceName $srcName
+                $d = [string](Get-SPSeriesProp $disp 'Disposition' '')
+                if ($d -eq 'Removed') { $deprovisioned++ }
+                elseif ($d -eq 'Queued') { $queued++ }
+                else { $pending++ }
+            }
+        }
+
+        $total = $approved + $revoked + $undecided
+        $decided = $approved + $revoked
+        $itemsDecidedPct = if ($total -gt 0) { [int][math]::Round($decided / $total * 100, 0) } else { 0 }
+
+        # (2) Genuine reviewer sign-off. ReviewersTotal = distinct roster reviewers keyed ReviewerId
+        # else ReviewerName (same distinct key as Get-SPForceSignedReviewerCount). notComplete = the
+        # DISTINCT roster reviewers who appear in the "did not complete" dictionary (admin force-close
+        # is NOT a genuine sign-off -- an auto-approved item is Undecided, so a force-closed reviewer
+        # still surfaces). ReviewersSigned = ReviewersTotal - notComplete (never negative).
+        $rosterKeys = @{}
+        foreach ($re in @($Roster)) {
+            if ($null -eq $re) { continue }
+            $rid = [string](Get-SPSeriesProp $re 'ReviewerId' '')
+            $rnm = [string](Get-SPSeriesProp $re 'ReviewerName' '')
+            if ([string]::IsNullOrWhiteSpace($rid) -and [string]::IsNullOrWhiteSpace($rnm)) { continue }
+            $rk = if (-not [string]::IsNullOrWhiteSpace($rid)) { 'id:' + $rid } else { 'nm:' + $rnm }
+            if (-not $rosterKeys.ContainsKey($rk)) { $rosterKeys[$rk] = $true }
+        }
+        $reviewersTotal = [int]$rosterKeys.Count
+
+        $notComplete = 0
+        if (Get-Command Group-SPCompletedPendingByReviewer -ErrorAction Ignore) {
+            $notCompleteDict = Group-SPCompletedPendingByReviewer `
+                -PendingItems @($pendingWrapped.ToArray()) `
+                -DecidedItems @($decidedWrapped.ToArray()) `
+                -Roster @($Roster) -KeyByReviewerId -IncludeUnsignedComplete
+            $matched = @{}
+            if ($null -ne $notCompleteDict) {
+                foreach ($row in $notCompleteDict.Values) {
+                    if ($null -eq $row) { continue }
+                    $rrid = [string](Get-SPSeriesProp $row 'ReviewerId' '')
+                    $rrnm = [string](Get-SPSeriesProp $row 'Name' '')
+                    $rrk = if (-not [string]::IsNullOrWhiteSpace($rrid)) { 'id:' + $rrid } else { 'nm:' + $rrnm }
+                    if ($rosterKeys.ContainsKey($rrk) -and -not $matched.ContainsKey($rrk)) { $matched[$rrk] = $true }
+                }
+            }
+            $notComplete = [int]$matched.Count
+        }
+        $reviewersSigned = [int][math]::Max(0, $reviewersTotal - $notComplete)
+
+        $data = [ordered]@{
+            Status          = [string]$Status
+            Total           = [int]$total
+            Approved        = [int]$approved
+            Revoked         = [int]$revoked
+            Undecided       = [int]$undecided
+            ItemsDecided    = [int]$decided
+            ItemsDecidedPct = [int]$itemsDecidedPct
+            ReviewersSigned = [int]$reviewersSigned
+            ReviewersTotal  = [int]$reviewersTotal
+            Removal         = [ordered]@{
+                Deprovisioned = [int]$deprovisioned
+                Queued        = [int]$queued
+                Pending       = [int]$pending
+            }
+        }
+
+        if (Get-Command Write-SPLog -ErrorAction Ignore) {
+            $logArgs = @{
+                Message   = "Instance completion: $decided/$total decided ($itemsDecidedPct%), reviewers $reviewersSigned/$reviewersTotal signed, removal $deprovisioned/$queued/$pending"
+                Severity  = 'Info'
+                Component = 'SP.CampaignSeries'
+                Action    = 'Get-SPSeriesInstanceCompletion'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($CorrelationID)) { $logArgs['CorrelationID'] = $CorrelationID }
+            Write-SPLog @logArgs
+        }
+        return @{ Success = $true; Data = $data; Error = $null }
+    }
+    catch { return @{ Success = $false; Data = $null; Error = "Get-SPSeriesInstanceCompletion failed: $($_.Exception.Message)" } }
+}
+
 #endregion
 
 Export-ModuleMember -Function @(
@@ -1121,5 +1330,6 @@ Export-ModuleMember -Function @(
     'Group-SPCampaignSeries',
     'Get-SPSeriesItemKey',
     'Resolve-SPSeriesItemState',
-    'Get-SPSeriesAttestationDelta'
+    'Get-SPSeriesAttestationDelta',
+    'Get-SPSeriesInstanceCompletion'
 )
