@@ -18,15 +18,18 @@
 
     The cache fixtures are hand-authored into a TestDrive subdir; metas are written with
     -Encoding UTF8 (UTF-8 BOM) ON PURPOSE to prove the BOM-safe read path. The
-    script-invoking Its are gated behind -Skip:(-not $script:PwshAvailable), mirroring
-    SP.DailyEvidenceV6.Tests.ps1.
+    script-invoking Its are gated behind $script:PsAvailable (powershell.exe -- Windows
+    PowerShell 5.1, the repo target, always present on this box), mirroring the sibling
+    SP.SeriesAttestationV4e.Tests.ps1. (Earlier revisions invoked pwsh / PowerShell 7, which
+    is NOT installed here, so every run-dependent It silently skipped.)
 #>
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
     Import-SPTestModules -Shared -Core -Api -Audit
 
-    $script:PwshAvailable = [bool](Get-Command pwsh -ErrorAction SilentlyContinue)
+    # powershell.exe (Windows PowerShell 5.1) is the repo target and is always present on this box.
+    $script:PsAvailable = [bool](Get-Command powershell.exe -ErrorAction SilentlyContinue)
     $script:V4cPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts\Invoke-SPDailyEvidenceReportV4c.ps1'
 
     # Reuse the cache-fixture builder shape from SP.CachedCampaignSeries.Tests.ps1: meta
@@ -89,7 +92,7 @@ BeforeAll {
     function Invoke-V4c {
         param([string]$ExtraArgs = '')
         $cmd = "& '$($script:V4cPath)' $ExtraArgs 2>&1"
-        return (& pwsh -NoProfile -Command $cmd)
+        return (& powershell.exe -NoProfile -Command $cmd)
     }
 }
 
@@ -152,7 +155,7 @@ Describe "CLI-04: renders HTML from a 2-instance recurring fixture cache" {
             -CachedAt '2026-06-30T08:00:00.0000000+00:00' `
             -Items @((New-CliFixtureItem -Decision 'APPROVE')) -RosterEntries $rosterB
 
-        if ($script:PwshAvailable) {
+        if ($script:PsAvailable) {
             $script:cli04Out = Invoke-V4c "-CachePath '$($script:cliCache)' -OutputPath '$($script:cliOut)' -OutputMode HTML"
             $script:cli04Html = (Get-ChildItem -Path $script:cliOut -Filter 'daily-evidence-v4c-*.html' -File -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending | Select-Object -First 1)
@@ -160,20 +163,20 @@ Describe "CLI-04: renders HTML from a 2-instance recurring fixture cache" {
     }
 
     It "produces a daily-evidence-v4c-*.html file" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:cli04Html | Should -Not -BeNullOrEmpty
         $script:cli04Html.Length | Should -BeGreaterThan 500
     }
 
     It "names the report and the Newly Attested headline" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $content = Get-Content $script:cli04Html.FullName -Raw
         $content | Should -Match 'Daily Evidence Report v4c'
         $content | Should -Match 'Newly Attested'
     }
 
     It "attributes the genuine approval to the cert-assigned reviewer" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $content = Get-Content $script:cli04Html.FullName -Raw
         $content | Should -Match 'Rita Reviewer'
         $content | Should -Match 'Finance-RW'
@@ -187,7 +190,7 @@ Describe "CLI-05: empty cache dir -> exit 0 + valid HTML (no throw)" {
         New-Item -ItemType Directory -Path $script:emptyCache -Force | Out-Null
         New-Item -ItemType Directory -Path $script:emptyOut -Force | Out-Null
 
-        if ($script:PwshAvailable) {
+        if ($script:PsAvailable) {
             $script:cli05Out = Invoke-V4c "-CachePath '$($script:emptyCache)' -OutputPath '$($script:emptyOut)' -OutputMode HTML"
             $script:cli05Exit = $LASTEXITCODE
             $script:cli05Html = (Get-ChildItem -Path $script:emptyOut -Filter 'daily-evidence-v4c-*.html' -File -ErrorAction SilentlyContinue |
@@ -196,12 +199,12 @@ Describe "CLI-05: empty cache dir -> exit 0 + valid HTML (no throw)" {
     }
 
     It "exits 0" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:cli05Exit | Should -Be 0
     }
 
     It "still emits a valid no-series HTML" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:cli05Html | Should -Not -BeNullOrEmpty
         $content = Get-Content $script:cli05Html.FullName -Raw
         $content | Should -Match 'Daily Evidence Report v4c'

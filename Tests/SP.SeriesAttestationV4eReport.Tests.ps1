@@ -24,14 +24,17 @@
               HTML renders for that series (HTML detail == JSON Counts reconciliation).
 
     The fixture cache is the checked-in repo cache; the script-invoking Its are gated behind
-    -Skip:(-not $script:PwshAvailable), mirroring SP.SeriesAttestationCli.Tests.ps1.
+    $script:PsAvailable (powershell.exe -- Windows PowerShell 5.1, the repo target, always present on
+    this box), mirroring the sibling SP.SeriesAttestationV4e.Tests.ps1. (Earlier revisions invoked pwsh
+    / PowerShell 7, which is NOT installed here, so every run-dependent It silently skipped.)
 #>
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'Import-TestModules.ps1')
     Import-SPTestModules -Shared -Core -Api -Audit
 
-    $script:PwshAvailable = [bool](Get-Command pwsh -ErrorAction SilentlyContinue)
+    # powershell.exe (Windows PowerShell 5.1) is the repo target and is always present on this box.
+    $script:PsAvailable = [bool](Get-Command powershell.exe -ErrorAction SilentlyContinue)
     $script:V4ePath = Join-Path (Split-Path $PSScriptRoot -Parent) 'Scripts\Invoke-SPDailyEvidenceReportV4e.ps1'
 
     # The V4e test input is the checked-in rich cache fixture (>=2 same-series instances).
@@ -40,13 +43,13 @@ BeforeAll {
     function Invoke-V4e {
         param([string]$ExtraArgs = '')
         $cmd = "& '$($script:V4ePath)' $ExtraArgs 2>&1"
-        return (& pwsh -NoProfile -Command $cmd)
+        return (& powershell.exe -NoProfile -Command $cmd)
     }
 
     # Run ONCE for the run-dependent describes: render Both to a scratch dir under TestDrive.
     $script:v4eOut = Join-Path $TestDrive 'v4e-out'
     New-Item -ItemType Directory -Path $script:v4eOut -Force | Out-Null
-    if ($script:PwshAvailable) {
+    if ($script:PsAvailable) {
         $script:v4eStdout = Invoke-V4e "-CachePath '$($script:cliCache)' -IncludeUnverified -OutputPath '$($script:v4eOut)' -OutputMode Both"
         $script:v4eExit = $LASTEXITCODE
         $script:v4eHtml = (Get-ChildItem -Path $script:v4eOut -Filter 'daily-evidence-v4e-*.html' -File -ErrorAction SilentlyContinue |
@@ -79,23 +82,23 @@ Describe "V4E-02: read-only -- no SupportsShouldProcess (CLI-005)" {
 
 Describe "V4E-03: runs against the fixture cache and writes HTML" {
     It "exits 0" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:v4eExit | Should -Be 0
     }
     It "produces a daily-evidence-v4e-*.html file" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:v4eHtml | Should -Not -BeNullOrEmpty
         $script:v4eHtml.Length | Should -BeGreaterThan 500
     }
     It "produces a sibling daily-evidence-v4e-*.json file" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $script:v4eJson | Should -Not -BeNullOrEmpty
     }
 }
 
 Describe "V4E-04: V4b-EXACT section chrome (Decision Summary + footer + regression guard)" {
     It "carries the Decision Summary / footer / already-shipped section chrome" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $content = Get-Content $script:v4eHtml.FullName -Raw
         # New in this item: Decision Summary detail + V4b-exact rebranded footer.
         $content | Should -Match 'class="footer"'
@@ -117,7 +120,7 @@ Describe "V4E-04: V4b-EXACT section chrome (Decision Summary + footer + regressi
 
 Describe "V4E-05: DATA correctness -- JSON Version + Counts reconcile with HTML detail rows" {
     It "Version is V4e and per-series Newly In Scope Counts equal the HTML detail rows" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
 
         # Read the JSON FILE (never piped stdout -- the console banner leaks into child stdout).
         $json = Get-Content $script:v4eJson.FullName -Raw | ConvertFrom-Json
@@ -156,7 +159,7 @@ Describe "V4E-05: DATA correctness -- JSON Version + Counts reconcile with HTML 
 
 Describe "V4E-06: newest-instance V4b-faithful exec panel" {
     It "exec box carries the V4b single-day chrome (Items Decided / Reviewers Signed Off / Removal Status / donut)" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
         $content = Get-Content $script:v4eHtml.FullName -Raw
         $content | Should -Match 'Items Decided'
         $content | Should -Match 'Reviewers Signed Off'
@@ -165,7 +168,7 @@ Describe "V4E-06: newest-instance V4b-faithful exec panel" {
     }
 
     It "newest-instance Items Decided fraction equals Get-SPSeriesInstanceCompletion on the fixture newest instance (dam-11)" {
-        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
 
         # Compute the honest expected fraction directly off the fixture (mirror the fixture-load idiom
         # from SP.SeriesInstanceCompletion.Tests.ps1:28-35).

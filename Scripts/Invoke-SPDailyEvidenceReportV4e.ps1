@@ -464,10 +464,13 @@ foreach ($series in $seriesList) {
                 Removal = [ordered]@{ Deprovisioned = 0; Queued = 0; Pending = 0 }
             }
         }
-        $isDone = (([string]$di.Status).ToUpperInvariant() -in @('COMPLETED', 'COMPLETING'))
-        $completedAt = $null
-        if ($isDone -and ($di.CachedAt -is [datetime]) -and ($di.CachedAt -ne [datetime]::MinValue)) {
-            $completedAt = $di.CachedAt
+        # HONESTY: the rich cache does NOT persist a per-instance completion timestamp, so the closest
+        # honest value we can surface is CachedAt -- the moment this instance's evidence was CAPTURED.
+        # Expose it under an accurately-labelled "Captured" column (it was previously mislabelled
+        # "Completed", which overstated a capture-time proxy as the campaign's true completion time).
+        $capturedAt = $null
+        if (($di.CachedAt -is [datetime]) -and ($di.CachedAt -ne [datetime]::MinValue)) {
+            $capturedAt = $di.CachedAt
         }
         $instanceCompletionList.Add([ordered]@{
                 CampaignName = [string]$di.CampaignName
@@ -476,7 +479,7 @@ foreach ($series in $seriesList) {
                 OrderIndex   = [int]$di.OrderIndex
                 Completion   = $comp
                 Created      = $di.ChronoKey
-                Completed    = $completedAt
+                Captured     = $capturedAt
             })
     }
     # Sort newest-first by OrderIndex. NOTE: Sort-Object -Property 'OrderIndex' does NOT extract the
@@ -730,7 +733,7 @@ $donut = {
 }
 
 # V4b date formatter lambda (VERBATIM from Invoke-SPDailyEvidenceReportV4b.ps1 lines 1672-1676).
-# Fed a string (blank -> '-'); used by Section A's Created/Completed columns. Defined once here.
+# Fed a string (blank -> '-'); used by Section A's Created/Captured columns. Defined once here.
 $fmtDt = {
     param([string]$s)
     if ([string]::IsNullOrWhiteSpace($s)) { return '-' }
@@ -969,7 +972,7 @@ if ($seriesDataList.Count -gt 0) {
         if ($multiSeries) {
             [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))) + '</div>')
         }
-        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Undecided</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Completed</th></tr></thead><tbody>')
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Campaign</th><th>Status</th><th>Total Items</th><th>Approved</th><th>Revoked</th><th>Undecided</th><th>Items Decided %</th><th>Reviewer %</th><th>Created</th><th>Captured</th></tr></thead><tbody>')
         $comps = @(Get-SPObjectProperty -Object $sd -Name 'InstanceCompletions' -Default @())
         foreach ($e in $comps) {
             $ic = $e.Completion
@@ -1011,9 +1014,10 @@ if ($seriesDataList.Count -gt 0) {
                 }
             }
 
-            # Created / Completed via the V4b $fmtDt lambda (blank -> '-').
+            # Created / Captured via the V4b $fmtDt lambda (blank -> '-'). Captured = CachedAt (the
+            # evidence-capture time); the cache has no true per-instance completion timestamp.
             $crStr = if ($e.Created -is [datetime] -and $e.Created -ne [datetime]::MinValue) { $e.Created.ToString('o') } else { '' }
-            $cmpStr = if ($e.Completed -is [datetime] -and $e.Completed -ne [datetime]::MinValue) { $e.Completed.ToString('o') } else { '' }
+            $cmpStr = if ($e.Captured -is [datetime] -and $e.Captured -ne [datetime]::MinValue) { $e.Captured.ToString('o') } else { '' }
             $cr = & $fmtDt $crStr
             $cmp = & $fmtDt $cmpStr
 
