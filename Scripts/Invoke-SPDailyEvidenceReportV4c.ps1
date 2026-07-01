@@ -4,6 +4,11 @@
     Generates the V4c series attestation delta report -- a series-aware, honest
     "newly attested" decision-transition report over the rich audit cache
     (output: daily-evidence-v4c-*.html).
+
+    DEPRECATION NOTE: Prefer Invoke-SPDailyEvidenceReportV4e.ps1 -- V4e is now THE
+    unified daily-evidence report for recurring campaign series (newest-instance
+    honest completion + multi-day series attestation on the rich cache). V4c/V4d
+    are retained for back-compat (additive; NOT deleted).
 .DESCRIPTION
     V4c is a READ-ONLY report. It reads ONLY the rich audit cache
     (items-<id>.jsonl + items-<id>.meta.json + roster-<id>.json) -- it never

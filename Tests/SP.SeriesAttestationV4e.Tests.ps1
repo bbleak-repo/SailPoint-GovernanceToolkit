@@ -63,6 +63,15 @@ BeforeAll {
             Sort-Object LastWriteTime -Descending | Select-Object -First 1)
         $script:jsonFile = (Get-ChildItem -Path $script:outDir -Filter 'daily-evidence-v4e-*.json' -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+
+        # SECOND read-only run -- narrowed to -Window 2 (today vs yesterday; newest instance always
+        # retained). Same idiom, its own scratch dir so it never collides with the full-window run.
+        $script:winDir = Join-Path $TestDrive 'v4e-win-out'
+        New-Item -ItemType Directory -Path $script:winDir -Force | Out-Null
+        & powershell.exe -NoProfile -File $script:V4ePath -CachePath $script:CacheDir -IncludeUnverified -Window 2 -OutputPath $script:winDir -OutputMode Both | Out-Null
+        $script:winExit = $LASTEXITCODE
+        $script:winHtmlFile = (Get-ChildItem -Path $script:winDir -Filter 'daily-evidence-v4e-*.html' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1)
     }
 }
 
@@ -120,6 +129,88 @@ Describe 'V4E-E2E-03: series data is correct' {
         $series = @($json.Series)
         $series.Count | Should -Be 1
         $series[0].NormalizedStem | Should -Be 'daily attestation manager campaign'
+        [int]$series[0].Counts.NewlyAttested         | Should -Be 2
+        [int]$series[0].Counts.PersistentlyUndecided | Should -Be 1
+    }
+}
+
+Describe 'V4E-E2E-04: newest-instance completion numbers render (single-day exec panel)' {
+    It 'renders Items Decided / Reviewers Signed Off / donut AND the honest newest-instance fraction reconciles' {
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
+        $html = Get-Content $script:htmlFile.FullName -Raw
+
+        # Newest-instance single-day exec chrome (V4b-faithful).
+        $html | Should -Match 'Items Decided'
+        $html | Should -Match 'Reviewers Signed Off'
+        $html | Should -Match 'stroke-dasharray'   # decision-distribution donut present
+
+        # Honest reconciliation: the rendered "ItemsDecided / Total" fraction equals what the SAME
+        # honest engine (Get-SPSeriesInstanceCompletion) computes for the newest fixture instance.
+        $r  = Get-SPCachedCampaignSeries -CachePath $script:CacheDir
+        $n  = @($r.Data.Series[0].Instances) | Sort-Object -Property OrderIndex -Descending | Select-Object -First 1
+        $ic = (Get-SPSeriesInstanceCompletion -Items @(& $n.LoadItems) -Roster @(& $n.LoadRoster) -Status $n.Status).Data
+        $html | Should -Match ([regex]::Escape("$($ic.ItemsDecided) / $($ic.Total)"))
+    }
+}
+
+Describe 'V4E-E2E-05: Section A has one row per instance (multi-day series breakdown)' {
+    It 'renders >= 11 data rows (11-instance fixture) with V4b completion column headers' {
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
+        $html = Get-Content $script:htmlFile.FullName -Raw
+
+        # Isolate Section A (A. Campaign Completion Evidence) up to Section B.
+        $aStart = $html.IndexOf('<h2>A. Campaign Completion Evidence (by instance)</h2>')
+        $aStart | Should -BeGreaterThan -1
+        $bStart = $html.IndexOf('<h2>B. Reviewer Accountability</h2>', $aStart)
+        $bStart | Should -BeGreaterThan $aStart
+        $sectionA = $html.Substring($aStart, $bStart - $aStart)
+
+        # Data rows are '<tr><td>...' (the header row is '<tr><th>' so it is excluded).
+        $script:sectionARowCount = ([regex]::Matches($sectionA, '<tr><td>')).Count
+        $script:sectionARowCount | Should -BeGreaterOrEqual 11
+
+        # V4b per-instance completion column headers.
+        $sectionA | Should -Match 'Total Items'
+        $sectionA | Should -Match 'Items Decided %'
+    }
+}
+
+Describe 'V4E-E2E-06: -Window 2 narrows the analysis (newest instance retained)' {
+    It 'Section A shows exactly 2 rows -- fewer than the full window' {
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
+        $script:winExit | Should -Be 0
+        $script:winHtmlFile | Should -Not -BeNullOrEmpty
+        $winHtml = Get-Content $script:winHtmlFile.FullName -Raw
+
+        $aStart = $winHtml.IndexOf('<h2>A. Campaign Completion Evidence (by instance)</h2>')
+        $aStart | Should -BeGreaterThan -1
+        $bStart = $winHtml.IndexOf('<h2>B. Reviewer Accountability</h2>', $aStart)
+        $bStart | Should -BeGreaterThan $aStart
+        $sectionA = $winHtml.Substring($aStart, $bStart - $aStart)
+
+        $winRowCount = ([regex]::Matches($sectionA, '<tr><td>')).Count
+        $winRowCount | Should -Be 2
+
+        # Prove the window NARROWED the analysis vs the full window (>= 11 rows).
+        $fullHtml = Get-Content $script:htmlFile.FullName -Raw
+        $fa = $fullHtml.IndexOf('<h2>A. Campaign Completion Evidence (by instance)</h2>')
+        $fb = $fullHtml.IndexOf('<h2>B. Reviewer Accountability</h2>', $fa)
+        $fullSectionA = $fullHtml.Substring($fa, $fb - $fa)
+        $fullRowCount = ([regex]::Matches($fullSectionA, '<tr><td>')).Count
+        $winRowCount | Should -BeLessThan $fullRowCount
+    }
+}
+
+Describe 'V4E-E2E-07: series deltas still render under the unified report' {
+    It 'Key Indicators show Newly Attested / Persistently Undecided AND JSON counts remain 2 / 1' {
+        if (-not $script:PsAvailable) { Set-ItResult -Skipped -Because 'powershell.exe not available'; return }
+        $html = Get-Content $script:htmlFile.FullName -Raw
+        $html | Should -Match 'Newly Attested'
+        $html | Should -Match 'Persistently Undecided'
+
+        # Self-contained delta-still-renders proof: re-read the JSON sidecar and re-assert the counts.
+        $json = Get-Content $script:jsonFile.FullName -Raw | ConvertFrom-Json
+        $series = @($json.Series)
         [int]$series[0].Counts.NewlyAttested         | Should -Be 2
         [int]$series[0].Counts.PersistentlyUndecided | Should -Be 1
     }

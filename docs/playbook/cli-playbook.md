@@ -1642,15 +1642,29 @@ whose cache V4c reads), `Invoke-SPCampaignDiff.ps1` (the snapshot scope-diff V4c
 recurring series, retained for different-campaign diffs).
 
 ### `Invoke-SPDailyEvidenceReportV4e.ps1`
-**Purpose:** the **V4/V4b-styled sibling of V4c** — same recurring-series attestation content, rendered
-in **byte-faithful V4b chrome** (output `daily-evidence-v4e-{timestamp}.html`). V4e runs the SAME series
-engine and pipeline as V4c (`Get-SPCachedCampaignSeries` for variance-tolerant auto-derivation +
-`Get-SPSeriesAttestationDelta` for the honest cross-instance classification) and honors the SAME
-**honesty doctrine** — but it wears the exact V4b look: the gradient header, the **Certification Scope**
-block, the `.execbox` Executive Summary with the decision-distribution donut + Key Indicators, the
-**Section A** `table.report` series summary, the **Section B** reviewer accountability tables, the
-**Decision Summary** detail, and the `.footer`. It is **read-only** (no `SupportsShouldProcess`, CLI-005):
-it reads ONLY the rich cache and never calls ISC, never starts the live mock, never opens a GUI.
+**Purpose:** **THE unified daily-evidence report for recurring campaign series** (output
+`daily-evidence-v4e-{timestamp}.html`). It fuses two views in one honest report off the rich audit cache,
+**superseding V4b's snapshot scope-diff for recurring series**:
+
+- **Single-day per-campaign completion (NEWEST instance, honest).** A V4b-faithful `.execbox` panel for the
+  newest instance in the series: status, **Items Decided X/Y**, **Reviewers Signed Off X/Y** (genuine
+  sign-off — admin force-close is NOT a sign-off), a newest-instance **decision-distribution donut**
+  (Approved / Revoked / Undecided), **Revoked Access — Removal Status** (source-aware:
+  Deprovisioned / Queued / Pending), and **Key Indicators**.
+- **Multi-day series attestation.** **Section A** is a per-instance completion breakdown table — one row per
+  instance (Total Items, Approved, Revoked, Undecided, Items Decided %, Reviewer %, Created, Completed) —
+  and **Section B** the reviewer accountability rollups (newly-attested / persistently-undecided by
+  reviewer), with the **Decision Summary** detail and Key Indicators carrying the cross-instance deltas.
+
+Every surface counts from the SAME honest/gated set (exec box, donut, Section A, Section B, Key Indicators,
+JSON, console) so the numbers reconcile; the newest Section A row's Items Decided / Total matches the exec
+box byte-for-byte. V4e runs the SAME series engine as V4c/V4d (`Get-SPCachedCampaignSeries` for
+variance-tolerant auto-derivation + `Get-SPSeriesAttestationDelta` for the honest cross-instance
+classification) and honors the SAME **honesty doctrine** — rendered in **byte-faithful V4b chrome** (the
+gradient header, the **Certification Scope** block, the `.execbox` Executive Summary, the **Section A**
+`table.report`, the **Section B** tables, the **Decision Summary** detail, and the `.footer`). It is
+**read-only** (no `SupportsShouldProcess`, CLI-005): it reads ONLY the rich cache and never calls ISC,
+never starts the live mock, never opens a GUI.
 
 V4e **DROPS the V4b per-campaign machinery** that is meaningless for a recurring-series attestation view:
 the 6 KPIs (Completion / Overdue / Revocations / Remediation / High-Risk / Reviewer Health), the
@@ -1669,17 +1683,21 @@ Parameters are identical to V4c:
 | `-SeriesPattern` | Override guard: a user-supplied temporal regex used instead of the built-in ladder. |
 | `-SimilarityThreshold <0..1>` | Opt-in fuzzy near-match. Default `0` = OFF (exact match only); the merge is logged as audit evidence. |
 | `-MinInstances <n>` | Minimum instances for a family to count as a "series" (default `2`). |
+| `-Window <n>` (alias `-DaysBack`) | Narrow each series to the newest `n` instances. Default `0` = full window (all instances); `-Window 2` = today vs yesterday. The newest instance is ALWAYS retained. |
 | `-IncludeUnverified` | Include Unverified-provenance items in the headline (rendered with a badge) instead of excluding them. |
 | `-CachePath` (alias `-Path`) | Override the rich-cache directory (defaults to the configured Audit cache). |
 | `-OutputPath` | Output directory (defaults to the daily-evidence subdir). |
 | `-OutputMode` | `Console`/`JSON`/`HTML`/`Both` (default `Both`). |
 
 ```powershell
-# Auto-derive every recurring series and render the delta in V4b-faithful chrome (read-only)
+# Auto-derive every recurring series and render the unified daily-evidence report (read-only)
 .\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1
 
 # Force a single series stem and write only the HTML report
 .\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SeriesName 'Daily Attestation Manager Campaign' -OutputMode HTML
+
+# Narrow each series to today vs yesterday (newest two instances; newest always retained)
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -Window 2
 
 # Opt-in fuzzy stem merge for genuine typos; include Unverified items with a badge
 .\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
