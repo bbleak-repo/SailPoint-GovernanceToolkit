@@ -650,6 +650,9 @@ foreach ($sd in $seriesDataList) {
     $periodUp = ''
     if (-not [string]::IsNullOrWhiteSpace($periodType)) { $periodUp = $periodType.ToUpperInvariant() }
     $statusBadge = ConvertTo-SafeHtml ("$periodUp SERIES - $instCount INSTANCES")
+    # Health-color the badge like V4b's status badge: green when nothing is left persistently
+    # undecided, amber when the series still has never-attested items.
+    $badgeBg = if ($cPU -eq 0) { '#339933' } else { '#9a6700' }
 
     # Metadata table values.
     $periodTypeSafe = ConvertTo-SafeHtml $periodType
@@ -666,9 +669,12 @@ foreach ($sd in $seriesDataList) {
     )
     $donutSvg = New-V4eDonut -Segments $segs -Total $shownTotal -CenterLabel 'items'
 
-    # Attestation-coverage blurb (replaces the dropped removal-status panel; chrome stays V4b).
-    $periodLower = ConvertTo-SafeHtml ($periodType.ToLowerInvariant())
-    $coverageBlurb = 'This recurring ' + $periodLower + ' series spans ' + $instCount + ' instance(s). Counting the FIRST genuine reviewer approval per item across the window, ' + $cNA + ' item(s) were newly attested and ' + $cPU + ' remain persistently undecided; ' + $cDC + ' changed decision. Auto-approved-at-close and pending items are held as Undecided, never counted as an approval.'
+    # Attestation-coverage VISUAL panel (mirrors V4b's removal-status panel: big %, bar, labels)
+    # in place of the dropped per-campaign removal status; series-rebound.
+    $covered = $shownTotal - $cPU
+    $covPct = if ($shownTotal -gt 0) { [int][math]::Round($covered / $shownTotal * 100) } else { 0 }
+    $undPct = 100 - $covPct
+    $covColor = if ($covPct -ge 80) { '#339933' } elseif ($covPct -ge 50) { '#9a6700' } else { '#CC3333' }
 
     $execHtml = @"
 <div class="execbox">
@@ -676,7 +682,7 @@ foreach ($sd in $seriesDataList) {
 <table style="width:100%;border-collapse:collapse;margin-bottom:18px"><tr>
 <td style="width:50%;vertical-align:top;padding-right:16px">
 <table style="width:100%;border-collapse:collapse;font-size:13px">
-<tr><td colspan="2" style="padding:12px 16px;background:#336699;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$statusBadge</span></td></tr>
+<tr><td colspan="2" style="padding:12px 16px;background:$badgeBg;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$statusBadge</span></td></tr>
 <tr>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#339933">$cNA</span><br>Newly Attested</td>
 <td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#CC3333">$cPU</span><br>Persistently Undecided</td>
@@ -699,7 +705,10 @@ $donutSvg
 </td>
 <td style="width:34%;vertical-align:top;padding:0 12px">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Attestation Coverage</p>
-<p style="font-size:12px;color:#555;line-height:1.5;margin:0">$coverageBlurb</p>
+<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$covColor">$covPct%</span><br><span style="font-size:12px;color:#777">$covered of $shownTotal items genuinely attested</span></div>
+<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$covPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$undPct%;background:#CC3333;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
+<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$covered Attested</td><td style="color:#CC3333;font-weight:bold;text-align:right;padding:2px 0">$cPU Never Attested</td></tr></table>
+<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Coverage = items with at least one genuine reviewer decision across the window. Never Attested = persistently undecided (incl. auto-approved-at-close).</p>
 </td>
 <td style="width:33%;vertical-align:top;padding-left:12px">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Key Indicators</p>
