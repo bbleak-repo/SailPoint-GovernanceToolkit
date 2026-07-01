@@ -52,6 +52,12 @@
 .PARAMETER MinInstances
     Minimum number of instances for a series to be reported. Default 2 (a single
     capture is not a "series"). Passed to the reader.
+.PARAMETER Window
+    Narrow each series to its newest N instances before the delta engine + rendering.
+    Default 0 = the FULL cached window (all instances). Alias -DaysBack. Applied AFTER
+    MinInstances filtering (a series must have >= MinInstances TOTAL cached instances to
+    appear, then the window narrows what is analyzed). The newest instance is ALWAYS
+    retained (it drives the exec-box single-day panel). ValidateRange(0, 10000).
 .PARAMETER IncludeUnverified
     By default Unverified-provenance items are EXCLUDED from the headline (and
     reported as an "Unverified (excluded)" note). When set, they are included and
@@ -77,6 +83,9 @@
 .EXAMPLE
     .\Invoke-SPDailyEvidenceReportV4e.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
     # Opt-in fuzzy stem merge; include Unverified items with a badge.
+.EXAMPLE
+    .\Invoke-SPDailyEvidenceReportV4e.ps1 -Window 2 -OutputMode Console
+    # Narrow each series to its two newest instances (today vs yesterday single-day diff).
 .NOTES
     Script:  Invoke-SPDailyEvidenceReportV4e.ps1
     Version: 1.0.0
@@ -96,6 +105,11 @@ param(
 
     [Parameter()]
     [int]$MinInstances = 2,
+
+    [Parameter()]
+    [Alias('DaysBack')]
+    [ValidateRange(0, 10000)]
+    [int]$Window = 0,
 
     [Parameter()]
     [switch]$IncludeUnverified,
@@ -198,7 +212,7 @@ try {
 } catch { }
 
 try {
-    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4e started: CorrelationID=$correlationID MinInstances=$MinInstances SimilarityThreshold=$SimilarityThreshold" `
+    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4e started: CorrelationID=$correlationID MinInstances=$MinInstances SimilarityThreshold=$SimilarityThreshold Window=$Window" `
         -Severity INFO -Component 'DailyEvidenceV4e' -Action 'Start' -CorrelationID $correlationID
 } catch { }
 
@@ -349,6 +363,33 @@ if ($SimilarityThreshold -gt 0 -and $MinInstances -gt 1) {
     if ($seriesList.Count -ne $beforeReFilter) {
         Write-Host "    Series after MinInstances=$MinInstances re-filter: $($seriesList.Count)" -ForegroundColor DarkGray
     }
+}
+
+#endregion
+
+#region Step 2b: Apply -Window (narrow each series to its newest N instances)
+
+# Guarded on $Window -gt 0 so the default full-window path is completely untouched
+# (byte-for-byte reproduction of today's output when -Window is omitted or 0). Runs
+# AFTER MinInstances filtering: a series must have >= MinInstances TOTAL cached instances
+# to appear, then the window narrows what is analyzed/rendered. The engine re-sorts by
+# OrderIndex and treats the LAST instance as newest, so keeping the original absolute
+# OrderIndex values on the retained slice is correct (Select-Object -Last preserves
+# ascending chronological order). The newest instance is always retained.
+if ($Window -gt 0) {
+    Write-Host "  Step 2b: Narrow each series to its newest $Window instance(s)" -ForegroundColor Cyan
+    $windowed = New-Object System.Collections.Generic.List[object]
+    foreach ($s in $seriesList) {
+        $inst = @($s.Instances)
+        if ($inst.Count -gt $Window) {
+            $kept = @($inst | Select-Object -Last $Window)
+            $s['Instances'] = $kept
+            $s['InstanceCount'] = $kept.Count
+            Write-Host "    [$($s.NormalizedStem)] $($inst.Count) -> $($kept.Count) instance(s)" -ForegroundColor DarkGray
+        }
+        $windowed.Add($s)
+    }
+    $seriesList = @($windowed.ToArray())
 }
 
 #endregion
