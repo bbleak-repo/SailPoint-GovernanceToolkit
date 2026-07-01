@@ -3854,6 +3854,58 @@ Clear-SPAuditItemCache -CampaignId 'campaign-id-here'</code></pre>
 .\Scripts\Invoke-SPDailyEvidenceReportV4c.ps1 -SimilarityThreshold 0.15 -IncludeUnverified</code></pre>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>V4c REPLACES the cross-campaign snapshot scope-diff for RECURRING series — and why.</strong> The snapshot scope-diff (<code>Invoke-SPCampaignDiff.ps1</code> / the V3 hybrid) compares exactly <strong>two</strong> campaign snapshots picked as "current" and an <strong>arbitrary prior</strong>. For a recurring daily/quarterly family that framing distorts the truth two ways: it depends on <em>which</em> prior you happen to pick, and it trusts the raw snapshot — so a COMPLETED instance's <code>idNowAutoApproved</code> auto-approve inflation reads as a real approval. V4c is <strong>series-aware</strong> (it walks every chronological instance of the family, not a single 2-snapshot prior) and <strong>honest</strong> (it reads the rich cache through the shared classifier, so the arbitrary-prior pick and the COMPLETED auto-approve inflation cannot distort the "newly attested" headline). This is <strong>ADDITIVE</strong>: the snapshot scope-diff stays intact for genuinely <strong>different</strong> campaigns — V4c is the recurring-series analysis alongside it, not a removal of it.</p></div>
 <p><strong>Output:</strong> <code>daily-evidence-v4c-{timestamp}.html</code> (plus a <code>.json</code> sidecar under <code>-OutputMode Both</code>). <strong>Related:</strong> <code>Invoke-SPDailyEvidenceReportV4b.ps1</code> (single-campaign honest completion — the data engine whose cache V4c reads), <code>Invoke-SPCampaignDiff.ps1</code> (the snapshot scope-diff V4c supersedes for recurring series, retained for different-campaign diffs).</p>
+<h3 id="invoke-spdailyevidencereportv4e-ps1"><code>Invoke-SPDailyEvidenceReportV4e.ps1</code></h3>
+<p><strong>Purpose:</strong> the <strong>V4/V4b-styled sibling of V4c</strong> — same recurring-series attestation content, rendered in <strong>byte-faithful V4b chrome</strong> (output <code>daily-evidence-v4e-{timestamp}.html</code>). V4e runs the SAME series engine and pipeline as V4c (<code>Get-SPCachedCampaignSeries</code> for variance-tolerant auto-derivation + <code>Get-SPSeriesAttestationDelta</code> for the honest cross-instance classification) and honors the SAME <strong>honesty doctrine</strong> — but it wears the exact V4b look: the gradient header, the <strong>Certification Scope</strong> block, the <code>.execbox</code> Executive Summary with the decision-distribution donut + Key Indicators, the <strong>Section A</strong> <code>table.report</code> series summary, the <strong>Section B</strong> reviewer accountability tables, the <strong>Decision Summary</strong> detail, and the <code>.footer</code>. It is <strong>read-only</strong> (no <code>SupportsShouldProcess</code>, CLI-005): it reads ONLY the rich cache and never calls ISC, never starts the live mock, never opens a GUI.</p>
+<p>V4e <strong>DROPS the V4b per-campaign machinery</strong> that is meaningless for a recurring-series attestation view: the 6 KPIs (Completion / Overdue / Revocations / Remediation / High-Risk / Reviewer Health), the Governance Confidence score, the Domino Chain, the cross-campaign scope-diff snapshot, and the <code>daily-metrics.jsonl</code> write. Only the series-attestation data is rebound onto the V4b section chrome.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Skin lineage.</strong> <code>V4c = analytics look</code>, <code>V4d = interim skin</code>, <code>V4e = V4b-faithful chrome</code>. All three render the SAME honest series-attestation data off the SAME engine; they differ ONLY in visual chrome. V4e is <strong>ADDITIVE</strong> — V4c and V4d stay intact.</p></div>
+<p>Parameters are identical to V4c:</p>
+<table>
+<thead><tr>
+<th>Parameter</th>
+<th>Description</th>
+</tr></thead><tbody>
+<tr>
+<td><code>-SeriesName</code> (alias <code>-SeriesStem</code>)</td>
+<td>Override guard: force an explicit series stem instead of auto-derivation.</td>
+</tr>
+<tr>
+<td><code>-SeriesPattern</code></td>
+<td>Override guard: a user-supplied temporal regex used instead of the built-in ladder.</td>
+</tr>
+<tr>
+<td><code>-SimilarityThreshold &lt;0..1&gt;</code></td>
+<td>Opt-in fuzzy near-match. Default <code>0</code> = OFF (exact match only); the merge is logged as audit evidence.</td>
+</tr>
+<tr>
+<td><code>-MinInstances &lt;n&gt;</code></td>
+<td>Minimum instances for a family to count as a "series" (default <code>2</code>).</td>
+</tr>
+<tr>
+<td><code>-IncludeUnverified</code></td>
+<td>Include Unverified-provenance items in the headline (rendered with a badge) instead of excluding them.</td>
+</tr>
+<tr>
+<td><code>-CachePath</code> (alias <code>-Path</code>)</td>
+<td>Override the rich-cache directory (defaults to the configured Audit cache).</td>
+</tr>
+<tr>
+<td><code>-OutputPath</code></td>
+<td>Output directory (defaults to the daily-evidence subdir).</td>
+</tr>
+<tr>
+<td><code>-OutputMode</code></td>
+<td><code>Console</code>/<code>JSON</code>/<code>HTML</code>/<code>Both</code> (default <code>Both</code>).</td>
+</tr>
+</tbody></table>
+<pre><code># Auto-derive every recurring series and render the delta in V4b-faithful chrome (read-only)
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1
+
+# Force a single series stem and write only the HTML report
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SeriesName 'Daily Attestation Manager Campaign' -OutputMode HTML
+
+# Opt-in fuzzy stem merge for genuine typos; include Unverified items with a badge
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SimilarityThreshold 0.15 -IncludeUnverified</code></pre>
+<p><strong>Output:</strong> <code>daily-evidence-v4e-{timestamp}.html</code> (plus a <code>.json</code> sidecar under <code>-OutputMode Both</code>). <strong>Related:</strong> <code>Invoke-SPDailyEvidenceReportV4c.ps1</code> (the analytics-look sibling — same engine/data), <code>Invoke-SPDailyEvidenceReportV4b.ps1</code> (the chrome source V4e reproduces AND the data engine whose rich cache it reads).</p>
 <h3 id="invoke-spadaptivereport-ps1-deprecated"><code>Invoke-SPAdaptiveReport.ps1</code> ---- DEPRECATED</h3>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecated — do not use for new work.</strong> These reports were ported <em>verbatim</em> from an EntraID group-enumerator and render an AD "group → members" view (<code>SamAccountName</code>, <code>Enabled</code>, nested groups) that <strong>drops the ISC certification substance</strong> — the decision, the reviewer, the dates, the remediation status. An IGA review panel found them either strictly-worse clones of native ISC reports or authoritative-looking dashboards built on the wrong fields. Use the ISC-native replacements: <strong><code>Invoke-SPCertTracker.ps1</code></strong> (executive tracker + <code>-EvidencePack</code> attestation evidence), <strong><code>Invoke-SPCampaignTrendReport.ps1</code></strong> (KPI trend; <code>-Program</code> for cross-campaign), <strong><code>Invoke-SPCampaignDiff.ps1</code></strong> (day-over-day diff). Kept temporarily for back-compat; will be removed.</p></div>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Deprecation timeline:</strong> Deprecated as of June 2026. Will be removed in a future release. <strong>Migration:</strong> Use <code>Invoke-SPCertTracker.ps1</code> (executive tracker), <code>Invoke-SPCampaignTrendReport.ps1</code> (KPI trend), or <code>Invoke-SPCampaignDiff.ps1</code> (day-over-day diff) instead.</p></div>

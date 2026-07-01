@@ -1641,6 +1641,55 @@ classifier, so the headline cannot be gamed:
 whose cache V4c reads), `Invoke-SPCampaignDiff.ps1` (the snapshot scope-diff V4c supersedes for
 recurring series, retained for different-campaign diffs).
 
+### `Invoke-SPDailyEvidenceReportV4e.ps1`
+**Purpose:** the **V4/V4b-styled sibling of V4c** — same recurring-series attestation content, rendered
+in **byte-faithful V4b chrome** (output `daily-evidence-v4e-{timestamp}.html`). V4e runs the SAME series
+engine and pipeline as V4c (`Get-SPCachedCampaignSeries` for variance-tolerant auto-derivation +
+`Get-SPSeriesAttestationDelta` for the honest cross-instance classification) and honors the SAME
+**honesty doctrine** — but it wears the exact V4b look: the gradient header, the **Certification Scope**
+block, the `.execbox` Executive Summary with the decision-distribution donut + Key Indicators, the
+**Section A** `table.report` series summary, the **Section B** reviewer accountability tables, the
+**Decision Summary** detail, and the `.footer`. It is **read-only** (no `SupportsShouldProcess`, CLI-005):
+it reads ONLY the rich cache and never calls ISC, never starts the live mock, never opens a GUI.
+
+V4e **DROPS the V4b per-campaign machinery** that is meaningless for a recurring-series attestation view:
+the 6 KPIs (Completion / Overdue / Revocations / Remediation / High-Risk / Reviewer Health), the
+Governance Confidence score, the Domino Chain, the cross-campaign scope-diff snapshot, and the
+`daily-metrics.jsonl` write. Only the series-attestation data is rebound onto the V4b section chrome.
+
+> **Skin lineage.** `V4c = analytics look`, `V4d = interim skin`, `V4e = V4b-faithful chrome`. All three
+> render the SAME honest series-attestation data off the SAME engine; they differ ONLY in visual chrome.
+> V4e is **ADDITIVE** — V4c and V4d stay intact.
+
+Parameters are identical to V4c:
+
+| Parameter | Description |
+|---|---|
+| `-SeriesName` (alias `-SeriesStem`) | Override guard: force an explicit series stem instead of auto-derivation. |
+| `-SeriesPattern` | Override guard: a user-supplied temporal regex used instead of the built-in ladder. |
+| `-SimilarityThreshold <0..1>` | Opt-in fuzzy near-match. Default `0` = OFF (exact match only); the merge is logged as audit evidence. |
+| `-MinInstances <n>` | Minimum instances for a family to count as a "series" (default `2`). |
+| `-IncludeUnverified` | Include Unverified-provenance items in the headline (rendered with a badge) instead of excluding them. |
+| `-CachePath` (alias `-Path`) | Override the rich-cache directory (defaults to the configured Audit cache). |
+| `-OutputPath` | Output directory (defaults to the daily-evidence subdir). |
+| `-OutputMode` | `Console`/`JSON`/`HTML`/`Both` (default `Both`). |
+
+```powershell
+# Auto-derive every recurring series and render the delta in V4b-faithful chrome (read-only)
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1
+
+# Force a single series stem and write only the HTML report
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SeriesName 'Daily Attestation Manager Campaign' -OutputMode HTML
+
+# Opt-in fuzzy stem merge for genuine typos; include Unverified items with a badge
+.\Scripts\Invoke-SPDailyEvidenceReportV4e.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
+```
+
+**Output:** `daily-evidence-v4e-{timestamp}.html` (plus a `.json` sidecar under `-OutputMode Both`).
+**Related:** `Invoke-SPDailyEvidenceReportV4c.ps1` (the analytics-look sibling — same engine/data),
+`Invoke-SPDailyEvidenceReportV4b.ps1` (the chrome source V4e reproduces AND the data engine whose rich
+cache it reads).
+
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
 > EntraID group-enumerator and render an AD "group → members" view (`SamAccountName`, `Enabled`,
