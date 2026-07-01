@@ -150,3 +150,27 @@ Describe "V4E-05: DATA correctness -- JSON Version + Counts reconcile with HTML 
         }
     }
 }
+
+Describe "V4E-06: newest-instance V4b-faithful exec panel" {
+    It "exec box carries the V4b single-day chrome (Items Decided / Reviewers Signed Off / Removal Status / donut)" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+        $content = Get-Content $script:v4eHtml.FullName -Raw
+        $content | Should -Match 'Items Decided'
+        $content | Should -Match 'Reviewers Signed Off'
+        $content | Should -Match 'Revoked Access &mdash; Removal Status'
+        $content | Should -Match 'stroke-dasharray="'
+    }
+
+    It "newest-instance Items Decided fraction equals Get-SPSeriesInstanceCompletion on the fixture newest instance (dam-11)" {
+        if (-not $script:PwshAvailable) { Set-ItResult -Skipped -Because 'pwsh (PowerShell 7) not available'; return }
+
+        # Compute the honest expected fraction directly off the fixture (mirror the fixture-load idiom
+        # from SP.SeriesInstanceCompletion.Tests.ps1:28-35).
+        $r = Get-SPCachedCampaignSeries -CachePath $script:cliCache
+        $n = @($r.Data.Series[0].Instances) | Sort-Object -Property OrderIndex -Descending | Select-Object -First 1
+        $ic = (Get-SPSeriesInstanceCompletion -Items @(& $n.LoadItems) -Roster @(& $n.LoadRoster) -Status $n.Status).Data
+
+        $content = Get-Content $script:v4eHtml.FullName -Raw
+        $content | Should -Match ([regex]::Escape("$($ic.ItemsDecided) / $($ic.Total)"))
+    }
+}

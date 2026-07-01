@@ -434,6 +434,30 @@ foreach ($series in $seriesList) {
         continue
     }
 
+    # Newest-instance single-day completion panel (V4b-faithful). REUSE the already-built honest
+    # engines inside Get-SPSeriesInstanceCompletion (ConvertTo-SPCanonicalDecision via
+    # Resolve-SPSeriesItemState / genuine reviewer sign-off from Group-SPCompletedPendingByReviewer /
+    # source-aware Get-SPRevocationDisposition) -- NO engine changes. Additive: attach to the ordered
+    # Data map so ONLY the HTML render layer reads it. Get-V4eJsonSeriesProjection builds JSON from
+    # explicit keys, so this new key never leaks into the JSON/console headline (reconciliation kept).
+    $newestInst = @($deltaInstances.ToArray() | Sort-Object OrderIndex -Descending | Select-Object -First 1)
+    $newestInst = if ($newestInst.Count -gt 0) { $newestInst[0] } else { $null }
+    $newestCompletion = $null
+    $newestUnverified = $false
+    if ($null -ne $newestInst) {
+        $newestUnverified = [bool]$newestInst.Unverified
+        $icRes = $null
+        try {
+            $icRes = Get-SPSeriesInstanceCompletion -Items @($newestInst.Items) -Roster @($newestInst.Roster) `
+                -Status ([string]$newestInst.Status) -Unverified ([bool]$newestInst.Unverified) -CorrelationID $correlationID
+        } catch {
+            Write-Host "    WARN: instance completion threw for series '$($series.NormalizedStem)': $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        if ($null -ne $icRes -and $icRes.Success) { $newestCompletion = $icRes.Data }
+    }
+    $dr.Data['NewestInstanceCompletion'] = $newestCompletion
+    $dr.Data['NewestInstanceUnverified'] = [bool]$newestUnverified
+
     $seriesResults.Add($dr.Data)
     $na = [int]$dr.Data.Counts['NewlyAttested']
     $pu = [int]$dr.Data.Counts['PersistentlyUndecided']
@@ -648,6 +672,28 @@ $unvMode = if ($IncludeUnverified) { 'INCLUDED (badged)' } else { 'EXCLUDED from
 [void]$sb.AppendLine('<div><span class="n">' + $reviewerSet.Count + '</span><span class="t">reviewers involved</span></div>')
 [void]$sb.AppendLine('</div></div>')
 
+# V4b decision-distribution donut lambda (VERBATIM from Invoke-SPDailyEvidenceReportV4b.ps1 render
+# region, lines 1682-1699). Rebound per series to the NEWEST-instance approve/revoke/undecided
+# percentages so the exec-box donut is byte-faithful to V4b. Defined once before the render loop.
+$donut = {
+    param($ap, $rp, $pp, $tot)
+    if ($tot -le 0) { return '<div style="color:#999;font-size:11px;padding:48px 0">No items</div>' }
+    $o2 = -$ap
+    $o3 = -([math]::Round($ap + $rp, 1))
+    $ar1 = [math]::Round(100 - $ap, 1); $ar2 = [math]::Round(100 - $rp, 1); $ar3 = [math]::Round(100 - $pp, 1)
+    $tf = '{0:N0}' -f $tot
+    return @"
+<svg width="140" height="140" viewBox="0 0 42 42" style="display:block;margin:0 auto">
+<circle cx="21" cy="21" r="15.9" pathLength="100" fill="transparent" stroke="#e0e0e0" stroke-width="3.2"></circle>
+<circle cx="21" cy="21" r="15.9" pathLength="100" fill="transparent" stroke="#339933" stroke-width="3.2" stroke-dasharray="$ap $ar1" stroke-dashoffset="0" transform="rotate(-90 21 21)"></circle>
+<circle cx="21" cy="21" r="15.9" pathLength="100" fill="transparent" stroke="#CC3333" stroke-width="3.2" stroke-dasharray="$rp $ar2" stroke-dashoffset="$o2" transform="rotate(-90 21 21)"></circle>
+<circle cx="21" cy="21" r="15.9" pathLength="100" fill="transparent" stroke="#FF8800" stroke-width="3.2" stroke-dasharray="$pp $ar3" stroke-dashoffset="$o3" transform="rotate(-90 21 21)"></circle>
+<text x="21" y="19.5" text-anchor="middle" style="font-size:5px;font-weight:bold;fill:#2c3e50">$tf</text>
+<text x="21" y="24" text-anchor="middle" style="font-size:2.8px;fill:#777">items</text>
+</svg>
+"@
+}
+
 # PER-SERIES BODY = PLACEHOLDER (SCAFFOLD-V4E). Later items replace this loop with the verbatim
 # V4b execbox / Section A / Section B / Decision Summary chrome rebound to series-attestation data.
 if ($seriesDataList.Count -eq 0) {
@@ -717,16 +763,112 @@ foreach ($sd in $seriesDataList) {
     $undPct = 100 - $covPct
     $covColor = if ($covPct -ge 80) { '#339933' } elseif ($covPct -ge 50) { '#9a6700' } else { '#CC3333' }
 
+    # ---- NEWEST-INSTANCE single-day completion (V4b-faithful). Read the completion Data attached in
+    # Step 3 (Get-SPSeriesInstanceCompletion -- honest classifier / roster sign-off / removal). Zero-
+    # fill a default map when absent so the panel never throws. All V4b render formulas below are
+    # copied byte-for-byte from Invoke-SPDailyEvidenceReportV4b.ps1, only rebinding the source vars.
+    $ic = Get-SPObjectProperty -Object $sd -Name 'NewestInstanceCompletion' -Default $null
+    if ($null -eq $ic) {
+        $ic = [ordered]@{
+            Status = ''; Total = 0; Approved = 0; Revoked = 0; Undecided = 0
+            ItemsDecided = 0; ItemsDecidedPct = 0; ReviewersSigned = 0; ReviewersTotal = 0
+            Removal = [ordered]@{ Deprovisioned = 0; Queued = 0; Pending = 0 }
+        }
+    }
+    $icTotal      = [int]$ic['Total']
+    $icApproved   = [int]$ic['Approved']
+    $icRevoked    = [int]$ic['Revoked']
+    $icUndecided  = [int]$ic['Undecided']
+    $icDecided    = [int]$ic['ItemsDecided']
+    $icDecidedPct = [int]$ic['ItemsDecidedPct']
+    $icRevSigned  = [int]$ic['ReviewersSigned']
+    $icRevTotal   = [int]$ic['ReviewersTotal']
+    $icRemoval    = $ic['Removal']
+    $removed = [int]$icRemoval['Deprovisioned']
+    $queued  = [int]$icRemoval['Queued']
+    $remPend = [int]$icRemoval['Pending']
+    $totRevoked = $icRevoked
+
+    # Status badge (V4b 1868): newest-instance ACTUAL status, green when COMPLETED/COMPLETING.
+    $icStatusRaw = ([string]$ic['Status']).ToUpperInvariant()
+    $stColor = switch ($icStatusRaw) { 'COMPLETED' { '#339933' } 'COMPLETING' { '#339933' } default { '#336699' } }
+    $cStatusUp = ConvertTo-SafeHtml $icStatusRaw
+
+    # Closed-incomplete honest qualifier row (V4b 1880-1884), guarded.
+    $qualSubRow = ''
+    if (Get-Command Get-SPClosedIncompleteQualifier -ErrorAction Ignore) {
+        $qExec = Get-SPClosedIncompleteQualifier -Status $icStatusRaw -ReviewersSigned $icRevSigned -ReviewersTotal $icRevTotal -UndecidedCount $icUndecided
+        if ($qExec.IsClosedIncomplete) {
+            $qualSubRow = '<tr><td colspan="2" style="padding:6px 8px;border:1px solid #b9770e;background:#fff8e1;color:#7a5200;font-size:11px;font-weight:600;border-radius:0 0 6px 6px">&#9888; ' + (ConvertTo-SafeHtml $qExec.Caption) + '</td></tr>'
+        }
+    }
+
+    # Reviewer completion (V4b 1853 + 1869), guarded with a manual fraction/percent fallback.
+    $rvc = $null
+    if (Get-Command Get-SPReviewerCompletion -ErrorAction Ignore) {
+        $rvc = Get-SPReviewerCompletion -Signed $icRevSigned -Total $icRevTotal
+    }
+    if ($null -ne $rvc) {
+        $rvcFraction = [string]$rvc.FractionLabel
+        $rvcPercent  = [string]$rvc.PercentLabel
+        $revCompPct  = [int]$rvc.Pct
+    }
+    else {
+        $revCompPct  = if ($icRevTotal -gt 0) { [int][math]::Round($icRevSigned / $icRevTotal * 100, 0) } else { 0 }
+        $rvcFraction = "$icRevSigned / $icRevTotal"
+        $rvcPercent  = "$revCompPct%"
+    }
+    $revCompColor = if ($revCompPct -ge 100) { '#339933' } elseif ($revCompPct -ge 50) { '#FF9900' } else { '#CC3333' }
+    $pendColor = if ($icUndecided -eq 0) { '#339933' } else { '#FF9900' }
+
+    # Newest-instance decision-distribution donut % (V4b 1822-1827: sum-to-100 correction + sliver).
+    $apct = if ($icTotal -gt 0) { [math]::Round($icApproved / $icTotal * 100, 1) } else { 0 }
+    $rpct = if ($icTotal -gt 0) { [math]::Round($icRevoked / $icTotal * 100, 1) } else { 0 }
+    $ppct = if ($icTotal -gt 0) { [math]::Round($icUndecided / $icTotal * 100, 1) } else { 0 }
+    if ($icTotal -gt 0 -and ($apct + $rpct + $ppct) -ne 100) { $apct = [math]::Round(100 - $rpct - $ppct, 1) }
+    if ($icUndecided -gt 0 -and $ppct -lt 0.5) { $ppct = 0.5; $apct = [math]::Round(100 - $rpct - $ppct, 1) }
+    $execDonutSvg = & $donut $apct $rpct $ppct $icTotal
+
+    # Removal status (V4b 1865-1895) rebound to the newest instance's Removal counts.
+    $remPct = if ($totRevoked -gt 0) { [math]::Round($removed / $totRevoked * 100, 0) } else { 0 }
+    $qPct   = if ($totRevoked -gt 0) { [math]::Round($queued / $totRevoked * 100, 0) } else { 0 }
+    $remPendPct = 100 - $remPct - $qPct; if ($remPendPct -lt 0) { $remPendPct = 0 }
+    $remColor = if ($totRevoked -eq 0) { '#777777' } elseif ($remPct -ge 100) { '#339933' } elseif ($remPct -ge 50) { '#FF9900' } else { '#CC3333' }
+    if ($totRevoked -gt 0) {
+        $remBlock = @"
+<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$remColor">$remPct%</span><br><span style="font-size:12px;color:#777">$removed of $totRevoked deprovisioned (connected AD)</span></div>
+<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$remPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$qPct%;background:#336699;height:18px"></td><td style="width:$remPendPct%;background:#FF8800;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
+<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$removed Deprovisioned</td><td style="color:#264d73;font-weight:bold;text-align:center;padding:2px 0">$queued Queued</td><td style="color:#FF8800;font-weight:bold;text-align:right;padding:2px 0">$remPend Pending</td></tr></table>
+<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Deprovisioned = revoke completed on a connected Active Directory source. Queued = revoke recorded on a disconnected / other source; actual removal is fulfilled downstream and not confirmed here.</p>
+"@
+    }
+    else {
+        $remBlock = '<div style="text-align:center;color:#777;font-size:13px;padding:18px 0">No revocations in this campaign.</div>'
+    }
+
+    # Unverified honesty: badge (never blank) the exec h3 when the newest instance is Unverified and
+    # the gate is off (mirror Get-V4eUnverifiedBadge).
+    $execUnvBadge = ''
+    $newestUnv = [bool](Get-SPObjectProperty -Object $sd -Name 'NewestInstanceUnverified' -Default $false)
+    if ($newestUnv -and (-not $IncludeUnverified)) {
+        $execUnvBadge = " <span class='badge badge-amber'>Unverified</span>"
+    }
+
+    # Compact series-attestation coverage stat (moved off the middle column; Removal Status now owns
+    # it). Reuses $covered/$covPct/$shownTotal/$instCount computed above.
+    $coverageStat = "<p style='font-size:11px;color:#777;text-align:center'>Series attestation coverage: $covPct% ($covered of $shownTotal genuinely attested across $instCount instances)</p>"
+
     $execHtml = @"
 <div class="execbox">
-<h3>Executive Summary &mdash; $seriesNameSafe</h3>
+<h3>Executive Summary &mdash; $seriesNameSafe$execUnvBadge</h3>
 <table style="width:100%;border-collapse:collapse;margin-bottom:18px"><tr>
 <td style="width:50%;vertical-align:top;padding-right:16px">
 <table style="width:100%;border-collapse:collapse;font-size:13px">
-<tr><td colspan="2" style="padding:12px 16px;background:$badgeBg;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$statusBadge</span></td></tr>
+<tr><td colspan="2" style="padding:12px 16px;background:$stColor;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$cStatusUp</span></td></tr>
+$qualSubRow
 <tr>
-<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#339933">$cNA</span><br>Newly Attested</td>
-<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#CC3333">$cPU</span><br>Persistently Undecided</td>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$rvcFraction</span><br>Reviewers Signed Off</td>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#2c3e50">$('{0:N0}' -f $icDecided) / $('{0:N0}' -f $icTotal)</span><br>Items Decided ($icDecidedPct%)</td>
 </tr>
 </table>
 </td>
@@ -742,26 +884,29 @@ foreach ($sd in $seriesDataList) {
 <table style="width:100%;border-collapse:collapse"><tr>
 <td style="width:33%;vertical-align:top;padding-right:12px;text-align:center">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Decision Distribution</p>
-$donutSvg
+$execDonutSvg
+<table style="margin:8px auto 0;font-size:11px;border-collapse:collapse">
+<tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#339933"/></svg></td><td style="padding:2px 6px;color:#555">Approved: $('{0:N0}' -f $icApproved) ($apct%)</td></tr>
+<tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#CC3333"/></svg></td><td style="padding:2px 6px;color:#555">Revoked: $('{0:N0}' -f $icRevoked) ($rpct%)</td></tr>
+<tr><td style="padding:2px 4px"><svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#FF8800"/></svg></td><td style="padding:2px 6px;color:#555">Undecided: $('{0:N0}' -f $icUndecided) ($ppct%)</td></tr>
+</table>
 </td>
 <td style="width:34%;vertical-align:top;padding:0 12px">
-<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Attestation Coverage</p>
-<div style="text-align:center;margin-bottom:10px"><span style="font-size:36px;font-weight:bold;color:$covColor">$covPct%</span><br><span style="font-size:12px;color:#777">$covered of $shownTotal items genuinely attested</span></div>
-<table style="width:100%;border-collapse:collapse;height:18px;margin-bottom:6px"><tr><td style="width:$covPct%;background:#339933;height:18px;border-radius:4px 0 0 4px"></td><td style="width:$undPct%;background:#CC3333;height:18px;border-radius:0 4px 4px 0"></td></tr></table>
-<table style="width:100%;font-size:11px;border-collapse:collapse"><tr><td style="color:#339933;font-weight:bold;padding:2px 0">$covered Attested</td><td style="color:#CC3333;font-weight:bold;text-align:right;padding:2px 0">$cPU Never Attested</td></tr></table>
-<p style="font-size:10px;color:#999;margin:6px 0 0;text-align:center;font-style:italic">Coverage = items with at least one genuine reviewer decision across the window. Never Attested = persistently undecided (incl. auto-approved-at-close).</p>
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Revoked Access &mdash; Removal Status</p>
+$remBlock
 </td>
 <td style="width:33%;vertical-align:top;padding-left:12px">
 <p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Key Indicators</p>
 <table style="width:100%;border-collapse:collapse;font-size:12px">
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Newly Attested</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#339933">$cNA</td></tr>
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#CC3333"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Persistently Undecided</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#CC3333">$cPU</td></tr>
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#FF8800"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Decision Changes</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#FF8800">$cDC</td></tr>
-<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#17a2b8"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Newly In Scope</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#17a2b8">$cNS</td></tr>
-<tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Already Attested</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$cAA</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$revCompColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Reviewer Completion</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$revCompColor">$rvcPercent</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$pendColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Pending Items</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$pendColor">$('{0:N0}' -f $icUndecided)</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="$remColor"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Deprovisioned (AD)</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:$remColor">$remPct%</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Newly Attested</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#339933">$cNA</td></tr>
+<tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#CC3333"/></svg></td><td style="padding:5px 4px;color:#555">Persistently Undecided</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#CC3333">$cPU</td></tr>
 </table>
 </td>
 </tr></table>
+$coverageStat
 </div>
 "@
     [void]$sb.AppendLine($execHtml)
