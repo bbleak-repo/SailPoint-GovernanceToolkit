@@ -614,7 +614,107 @@ if ($seriesDataList.Count -eq 0) {
 }
 foreach ($sd in $seriesDataList) {
     $stem = [string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default '')
-    [void]$sb.AppendLine('<div class="section"><h2>' + (ConvertTo-SafeHtml $stem) + '</h2><p>Section chrome pending (SCAFFOLD-V4E).</p></div>')
+    $periodType = [string](Get-SPObjectProperty -Object $sd -Name 'PeriodType' -Default '')
+    $instCount = [int](Get-SPObjectProperty -Object $sd -Name 'InstanceCount' -Default 0)
+    $newestName = [string](Get-SPObjectProperty -Object $sd -Name 'NewestCampaignName' -Default '')
+
+    # Compute the classification count map ONCE from the -IncludeUnverified-gated item set. The
+    # donut, the two metric cells, the coverage blurb, AND Key Indicators all read from THIS SAME
+    # map -- honesty reconciliation: every surface counts the same rows (mirror Get-V4eJsonSeries-
+    # Projection's recCounts loop so the HTML and JSON headlines match).
+    $allItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+    $shownItems = @($allItems | Where-Object { Test-V4eItemShown $_ })
+    $shownTotal = $shownItems.Count
+    $clsCounts = [ordered]@{
+        NewlyInScope           = 0
+        DecisionChanged        = 0
+        NewlyAttested          = 0
+        AlreadyAttestedEarlier = 0
+        PersistentlyUndecided  = 0
+        OtherDecided           = 0
+    }
+    foreach ($it in $shownItems) {
+        $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
+        if ($clsCounts.Contains($cls)) { $clsCounts[$cls] = [int]$clsCounts[$cls] + 1 }
+    }
+    $cNA = [int]$clsCounts['NewlyAttested']
+    $cAA = [int]$clsCounts['AlreadyAttestedEarlier']
+    $cPU = [int]$clsCounts['PersistentlyUndecided']
+    $cDC = [int]$clsCounts['DecisionChanged']
+    $cNS = [int]$clsCounts['NewlyInScope']
+    $cOD = [int]$clsCounts['OtherDecided']
+
+    # h3 name + status badge (family blue; a series has no COMPLETED status).
+    $seriesNameSafe = ConvertTo-SafeHtml $stem
+    $periodUp = ''
+    if (-not [string]::IsNullOrWhiteSpace($periodType)) { $periodUp = $periodType.ToUpperInvariant() }
+    $statusBadge = ConvertTo-SafeHtml ("$periodUp SERIES - $instCount INSTANCES")
+
+    # Metadata table values.
+    $periodTypeSafe = ConvertTo-SafeHtml $periodType
+    $newestNameSafe = ConvertTo-SafeHtml $newestName
+
+    # Donut segments over the SAME gated set (New-V4eDonut emits svg + legend, drops zero rows).
+    $segs = @(
+        [pscustomobject]@{ Label = 'Newly Attested';        Count = $cNA; Color = '#339933' }
+        [pscustomobject]@{ Label = 'Already Attested';      Count = $cAA; Color = '#336699' }
+        [pscustomobject]@{ Label = 'Persistently Undecided'; Count = $cPU; Color = '#CC3333' }
+        [pscustomobject]@{ Label = 'Decision Changed';      Count = $cDC; Color = '#FF8800' }
+        [pscustomobject]@{ Label = 'Newly In Scope';        Count = $cNS; Color = '#17a2b8' }
+        [pscustomobject]@{ Label = 'Other Decided';         Count = $cOD; Color = '#999999' }
+    )
+    $donutSvg = New-V4eDonut -Segments $segs -Total $shownTotal -CenterLabel 'items'
+
+    # Attestation-coverage blurb (replaces the dropped removal-status panel; chrome stays V4b).
+    $periodLower = ConvertTo-SafeHtml ($periodType.ToLowerInvariant())
+    $coverageBlurb = 'This recurring ' + $periodLower + ' series spans ' + $instCount + ' instance(s). Counting the FIRST genuine reviewer approval per item across the window, ' + $cNA + ' item(s) were newly attested and ' + $cPU + ' remain persistently undecided; ' + $cDC + ' changed decision. Auto-approved-at-close and pending items are held as Undecided, never counted as an approval.'
+
+    $execHtml = @"
+<div class="execbox">
+<h3>Executive Summary &mdash; $seriesNameSafe</h3>
+<table style="width:100%;border-collapse:collapse;margin-bottom:18px"><tr>
+<td style="width:50%;vertical-align:top;padding-right:16px">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+<tr><td colspan="2" style="padding:12px 16px;background:#336699;border-radius:6px;text-align:center"><span style="color:#fff;font-size:22px;font-weight:bold;letter-spacing:1px">$statusBadge</span></td></tr>
+<tr>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#339933">$cNA</span><br>Newly Attested</td>
+<td style="padding:10px 4px;text-align:center;color:#555;font-size:12px"><span style="font-weight:bold;font-size:16px;color:#CC3333">$cPU</span><br>Persistently Undecided</td>
+</tr>
+</table>
+</td>
+<td style="width:50%;vertical-align:top;padding-left:16px">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+<tr><td style="padding:6px 8px;font-weight:bold;color:#555;width:120px">Series</td><td style="padding:6px 8px;color:#2c3e50">$seriesNameSafe</td></tr>
+<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Period type</td><td style="padding:6px 8px;color:#2c3e50">$periodTypeSafe</td></tr>
+<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Instances</td><td style="padding:6px 8px;color:#2c3e50">$instCount</td></tr>
+<tr><td style="padding:6px 8px;font-weight:bold;color:#555">Newest</td><td style="padding:6px 8px;color:#2c3e50">$newestNameSafe</td></tr>
+</table>
+</td>
+</tr></table>
+<table style="width:100%;border-collapse:collapse"><tr>
+<td style="width:33%;vertical-align:top;padding-right:12px;text-align:center">
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Decision Distribution</p>
+$donutSvg
+</td>
+<td style="width:34%;vertical-align:top;padding:0 12px">
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Attestation Coverage</p>
+<p style="font-size:12px;color:#555;line-height:1.5;margin:0">$coverageBlurb</p>
+</td>
+<td style="width:33%;vertical-align:top;padding-left:12px">
+<p style="font-weight:bold;font-size:12px;color:#555;margin:0 0 8px">Key Indicators</p>
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#339933"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Newly Attested</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#339933">$cNA</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#CC3333"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Persistently Undecided</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#CC3333">$cPU</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#FF8800"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Decision Changes</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#FF8800">$cDC</td></tr>
+<tr><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#17a2b8"/></svg></td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555">Newly In Scope</td><td style="padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#17a2b8">$cNS</td></tr>
+<tr><td style="padding:5px 4px"><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#336699"/></svg></td><td style="padding:5px 4px;color:#555">Already Attested</td><td style="padding:5px 4px;font-weight:bold;text-align:right;color:#264d73">$cAA</td></tr>
+</table>
+</td>
+</tr></table>
+</div>
+"@
+    [void]$sb.AppendLine($execHtml)
+    [void]$sb.AppendLine('<!-- SCAFFOLD-V4E: Section A / Section B / Decision Summary pending for ' + (ConvertTo-SafeHtml $stem) + ' -->')
 }
 
 [void]$sb.AppendLine('<div class="footer">Daily Evidence Report (Series Attestation Delta, v4e) &middot; Series: ' + $seriesDataList.Count + ' &middot; Generated: ' + $genDate + ' &middot; SailPoint ISC Governance Toolkit</div>')
