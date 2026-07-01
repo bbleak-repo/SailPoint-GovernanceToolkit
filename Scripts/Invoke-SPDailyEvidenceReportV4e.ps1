@@ -714,7 +714,46 @@ $donutSvg
 </div>
 "@
     [void]$sb.AppendLine($execHtml)
-    [void]$sb.AppendLine('<!-- SCAFFOLD-V4E: Section A / Section B / Decision Summary pending for ' + (ConvertTo-SafeHtml $stem) + ' -->')
+    [void]$sb.AppendLine('<!-- SCAFFOLD-V4E: Section B / Decision Summary pending for ' + (ConvertTo-SafeHtml $stem) + ' -->')
+}
+
+# ---- A. Series Attestation Summary (V4b table.report chrome, rebound to series counts) ----
+# ONE summary row per series across ALL series. Counts are RECOMPUTED from the SAME
+# Test-V4eItemShown-gated item set the exec box / Key Indicators use (honesty reconciliation:
+# Section A rows must equal the per-series exec-box figures). DROP the V4b per-campaign machinery
+# (no KPI/SLA/reviewer-completion/domino) -- this is a pure series count roll-up.
+if ($seriesDataList.Count -gt 0) {
+    [void]$sb.AppendLine('<div class="section"><h2>A. Series Attestation Summary</h2>')
+    [void]$sb.AppendLine('<table class="report"><thead><tr><th>Series</th><th>Period</th><th>Instances</th><th>Newly Attested</th><th>Already Attested</th><th>Persistently Undecided</th><th>Decision Changes</th><th>Newly In Scope</th><th>Newest</th></tr></thead><tbody>')
+    foreach ($sd in $seriesDataList) {
+        $allItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+        $shownItems = @($allItems | Where-Object { Test-V4eItemShown $_ })
+        $clsCounts = [ordered]@{
+            NewlyInScope           = 0
+            DecisionChanged        = 0
+            NewlyAttested          = 0
+            AlreadyAttestedEarlier = 0
+            PersistentlyUndecided  = 0
+            OtherDecided           = 0
+        }
+        foreach ($it in $shownItems) {
+            $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
+            if ($clsCounts.Contains($cls)) { $clsCounts[$cls] = [int]$clsCounts[$cls] + 1 }
+        }
+        $cNA = [int]$clsCounts['NewlyAttested']
+        $cAA = [int]$clsCounts['AlreadyAttestedEarlier']
+        $cPU = [int]$clsCounts['PersistentlyUndecided']
+        $cDC = [int]$clsCounts['DecisionChanged']
+        $cNS = [int]$clsCounts['NewlyInScope']
+
+        $sName   = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))
+        $sPeriod = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'PeriodType' -Default ''))
+        $sInst   = [int](Get-SPObjectProperty -Object $sd -Name 'InstanceCount' -Default 0)
+        $sNewest = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'NewestCampaignName' -Default ''))
+
+        [void]$sb.AppendLine("<tr><td>$sName</td><td>$sPeriod</td><td>$('{0:N0}' -f $sInst)</td><td class='s-green'>$('{0:N0}' -f $cNA)</td><td>$('{0:N0}' -f $cAA)</td><td class='s-red'>$('{0:N0}' -f $cPU)</td><td class='s-amber'>$('{0:N0}' -f $cDC)</td><td>$('{0:N0}' -f $cNS)</td><td>$sNewest</td></tr>")
+    }
+    [void]$sb.AppendLine('</tbody></table></div>')
 }
 
 [void]$sb.AppendLine('<div class="footer">Daily Evidence Report (Series Attestation Delta, v4e) &middot; Series: ' + $seriesDataList.Count + ' &middot; Generated: ' + $genDate + ' &middot; SailPoint ISC Governance Toolkit</div>')
