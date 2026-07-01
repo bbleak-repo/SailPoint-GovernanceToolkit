@@ -1519,6 +1519,18 @@ them `idNowAutoApproved`), reports `decisionsMade = decisionsTotal`, and sets ev
   completion unverified" banner rather than silently trusting ISC's post-close numbers.
   **Operational rule:** schedule V4/V4b to run **while campaigns are ACTIVE** (after the daily
   orchestrator) so every campaign gets an honest pre-close capture.
+- **Every non-completed reviewer is named -- with the reason.** The COMPLETED accountability lists not
+  just reviewers who left items **Undecided**, but also those who **decided everything yet never signed
+  off** (finished-but-unsigned / auto-closed) -- each row states which -- so a reviewer who did all the
+  work but never finalized no longer disappears from the report.
+- **A force-close is not a sign-off.** An ISC *administrative* force-signature (`signedBy` is a system
+  identity, not the reviewer) is **excluded** from the genuine reviewer-completion count, so a
+  force-closed campaign shows the honest "0 of N reviewers signed off", never a green "N of N".
+- **The COMPLETED badge tells the truth.** When a campaign closed with work outstanding, the status
+  carries a "Closed with incomplete work -- N of M reviewers signed off, X items never manually
+  decided" qualifier, so a green COMPLETED never reads as a clean pass. Reviewer-% is rendered the same
+  across the exec summary, Section A, and the KPI card, and decision dates never show the campaign's
+  created timestamp in place of a real decision time.
 
 | Parameter (V4 / V4b) | Description |
 |---|---|
@@ -1564,6 +1576,38 @@ them `idNowAutoApproved`), reports `decisionsMade = decisionsTotal`, and sets ev
 `daily-evidence-v7-{prefix}-{timestamp}.html`, and `Audit\metrics\daily-metrics.jsonl`. For the
 exhaustive per-section tables and the full ISC-behaviour handling matrix, see
 [Reporting & Analytics](07-reporting-analytics.md).
+
+### `Invoke-SPPendingReviewerScrape.ps1`
+**Purpose:** an **ad-hoc, dependency-free** scraper that answers "who keeps not attesting?" straight from
+the **daily evidence HTML files you already have** -- no ISC API, no cache, no metrics store, no V7.
+Point it at a folder of reports (default name `Daily-Attestation-Evidence-Report-<date>.html`) and it
+pulls every reviewer listed in each report's Pending / Undecided table, then charts who shows up
+repeatedly. Handy as a bridge while the cache-based trending is adopted, or as an independent
+cross-check when V7 looks off. Because it reads finished HTML rather than the API or cache, it is
+unaffected by cache or metrics-store state.
+
+It renders a self-contained inline-SVG dashboard (no JavaScript -- Word/email safe):
+1. **Chronic-Pending bars** -- per reviewer, appeared pending in X of N reports (percentage).
+2. **Reviewer-by-Date heatmap** -- a red cell wherever a reviewer was pending that day.
+3. **Missed-Review Streak flags** -- reviewers pending N calendar days **in a row** (threshold 2 when
+   fewer than 3 reports are in scope, otherwise 3), so a genuine multi-day lapse is called out.
+4. **Daily distinct-pending trend** bars.
+
+| Parameter | Description |
+|---|---|
+| `-Path <folder>` | Folder of report HTML files. Default `.\Audit\daily-evidence`. |
+| `-FilePattern` | Wildcard for the files. Default `Daily-Attestation-Evidence-Report-*.html`. |
+| `-Since` / `-Until` | Optional inclusive date bounds; the date is auto-parsed from each filename. |
+| `-Top <n>` | Limit the bars/heatmap to the N most-pending reviewers (0 for all). |
+| `-OutputMode` | `Console`/`HTML`/`Both`. |
+
+```powershell
+# Point at a folder of your final attestation reports; last 3 days
+.\Scripts\Invoke-SPPendingReviewerScrape.ps1 -Path 'C:\Reports\DailyEvidence' -Since (Get-Date).AddDays(-2).ToString('yyyy-MM-dd') -OutputMode Both
+```
+
+**Read-only** (no `SupportsShouldProcess`). **Output:** `Pending-Reviewer-Tracker-<timestamp>.html` in the
+output folder.
 
 ### `Invoke-SPAdaptiveReport.ps1` ---- DEPRECATED
 > **Deprecated — do not use for new work.** These reports were ported *verbatim* from an
