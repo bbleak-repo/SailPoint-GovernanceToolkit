@@ -499,6 +499,39 @@ function Get-V4dJsonSeriesProjection {
     }
 }
 
+# Build the V4-style decision-distribution donut (SVG + legend) from classification segments.
+function New-V4dDonut {
+    param([object[]]$Segments, [int]$Total, [string]$CenterLabel = 'items')
+    if ($Total -le 0) { return "<p class='note' style='text-align:center'>No items in window.</p>" }
+    $out = New-Object System.Text.StringBuilder
+    [void]$out.Append("<svg width='140' height='140' viewBox='0 0 42 42' style='display:block;margin:0 auto'>")
+    [void]$out.Append("<circle cx='21' cy='21' r='15.9' pathLength='100' fill='transparent' stroke='#e0e0e0' stroke-width='3.2'></circle>")
+    $cum = 0.0
+    foreach ($seg in $Segments) {
+        $cnt = [int](Get-SPObjectProperty -Object $seg -Name 'Count' -Default 0)
+        if ($cnt -le 0) { continue }
+        $pct = [math]::Round($cnt * 100.0 / $Total, 1)
+        $rest = [math]::Round(100 - $pct, 1)
+        $off = [math]::Round(-$cum, 1)
+        $col = [string](Get-SPObjectProperty -Object $seg -Name 'Color' -Default '#999999')
+        [void]$out.Append("<circle cx='21' cy='21' r='15.9' pathLength='100' fill='transparent' stroke='$col' stroke-width='3.2' stroke-dasharray='$pct $rest' stroke-dashoffset='$off' transform='rotate(-90 21 21)'></circle>")
+        $cum += $pct
+    }
+    [void]$out.Append("<text x='21' y='19.5' text-anchor='middle' style='font-size:5px;font-weight:bold;fill:#2c3e50'>$Total</text>")
+    [void]$out.Append("<text x='21' y='24' text-anchor='middle' style='font-size:2.8px;fill:#777'>$CenterLabel</text></svg>")
+    [void]$out.Append("<table style='margin:8px auto 0;font-size:11px;border-collapse:collapse'>")
+    foreach ($seg in $Segments) {
+        $cnt = [int](Get-SPObjectProperty -Object $seg -Name 'Count' -Default 0)
+        if ($cnt -le 0) { continue }
+        $pct = [math]::Round($cnt * 100.0 / $Total, 1)
+        $col = [string](Get-SPObjectProperty -Object $seg -Name 'Color' -Default '#999999')
+        $lbl = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $seg -Name 'Label' -Default ''))
+        [void]$out.Append("<tr><td style='padding:2px 4px'><svg width='10' height='10'><circle cx='5' cy='5' r='4' fill='$col'/></svg></td><td style='padding:2px 6px;color:#555'>$lbl`: $cnt ($pct%)</td></tr>")
+    }
+    [void]$out.Append("</table>")
+    return $out.ToString()
+}
+
 $css = @'
 *{box-sizing:border-box}
 body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f9;color:#333;margin:0;padding:20px}
@@ -512,6 +545,8 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f9;color:#333;margi
 .scope-inline{display:flex;flex-wrap:wrap;gap:12px 26px;font-size:13px;color:#555;margin:8px 0 4px}
 .scope-inline .n{font-size:22px;font-weight:700;color:#264d73;display:block;line-height:1.1}
 .scope-inline .t{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#777}
+.execbox{background:#f8f9fa;border:1px solid #e0e0e0;border-top:none;padding:20px 32px}
+.execbox h3{color:#2c3e50;margin:0 0 16px;font-size:16px;border-bottom:2px solid #336699;padding-bottom:6px}
 table.report{border-collapse:collapse;width:100%;margin:8px 0 14px;font-size:12px}
 table.report th{background:#e8eef5;padding:8px 10px;text-align:left;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}
 table.report td{padding:7px 10px;border-bottom:1px solid #eee;vertical-align:top}
@@ -544,6 +579,22 @@ $unvMode = if ($IncludeUnverified) { 'INCLUDED (badged)' } else { 'EXCLUDED from
 [void]$sb.AppendLine("<div class='status-line'>$($seriesDataList.Count) series analyzed &middot; $totalNA newly attested &middot; $totalPU persistently undecided &middot; Unverified: $unvMode &middot; Min instances: $MinInstances</div>")
 [void]$sb.AppendLine("</div>")
 
+# Top-level scope band (mirrors the V4 "Certification Scope" section).
+$scopeReviewers = New-Object System.Collections.Generic.HashSet[string]
+$scopeInstances = 0
+foreach ($sd0 in $seriesDataList) {
+    $scopeInstances += [int](Get-SPObjectProperty -Object $sd0 -Name 'InstanceCount' -Default 0)
+    foreach ($rvv in @(Get-SPObjectProperty -Object $sd0 -Name 'NewlyAttestedByReviewer' -Default @())) { [void]$scopeReviewers.Add([string](Get-SPObjectProperty -Object $rvv -Name 'ReviewerName' -Default '')) }
+    foreach ($rvv in @(Get-SPObjectProperty -Object $sd0 -Name 'PersistentlyUndecidedByReviewer' -Default @())) { [void]$scopeReviewers.Add([string](Get-SPObjectProperty -Object $rvv -Name 'ReviewerName' -Default '')) }
+}
+[void]$sb.AppendLine("<div class='section'><h2>Scope</h2><div class='scope-inline'>")
+[void]$sb.AppendLine("<div><span class='n'>$($seriesDataList.Count)</span><span class='t'>recurring series</span></div>")
+[void]$sb.AppendLine("<div><span class='n'>$scopeInstances</span><span class='t'>campaign instances</span></div>")
+[void]$sb.AppendLine("<div><span class='n' style='color:#339933'>$totalNA</span><span class='t'>newly attested</span></div>")
+[void]$sb.AppendLine("<div><span class='n' style='color:#CC3333'>$totalPU</span><span class='t'>persistently undecided</span></div>")
+[void]$sb.AppendLine("<div><span class='n'>$($scopeReviewers.Count)</span><span class='t'>reviewers involved</span></div>")
+[void]$sb.AppendLine("</div></div>")
+
 if ($seriesDataList.Count -eq 0) {
     [void]$sb.AppendLine("<div class='section'><h2>No recurring series found</h2>")
     [void]$sb.AppendLine("<p class='empty'>The cache contains no campaign family with at least $MinInstances instance(s) sharing a normalized series stem. Run the daily orchestrator across multiple instances of a recurring campaign to populate the series.</p></div>")
@@ -558,28 +609,70 @@ foreach ($sd in $seriesDataList) {
     $unvInstCount = [int](Get-SPObjectProperty -Object $sd -Name 'UnverifiedInstanceCount' -Default 0)
 
     $seriesBadge = if ([bool](Get-SPObjectProperty -Object $sd -Name 'Unverified' -Default $false)) { " <span class='badge badge-amber'>Unverified provenance</span>" } else { '' }
-    [void]$sb.AppendLine("<div class='section'>")
-    [void]$sb.AppendLine("<h2>$(ConvertTo-SPHtmlSafe $stem)$seriesBadge</h2>")
 
-    # KPI band from honest counts. Render from the SAME filtered set the detail tables use
-    # (Test-V4dItemShown) so the headline reconciles with the evidence rows below.
+    # Honest, gated item set (Test-V4dItemShown) -- the exec box, donut and detail tables all count
+    # from THIS set so the headline reconciles with the evidence rows below.
     $kpiShownItems = @($items | Where-Object { Test-V4dItemShown $_ })
-    $kpiNewlyAttested = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
-    $kpiPersistentlyUndecided = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
-    $kpiDecisionChanged = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsDecisionChanged' -Default $false) }).Count
-    $kpiNewlyInScope = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsNewlyInScope' -Default $false) }).Count
-    [void]$sb.AppendLine("<div class='scope-inline'>")
-    [void]$sb.AppendLine("<div><span class='n'>$instCount</span><span class='t'>instances in window</span></div>")
-    [void]$sb.AppendLine("<div><span class='n' style='color:#339933'>$kpiNewlyAttested</span><span class='t'>newly attested</span></div>")
-    [void]$sb.AppendLine("<div><span class='n' style='color:#CC3333'>$kpiPersistentlyUndecided</span><span class='t'>persistently undecided</span></div>")
-    [void]$sb.AppendLine("<div><span class='n'>$kpiDecisionChanged</span><span class='t'>decision changes</span></div>")
-    [void]$sb.AppendLine("<div><span class='n'>$kpiNewlyInScope</span><span class='t'>newly in scope</span></div>")
-    [void]$sb.AppendLine("</div>")
-    [void]$sb.AppendLine("<p class='note'>Period type: $(ConvertTo-SPHtmlSafe $periodType) &middot; Newest: $(ConvertTo-SPHtmlSafe $newestName)</p>")
-
-    if ((-not $IncludeUnverified) -and $unvInstCount -gt 0) {
-        [void]$sb.AppendLine("<p class='note'>Note: $unvInstCount instance(s) carry Unverified provenance; their items are EXCLUDED from the headline. Re-run with -IncludeUnverified to surface them with a badge.</p>")
+    $clsCounts = @{ NewlyAttested = 0; AlreadyAttestedEarlier = 0; PersistentlyUndecided = 0; DecisionChanged = 0; NewlyInScope = 0; OtherDecided = 0 }
+    foreach ($it in $kpiShownItems) {
+        $c = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
+        if ($clsCounts.ContainsKey($c)) { $clsCounts[$c] = [int]$clsCounts[$c] + 1 }
     }
+    $totShown = $kpiShownItems.Count
+    $kpiNewlyAttested = $clsCounts['NewlyAttested']
+    $kpiPersistentlyUndecided = $clsCounts['PersistentlyUndecided']
+    $kpiAlready = $clsCounts['AlreadyAttestedEarlier']
+    $kpiDecisionChanged = @($items | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsDecisionChanged' -Default $false) -and (Test-V4dItemShown $_) }).Count
+    $kpiNewlyInScope = @($items | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsNewlyInScope' -Default $false) -and (Test-V4dItemShown $_) }).Count
+
+    # ---- Executive Summary box (V4/V4b .execbox analogue: status + metadata + donut + KPIs) ----
+    [void]$sb.AppendLine("<div class='execbox'>")
+    [void]$sb.AppendLine("<h3>Executive Summary &mdash; $(ConvertTo-SPHtmlSafe $stem)$seriesBadge</h3>")
+    [void]$sb.AppendLine("<table style='width:100%;border-collapse:collapse;margin-bottom:18px'><tr>")
+    [void]$sb.AppendLine("<td style='width:50%;vertical-align:top;padding-right:16px'>")
+    [void]$sb.AppendLine("<table style='width:100%;border-collapse:collapse;font-size:13px'>")
+    $ptBadge = if ([string]::IsNullOrWhiteSpace($periodType)) { 'RECURRING' } else { $periodType.ToUpper() }
+    [void]$sb.AppendLine("<tr><td colspan='2' style='padding:12px 16px;background:#264d73;border-radius:6px;text-align:center'><span style='color:#fff;font-size:18px;font-weight:bold;letter-spacing:1px'>$ptBadge SERIES &middot; $instCount INSTANCES</span></td></tr>")
+    if ((-not $IncludeUnverified) -and $unvInstCount -gt 0) {
+        [void]$sb.AppendLine("<tr><td colspan='2' style='padding:6px 8px;border:1px solid #b9770e;background:#fff8e1;color:#7a5200;font-size:11px;font-weight:600;border-radius:0 0 6px 6px'>&#9888; $unvInstCount instance(s) carry Unverified provenance -- their items are excluded. Re-run with -IncludeUnverified to include them.</td></tr>")
+    }
+    [void]$sb.AppendLine("<tr>")
+    [void]$sb.AppendLine("<td style='padding:10px 4px;text-align:center;color:#555;font-size:12px'><span style='font-weight:bold;font-size:18px;color:#339933'>$kpiNewlyAttested</span><br>Newly Attested</td>")
+    [void]$sb.AppendLine("<td style='padding:10px 4px;text-align:center;color:#555;font-size:12px'><span style='font-weight:bold;font-size:18px;color:#CC3333'>$kpiPersistentlyUndecided</span><br>Persistently Undecided</td>")
+    [void]$sb.AppendLine("</tr></table></td>")
+    [void]$sb.AppendLine("<td style='width:50%;vertical-align:top;padding-left:16px'>")
+    [void]$sb.AppendLine("<table style='width:100%;border-collapse:collapse;font-size:13px'>")
+    [void]$sb.AppendLine("<tr><td style='padding:6px 8px;font-weight:bold;color:#555;width:120px'>Series</td><td style='padding:6px 8px;color:#2c3e50'>$(ConvertTo-SPHtmlSafe $stem)</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:6px 8px;font-weight:bold;color:#555'>Period type</td><td style='padding:6px 8px;color:#2c3e50'>$(ConvertTo-SPHtmlSafe $periodType)</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:6px 8px;font-weight:bold;color:#555'>Instances</td><td style='padding:6px 8px;color:#2c3e50'>$instCount in window</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:6px 8px;font-weight:bold;color:#555'>Newest</td><td style='padding:6px 8px;color:#2c3e50'>$(ConvertTo-SPHtmlSafe $newestName)</td></tr>")
+    [void]$sb.AppendLine("</table></td></tr></table>")
+    $donutSegs = @(
+        [pscustomobject]@{ Label = 'Newly Attested'; Count = $clsCounts['NewlyAttested']; Color = '#339933' }
+        [pscustomobject]@{ Label = 'Already Attested'; Count = $clsCounts['AlreadyAttestedEarlier']; Color = '#336699' }
+        [pscustomobject]@{ Label = 'Persistently Undecided'; Count = $clsCounts['PersistentlyUndecided']; Color = '#CC3333' }
+        [pscustomobject]@{ Label = 'Decision Changed'; Count = $clsCounts['DecisionChanged']; Color = '#FF8800' }
+        [pscustomobject]@{ Label = 'Newly In Scope'; Count = $clsCounts['NewlyInScope']; Color = '#17a2b8' }
+        [pscustomobject]@{ Label = 'Other Decided'; Count = $clsCounts['OtherDecided']; Color = '#999999' }
+    )
+    [void]$sb.AppendLine("<table style='width:100%;border-collapse:collapse'><tr>")
+    [void]$sb.AppendLine("<td style='width:50%;vertical-align:top;padding-right:12px;text-align:center'>")
+    [void]$sb.AppendLine("<p style='font-weight:bold;font-size:12px;color:#555;margin:0 0 8px'>Item Classification</p>")
+    [void]$sb.AppendLine((New-V4dDonut -Segments $donutSegs -Total $totShown -CenterLabel 'items'))
+    [void]$sb.AppendLine("</td>")
+    [void]$sb.AppendLine("<td style='width:50%;vertical-align:top;padding-left:12px'>")
+    [void]$sb.AppendLine("<p style='font-weight:bold;font-size:12px;color:#555;margin:0 0 8px'>Key Indicators</p>")
+    [void]$sb.AppendLine("<table style='width:100%;border-collapse:collapse;font-size:12px'>")
+    [void]$sb.AppendLine("<tr><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;width:20px'><svg width='12' height='12'><circle cx='6' cy='6' r='5' fill='#339933'/></svg></td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555'>Newly Attested</td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#339933'>$kpiNewlyAttested</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0'><svg width='12' height='12'><circle cx='6' cy='6' r='5' fill='#CC3333'/></svg></td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555'>Persistently Undecided</td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#CC3333'>$kpiPersistentlyUndecided</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0'><svg width='12' height='12'><circle cx='6' cy='6' r='5' fill='#FF8800'/></svg></td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555'>Decision Changes</td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#264d73'>$kpiDecisionChanged</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0'><svg width='12' height='12'><circle cx='6' cy='6' r='5' fill='#17a2b8'/></svg></td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;color:#555'>Newly In Scope</td><td style='padding:5px 4px;border-bottom:1px solid #e0e0e0;font-weight:bold;text-align:right;color:#264d73'>$kpiNewlyInScope</td></tr>")
+    [void]$sb.AppendLine("<tr><td style='padding:5px 4px'><svg width='12' height='12'><circle cx='6' cy='6' r='5' fill='#336699'/></svg></td><td style='padding:5px 4px;color:#555'>Already Attested (prior)</td><td style='padding:5px 4px;font-weight:bold;text-align:right;color:#264d73'>$kpiAlready</td></tr>")
+    [void]$sb.AppendLine("</table></td></tr></table>")
+    [void]$sb.AppendLine("</div>")
+
+    # ---- Attestation evidence detail (the NEW series content -- kept) ----
+    [void]$sb.AppendLine("<div class='section'><h2>Attestation Evidence &mdash; $(ConvertTo-SPHtmlSafe $stem)</h2>")
 
     # (A) Newly Attested This Period -- per reviewer then per item.
     [void]$sb.AppendLine("<details open><summary>Newly Attested This Period ($kpiNewlyAttested)</summary>")
