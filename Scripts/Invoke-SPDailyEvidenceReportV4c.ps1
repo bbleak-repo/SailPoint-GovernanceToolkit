@@ -236,7 +236,11 @@ if (-not (Test-Path $effectiveOutputPath)) {
 
 Write-Host '  Step 1: Read rich cache and derive recurring series' -ForegroundColor Cyan
 
-$readerArgs = @{ MinInstances = $MinInstances; CorrelationID = $correlationID }
+# When opt-in fuzzy near-match is on, read with MinInstances=1 so a mistyped singleton
+# (e.g. 'Acess Review - <date>' among 'Access Review - <date>') survives Step 1 and can be
+# rescued into its family by the Step-2 fuzzy merge; MinInstances is re-applied AFTER the merge.
+$readerMinInstances = if ($SimilarityThreshold -gt 0) { 1 } else { $MinInstances }
+$readerArgs = @{ MinInstances = $readerMinInstances; CorrelationID = $correlationID }
 if ($PSBoundParameters.ContainsKey('CachePath'))     { $readerArgs['CachePath'] = $CachePath }
 if ($PSBoundParameters.ContainsKey('SeriesName'))    { $readerArgs['SeriesStem'] = $SeriesName }
 if ($PSBoundParameters.ContainsKey('SeriesPattern')) { $readerArgs['SeriesPattern'] = $SeriesPattern }
@@ -325,6 +329,18 @@ if ($SimilarityThreshold -gt 0 -and $seriesList.Count -gt 1) {
         }
         $seriesList = @($merged.ToArray())
         Write-Host "    Series after consolidation: $($seriesList.Count)" -ForegroundColor DarkGray
+    }
+}
+
+# Re-apply MinInstances AFTER the fuzzy merge: Step 1 deliberately read with MinInstances=1
+# (see $readerMinInstances) so a mistyped singleton could survive to be rescued by the fuzzy
+# pass; now drop any stem still below the user's threshold once the merges are done. This runs
+# even when Step 2's merge block was skipped (a lone surviving singleton must not slip through).
+if ($SimilarityThreshold -gt 0 -and $MinInstances -gt 1) {
+    $beforeReFilter = $seriesList.Count
+    $seriesList = @($seriesList | Where-Object { @($_.Instances).Count -ge $MinInstances })
+    if ($seriesList.Count -ne $beforeReFilter) {
+        Write-Host "    Series after MinInstances=$MinInstances re-filter: $($seriesList.Count)" -ForegroundColor DarkGray
     }
 }
 

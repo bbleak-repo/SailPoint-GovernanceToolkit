@@ -136,11 +136,13 @@ Describe "CLI-04: renders HTML from a 2-instance recurring fixture cache" {
         New-Item -ItemType Directory -Path $script:cliCache -Force | Out-Null
         New-Item -ItemType Directory -Path $script:cliOut -Force | Out-Null
 
-        # Roster is keyed by the CAMPAIGN id: the engine attributes via Resolve-SPSeriesItemState
-        # passing the instance CampaignId as the cert id (see SAD-08), so the sealed roster entry's
-        # CertificationId must equal the CampaignId for the cert-assigned reviewer to win.
-        $roster = @([PSCustomObject]@{ CertificationId = 'cli-d1'; ReviewerName = 'Rita Reviewer'; ReviewerId = 'rv-rita'; ReviewerEmail = 'rita@test.com' })
-        $rosterB = @([PSCustomObject]@{ CertificationId = 'cli-d2'; ReviewerName = 'Rita Reviewer'; ReviewerId = 'rv-rita'; ReviewerEmail = 'rita@test.com' })
+        # Roster is keyed by the per-item CERTIFICATION id. New-CliCacheInstance wraps each item
+        # with CertificationId "<CampId>-cert" (see line ~64), and post-44c0edf the engine derives
+        # the per-item cert id from that wrapper -- so the sealed roster entry's CertificationId
+        # must equal "<CampId>-cert" for the cert-assigned reviewer to win (mirrors the passing E2E
+        # roster-dam-*.json which keys on 'dam-01-cert').
+        $roster = @([PSCustomObject]@{ CertificationId = 'cli-d1-cert'; ReviewerName = 'Rita Reviewer'; ReviewerId = 'rv-rita'; ReviewerEmail = 'rita@test.com' })
+        $rosterB = @([PSCustomObject]@{ CertificationId = 'cli-d2-cert'; ReviewerName = 'Rita Reviewer'; ReviewerId = 'rv-rita'; ReviewerEmail = 'rita@test.com' })
 
         # Prior instance: pending (Undecided). Newest: genuine APPROVE.
         New-CliCacheInstance -Dir $script:cliCache -CampId 'cli-d1' -CampName 'Access Review - 2026-06-29' `
