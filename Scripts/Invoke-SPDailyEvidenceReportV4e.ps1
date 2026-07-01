@@ -836,7 +836,74 @@ if ($seriesDataList.Count -gt 0) {
     [void]$sb.AppendLine('</div>')
 }
 
-[void]$sb.AppendLine('<div class="footer">Daily Evidence Report (Series Attestation Delta, v4e) &middot; Series: ' + $seriesDataList.Count + ' &middot; Generated: ' + $genDate + ' &middot; SailPoint ISC Governance Toolkit</div>')
+# ---- Decision Summary (V4b Decision-Summary chrome, rebound to series classifications) ----
+# TWO V4b-style <details> collapsibles per series: Decision Changes (genuine decision flipped)
+# and Newly In Scope (absent from all priors, present in the newest). Both are FILTERED by
+# Classification (NOT the IsDecisionChanged/IsNewlyInScope precedence flags) so the row counts
+# reconcile with Section A's cDC/cNS, the donut, and JSON Counts.DecisionChanged/NewlyInScope
+# (the engine's precedence ladder can set IsDecisionChanged=true on a NewlyInScope-classified
+# item). Both <details> render for EVERY series (even when empty, with a None. row) so the chrome
+# is deterministic -- mirrors V4b, which always renders its Decision-Summary details.
+if ($seriesDataList.Count -gt 0) {
+    [void]$sb.AppendLine('<div class="section"><h2>Decision Summary</h2>')
+    foreach ($sd in $seriesDataList) {
+        [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))) + '</div>')
+
+        # SAME Test-V4eItemShown gate the donut / Section A / JSON use (honesty reconciliation).
+        $allItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+        $shownItems = @($allItems | Where-Object { Test-V4eItemShown $_ })
+
+        # Unverified-provenance note where this series has excluded Unverified instances (inline
+        # amber style; V4e CSS has no .note class, mirror V4b's inline Decision-Summary notes).
+        $excluded = $allItems.Count - $shownItems.Count
+        if ((-not $IncludeUnverified) -and $excluded -gt 0) {
+            [void]$sb.AppendLine('<p style="color:#9a6700;font-size:11px;margin:2px 0 6px"><strong>Note:</strong> ' + $excluded + ' item(s) from Unverified-provenance instance(s) were EXCLUDED from this series'' headline. Re-run with -IncludeUnverified to include them (badged).</p>')
+        }
+
+        # Decision Changes -- filter by Classification so the row count reconciles with Section A's
+        # cDC / the donut / JSON Counts.DecisionChanged (NOT the IsDecisionChanged precedence flag).
+        $dcItems = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'DecisionChanged' })
+        [void]$sb.AppendLine("<details><summary class='s-amber' style='font-size:13px;margin:12px 0 6px'>Decision Changes (" + $dcItems.Count + " items)</summary>")
+        [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items whose genuine decision flipped (Approved and Revoked both present) across the window.</p>')
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Current State</th><th>Reviewer</th></tr></thead><tbody>')
+        if ($dcItems.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">None.</td></tr>') }
+        else {
+            foreach ($it in $dcItems) {
+                $idn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+                $acc = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+                $src = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+                $cur = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default ''))
+                $rvn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentReviewerName' -Default ''))
+                $bdg = Get-V4eUnverifiedBadge $it
+                [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td>$cur</td><td>$rvn</td></tr>")
+            }
+        }
+        [void]$sb.AppendLine('</tbody></table></details>')
+
+        # Newly In Scope -- filter by Classification (reconciles with Section A's cNS / donut / JSON).
+        $nisItems = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyInScope' })
+        [void]$sb.AppendLine("<details><summary class='s-gray' style='font-size:13px;margin:12px 0 6px'>Newly In Scope (" + $nisItems.Count + " items)</summary>")
+        [void]$sb.AppendLine('<p style="color:#777;font-size:11px;margin:2px 0 6px">Items absent from all prior instances and present in the newest -- newly subject to certification.</p>')
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Current State</th><th>Reviewer</th></tr></thead><tbody>')
+        if ($nisItems.Count -eq 0) { [void]$sb.AppendLine('<tr><td colspan="5" style="color:#777;font-style:italic">None.</td></tr>') }
+        else {
+            foreach ($it in $nisItems) {
+                $idn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+                $acc = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+                $src = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+                $cur = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default ''))
+                $rvn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentReviewerName' -Default ''))
+                $bdg = Get-V4eUnverifiedBadge $it
+                [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td>$cur</td><td>$rvn</td></tr>")
+            }
+        }
+        [void]$sb.AppendLine('</tbody></table></details>')
+    }
+    [void]$sb.AppendLine('</div>')
+}
+
+# ---- Footer (V4b-EXACT chrome, rebranded v4e; unit swapped campaign(s) -> series) ----
+[void]$sb.AppendLine('<div class="footer">SailPoint ISC Governance Toolkit &middot; Daily Evidence Report v4e &middot; Generated: ' + (ConvertTo-SafeHtml $genDate) + ' &middot; CorrelationID: ' + (ConvertTo-SafeHtml $correlationID) + ' &middot; ' + $seriesDataList.Count + ' series</div>')
 [void]$sb.AppendLine("</div></body></html>")
 
 if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
