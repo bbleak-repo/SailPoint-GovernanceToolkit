@@ -563,6 +563,7 @@ table.report td{padding:7px 10px;border-bottom:1px solid #eee}table.report tr:nt
 .s-green{color:#339933;font-weight:600}.s-amber{color:#9a6700;font-weight:600}.s-red{color:#CC3333;font-weight:600}.s-gray{color:#777}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
 .badge-priv{background:#ffcdd2;color:#b71c1c}
+.badge-amber{background:#fff3cd;color:#9a6700}
 summary{cursor:pointer}
 .subhead{font-size:13px;color:#264d73;margin:16px 0 4px;font-weight:bold}
 .footer{text-align:center;color:#999;font-size:11px;padding:16px;border-top:1px solid #eee}
@@ -754,6 +755,85 @@ if ($seriesDataList.Count -gt 0) {
         [void]$sb.AppendLine("<tr><td>$sName</td><td>$sPeriod</td><td>$('{0:N0}' -f $sInst)</td><td class='s-green'>$('{0:N0}' -f $cNA)</td><td>$('{0:N0}' -f $cAA)</td><td class='s-red'>$('{0:N0}' -f $cPU)</td><td class='s-amber'>$('{0:N0}' -f $cDC)</td><td>$('{0:N0}' -f $cNS)</td><td>$sNewest</td></tr>")
     }
     [void]$sb.AppendLine('</tbody></table></div>')
+}
+
+# ---- B. Reviewer Accountability (V4b Section-B chrome, rebound to series reviewer rollups) ----
+# The NEW content the user wants preserved: TWO per-reviewer breakdowns per series --
+#   (1) "Newly Attested by Reviewer"                     -- who FINALLY (genuinely) attested each item.
+#   (2) "Persistently Undecided / Never Attested by Reviewer" -- items never genuinely decided across the window.
+# Attribution is to the cert-ASSIGNED reviewer via the engine's NewlyAttestedByReviewer /
+# PersistentlyUndecidedByReviewer rollups. Every rollup is passed through Get-V4eReconcileRollup so
+# the per-reviewer counts here reconcile with Section A and the exec box under -IncludeUnverified
+# (same reconciled rollups the JSON emits => HTML == JSON == Section A). DROP the V4b per-campaign
+# machinery (Group-SPCompletedPendingByReviewer, reassigned/force-close/active-vs-completed) -- a
+# recurring series has no single cert Status; this is a pure series reviewer roll-up.
+if ($seriesDataList.Count -gt 0) {
+    [void]$sb.AppendLine('<div class="section"><h2>B. Reviewer Accountability</h2>')
+    $anyRev = $false
+    foreach ($sd in $seriesDataList) {
+        $naRollup = @(Get-V4eReconcileRollup (Get-SPObjectProperty -Object $sd -Name 'NewlyAttestedByReviewer' -Default @()))
+        $puRollup = @(Get-V4eReconcileRollup (Get-SPObjectProperty -Object $sd -Name 'PersistentlyUndecidedByReviewer' -Default @()))
+        if ($naRollup.Count -eq 0 -and $puRollup.Count -eq 0) { continue }
+        $anyRev = $true
+        [void]$sb.AppendLine('<div class="subhead">' + (ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default ''))) + '</div>')
+
+        # (1) Newly Attested by Reviewer -- reviewer + email + count + the items they finally attested.
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin-bottom:4px'>Newly Attested by Reviewer (" + @($naRollup).Count + ")</summary>")
+        [void]$sb.AppendLine("<div style='font-size:11px;color:#777;margin-bottom:4px'>First GENUINE (honest) reviewer approval of each identity+entitlement in the window. Auto-approved-at-close and pending are NOT counted.</div>")
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Newly Attested</th><th>Items Attested</th></tr></thead><tbody>')
+        if ($naRollup.Count -eq 0) {
+            [void]$sb.AppendLine('<tr><td colspan="4" style="color:#777;font-style:italic">No genuine first-time approvals in this window.</td></tr>')
+        }
+        else {
+            foreach ($rv in $naRollup) {
+                $rvName = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '')
+                if ([string]::IsNullOrWhiteSpace($rvName)) { $rvName = '(Unassigned)' }
+                $rvEmail = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerEmail' -Default '')
+                $rvCount = [int](Get-SPObjectProperty -Object $rv -Name 'Count' -Default 0)
+                $rowBg = if ($rvName -eq '(Unassigned)') { " style='background:#fdecec'" } else { '' }
+                $itemsCell = New-Object System.Text.StringBuilder
+                foreach ($it in @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())) {
+                    $idn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+                    $acc = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+                    $src = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+                    $bdg = Get-V4eUnverifiedBadge $it
+                    [void]$itemsCell.Append("<div style='padding:1px 0'>$idn &mdash; $acc <span class='s-gray'>($src)</span>$bdg</div>")
+                }
+                [void]$sb.AppendLine("<tr$rowBg><td style='font-weight:600'>" + (ConvertTo-SafeHtml $rvName) + "</td><td>" + (ConvertTo-SafeHtml $rvEmail) + "</td><td style='text-align:right;font-weight:600' class='s-green'>$rvCount</td><td>" + $itemsCell.ToString() + "</td></tr>")
+            }
+        }
+        [void]$sb.AppendLine('</tbody></table></details>')
+
+        # (2) Persistently Undecided / Never Attested by Reviewer -- items never genuinely decided across the window.
+        [void]$sb.AppendLine("<details><summary style='font-weight:bold;font-size:12px;margin:8px 0 4px'>Persistently Undecided / Never Attested by Reviewer (" + @($puRollup).Count + ")</summary>")
+        [void]$sb.AppendLine("<div style='font-size:11px;color:#777;margin-bottom:4px'>Items never genuinely decided in ANY instance across the window, grouped by the cert-assigned reviewer.</div>")
+        [void]$sb.AppendLine('<table class="report"><thead><tr><th>Reviewer</th><th>Email</th><th style="text-align:right">Never Attested</th><th>Items Never Decided</th></tr></thead><tbody>')
+        if ($puRollup.Count -eq 0) {
+            [void]$sb.AppendLine('<tr><td colspan="4" style="color:#777;font-style:italic">No persistently-undecided items in this window.</td></tr>')
+        }
+        else {
+            foreach ($rv in $puRollup) {
+                $rvName = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '')
+                if ([string]::IsNullOrWhiteSpace($rvName)) { $rvName = '(Unassigned)' }
+                $rvEmail = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerEmail' -Default '')
+                $rvCount = [int](Get-SPObjectProperty -Object $rv -Name 'Count' -Default 0)
+                $rowBg = if ($rvName -eq '(Unassigned)') { " style='background:#fdecec'" } else { '' }
+                $itemsCell = New-Object System.Text.StringBuilder
+                foreach ($it in @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())) {
+                    $idn = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+                    $acc = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+                    $src = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+                    $cur = ConvertTo-SafeHtml ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default 'Undecided'))
+                    $bdg = Get-V4eUnverifiedBadge $it
+                    [void]$itemsCell.Append("<div style='padding:1px 0'>$idn &mdash; $acc <span class='s-gray'>($src)</span>$bdg <span class='s-gray'>[$cur]</span></div>")
+                }
+                [void]$sb.AppendLine("<tr$rowBg><td style='font-weight:600'>" + (ConvertTo-SafeHtml $rvName) + "</td><td>" + (ConvertTo-SafeHtml $rvEmail) + "</td><td style='text-align:right;font-weight:600' class='s-red'>$rvCount</td><td>" + $itemsCell.ToString() + "</td></tr>")
+            }
+        }
+        [void]$sb.AppendLine('</tbody></table></details>')
+    }
+    if (-not $anyRev) { [void]$sb.AppendLine('<p style="color:#777">No reviewer accountability data available.</p>') }
+    [void]$sb.AppendLine('</div>')
 }
 
 [void]$sb.AppendLine('<div class="footer">Daily Evidence Report (Series Attestation Delta, v4e) &middot; Series: ' + $seriesDataList.Count + ' &middot; Generated: ' + $genDate + ' &middot; SailPoint ISC Governance Toolkit</div>')
