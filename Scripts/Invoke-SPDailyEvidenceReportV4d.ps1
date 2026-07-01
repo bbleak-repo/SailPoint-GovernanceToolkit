@@ -1,0 +1,768 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Generates the V4d series attestation delta report -- the SAME series-aware, honest
+    "newly attested" decision-transition analysis as V4c, rendered in the V4/V4b
+    visual family (gradient header, sectioned layout, collapsible tables)
+    (output: daily-evidence-v4d-*.html).
+.DESCRIPTION
+    V4d is a READ-ONLY report. It reads ONLY the rich audit cache
+    (items-<id>.jsonl + items-<id>.meta.json + roster-<id>.json) -- it never
+    calls the ISC API, never starts the live mock, never opens a GUI.
+
+    V4d shares V4c's engine and pipeline byte-for-byte (Get-SPCachedCampaignSeries +
+    Get-SPSeriesAttestationDelta); the ONLY difference is the HTML skin -- V4d wears
+    the V4/V4b chrome (gradient banner, .section blocks with h2 headings, KPI tiles,
+    table.report styling, <details> collapsibles) so it looks consistent with the
+    rest of the daily-evidence family. V4c stays as-is (its own analytics-style look).
+
+    It AUTO-DERIVES recurring campaign series by stripping the variable temporal
+    token from each campaign name (daily date, quarter, month-year, year) and
+    grouping by a normalized stem that is robust to human spacing/separator/case
+    variances. For each series it walks the cached instances chronologically and
+    flags, per identity+entitlement item, the FIRST genuine (honest) reviewer
+    approval in the window (the "newly attested" headline), plus persistent
+    non-attestation, decision changes, and newly-in-scope items.
+
+    Honesty doctrine: it reuses the shared honest classifier via the pure engine
+    Get-SPSeriesAttestationDelta -- auto-approved-at-close (idNowAutoApproved) and
+    pending decisions are demoted to Undecided and NEVER counted as a genuine
+    approval; COMPLETED instances are attributed to the cert-ASSIGNED reviewer off
+    the sealed roster; Unverified provenance is propagated and flagged.
+
+    This is ADDITIVE: it does NOT replace or modify V3/V4/V4b/V4c/V5/V6/V7. The
+    cross-campaign snapshot scope-diff stays intact for genuinely-different
+    campaigns; V4d is the V4/V4b-styled sibling of the V4c recurring-series analysis.
+
+    Exit codes:
+        0 = Normal
+        2 = Parameter error
+        4 = Configuration / reader failure
+        5 = Critical (unexpected failure)
+.PARAMETER SeriesName
+    OVERRIDE GUARD (alias -SeriesStem): force an explicit series stem instead of
+    auto-derivation. Passed through to the reader only when bound.
+.PARAMETER SeriesPattern
+    OVERRIDE GUARD: a user-supplied temporal regex used instead of the built-in
+    ladder. Passed through to the reader only when bound.
+.PARAMETER SimilarityThreshold
+    OPT-IN fuzzy near-match (0..1). Default 0 = OFF (exact-match grouping only).
+    When > 0, near-identical series stems are consolidated via Levenshtein
+    distance (the merge is logged as audit evidence).
+.PARAMETER MinInstances
+    Minimum number of instances for a series to be reported. Default 2 (a single
+    capture is not a "series"). Passed to the reader.
+.PARAMETER IncludeUnverified
+    By default Unverified-provenance items are EXCLUDED from the headline (and
+    reported as an "Unverified (excluded)" note). When set, they are included and
+    rendered with a visible "Unverified" badge.
+.PARAMETER CachePath
+    Override the rich-cache directory (alias -Path). Defaults via the reader to
+    the configured Audit cache dir.
+.PARAMETER OutputPath
+    Directory for output files. Defaults to the daily-evidence subdirectory.
+.PARAMETER OutputMode
+    Console: per-series summary to terminal.
+    JSON: machine-readable JSON to stdout.
+    HTML: self-contained HTML report file.
+    Both (default): console output and HTML file.
+.PARAMETER Help
+    Display detailed help.
+.EXAMPLE
+    .\Invoke-SPDailyEvidenceReportV4d.ps1
+    # Auto-derive every recurring series from the cache and render the delta (V4b look).
+.EXAMPLE
+    .\Invoke-SPDailyEvidenceReportV4d.ps1 -SeriesName 'Access Review' -OutputMode HTML
+    # Force a single series stem and write only the HTML report.
+.EXAMPLE
+    .\Invoke-SPDailyEvidenceReportV4d.ps1 -SimilarityThreshold 0.15 -IncludeUnverified
+    # Opt-in fuzzy stem merge; include Unverified items with a badge.
+.NOTES
+    Script:  Invoke-SPDailyEvidenceReportV4d.ps1
+    Version: 1.0.0
+#>
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [Alias('SeriesStem')]
+    [string]$SeriesName,
+
+    [Parameter()]
+    [string]$SeriesPattern,
+
+    [Parameter()]
+    [ValidateRange(0, 1)]
+    [double]$SimilarityThreshold = 0,
+
+    [Parameter()]
+    [int]$MinInstances = 2,
+
+    [Parameter()]
+    [switch]$IncludeUnverified,
+
+    [Parameter()]
+    [Alias('Path')]
+    [string]$CachePath,
+
+    [Parameter()]
+    [string]$OutputPath,
+
+    [Parameter()]
+    [ValidateSet('Console', 'JSON', 'HTML', 'Both')]
+    [string]$OutputMode = 'Both',
+
+    [Parameter()]
+    [Alias('?')]
+    [switch]$Help
+)
+
+Set-StrictMode -Version 1
+$ErrorActionPreference = 'Stop'
+
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed
+    return
+}
+
+#region Module Load
+
+$scriptRoot = $PSScriptRoot
+if (-not $scriptRoot) {
+    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+$toolkitRoot = Split-Path -Parent $scriptRoot
+
+# V4d needs SP.Audit (the series reader + pure delta engine live there). SP.Audit
+# depends on SP.Api/SP.Core; import order Shared -> Core -> Api -> Audit.
+$moduleChain = @(
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Shared\SP.Shared.psd1'; Name = 'SP.Shared'; Required = $true }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Core\SP.Core.psd1';     Name = 'SP.Core';   Required = $true }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Api\SP.Api.psd1';       Name = 'SP.Api';    Required = $true }
+    @{ Path = Join-Path $toolkitRoot 'Modules\SP.Audit\SP.Audit.psd1';   Name = 'SP.Audit';  Required = $true }
+)
+
+foreach ($mod in $moduleChain) {
+    if (Test-Path $mod.Path) {
+        Import-Module $mod.Path -Force -ErrorAction Stop -DisableNameChecking
+    }
+    else {
+        $moduleDir = Split-Path -Parent $mod.Path
+        $psm1Files = Get-ChildItem -Path $moduleDir -Filter '*.psm1' -ErrorAction SilentlyContinue
+        if ($psm1Files) {
+            foreach ($psm1 in $psm1Files) {
+                Import-Module $psm1.FullName -Force -ErrorAction SilentlyContinue -DisableNameChecking
+            }
+        }
+        elseif ($mod.Required) {
+            Write-Host "ERROR: Required module '$($mod.Name)' not found at: $($mod.Path)" -ForegroundColor Red
+            exit 4
+        }
+    }
+}
+
+#endregion
+
+#region Setup
+
+$startTime = Get-Date
+$correlationID = [guid]::NewGuid().ToString()
+$todayLabel = $startTime.ToString('yyyy-MM-dd')
+
+$cfgPath = $null
+try {
+    $cfgPath = Resolve-SPConfigPath -ToolkitRoot $toolkitRoot
+} catch {
+    $defaultCfg = Join-Path $toolkitRoot 'settings.json'
+    if (Test-Path $defaultCfg) { $cfgPath = $defaultCfg }
+}
+
+$config = $null
+if ($cfgPath) {
+    try {
+        $config = Get-SPConfig -ConfigPath $cfgPath
+    }
+    catch {
+        Write-Host "WARN: Failed to load configuration: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+Write-Host ''
+Write-Host '  SailPoint ISC Governance Toolkit' -ForegroundColor Cyan
+Write-Host '  Daily Evidence Report (v4d) -- Series Attestation Delta' -ForegroundColor Cyan
+Write-Host "  Date:          $todayLabel" -ForegroundColor DarkGray
+Write-Host "  CorrelationID: $correlationID" -ForegroundColor DarkGray
+Write-Host ''
+
+try {
+    Initialize-SPLogging -ErrorAction SilentlyContinue
+} catch { }
+
+try {
+    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4d started: CorrelationID=$correlationID MinInstances=$MinInstances SimilarityThreshold=$SimilarityThreshold" `
+        -Severity INFO -Component 'DailyEvidenceV4d' -Action 'Start' -CorrelationID $correlationID
+} catch { }
+
+# Resolve output path (mirrors the V6 OutputPath-resolution region).
+$effectiveOutputPath = $OutputPath
+if ([string]::IsNullOrWhiteSpace($effectiveOutputPath)) {
+    $deOutputPath = $null
+    if ($null -ne $config) {
+        try {
+            if ($null -ne $config.PSObject.Properties['DailyEvidence'] -and
+                $null -ne $config.DailyEvidence -and
+                $null -ne $config.DailyEvidence.PSObject.Properties['OutputPath'] -and
+                -not [string]::IsNullOrWhiteSpace($config.DailyEvidence.OutputPath)) {
+                $deOutputPath = [string]$config.DailyEvidence.OutputPath
+            }
+        } catch { }
+    }
+
+    if ($null -ne $deOutputPath) {
+        $effectiveOutputPath = $deOutputPath
+    }
+    elseif ($null -ne $config -and $null -ne $config.PSObject.Properties['Audit'] -and
+        $null -ne $config.Audit -and
+        $null -ne $config.Audit.PSObject.Properties['OutputPath'] -and
+        -not [string]::IsNullOrWhiteSpace($config.Audit.OutputPath)) {
+        $effectiveOutputPath = Join-Path ([string]$config.Audit.OutputPath) 'daily-evidence'
+    }
+    else {
+        $effectiveOutputPath = Join-Path $toolkitRoot (Join-Path 'Audit' 'daily-evidence')
+    }
+}
+if (-not [System.IO.Path]::IsPathRooted($effectiveOutputPath)) {
+    $effectiveOutputPath = Join-Path $toolkitRoot $effectiveOutputPath
+}
+if (-not (Test-Path $effectiveOutputPath)) {
+    New-Item -ItemType Directory -Path $effectiveOutputPath -Force | Out-Null
+}
+
+#endregion
+
+#region Step 1: Read the cache and auto-derive series
+
+Write-Host '  Step 1: Read rich cache and derive recurring series' -ForegroundColor Cyan
+
+# When opt-in fuzzy near-match is on, read with MinInstances=1 so a mistyped singleton
+# (e.g. 'Acess Review - <date>' among 'Access Review - <date>') survives Step 1 and can be
+# rescued into its family by the Step-2 fuzzy merge; MinInstances is re-applied AFTER the merge.
+$readerMinInstances = if ($SimilarityThreshold -gt 0) { 1 } else { $MinInstances }
+$readerArgs = @{ MinInstances = $readerMinInstances; CorrelationID = $correlationID }
+if ($PSBoundParameters.ContainsKey('CachePath'))     { $readerArgs['CachePath'] = $CachePath }
+if ($PSBoundParameters.ContainsKey('SeriesName'))    { $readerArgs['SeriesStem'] = $SeriesName }
+if ($PSBoundParameters.ContainsKey('SeriesPattern')) { $readerArgs['SeriesPattern'] = $SeriesPattern }
+
+$seriesRes = $null
+try {
+    $seriesRes = Get-SPCachedCampaignSeries @readerArgs
+} catch {
+    Write-Host "  ERROR: Series reader threw: $($_.Exception.Message)" -ForegroundColor Red
+    try {
+        Write-SPLog -Message "V4d reader threw: $($_.Exception.Message)" -Severity ERROR -Component 'DailyEvidenceV4d' -Action 'Read' -CorrelationID $correlationID
+    } catch { }
+    exit 4
+}
+
+if ($null -eq $seriesRes -or -not $seriesRes.Success) {
+    $errMsg = if ($null -ne $seriesRes) { [string]$seriesRes.Error } else { 'null result' }
+    Write-Host "  ERROR: Series reader failed: $errMsg" -ForegroundColor Red
+    try {
+        Write-SPLog -Message "V4d reader failed: $errMsg" -Severity WARN -Component 'DailyEvidenceV4d' -Action 'Read' -CorrelationID $correlationID
+    } catch { }
+    exit 4
+}
+
+$cacheDir = [string]$seriesRes.Data.CacheDir
+$seriesList = @($seriesRes.Data.Series)
+Write-Host "    Cache dir: $cacheDir" -ForegroundColor DarkGray
+Write-Host "    Series found: $($seriesList.Count) (instances kept: $($seriesRes.Data.InstanceCount))" -ForegroundColor DarkGray
+
+#endregion
+
+#region Step 2: Opt-in fuzzy consolidation (default OFF)
+
+if ($SimilarityThreshold -gt 0 -and $seriesList.Count -gt 1) {
+    Write-Host "  Step 2: Opt-in fuzzy stem consolidation (threshold=$SimilarityThreshold)" -ForegroundColor Cyan
+    $stemToSeries = @{}
+    foreach ($s in $seriesList) { $stemToSeries[[string]$s.NormalizedStem] = $s }
+
+    $synthetic = New-Object System.Collections.Generic.List[object]
+    foreach ($s in $seriesList) {
+        $synthetic.Add([pscustomobject]@{ id = [string]$s.NormalizedStem; Name = [string]$s.NormalizedStem })
+    }
+
+    $grp = $null
+    try {
+        $grp = Group-SPCampaignSeries -Campaigns @($synthetic.ToArray()) -SimilarityThreshold $SimilarityThreshold
+    } catch {
+        Write-Host "    WARN: fuzzy consolidation failed, keeping exact-match series: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    if ($null -ne $grp -and $grp.Success) {
+        $merged = New-Object System.Collections.Generic.List[object]
+        foreach ($cluster in @($grp.Data)) {
+            $clusterSeries = New-Object System.Collections.Generic.List[object]
+            foreach ($m in @($cluster.Members)) {
+                $ms = [string](Get-SPObjectProperty -Object $m -Name 'id' -Default '')
+                if ($stemToSeries.ContainsKey($ms)) { $clusterSeries.Add($stemToSeries[$ms]) }
+            }
+            $cs = @($clusterSeries.ToArray())
+            if ($cs.Count -eq 0) { continue }
+            if ($cs.Count -eq 1) { $merged.Add($cs[0]); continue }
+
+            # Merge >1 reader series: concat instances, re-sort by ChronoKey then CampaignId,
+            # re-stamp OrderIndex, keep the earliest series' stem/period (audit-explainable).
+            $allInst = New-Object System.Collections.Generic.List[object]
+            foreach ($one in $cs) { foreach ($inst in @($one.Instances)) { $allInst.Add($inst) } }
+            $reSorted = @($allInst.ToArray() | Sort-Object -Property @{ Expression = {
+                        '{0:o}|{1}' -f $_.ChronoKey, $_.CampaignId
+                    } })
+            for ($qi = 0; $qi -lt $reSorted.Count; $qi++) { $reSorted[$qi].OrderIndex = $qi }
+
+            $firstCs = $cs[0]
+            $mergedStems = @($cs | ForEach-Object { [string]$_.NormalizedStem }) -join ', '
+            $merged.Add([ordered]@{
+                    SeriesStem     = [string]$firstCs.SeriesStem
+                    NormalizedStem = [string]$firstCs.NormalizedStem
+                    PeriodType     = [string]$firstCs.PeriodType
+                    InstanceCount  = $reSorted.Count
+                    Instances      = @($reSorted)
+                })
+            Write-Host "    Merged near-match stems into '$($firstCs.NormalizedStem)': $mergedStems" -ForegroundColor DarkGray
+            try {
+                Write-SPLog -Message "V4d fuzzy merge -> '$($firstCs.NormalizedStem)' from: $mergedStems" `
+                    -Severity INFO -Component 'DailyEvidenceV4d' -Action 'FuzzyMerge' -CorrelationID $correlationID
+            } catch { }
+        }
+        $seriesList = @($merged.ToArray())
+        Write-Host "    Series after consolidation: $($seriesList.Count)" -ForegroundColor DarkGray
+    }
+}
+
+# Re-apply MinInstances AFTER the fuzzy merge: Step 1 deliberately read with MinInstances=1
+# (see $readerMinInstances) so a mistyped singleton could survive to be rescued by the fuzzy
+# pass; now drop any stem still below the user's threshold once the merges are done. This runs
+# even when Step 2's merge block was skipped (a lone surviving singleton must not slip through).
+if ($SimilarityThreshold -gt 0 -and $MinInstances -gt 1) {
+    $beforeReFilter = $seriesList.Count
+    $seriesList = @($seriesList | Where-Object { @($_.Instances).Count -ge $MinInstances })
+    if ($seriesList.Count -ne $beforeReFilter) {
+        Write-Host "    Series after MinInstances=$MinInstances re-filter: $($seriesList.Count)" -ForegroundColor DarkGray
+    }
+}
+
+#endregion
+
+#region Step 3: Run the pure delta engine per series
+
+Write-Host '  Step 3: Compute series attestation delta' -ForegroundColor Cyan
+
+$seriesResults = New-Object System.Collections.Generic.List[object]
+foreach ($series in $seriesList) {
+    # Materialize each instance for the PURE engine (the report layer does the IO).
+    $deltaInstances = New-Object System.Collections.Generic.List[object]
+    foreach ($inst in @($series.Instances)) {
+        $loadedItems = @()
+        $loadedRoster = @()
+        try { $loadedItems = @(& $inst.LoadItems) } catch { $loadedItems = @() }
+        try { $loadedRoster = @(& $inst.LoadRoster) } catch { $loadedRoster = @() }
+        $deltaInstances.Add([pscustomobject]@{
+                OrderIndex   = $inst.OrderIndex
+                CampaignId   = $inst.CampaignId
+                CampaignName = $inst.CampaignName
+                Status       = $inst.Status
+                Unverified   = $inst.Unverified
+                PeriodToken  = $inst.PeriodToken
+                Items        = @($loadedItems)
+                Roster       = @($loadedRoster)
+            })
+    }
+
+    $dr = $null
+    try {
+        $dr = Get-SPSeriesAttestationDelta -Instances @($deltaInstances.ToArray()) `
+            -SeriesStem ([string]$series.SeriesStem) -NormalizedStem ([string]$series.NormalizedStem) `
+            -PeriodType ([string]$series.PeriodType) -CorrelationID $correlationID
+    } catch {
+        Write-Host "    WARN: delta engine threw for series '$($series.NormalizedStem)': $($_.Exception.Message)" -ForegroundColor Yellow
+        continue
+    }
+    if ($null -eq $dr -or -not $dr.Success) {
+        $de = if ($null -ne $dr) { [string]$dr.Error } else { 'null result' }
+        Write-Host "    WARN: delta engine failed for series '$($series.NormalizedStem)': $de" -ForegroundColor Yellow
+        continue
+    }
+
+    $seriesResults.Add($dr.Data)
+    $na = [int]$dr.Data.Counts['NewlyAttested']
+    $pu = [int]$dr.Data.Counts['PersistentlyUndecided']
+    Write-Host "    [$($series.NormalizedStem)] instances=$($dr.Data.InstanceCount) newlyAttested=$na persistentlyUndecided=$pu" -ForegroundColor DarkGray
+}
+
+$seriesDataList = @($seriesResults.ToArray())
+
+#endregion
+
+#region Step 4: Build HTML report (V4/V4b visual family)
+
+$genDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm UTC')
+$timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+$htmlFile = Join-Path $effectiveOutputPath "daily-evidence-v4d-$timestamp.html"
+
+# Helper: should this item be shown in the headline given the -IncludeUnverified gate?
+function Test-V4dItemShown {
+    param([object]$Item)
+    if ($IncludeUnverified) { return $true }
+    $uv = [bool](Get-SPObjectProperty -Object $Item -Name 'Unverified' -Default $false)
+    $cuv = [bool](Get-SPObjectProperty -Object $Item -Name 'CurrentUnverified' -Default $false)
+    return (-not ($uv -or $cuv))
+}
+
+function Get-V4dUnverifiedBadge {
+    param([object]$Item)
+    $uv = [bool](Get-SPObjectProperty -Object $Item -Name 'Unverified' -Default $false)
+    $cuv = [bool](Get-SPObjectProperty -Object $Item -Name 'CurrentUnverified' -Default $false)
+    if ($uv -or $cuv) { return " <span class='badge badge-amber'>Unverified</span>" }
+    return ''
+}
+
+# Helper: reconcile a per-reviewer rollup against the -IncludeUnverified gate. Drops items the
+# gate hides (exactly as the HTML tables do via Test-V4dItemShown), recomputes the cluster Count,
+# and omits clusters that become empty -- so the JSON rollup mirrors the rendered tables.
+function Get-V4dReconcileRollup {
+    param([object[]]$Rollup)
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($rv in @($Rollup)) {
+        if ($null -eq $rv) { continue }
+        $rvItems = @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())
+        $rvShown = @($rvItems | Where-Object { Test-V4dItemShown $_ })
+        if ($rvShown.Count -eq 0) { continue }
+        $out.Add([ordered]@{
+                ReviewerName  = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '(Unassigned)')
+                ReviewerId    = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerId' -Default '')
+                ReviewerEmail = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerEmail' -Default '')
+                Count         = [int]$rvShown.Count
+                Items         = @($rvShown)
+            })
+    }
+    return @($out.ToArray())
+}
+
+# Helper: project an engine series Data object onto the JSON surface so its headline (Counts +
+# reviewer rollups + Items) RECONCILES with the rendered HTML/console under the -IncludeUnverified
+# gate. When the gate is OFF (default) Unverified items are excluded from the headline numbers
+# exactly as the HTML KPI band and console summary exclude them, so a machine consumer reading the
+# JSON never sees an inflated count vs the report it summarizes. The raw pre-gate engine Counts are
+# preserved under EngineCounts for audit. When the gate is ON the reconciled values equal the
+# engine values (every item is shown). (Honesty doctrine: the headline a reader sees -- human OR
+# machine -- must reconcile against the rows it summarizes.)
+function Get-V4dJsonSeriesProjection {
+    param([object]$Series)
+
+    $allItems = @(Get-SPObjectProperty -Object $Series -Name 'Items' -Default @())
+    $shownItems = @($allItems | Where-Object { Test-V4dItemShown $_ })
+
+    # Recompute Counts by Classification from the SHOWN set (the same by-classification method the
+    # engine uses, just over the gated rows).
+    $recCounts = [ordered]@{
+        NewlyInScope           = 0
+        DecisionChanged        = 0
+        NewlyAttested          = 0
+        AlreadyAttestedEarlier = 0
+        PersistentlyUndecided  = 0
+        OtherDecided           = 0
+        Total                  = 0
+    }
+    foreach ($it in $shownItems) {
+        $cls = [string](Get-SPObjectProperty -Object $it -Name 'Classification' -Default '')
+        if ($recCounts.Contains($cls)) { $recCounts[$cls] = [int]$recCounts[$cls] + 1 }
+        $recCounts['Total'] = [int]$recCounts['Total'] + 1
+    }
+
+    return [ordered]@{
+        SeriesStem              = [string](Get-SPObjectProperty -Object $Series -Name 'SeriesStem' -Default '')
+        NormalizedStem          = [string](Get-SPObjectProperty -Object $Series -Name 'NormalizedStem' -Default '')
+        PeriodType              = [string](Get-SPObjectProperty -Object $Series -Name 'PeriodType' -Default '')
+        InstanceCount           = [int](Get-SPObjectProperty -Object $Series -Name 'InstanceCount' -Default 0)
+        NewestCampaignId        = [string](Get-SPObjectProperty -Object $Series -Name 'NewestCampaignId' -Default '')
+        NewestCampaignName      = [string](Get-SPObjectProperty -Object $Series -Name 'NewestCampaignName' -Default '')
+        NewestOrderIndex        = [int](Get-SPObjectProperty -Object $Series -Name 'NewestOrderIndex' -Default -1)
+        Unverified              = [bool](Get-SPObjectProperty -Object $Series -Name 'Unverified' -Default $false)
+        UnverifiedInstanceCount = [int](Get-SPObjectProperty -Object $Series -Name 'UnverifiedInstanceCount' -Default 0)
+        IncludeUnverified       = [bool]$IncludeUnverified
+        UnverifiedItemsExcluded = [int]($allItems.Count - $shownItems.Count)
+        Counts                  = $recCounts
+        EngineCounts            = (Get-SPObjectProperty -Object $Series -Name 'Counts' -Default @{})
+        NewlyAttestedByReviewer         = (Get-V4dReconcileRollup (Get-SPObjectProperty -Object $Series -Name 'NewlyAttestedByReviewer' -Default @()))
+        PersistentlyUndecidedByReviewer = (Get-V4dReconcileRollup (Get-SPObjectProperty -Object $Series -Name 'PersistentlyUndecidedByReviewer' -Default @()))
+        Items                   = @($shownItems)
+    }
+}
+
+$css = @'
+*{box-sizing:border-box}
+body{font-family:"Segoe UI",Arial,sans-serif;background:#f4f6f9;color:#333;margin:0;padding:20px}
+.container{max-width:1100px;margin:0 auto}
+.header{background:linear-gradient(135deg,#264d73,#336699);color:#fff;padding:24px 32px;border-radius:8px 8px 0 0}
+.header h1{margin:0 0 6px;font-size:22px}
+.header .meta{font-size:12px;opacity:.85;line-height:1.6;color:#fff}
+.header .status-line{margin-top:8px;font-size:13px;opacity:.9}
+.section{background:#fff;border:1px solid #e0e0e0;border-top:none;padding:20px 32px}
+.section h2{color:#264d73;font-size:16px;border-bottom:2px solid #e8eef5;padding-bottom:6px;margin-top:0}
+.scope-inline{display:flex;flex-wrap:wrap;gap:12px 26px;font-size:13px;color:#555;margin:8px 0 4px}
+.scope-inline .n{font-size:22px;font-weight:700;color:#264d73;display:block;line-height:1.1}
+.scope-inline .t{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#777}
+table.report{border-collapse:collapse;width:100%;margin:8px 0 14px;font-size:12px}
+table.report th{background:#e8eef5;padding:8px 10px;text-align:left;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}
+table.report td{padding:7px 10px;border-bottom:1px solid #eee;vertical-align:top}
+table.report tr:nth-child(even){background:#fafafa}
+.s-green{color:#339933;font-weight:600}.s-amber{color:#9a6700;font-weight:600}.s-red{color:#CC3333;font-weight:600}.s-gray{color:#777}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;color:#fff;margin-left:6px}
+.badge-green{background:#0a7d2c}.badge-red{background:#b00020}.badge-amber{background:#9a6700}.badge-blue{background:#336699}
+summary{cursor:pointer;font-weight:600;color:#264d73;font-size:13px;margin:12px 0 4px}
+.subhead{font-size:13px;color:#264d73;margin:14px 0 2px;font-weight:bold}
+.note{font-size:11px;color:#777;margin:2px 0 6px}
+.empty{font-size:12px;color:#888;font-style:italic;margin:6px 0}
+.footer{text-align:center;color:#999;font-size:11px;padding:16px;background:#fff;border:1px solid #e0e0e0;border-top:1px solid #eee;border-radius:0 0 8px 8px}
+@media print{body{background:#fff;padding:0}.container{max-width:100%}.header{border-radius:0}}
+'@
+
+$sb = New-Object System.Text.StringBuilder 32768
+[void]$sb.AppendLine("<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Daily Evidence Report v4d -- Series Attestation Delta</title><style>$css</style></head><body><div class='container'>")
+
+# Header banner (V4/V4b family chrome)
+$totalNA = 0; $totalPU = 0
+foreach ($sd0 in $seriesDataList) {
+    $it0 = @(@(Get-SPObjectProperty -Object $sd0 -Name 'Items' -Default @()) | Where-Object { Test-V4dItemShown $_ })
+    $totalNA += @($it0 | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
+    $totalPU += @($it0 | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
+}
+$unvMode = if ($IncludeUnverified) { 'INCLUDED (badged)' } else { 'EXCLUDED from headline' }
+[void]$sb.AppendLine("<div class='header'>")
+[void]$sb.AppendLine("<h1>Daily Evidence Report &mdash; Series Attestation Delta</h1>")
+[void]$sb.AppendLine("<div class='meta'>SailPoint ISC Governance Toolkit &middot; v4d (series-aware, honest newly-attested)<br>Cache: $(ConvertTo-SPHtmlSafe $cacheDir) &middot; Generated: $genDate</div>")
+[void]$sb.AppendLine("<div class='status-line'>$($seriesDataList.Count) series analyzed &middot; $totalNA newly attested &middot; $totalPU persistently undecided &middot; Unverified: $unvMode &middot; Min instances: $MinInstances</div>")
+[void]$sb.AppendLine("</div>")
+
+if ($seriesDataList.Count -eq 0) {
+    [void]$sb.AppendLine("<div class='section'><h2>No recurring series found</h2>")
+    [void]$sb.AppendLine("<p class='empty'>The cache contains no campaign family with at least $MinInstances instance(s) sharing a normalized series stem. Run the daily orchestrator across multiple instances of a recurring campaign to populate the series.</p></div>")
+}
+
+foreach ($sd in $seriesDataList) {
+    $stem = [string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default '')
+    $periodType = [string](Get-SPObjectProperty -Object $sd -Name 'PeriodType' -Default '')
+    $instCount = [int](Get-SPObjectProperty -Object $sd -Name 'InstanceCount' -Default 0)
+    $newestName = [string](Get-SPObjectProperty -Object $sd -Name 'NewestCampaignName' -Default '')
+    $items = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+    $unvInstCount = [int](Get-SPObjectProperty -Object $sd -Name 'UnverifiedInstanceCount' -Default 0)
+
+    $seriesBadge = if ([bool](Get-SPObjectProperty -Object $sd -Name 'Unverified' -Default $false)) { " <span class='badge badge-amber'>Unverified provenance</span>" } else { '' }
+    [void]$sb.AppendLine("<div class='section'>")
+    [void]$sb.AppendLine("<h2>$(ConvertTo-SPHtmlSafe $stem)$seriesBadge</h2>")
+
+    # KPI band from honest counts. Render from the SAME filtered set the detail tables use
+    # (Test-V4dItemShown) so the headline reconciles with the evidence rows below.
+    $kpiShownItems = @($items | Where-Object { Test-V4dItemShown $_ })
+    $kpiNewlyAttested = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
+    $kpiPersistentlyUndecided = @($kpiShownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
+    $kpiDecisionChanged = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsDecisionChanged' -Default $false) }).Count
+    $kpiNewlyInScope = @($kpiShownItems | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsNewlyInScope' -Default $false) }).Count
+    [void]$sb.AppendLine("<div class='scope-inline'>")
+    [void]$sb.AppendLine("<div><span class='n'>$instCount</span><span class='t'>instances in window</span></div>")
+    [void]$sb.AppendLine("<div><span class='n' style='color:#339933'>$kpiNewlyAttested</span><span class='t'>newly attested</span></div>")
+    [void]$sb.AppendLine("<div><span class='n' style='color:#CC3333'>$kpiPersistentlyUndecided</span><span class='t'>persistently undecided</span></div>")
+    [void]$sb.AppendLine("<div><span class='n'>$kpiDecisionChanged</span><span class='t'>decision changes</span></div>")
+    [void]$sb.AppendLine("<div><span class='n'>$kpiNewlyInScope</span><span class='t'>newly in scope</span></div>")
+    [void]$sb.AppendLine("</div>")
+    [void]$sb.AppendLine("<p class='note'>Period type: $(ConvertTo-SPHtmlSafe $periodType) &middot; Newest: $(ConvertTo-SPHtmlSafe $newestName)</p>")
+
+    if ((-not $IncludeUnverified) -and $unvInstCount -gt 0) {
+        [void]$sb.AppendLine("<p class='note'>Note: $unvInstCount instance(s) carry Unverified provenance; their items are EXCLUDED from the headline. Re-run with -IncludeUnverified to surface them with a badge.</p>")
+    }
+
+    # (A) Newly Attested This Period -- per reviewer then per item.
+    [void]$sb.AppendLine("<details open><summary>Newly Attested This Period ($kpiNewlyAttested)</summary>")
+    [void]$sb.AppendLine("<p class='note'>First GENUINE (honest) reviewer approval of each identity+entitlement in the window. Auto-approved-at-close and pending are NOT counted.</p>")
+    $naRollup = @(Get-SPObjectProperty -Object $sd -Name 'NewlyAttestedByReviewer' -Default @())
+    $naShown = 0
+    foreach ($rv in $naRollup) {
+        $rvItems = @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())
+        $rvShownItems = @($rvItems | Where-Object { Test-V4dItemShown $_ })
+        if ($rvShownItems.Count -eq 0) { continue }
+        $rvName = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '(Unassigned)')
+        $rvEmail = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerEmail' -Default '')
+        [void]$sb.AppendLine("<div class='subhead'>$(ConvertTo-SPHtmlSafe $rvName) <span class='badge badge-green'>$($rvShownItems.Count)</span> <span style='font-weight:400;color:#888;font-size:11px'>$(ConvertTo-SPHtmlSafe $rvEmail)</span></div>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th style='text-align:right'>First Genuine Approval (order)</th></tr></thead><tbody>")
+        foreach ($it in $rvShownItems) {
+            $idn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+            $acc = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+            $src = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+            $foi = [int](Get-SPObjectProperty -Object $it -Name 'FirstGenuineApprovalOrderIndex' -Default -1)
+            $bdg = Get-V4dUnverifiedBadge $it
+            [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td style='text-align:right'>$foi</td></tr>")
+            $naShown++
+        }
+        [void]$sb.AppendLine("</tbody></table>")
+    }
+    if ($naShown -eq 0) { [void]$sb.AppendLine("<p class='empty'>No genuine first-time approvals in this window.</p>") }
+    [void]$sb.AppendLine("</details>")
+
+    # (B) Persistently Undecided / Never Attested.
+    [void]$sb.AppendLine("<details><summary>Persistently Undecided / Never Attested ($kpiPersistentlyUndecided)</summary>")
+    [void]$sb.AppendLine("<p class='note'>Items never genuinely decided in ANY instance across the window, grouped by the cert-assigned reviewer.</p>")
+    $puRollup = @(Get-SPObjectProperty -Object $sd -Name 'PersistentlyUndecidedByReviewer' -Default @())
+    $puShown = 0
+    foreach ($rv in $puRollup) {
+        $rvItems = @(Get-SPObjectProperty -Object $rv -Name 'Items' -Default @())
+        $rvShownItems = @($rvItems | Where-Object { Test-V4dItemShown $_ })
+        if ($rvShownItems.Count -eq 0) { continue }
+        $rvName = [string](Get-SPObjectProperty -Object $rv -Name 'ReviewerName' -Default '(Unassigned)')
+        [void]$sb.AppendLine("<div class='subhead'>$(ConvertTo-SPHtmlSafe $rvName) <span class='badge badge-red'>$($rvShownItems.Count)</span></div>")
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Current State</th></tr></thead><tbody>")
+        foreach ($it in $rvShownItems) {
+            $idn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+            $acc = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+            $src = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+            $cur = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default 'Undecided'))
+            $bdg = Get-V4dUnverifiedBadge $it
+            [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td class='s-red'>$cur</td></tr>")
+            $puShown++
+        }
+        [void]$sb.AppendLine("</tbody></table>")
+    }
+    if ($puShown -eq 0) { [void]$sb.AppendLine("<p class='empty'>No persistently-undecided items in this window.</p>") }
+    [void]$sb.AppendLine("</details>")
+
+    # (C) Decision Changes.
+    $dcItems = @($items | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsDecisionChanged' -Default $false) -and (Test-V4dItemShown $_) })
+    [void]$sb.AppendLine("<details><summary>Decision Changes ($($dcItems.Count))</summary>")
+    [void]$sb.AppendLine("<p class='note'>Items whose genuine decision flipped (Approved and Revoked both present) across the window.</p>")
+    if ($dcItems.Count -gt 0) {
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Current State</th><th>Reviewer</th></tr></thead><tbody>")
+        foreach ($it in $dcItems) {
+            $idn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+            $acc = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+            $src = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+            $cur = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default ''))
+            $rvn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'CurrentReviewerName' -Default ''))
+            $bdg = Get-V4dUnverifiedBadge $it
+            [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td>$cur</td><td>$rvn</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table>")
+    }
+    else { [void]$sb.AppendLine("<p class='empty'>No decision changes in this window.</p>") }
+    [void]$sb.AppendLine("</details>")
+
+    # (D) Newly In Scope.
+    $nisItems = @($items | Where-Object { [bool](Get-SPObjectProperty -Object $_ -Name 'IsNewlyInScope' -Default $false) -and (Test-V4dItemShown $_) })
+    [void]$sb.AppendLine("<details><summary>Newly In Scope ($($nisItems.Count))</summary>")
+    [void]$sb.AppendLine("<p class='note'>Items absent from all prior instances and present in the newest -- newly subject to certification.</p>")
+    if ($nisItems.Count -gt 0) {
+        [void]$sb.AppendLine("<table class='report'><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Current State</th><th>Reviewer</th></tr></thead><tbody>")
+        foreach ($it in $nisItems) {
+            $idn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'IdentityName' -Default ''))
+            $acc = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'AccessName' -Default ''))
+            $src = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'SourceName' -Default ''))
+            $cur = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'CurrentHonestDecision' -Default ''))
+            $rvn = ConvertTo-SPHtmlSafe ([string](Get-SPObjectProperty -Object $it -Name 'CurrentReviewerName' -Default ''))
+            $bdg = Get-V4dUnverifiedBadge $it
+            [void]$sb.AppendLine("<tr><td>$idn$bdg</td><td>$acc</td><td>$src</td><td>$cur</td><td>$rvn</td></tr>")
+        }
+        [void]$sb.AppendLine("</tbody></table>")
+    }
+    else { [void]$sb.AppendLine("<p class='empty'>No newly-in-scope items in this window.</p>") }
+    [void]$sb.AppendLine("</details>")
+
+    [void]$sb.AppendLine("</div>")  # section
+}
+
+[void]$sb.AppendLine("<div class='footer'>Daily Evidence Report v4d (Series Attestation Delta) &middot; Series: $($seriesDataList.Count) &middot; Generated: $genDate &middot; SailPoint ISC Governance Toolkit</div>")
+[void]$sb.AppendLine("</div></body></html>")
+
+if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') {
+    Write-SPHtmlFile -Path $htmlFile -Content $sb.ToString()
+    Write-Host "    HTML: $htmlFile" -ForegroundColor Green
+}
+
+#endregion
+
+#region Step 5: Console summary
+
+if ($OutputMode -eq 'Console' -or $OutputMode -eq 'Both') {
+    Write-Host ''
+    Write-Host '  Series summary:' -ForegroundColor Cyan
+    if ($seriesDataList.Count -eq 0) {
+        Write-Host '    (no recurring series found)' -ForegroundColor DarkGray
+    }
+    foreach ($sd in $seriesDataList) {
+        # Reconcile with the HTML: count from the SAME Test-V4dItemShown-filtered set the KPI band
+        # uses, not the engine's RAW Counts. Otherwise, when a series has Unverified instances and
+        # -IncludeUnverified is OFF (default), the console would include items the HTML excludes and
+        # the two surfaces would report different newly-attested totals for the same run.
+        $sdItems = @(Get-SPObjectProperty -Object $sd -Name 'Items' -Default @())
+        $shownItems = @($sdItems | Where-Object { Test-V4dItemShown $_ })
+        $na = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
+        $pu = @($shownItems | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
+        $stem = [string](Get-SPObjectProperty -Object $sd -Name 'SeriesStem' -Default '')
+        Write-Host "    - $stem : newly-attested=$na  persistently-undecided=$pu" -ForegroundColor DarkGray
+    }
+    Write-Host ''
+}
+
+#endregion
+
+#region Step 6: JSON output
+
+if ($OutputMode -eq 'JSON' -or $OutputMode -eq 'Both') {
+    # Reconcile the JSON headline with the rendered HTML/console: project each series through the
+    # -IncludeUnverified gate (Get-V4dJsonSeriesProjection) so the machine surface reports the SAME
+    # honest Counts + reviewer rollups + Items the human surfaces show. When -IncludeUnverified is
+    # OFF (default) Unverified items are excluded from the JSON headline exactly as they are from
+    # the HTML KPI band and console summary; the raw pre-gate engine Counts stay under EngineCounts
+    # for audit. Without this the JSON headline could over-state newly-attested vs the report it
+    # summarizes when a series carries Unverified instances.
+    $jsonSeries = @($seriesDataList | ForEach-Object { Get-V4dJsonSeriesProjection -Series $_ })
+    $jsonResult = [ordered]@{
+        Version           = 'V4d'
+        SeriesCount       = $seriesDataList.Count
+        IncludeUnverified = [bool]$IncludeUnverified
+        Series            = @($jsonSeries)
+        CorrelationID     = $correlationID
+        GeneratedAt       = $genDate
+        # Only advertise the HTML artifact when it was actually written to disk (HTML/Both);
+        # a JSON-only run writes no HTML file, so reporting a path would be a false reference.
+        HtmlReport        = if ($OutputMode -eq 'HTML' -or $OutputMode -eq 'Both') { $htmlFile } else { $null }
+    }
+
+    if ($OutputMode -eq 'JSON') {
+        $jsonResult | ConvertTo-Json -Depth 8
+    }
+    else {
+        $jsonFile = Join-Path $effectiveOutputPath "daily-evidence-v4d-$timestamp.json"
+        $jsonResult | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonFile -Encoding UTF8
+        Write-Host "    JSON: $jsonFile" -ForegroundColor Green
+    }
+}
+
+#endregion
+
+#region Audit Trail
+
+$totalDuration = (Get-Date) - $startTime
+$durationStr = "$([math]::Round($totalDuration.TotalSeconds, 1))s"
+Write-Host "  Duration: $durationStr" -ForegroundColor DarkGray
+
+try {
+    Write-SPLog -Message "Invoke-SPDailyEvidenceReportV4d completed: Duration=$durationStr Series=$($seriesDataList.Count)" `
+        -Severity INFO -Component 'DailyEvidenceV4d' -Action 'Complete' -CorrelationID $correlationID
+} catch { }
+
+#endregion
+
+#region Exit Code
+
+# 0: Normal (report rendered, including the valid zero-series case).
+exit 0
+
+#endregion
