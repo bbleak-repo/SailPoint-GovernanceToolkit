@@ -575,10 +575,19 @@ $sb = New-Object System.Text.StringBuilder 32768
 
 # Header banner (V4/V4b family chrome)
 $totalNA = 0; $totalPU = 0
+$totalInstances = 0
+$reviewerSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($sd0 in $seriesDataList) {
     $it0 = @(@(Get-SPObjectProperty -Object $sd0 -Name 'Items' -Default @()) | Where-Object { Test-V4eItemShown $_ })
     $totalNA += @($it0 | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'NewlyAttested' }).Count
     $totalPU += @($it0 | Where-Object { [string](Get-SPObjectProperty -Object $_ -Name 'Classification' -Default '') -eq 'PersistentlyUndecided' }).Count
+    $totalInstances += [int](Get-SPObjectProperty -Object $sd0 -Name 'InstanceCount' -Default 0)
+    foreach ($rItem in $it0) {
+        $rid = [string](Get-SPObjectProperty -Object $rItem -Name 'CurrentReviewerId' -Default '')
+        $rnm = [string](Get-SPObjectProperty -Object $rItem -Name 'CurrentReviewerName' -Default '')
+        $rk = if ($rid) { $rid } else { $rnm }
+        if ($rk) { [void]$reviewerSet.Add($rk) }
+    }
 }
 $unvMode = if ($IncludeUnverified) { 'INCLUDED (badged)' } else { 'EXCLUDED from headline' }
 # ---- HEADER (V4b shell, verbatim markup rebound to series data) ----
@@ -587,6 +596,15 @@ $unvMode = if ($IncludeUnverified) { 'INCLUDED (badged)' } else { 'EXCLUDED from
 [void]$sb.AppendLine('<div class="meta">SailPoint ISC Governance Toolkit | Series Attestation Delta (v4e) | Cache: ' + (ConvertTo-SafeHtml $cacheDir) + ' | Generated: ' + $genDate + '</div>')
 [void]$sb.AppendLine('<div class="status-line">' + $seriesDataList.Count + ' series analyzed &middot; ' + $totalNA + ' newly attested &middot; ' + $totalPU + ' persistently undecided &middot; Unverified: ' + $unvMode + ' &middot; Min instances: ' + $MinInstances + '</div>')
 [void]$sb.AppendLine('</div>')
+
+# ---- Certification Scope (V4b shell, verbatim markup rebound to series totals) ----
+[void]$sb.AppendLine('<div class="section"><h2>Certification Scope</h2><div class="scope-inline">')
+[void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $seriesDataList.Count) + '</span><span class="t">recurring series</span></div>')
+[void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $totalInstances) + '</span><span class="t">campaign instances</span></div>')
+[void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $totalNA) + '</span><span class="t">newly attested</span></div>')
+[void]$sb.AppendLine('<div><span class="n">' + ('{0:N0}' -f $totalPU) + '</span><span class="t">persistently undecided</span></div>')
+[void]$sb.AppendLine('<div><span class="n">' + $reviewerSet.Count + '</span><span class="t">reviewers involved</span></div>')
+[void]$sb.AppendLine('</div></div>')
 
 # PER-SERIES BODY = PLACEHOLDER (SCAFFOLD-V4E). Later items replace this loop with the verbatim
 # V4b execbox / Section A / Section B / Decision Summary chrome rebound to series-attestation data.
