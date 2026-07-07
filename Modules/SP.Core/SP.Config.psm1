@@ -1153,12 +1153,16 @@ function Test-SPConfiguration {
     # --- Connectivity validation (optional) ---
     if ($ValidateConnectivity -or $ResolveEntities) {
         try {
-            $token = Get-SPAuthToken -Config $config
-            if ($token) {
+            # Get-SPAuthToken reads config itself (it has no -Config parameter) and
+            # returns a @{Success; Data; Error} envelope -- a truthy hashtable even
+            # on failure, so check .Success explicitly.
+            $authResult = Get-SPAuthToken
+            if ($null -ne $authResult -and $authResult.Success) {
                 $info.Add('API authentication successful')
             }
             else {
-                $errors.Add('API authentication failed: Get-SPAuthToken returned null')
+                $authErr = if ($null -ne $authResult) { $authResult.Error } else { 'Get-SPAuthToken returned null' }
+                $errors.Add("API authentication failed: $authErr")
             }
         }
         catch {
@@ -1167,9 +1171,13 @@ function Test-SPConfiguration {
 
         if ($errors.Count -eq 0 -or ($errors | Where-Object { $_ -notmatch 'authentication' })) {
             try {
-                $testResponse = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns?limit=1' -Config $config
-                if ($null -ne $testResponse) {
+                $testResponse = Invoke-SPApiRequest -Method GET -Endpoint '/campaigns?limit=1'
+                if ($null -ne $testResponse -and $testResponse.Success) {
                     $info.Add('API connectivity verified')
+                }
+                else {
+                    $connErr = if ($null -ne $testResponse) { $testResponse.Error } else { 'no response' }
+                    $errors.Add("API connectivity test failed: $connErr")
                 }
             }
             catch {
@@ -1186,9 +1194,11 @@ function Test-SPConfiguration {
             if ($null -ne $sourceIds -and $sourceIds.Count -gt 0) {
                 foreach ($srcId in $sourceIds) {
                     try {
-                        $source = Invoke-SPApiRequest -Method GET -Endpoint "/v3/sources/$srcId" -Config $config
-                        if ($null -ne $source -and $source.name) {
-                            $info.Add("Source $srcId resolved: $($source.name)")
+                        # Api.BaseUrl already carries the API version; the entity lives
+                        # on the .Data of the response envelope.
+                        $source = Invoke-SPApiRequest -Method GET -Endpoint "/sources/$srcId"
+                        if ($null -ne $source -and $source.Success -and $null -ne $source.Data -and $source.Data.name) {
+                            $info.Add("Source $srcId resolved: $($source.Data.name)")
                         }
                         else {
                             $errors.Add("Source ID '$srcId' not found in tenant")
@@ -1206,9 +1216,21 @@ function Test-SPConfiguration {
             $reviewerId = $config.DeltaCert.FallbackReviewerIdentityId
             if (-not [string]::IsNullOrWhiteSpace($reviewerId)) {
                 try {
-                    $identity = Invoke-SPApiRequest -Method GET -Endpoint "/v3/identities/$reviewerId" -Config $config
-                    if ($null -ne $identity -and $identity.name) {
-                        $info.Add("FallbackReviewer $reviewerId resolved: $($identity.name)")
+                    # GET /v3/identities/{id} does not exist in the ISC v3 API -- use the
+                    # search variant (same pattern as SP.IdentityService.Get-SPIdentityDetail).
+                    $identity = Invoke-SPApiRequest -Method GET -Endpoint "/search/identities/$reviewerId"
+                    $identityName = $null
+                    if ($null -ne $identity -and $identity.Success -and $null -ne $identity.Data) {
+                        foreach ($prop in @('displayName', 'name')) {
+                            if ($null -ne $identity.Data.PSObject.Properties[$prop] -and
+                                -not [string]::IsNullOrWhiteSpace($identity.Data.$prop)) {
+                                $identityName = [string]$identity.Data.$prop
+                                break
+                            }
+                        }
+                    }
+                    if ($identityName) {
+                        $info.Add("FallbackReviewer $reviewerId resolved: $identityName")
                     }
                     else {
                         $errors.Add("FallbackReviewerIdentityId '$reviewerId' not found in tenant")

@@ -323,6 +323,20 @@ function Invoke-SPApiRequest {
     # Build full URL
     $baseUrl     = $config.Api.BaseUrl.TrimEnd('/')
     $cleanEndpoint = if ($Endpoint.StartsWith('/')) { $Endpoint } else { '/' + $Endpoint }
+
+    # Version-segment normalization: Api.BaseUrl is configured WITH the API version
+    # (e.g. "https://tenant.api.identitynow.com/v3"), but some callers pass endpoints
+    # that also carry the version prefix (e.g. '/v3/entitlements'). Without this guard
+    # the request goes to '/v3/v3/entitlements' and 404s. If the base URL's last path
+    # segment (v3, v2, beta, ...) matches the endpoint's first segment, drop the
+    # duplicate from the endpoint so both endpoint styles work.
+    $baseVersionSeg = ($baseUrl -split '/')[-1]
+    if ($baseVersionSeg -match '^(v\d+|beta)$' -and
+        ($cleanEndpoint -eq "/$baseVersionSeg" -or $cleanEndpoint.StartsWith("/$baseVersionSeg/", [System.StringComparison]::OrdinalIgnoreCase))) {
+        $cleanEndpoint = $cleanEndpoint.Substring($baseVersionSeg.Length + 1)
+        if (-not $cleanEndpoint.StartsWith('/')) { $cleanEndpoint = '/' + $cleanEndpoint }
+    }
+
     $queryString = Build-SPQueryString -QueryParams $QueryParams
     $fullUrl     = $baseUrl + $cleanEndpoint + $queryString
 
