@@ -1,0 +1,11 @@
+﻿{
+    "CampaignId":  "dam-04",
+    "CampaignName":  "Daily Attestation Manager Campaign – 2026-06-23",
+    "Status":  "COMPLETED",
+    "CachedAt":  "2026-06-23T08:00:00.0000000+00:00",
+    "IsPermanent":  true,
+    "CapturedWhileActive":  true,
+    "Unverified":  false,
+    "ItemCount":  4,
+    "CertCount":  1
+}

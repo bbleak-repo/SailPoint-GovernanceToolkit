@@ -39,6 +39,11 @@
 .PARAMETER Top
     Limit the bar chart + heatmap to the Top N most-pending reviewers (0 = all). Default 0.
 
+.PARAMETER MinMisses
+    Only include reviewers who appeared pending in at least N reports. Default 1 (include everyone);
+    pass -MinMisses 2 to leave off folks who only missed a single day. Applies to every reviewer view
+    (bars, missed-day streak flags, heatmap, detail table).
+
 .EXAMPLE
     .\Invoke-SPPendingReviewerScrape.ps1 -Path 'C:\Reports\DailyEvidence' -Since '2026-06-01'
 
@@ -54,6 +59,7 @@ param(
     [Parameter()][string]$OutputPath,
     [Parameter()][ValidateSet('Console', 'HTML', 'Both')][string]$OutputMode = 'Both',
     [Parameter()][int]$Top = 0,
+    [Parameter()][int]$MinMisses = 1,
     [Parameter()][Alias('?')][switch]$Help
 )
 
@@ -269,6 +275,12 @@ foreach ($rep in $reports) {
 }
 $rows = @($counts.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $_.Key; Count = $_.Value; Pct = if ($total -gt 0) { [math]::Round($_.Value * 100.0 / $total, 0) } else { 0 } } } |
           Sort-Object -Property @{Expression='Count';Descending=$true}, @{Expression='Name';Descending=$false})
+# -MinMisses: drop reviewers with fewer than N total pending appearances (e.g. -MinMisses 2 leaves off
+# anyone who only missed a single day). Cascades to every reviewer view -- bars, streak flags, heatmap,
+# and the detail table all derive from $rows below.
+$reviewersBeforeMinMisses = $rows.Count
+if ($MinMisses -gt 1) { $rows = @($rows | Where-Object { $_.Count -ge $MinMisses }) }
+$excludedByMinMisses = $reviewersBeforeMinMisses - $rows.Count
 $shown = if ($Top -gt 0) { @($rows | Select-Object -First $Top) } else { $rows }
 $dailyCounts = @($reports | ForEach-Object { $_.Reviewers.Count })
 
@@ -299,7 +311,7 @@ $flaggedCount = @($streakRows | Where-Object Flagged).Count
 # ---- Console ----
 if ($OutputMode -in @('Console', 'Both')) {
     Write-Host ''
-    Write-Host "Pending-Reviewer scrape: $total report(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)" -ForegroundColor Cyan
+    Write-Host "Pending-Reviewer scrape: $total report(s) [$($reports[0].Label) .. $($reports[-1].Label)], $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " (>= $MinMisses misses; $excludedByMinMisses single/low-miss reviewer(s) excluded)" })" -ForegroundColor Cyan
     $shown | Select-Object Name, Count, @{N='OutOf';E={$total}}, @{N='Pct';E={"$($_.Pct)%"}} | Format-Table -AutoSize | Out-String | Write-Host
     if ($flaggedCount -gt 0) {
         Write-Host "Missed-review streaks (>= $streakThreshold consecutive day(s)): $flaggedCount reviewer(s) flagged" -ForegroundColor Yellow
@@ -345,7 +357,7 @@ table.report th{background:#f6f8fa;text-align:left}
 .note{color:#777;font-size:11px;margin-top:4px}
 </style></head><body>
 <h1>Pending / Undecided Reviewer Tracker</h1>
-<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total report(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
+<div class='meta'>Source: $(ConvertTo-Safe $Path) &nbsp;|&nbsp; $total report(s), $($reports[0].Label) &rarr; $($reports[-1].Label) &nbsp;|&nbsp; $($rows.Count) distinct reviewer(s)$(if ($MinMisses -gt 1) { " &nbsp;|&nbsp; min $MinMisses misses ($excludedByMinMisses excluded)" }) &nbsp;|&nbsp; generated $(Get-Date -Format 'yyyy-MM-dd HH:mm')</div>
 <div class='note'>Scraped from the day-end evidence reports' Pending/Undecided reviewer tables. A reviewer is counted once per report. (Bridge view until cache-based trending is fully wired.)</div>
 
 <h2>1. Chronic Pending &mdash; appearances out of $total report(s)</h2>

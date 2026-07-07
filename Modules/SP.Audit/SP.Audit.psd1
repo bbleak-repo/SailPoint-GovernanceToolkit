@@ -37,6 +37,7 @@
         'SP.CampaignVelocity.psm1'
         'SP.CertTracker.psm1'
         'SP.ReviewerAccountability.psm1'
+        'SP.CampaignSeries.psm1'
     )
 
     # Public functions exported by this module
@@ -47,6 +48,7 @@
         'Get-SPAuditCertificationItems'
         'Get-SPCachedCampaignItems'
         'Get-SPCachedCampaignRoster'
+        'Get-SPCachedCampaignSeries'
         'Get-SPAuditEffectiveCacheTtl'
         'Clear-SPAuditItemCache'
         'Clear-SPAuditAccountCache'
@@ -287,6 +289,14 @@
         'Build-SPCertTrackerData'
         'Export-SPCertTrackerHtml'
         'Export-SPAttestationEvidenceHtml'
+
+        # SP.CampaignSeries - recurring series derivation (V4c)
+        'Get-SPCampaignSeriesKey'
+        'Group-SPCampaignSeries'
+        'Get-SPSeriesItemKey'
+        'Resolve-SPSeriesItemState'
+        'Get-SPSeriesAttestationDelta'
+        'Get-SPSeriesInstanceCompletion'
     )
 
     # Do not export variables or aliases from nested modules

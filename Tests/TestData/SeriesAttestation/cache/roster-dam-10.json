@@ -1,0 +1,12 @@
+﻿{
+    "CampaignId":  "dam-10",
+    "CapturedWhileActive":  true,
+    "Entries":  [
+                    {
+                        "CertificationId":  "dam-10-cert",
+                        "ReviewerName":  "Mona Manager",
+                        "ReviewerId":  "rv-mona",
+                        "ReviewerEmail":  "mona@test.com"
+                    }
+                ]
+}

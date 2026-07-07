@@ -7689,6 +7689,354 @@ function Get-SPCachedCampaignRoster {
     }
 }
 
+function ConvertTo-SPSeriesChronoKey {
+    <#
+    .SYNOPSIS
+        Resolve a series PeriodToken to a sortable [datetime] for chronological ordering.
+    .DESCRIPTION
+        PRIVATE helper for Get-SPCachedCampaignSeries. Deterministic, no IO. Tries, in
+        order: a direct [datetime]::TryParse (covers ISO date '2026-06-30', ISO datetime,
+        'Jun 2026'/'June 2026', numeric year-month '2026-06'); then PeriodType-specific
+        parsing -- Quarterly extracts the quarter# + 4-digit year from any coworker variant
+        ('1Q2026' / 'Q1 2026' / 'Q1-2026' / '2026 Q1') and maps to the first month of the
+        quarter; a bare 4-digit year maps to Jan 1. A Weekly 'W23'/'Week 23' token is NOT
+        date-resolvable on its own (no anchoring year) and signals failure. Returns $null
+        on any failure so the caller can fall back to the meta CachedAt.
+    .PARAMETER Token
+        The extracted PeriodToken (may be empty).
+    .PARAMETER PeriodType
+        The derived PeriodType (Daily/Weekly/Monthly/Quarterly/Annual/Unknown).
+    .OUTPUTS
+        [datetime] or $null.
+    #>
+    [CmdletBinding()]
+    [OutputType([datetime])]
+    param(
+        [string]$Token,
+        [string]$PeriodType
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Token)) { return $null }
+    $tok = ([string]$Token).Trim()
+
+    # 1. Direct parse first (ISO date / datetime / month-year / numeric year-month).
+    #    Skip for Quarterly/Weekly tokens which would mis-parse (e.g. 'Q1 2026' partials).
+    if ($PeriodType -ne 'Quarterly' -and $PeriodType -ne 'Weekly') {
+        $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($tok, [ref]$dt)) { return $dt }
+    }
+
+    # 2. Quarterly: pull quarter# + 4-digit year from any variant; map to first month.
+    if ($PeriodType -eq 'Quarterly') {
+        $qm = [regex]::Match($tok, '(?<q>[1-4])\s*Q', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $qm.Success) { $qm = [regex]::Match($tok, 'Q\s*(?<q>[1-4])', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }
+        $ym = [regex]::Match($tok, '(?<y>\d{4})')
+        if ($qm.Success -and $ym.Success) {
+            $q = [int]$qm.Groups['q'].Value
+            $y = [int]$ym.Groups['y'].Value
+            try { return (New-Object System.DateTime($y, (($q - 1) * 3 + 1), 1)) } catch { return $null }
+        }
+        return $null
+    }
+
+    # 3. Weekly is not resolvable to a date without an anchoring year -- signal failure.
+    if ($PeriodType -eq 'Weekly') { return $null }
+
+    # 4. Bare 4-digit year (Annual or a year that fell through direct parse) -> Jan 1.
+    $yOnly = [regex]::Match($tok, '^\s*(?<y>\d{4})\s*$')
+    if ($yOnly.Success) {
+        $y = [int]$yOnly.Groups['y'].Value
+        try { return (New-Object System.DateTime($y, 1, 1)) } catch { return $null }
+    }
+
+    return $null
+}
+
+function Get-SPCachedCampaignSeries {
+    <#
+    .SYNOPSIS
+        Reads the rich on-disk cache, derives recurring campaign SERIES, and orders each
+        series' instances chronologically -- carrying capture provenance. READ-ONLY, NO API.
+    .DESCRIPTION
+        The cache-IO layer for the V4c series-attestation analysis. Enumerates every
+        items-*.meta.json in the cache dir (BOM-safe via Get-Content -Raw | ConvertFrom-Json),
+        derives the series grouping key for each via Get-SPCampaignSeriesKey (so human
+        spacing/separator/case name variances collapse to one series by NormalizedStem),
+        and within each series orders instances chronologically by the extracted PeriodToken
+        date (falling back to meta CachedAt when the token is not date-resolvable).
+
+        Each instance exposes the meta provenance (CampaignId, CampaignName, Status,
+        CapturedWhileActive, Unverified, SealReason, IsPermanent, CachedAt, ItemCount,
+        CertCount), the derived series fields (SeriesStem / NormalizedStem / PeriodToken /
+        PeriodType), the resolved sibling file paths, and two NO-API loader scriptblocks:
+          LoadItems  -> the wrapped items from items-<id>.jsonl (BOM-safe, line-delimited).
+          LoadRoster -> the sealed roster Entries from roster-<id>.json (or @() if none).
+        The loaders read the cache files DIRECTLY (never via Get-SPCachedCampaignItems /
+        Get-SPCachedCampaignRoster, which can fall through to a live ISC fetch) so the whole
+        path is guaranteed API-free.
+
+        Series derivation honors the -SeriesStem / -SeriesPattern override guards (threaded
+        to Get-SPCampaignSeriesKey exactly like Group-SPCampaignSeries) and a -MinInstances
+        filter (default 2) so one-off campaigns are not reported as a "series".
+
+        ADDITIVE: does not modify the sibling readers/writers; an absent/empty cache dir is
+        SUCCESS with an empty Series array (never throws).
+    .PARAMETER CachePath
+        Explicit cache directory; honored as-is. Defaults to Get-SPAuditCacheDir.
+    .PARAMETER SeriesStem
+        OVERRIDE GUARD: explicit stem threaded to Get-SPCampaignSeriesKey for every instance.
+    .PARAMETER SeriesPattern
+        OVERRIDE GUARD: temporal-regex threaded to Get-SPCampaignSeriesKey for every instance.
+    .PARAMETER MinInstances
+        Minimum instance count for a stem to be reported as a series (default 2).
+    .PARAMETER CorrelationID
+        Unique ID for log tracing.
+    .OUTPUTS
+        [hashtable] @{
+            Success = $bool
+            Data    = [ordered]@{
+                CacheDir      = [string]
+                SeriesCount   = [int]
+                InstanceCount = [int]   # sum across KEPT series only
+                Series        = @( [ordered]@{ SeriesStem; NormalizedStem; PeriodType;
+                                               InstanceCount; Instances = @(...) } )
+            }
+            Error   = $string
+        }
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()]
+        [string]$CachePath,
+
+        [Parameter()]
+        [string]$SeriesStem,
+
+        [Parameter()]
+        [string]$SeriesPattern,
+
+        [Parameter()]
+        [int]$MinInstances = 2,
+
+        [Parameter()]
+        [string]$CorrelationID
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
+        $CorrelationID = [guid]::NewGuid().ToString()
+    }
+
+    try {
+        # 1. Resolve cache dir identically to the sibling readers.
+        if (-not [string]::IsNullOrWhiteSpace($CachePath)) {
+            $effectiveCachePath = $CachePath
+        }
+        else {
+            $effectiveCachePath = Get-SPAuditCacheDir
+        }
+
+        if (-not (Test-Path $effectiveCachePath)) {
+            return @{
+                Success = $true
+                Error   = $null
+                Data    = [ordered]@{
+                    CacheDir      = $effectiveCachePath
+                    SeriesCount   = 0
+                    InstanceCount = 0
+                    Series        = @()
+                }
+            }
+        }
+
+        # 2/3/4/5/6. Enumerate every meta file and build a per-instance record.
+        $instances = New-Object System.Collections.Generic.List[object]
+        $metaFiles = @(Get-ChildItem -Path $effectiveCachePath -Filter 'items-*.meta.json' -File -ErrorAction SilentlyContinue)
+        foreach ($f in $metaFiles) {
+            $meta = $null
+            try {
+                # BOM-safe: PS 5.1 Get-Content strips the UTF-8 BOM (the proven disk-cache pattern).
+                $meta = Get-Content $f.FullName -Raw | ConvertFrom-Json
+            }
+            catch {
+                if (Get-Command Write-SPLog -ErrorAction Ignore) {
+                    Write-SPLog -Message "Series reader: skipping corrupt meta '$($f.Name)': $($_.Exception.Message)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedSeries' -CorrelationID $CorrelationID
+                }
+                continue
+            }
+            if ($null -eq $meta) { continue }
+
+            # Defensive meta-prop reads (PSCustomObjects from ConvertFrom-Json).
+            $campId = if ($null -ne $meta.PSObject.Properties['CampaignId'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.CampaignId)) { [string]$meta.CampaignId } else { '' }
+            $campName = if ($null -ne $meta.PSObject.Properties['CampaignName'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.CampaignName)) { [string]$meta.CampaignName } else { $campId }
+            $status = if ($null -ne $meta.PSObject.Properties['Status'] -and $null -ne $meta.Status) { [string]$meta.Status } else { '' }
+            $isPermanent = if ($null -ne $meta.PSObject.Properties['IsPermanent']) { [bool]$meta.IsPermanent } else { $false }
+            $capturedWhileActive = if ($null -ne $meta.PSObject.Properties['CapturedWhileActive']) { [bool]$meta.CapturedWhileActive } else { $false }
+            $unverified = if ($null -ne $meta.PSObject.Properties['Unverified']) { [bool]$meta.Unverified } else { $false }
+            $sealReason = if ($null -ne $meta.PSObject.Properties['SealReason'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.SealReason)) { [string]$meta.SealReason } else { $null }
+            $itemCount = if ($null -ne $meta.PSObject.Properties['ItemCount']) { [int]$meta.ItemCount } else { 0 }
+            $certCount = if ($null -ne $meta.PSObject.Properties['CertCount']) { [int]$meta.CertCount } else { 0 }
+
+            $cachedAt = [datetime]::MinValue
+            if ($null -ne $meta.PSObject.Properties['CachedAt'] -and -not [string]::IsNullOrWhiteSpace([string]$meta.CachedAt)) {
+                try {
+                    $cachedAt = [datetime]::Parse([string]$meta.CachedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+                }
+                catch { $cachedAt = [datetime]::MinValue }
+            }
+
+            # Skip metas with no usable campaign id (can't resolve siblings / series key).
+            if ([string]::IsNullOrWhiteSpace($campId)) {
+                if (Get-Command Write-SPLog -ErrorAction Ignore) {
+                    Write-SPLog -Message "Series reader: skipping meta '$($f.Name)' with no CampaignId" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedSeries' -CorrelationID $CorrelationID
+                }
+                continue
+            }
+
+            # 4. Derive the series key, threading overrides exactly like Group-SPCampaignSeries.
+            $keyArgs = @{ Name = $campName }
+            if ($PSBoundParameters.ContainsKey('SeriesStem')) { $keyArgs['SeriesStem'] = $SeriesStem }
+            if ($PSBoundParameters.ContainsKey('SeriesPattern')) { $keyArgs['SeriesPattern'] = $SeriesPattern }
+            $kr = Get-SPCampaignSeriesKey @keyArgs
+            if (-not $kr.Success) {
+                if (Get-Command Write-SPLog -ErrorAction Ignore) {
+                    Write-SPLog -Message "Series reader: series-key derivation failed for '$campName': $($kr.Error)" `
+                        -Severity WARN -Component 'SP.AuditQueries' -Action 'GetCachedSeries' -CorrelationID $CorrelationID
+                }
+                continue
+            }
+            $seriesStemVal = [string]$kr.Data.SeriesStem
+            $normalizedStem = [string]$kr.Data.NormalizedStem
+            $periodToken = [string]$kr.Data.PeriodToken
+            $periodType = [string]$kr.Data.PeriodType
+
+            # 5. Resolve sibling cache files with the SAME safe-id transform as the readers.
+            $safeCampId = $campId -replace '[^A-Za-z0-9_\-]', '_'
+            $itemsFile = Join-Path $effectiveCachePath "items-$safeCampId.jsonl"
+            $rosterFile = Join-Path $effectiveCachePath "roster-$safeCampId.json"
+
+            # 7. Chronological key: PeriodToken date if resolvable, else meta CachedAt.
+            $tokenDate = ConvertTo-SPSeriesChronoKey -Token $periodToken -PeriodType $periodType
+            if ($null -ne $tokenDate) {
+                $chronoKey = $tokenDate
+                $chronoSource = 'PeriodToken'
+            }
+            else {
+                $chronoKey = $cachedAt
+                $chronoSource = 'CachedAt'
+            }
+
+            # 6. NO-API, BOM-safe loaders. Closures capture the resolved paths (PS 5.1:
+            #    no $script: inside; .GetNewClosure() freezes $itemsFile / $rosterFile).
+            $loadItems = {
+                if (Test-Path $itemsFile) {
+                    $list = [System.Collections.Generic.List[object]]::new()
+                    Get-Content $itemsFile | ForEach-Object {
+                        if (-not [string]::IsNullOrWhiteSpace($_)) {
+                            $list.Add(($_ | ConvertFrom-Json))
+                        }
+                    }
+                    return , $list.ToArray()
+                }
+                return @()
+            }.GetNewClosure()
+
+            $loadRoster = {
+                if (Test-Path $rosterFile) {
+                    $r = Get-Content $rosterFile -Raw | ConvertFrom-Json
+                    if ($null -ne $r -and $null -ne $r.PSObject.Properties['Entries']) {
+                        return @($r.Entries)
+                    }
+                }
+                return @()
+            }.GetNewClosure()
+
+            $instances.Add([pscustomobject]@{
+                    CampaignId          = $campId
+                    CampaignName        = $campName
+                    Status              = $status
+                    IsPermanent         = $isPermanent
+                    CapturedWhileActive = $capturedWhileActive
+                    Unverified          = $unverified
+                    SealReason          = $sealReason
+                    CachedAt            = $cachedAt
+                    ItemCount           = $itemCount
+                    CertCount           = $certCount
+                    SeriesStem          = $seriesStemVal
+                    NormalizedStem      = $normalizedStem
+                    PeriodToken         = $periodToken
+                    PeriodType          = $periodType
+                    ChronoKey           = $chronoKey
+                    ChronoSource        = $chronoSource
+                    OrderIndex          = -1
+                    Campaign            = [pscustomobject]@{ id = $campId; name = $campName; status = $status }
+                    ItemsFile           = $itemsFile
+                    RosterFile          = $rosterFile
+                    MetaFile            = $f.FullName
+                    LoadItems           = $loadItems
+                    LoadRoster          = $loadRoster
+                })
+        }
+
+        # 8. Group by NormalizedStem (regular @{} -> .ContainsKey is fine, not OrderedDictionary).
+        $buckets = @{}
+        foreach ($inst in $instances) {
+            $ns = [string]$inst.NormalizedStem
+            if (-not $buckets.ContainsKey($ns)) {
+                $buckets[$ns] = New-Object System.Collections.Generic.List[object]
+            }
+            $buckets[$ns].Add($inst)
+        }
+
+        # 9/10. MinInstances filter + deterministic emission (series sorted by NormalizedStem;
+        #       instances sorted ascending by a single composite ChronoKey|CampaignId string key).
+        $series = New-Object System.Collections.Generic.List[object]
+        $totalInstances = 0
+        foreach ($ns in (@($buckets.Keys) | Sort-Object)) {
+            # .ToArray() before @() -- @()-wrapping a bare List[object] throws
+            # "Argument types do not match" on PS 5.1 (mirrors the Members.ToArray() pattern).
+            $members = @($buckets[$ns].ToArray())
+            if ($members.Count -lt $MinInstances) { continue }
+
+            $sorted = @($members | Sort-Object -Property @{ Expression = {
+                        '{0:o}|{1}' -f $_.ChronoKey, $_.CampaignId
+                    } })
+            for ($i = 0; $i -lt $sorted.Count; $i++) { $sorted[$i].OrderIndex = $i }
+
+            $first = $sorted[0]
+            $series.Add([ordered]@{
+                    SeriesStem     = [string]$first.SeriesStem
+                    NormalizedStem = $ns
+                    PeriodType     = [string]$first.PeriodType
+                    InstanceCount  = $sorted.Count
+                    Instances      = @($sorted)
+                })
+            $totalInstances += $sorted.Count
+        }
+
+        if (Get-Command Write-SPLog -ErrorAction Ignore) {
+            Write-SPLog -Message "Series reader: $($metaFiles.Count) meta(s) -> $($series.Count) series ($totalInstances instance(s) kept, MinInstances=$MinInstances)" `
+                -Severity INFO -Component 'SP.AuditQueries' -Action 'GetCachedSeries' -CorrelationID $CorrelationID
+        }
+
+        return @{
+            Success = $true
+            Error   = $null
+            Data    = [ordered]@{
+                CacheDir      = $effectiveCachePath
+                SeriesCount   = $series.Count
+                InstanceCount = $totalInstances
+                Series        = @($series.ToArray())
+            }
+        }
+    }
+    catch {
+        return @{ Success = $false; Data = $null; Error = "Get-SPCachedCampaignSeries failed: $($_.Exception.Message)" }
+    }
+}
+
 function Clear-SPAuditItemCache {
     <#
     .SYNOPSIS
@@ -7821,6 +8169,7 @@ Export-ModuleMember -Function @(
     'Test-SPSourceOnboardingReadiness',
     'Get-SPCachedCampaignItems',
     'Get-SPCachedCampaignRoster',
+    'Get-SPCachedCampaignSeries',
     'Get-SPAuditEffectiveCacheTtl',
     'Clear-SPAuditItemCache',
     'Clear-SPAuditAccountCache'
