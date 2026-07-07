@@ -260,6 +260,11 @@ function Set-SPCachedItem {
         }
         $s['ItemTtl'][$Key] = $TtlMinutes
     }
+    elseif ($s.ContainsKey('ItemTtl') -and $s['ItemTtl'].ContainsKey($Key)) {
+        # Re-set without an explicit TTL: drop any stale per-item override so the new value
+        # uses the store default rather than silently inheriting the old item TTL.
+        [void]$s['ItemTtl'].Remove($Key)
+    }
 
     # Auto-append to disk if the store has a DiskPath and DiskAutoAppend is true
     if (-not $NoPersist -and
@@ -428,9 +433,11 @@ function Export-SPCacheStore {
             TtlMinutes = $ttlVal
         }
 
-        $jsonArgs = @{ InputObject = $rec; Depth = 6 }
-        if ($Compress) { $jsonArgs['Compress'] = $true }
-        [void]$sb.AppendLine((ConvertTo-Json @jsonArgs))
+        # JSONL requires exactly ONE record per physical line. ConvertTo-Json WITHOUT -Compress
+        # emits multi-line (pretty) JSON, which Import-SPCacheStore (reads line-by-line) silently
+        # fails to parse -> every record is lost. So each record is ALWAYS written single-line,
+        # regardless of the -Compress switch (kept only for call-signature back-compat).
+        [void]$sb.AppendLine((ConvertTo-Json -InputObject $rec -Depth 6 -Compress))
     }
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -722,9 +729,10 @@ function Compress-SPCacheStore {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($tmpPath, $sb.ToString(), $utf8NoBom)
 
-    # Rename .tmp to target (overwrite if exists)
-    if (Test-Path $Path) { Remove-Item $Path -Force }
-    Rename-Item -Path $tmpPath -NewName (Split-Path -Leaf $Path) -Force
+    # Atomic replace: no Remove-then-Rename gap that could lose the file if the process crashes
+    # between the two. [IO.File]::Replace is atomic on NTFS (requires the destination to exist).
+    if (Test-Path $Path) { [System.IO.File]::Replace($tmpPath, $Path, [NullString]::Value) }
+    else { Move-Item -Path $tmpPath -Destination $Path -Force }
 
     return @{ Before = $before; After = $after; Pruned = $pruned }
 }

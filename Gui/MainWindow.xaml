@@ -1176,16 +1176,19 @@
 
                         <Button Grid.Column="2" x:Name="BtnCampaignDiff"
                                 Content="Campaign Diff"
+                                ToolTip="Compare two campaigns (e.g. today vs yesterday) and open the day-over-day scope-diff report."
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
                         <Button Grid.Column="3" x:Name="BtnCertTracker"
                                 Content="Cert Tracker"
+                                ToolTip="Generate the executive certification progress tracker report for active campaigns."
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 
                         <Button Grid.Column="4" x:Name="BtnDailyEvidence"
                                 Content="Daily Evidence"
+                                ToolTip="Generate the daily evidence report (V4/V4b) for the campaigns currently in scope."
                                 Style="{StaticResource SecondaryButton}"
                                 Margin="0,0,6,0"/>
 

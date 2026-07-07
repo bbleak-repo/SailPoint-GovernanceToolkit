@@ -79,7 +79,9 @@
         # SP.Auth exports
         'Get-SPAuthToken',
         'Set-SPBrowserToken',
-        'Clear-SPAuthToken'
+        'Clear-SPAuthToken',
+        'Get-SPMachineDerivedPassphrase',
+        'Get-SPScheduledVaultSecret'
     )
 
     # Cmdlets to export from this module

@@ -629,6 +629,16 @@ if ($trendRecords.Count -eq 0) {
     exit 5
 }
 
+# Detect mode: cross-campaign (multiple campaignIds) or within-campaign (same campaign,
+# multiple captures). Computed BEFORE the metadata block below, which reads both vars --
+# under Set-StrictMode v1 reading them before assignment is a terminating error.
+$distinctCampIds = @{}
+foreach ($rec in $trendRecords) {
+    $cid = [string]$rec.campaignId
+    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
+}
+$isCrossCampaign = ($distinctCampIds.Count -gt 1)
+
 # Resolve campaign metadata from the latest record
 $latestRecord = $trendRecords[$trendRecords.Count - 1]
 if ($isCrossCampaign) {
@@ -662,14 +672,8 @@ Write-Host ''
 
 Write-Host '  Step 4: Build daily data from trend records' -ForegroundColor Cyan
 
-# Detect mode: cross-campaign (multiple campaignIds) or within-campaign (same campaign, multiple captures)
-$distinctCampIds = @{}
-foreach ($rec in $trendRecords) {
-    $cid = [string]$rec.campaignId
-    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
-}
-$isCrossCampaign = ($distinctCampIds.Count -gt 1)
-
+# (mode detection $distinctCampIds / $isCrossCampaign moved above the Step-3 metadata
+# block, which reads these vars; recomputing here would be redundant.)
 if ($isCrossCampaign) {
     Write-Host "    Mode: Cross-campaign ($($distinctCampIds.Count) campaigns -> 1 data point each)" -ForegroundColor DarkGray
 }
@@ -785,6 +789,7 @@ foreach ($dayKey in $filteredKeys) {
         Pending       = $pending
         CompletionPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
         ScopeAdded    = $null  # set below after baseline detection
+        RawScopeAdded = [int](Get-V5MetricVal $m 'scope.added' 0)  # captured from THIS day's record ($m)
         ScopeRemoved  = [int](Get-V5MetricVal $m 'scope.removed' 0)
         PrivPending   = [int](Get-V5MetricVal $m 'counts.privPending' 0)
         PrivTotal     = [int](Get-V5MetricVal $m 'risk.privilegedTotal' 0)
@@ -796,7 +801,11 @@ foreach ($dayKey in $filteredKeys) {
 # ScopeAdded to 0 for baseline captures. This handles the scenario where a failed run
 # (e.g., reassignment error) causes the retry to have no valid prior snapshot.
 foreach ($d in $dailyData) {
-    $rawScopeAdded = [int](Get-V5MetricVal ($trendRecords[$dailyData.IndexOf($d)].metrics) 'scope.added' 0)
+    # Read scope.added from THIS day's own record (captured as RawScopeAdded during the build
+    # loop above), NOT by indexing $trendRecords with a position taken from the deduped/filtered
+    # $dailyData -- those two lists are not positionally aligned once dedup or the derived-date
+    # filter drops any record, so the old index pulled scope.added from a mismatched record.
+    $rawScopeAdded = [int]$d.RawScopeAdded
     if ($rawScopeAdded -ge $d.Total -and $d.Total -gt 0) {
         # Scope.added >= total items = baseline capture (no valid prior snapshot)
         $d.ScopeAdded = 0

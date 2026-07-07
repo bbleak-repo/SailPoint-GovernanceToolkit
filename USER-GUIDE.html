@@ -1326,19 +1326,43 @@ body {
 <p><strong>Security properties:</strong></p>
 <ul><li>Encrypted to the Windows user account + machine via DPAPI</li><li>If the file is copied to another machine or user, decryption fails</li><li>No passphrase needed at runtime -- suitable for Task Scheduler</li><li><strong>Risk:</strong> Mimikatz and similar credential dumping tools can extract DPAPI master keys from process memory. Some EDR/endpoint protection systems flag DPAPI operations in non-interactive sessions. Discuss with your SOC/EDR team before deploying.</li></ul>
 <div class="callout callout-info"><div class="callout-label">Note</div><p><strong>When to use:</strong> when your EDR team approves DPAPI-based credential storage, or in environments without aggressive endpoint monitoring. Simplest automation setup.</p></div>
-<h3 id="5-5-scheduledvault-automation-option-b-no-dpapi">5.5 ScheduledVault (automation option B -- no DPAPI)</h3>
-<p>Uses the toolkit's <strong>own AES-256-CBC encryption</strong> (same crypto as the vault) to store the vault passphrase encrypted with a <strong>machine-derived key</strong>. No DPAPI involved -- no Mimikatz/EDR concerns. Requires the regular vault (§5.3) to be set up first.</p>
+<h3 id="5-5-scheduledvault-automation-option-b-machine-bound-key-dpapi-optional">5.5 ScheduledVault (automation option B -- machine-bound key, DPAPI optional)</h3>
+<p>Stores the vault passphrase encrypted with a <strong>machine-derived key</strong> using the toolkit's own AES-256-CBC crypto (same as the vault). The key mixes in a <strong>per-install random secret</strong> so it is <strong>not derivable</strong> from public machine, user, and domain values. Requires the regular vault (§5.3) first.</p>
+<div class="callout callout-danger"><div class="callout-label">Security</div><p><strong>Important (this was a security gap):</strong> earlier versions derived the key purely from a SHA-256 of machine, user, domain, and a salt shipped in the repo -- all <em>public</em> values. Anyone who copied the key file and the vault file could recompute the key and <strong>decrypt offline on any machine</strong>. The per-install secret closes that hole.</p></div>
 <pre><code># Step 1: Set up the regular vault first (if not already done)
 .\Scripts\New-SPVault.ps1 -Mode Vault
 
-# Step 2: Create the scheduled key (prompts for the vault passphrase to verify it)
-.\Scripts\New-SPVault.ps1 -Mode ScheduledVault</code></pre>
-<p>Then set <code>Authentication.Mode = "ScheduledVault"</code>. The encrypted key is created at <code>Authentication.ScheduledVault.KeyPath</code> (default <code>.\Data\sp-scheduled-key.enc</code>).</p>
+# Step 2: Create the scheduled key (recommended: DPAPI-protected secret -- the default)
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault
+
+#   ...or EDR-quiet (no DPAPI):
+.\Scripts\New-SPVault.ps1 -Mode ScheduledVault -KeyProtection AclFile</code></pre>
+<p>Then set <code>Authentication.Mode = "ScheduledVault"</code>. The key is at <code>Authentication.ScheduledVault.KeyPath</code> (default <code>.\Data\sp-scheduled-key.enc</code>); the per-install secret is at <code>.\Data\.sv-secret</code> (gitignored -- never commit it).</p>
 <p><strong>How it works:</strong></p>
-<ol><li>Your vault passphrase is encrypted using AES-256-CBC + PBKDF2 (same as the vault)</li><li>The encryption key is derived from <code>SHA-256(MachineName|UserName|DomainName|static-salt)</code></li><li>At runtime, the machine identity is reconstructed, the passphrase is decrypted, and the regular vault is opened -- no human input needed</li><li>If the key file is copied to another machine/user, decryption fails (different identity)</li></ol>
-<p><strong>Security properties:</strong></p>
-<ul><li>Uses the same AES-256-CBC + HMAC-SHA256 crypto as the vault -- no DPAPI</li><li>Key is derived from machine identity -- not extractable by Mimikatz</li><li>No EDR/endpoint protection alerts</li><li>Requires the regular vault to be set up first (two-layer security)</li></ul>
-<div class="callout callout-danger"><div class="callout-label">Security</div><p><strong>When to use:</strong> when your SOC/EDR team prohibits DPAPI or you want zero endpoint monitoring alerts. Slightly more setup (two steps) but cleanest from a security tooling perspective.</p></div>
+<ol><li>Your vault passphrase is encrypted with AES-256-CBC + PBKDF2 (same as the vault)</li><li>The encryption key is a SHA-256 over machine, user, domain, a static salt, AND the per-install secret</li><li>At runtime the key is reconstructed, the passphrase is decrypted, and the vault opens -- no human input</li><li>Copying the files to another machine or user fails to decrypt (different identity; and in Dpapi mode the secret itself will not unprotect off-box)</li></ol>
+<p><strong>Key-protection modes</strong> (<code>-KeyProtection</code>, or <code>Authentication.ScheduledVault.KeyProtection</code>):</p>
+<table>
+<thead><tr>
+<th>Mode</th>
+<th>How the per-install secret is stored</th>
+<th>Off-box decryption if every file is exfiltrated?</th>
+<th>EDR / SOC</th>
+</tr></thead><tbody>
+<tr>
+<td><strong><code>Dpapi</code></strong> (default, recommended)</td>
+<td>DPAPI-protected (CurrentUser)</td>
+<td>No -- DPAPI will not unprotect off the box or user</td>
+<td>ProtectedData calls may be flagged</td>
+</tr>
+<tr>
+<td><strong><code>AclFile</code></strong> (EDR-quiet)</td>
+<td>Raw random blob in an NTFS-ACL-locked file (no DPAPI)</td>
+<td>Possible -- if the attacker can also read the ACL-locked secret file</td>
+<td>No DPAPI, so no endpoint alerts</td>
+</tr>
+</tbody></table>
+<p>Both are far stronger than the old public-only key. <strong>Prefer <code>Dpapi</code></strong> unless your SOC/EDR team prohibits DPAPI; in that case <code>AclFile</code> still removes the "derivable from the repo" weakness while staying endpoint-quiet -- just keep the secret file's ACLs sound.</p>
+<div class="callout callout-info"><div class="callout-label">Note</div><p><strong>Note:</strong> <code>DpapiCredential</code> (§5.4) remains the simplest genuinely-secure unattended mode. Use ScheduledVault when you specifically want the AES-vault plus machine-binding model.</p></div>
 <h3 id="5-3-1-choosing-an-automation-mode">5.3.1 Choosing an automation mode</h3>
 <table>
 <thead><tr>
@@ -1375,11 +1399,11 @@ body {
 </tr>
 <tr>
 <td><strong>ScheduledVault</strong></td>
-<td><code>New-SPVault.ps1 -Mode ScheduledVault</code></td>
+<td><code>New-SPVault.ps1 -Mode ScheduledVault [-KeyProtection Dpapi/AclFile]</code></td>
 <td>No</td>
-<td>No</td>
-<td>None</td>
-<td>Automation without EDR concerns</td>
+<td>Optional</td>
+<td>Dpapi: flaggable / AclFile: none</td>
+<td>Automation; machine-bound AES vault</td>
 </tr>
 <tr>
 <td><strong>BrowserToken</strong></td>

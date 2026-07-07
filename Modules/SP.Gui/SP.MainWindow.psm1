@@ -4794,6 +4794,9 @@ function Invoke-GuiCampaignDiff {
                         -not [string]::IsNullOrWhiteSpace($reportResult.Data.OutputPath) -and
                         (Test-Path $reportResult.Data.OutputPath) -and
                         $reportResult.Data.OutputPath -match '\.html$') {
+                        # Let the runspace-written file fully flush/unlock before the browser
+                        # opens it, else it can render a blank/partial page. (MacBook-validation fix.)
+                        Wait-SPReportFileReady -Path $reportResult.Data.OutputPath | Out-Null
                         Start-Process $reportResult.Data.OutputPath
                     }
                 }
@@ -4896,6 +4899,7 @@ function Invoke-GuiCertTracker {
                 }
                 # Open the generated HTML report
                 if (-not [string]::IsNullOrWhiteSpace($d.HtmlFile) -and (Test-Path $d.HtmlFile)) {
+                    Wait-SPReportFileReady -Path $d.HtmlFile | Out-Null
                     Start-Process $d.HtmlFile
                 }
             }
@@ -5115,6 +5119,7 @@ function Invoke-GuiDailyEvidence {
                             if ($null -ne $result -and $result.Success -and
                                 -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
                                 (Test-Path $result.Data.HtmlPath)) {
+                                Wait-SPReportFileReady -Path $result.Data.HtmlPath | Out-Null
                                 Start-Process $result.Data.HtmlPath
                             }
                         }
@@ -5293,6 +5298,7 @@ function Invoke-GuiEntitlementHistory {
                             if ($null -ne $result -and $result.Success -and
                                 -not [string]::IsNullOrWhiteSpace($result.Data.HtmlPath) -and
                                 (Test-Path $result.Data.HtmlPath)) {
+                                Wait-SPReportFileReady -Path $result.Data.HtmlPath | Out-Null
                                 Start-Process $result.Data.HtmlPath
                             }
                         }

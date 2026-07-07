@@ -46,7 +46,14 @@ function _TQ_GetPeriodKey {
         'Weekly'  {
             $cal = [System.Globalization.CultureInfo]::InvariantCulture.Calendar
             $wn  = $cal.GetWeekOfYear($Dt, [System.Globalization.CalendarWeekRule]::FirstFourDayWeek, [System.DayOfWeek]::Monday)
-            return "$($Dt.ToString('yyyy'))-W$($wn.ToString('D2'))"
+            # ISO week-numbering YEAR (not the calendar year): pairing $wn with $Dt.Year
+            # collides across the year boundary -- e.g. 2019-12-31 (ISO 2020-W01) and
+            # 2019-01-02 (2019-W01) would both key '2019-W01'. PS 5.1 has no [ISOWeek];
+            # apply the standard Dec/Jan correction. (no [ISOWeek] in .NET Framework / PS 5.1)
+            $weekYear = $Dt.Year
+            if ($wn -ge 52 -and $Dt.Month -eq 1)      { $weekYear = $Dt.Year - 1 }
+            elseif ($wn -eq 1 -and $Dt.Month -eq 12)  { $weekYear = $Dt.Year + 1 }
+            return "$($weekYear.ToString('D4'))-W$($wn.ToString('D2'))"
         }
         'Monthly' { return $Dt.ToString('yyyy-MM') }
     }
