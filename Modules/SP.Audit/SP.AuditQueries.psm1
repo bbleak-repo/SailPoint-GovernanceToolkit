@@ -7151,8 +7151,11 @@ function Get-SPCachedCampaignItems {
 
     # ---------------------------------------------------------------------------
     # Layer 1: memory cache check
+    # -RefreshCache skips BOTH read layers (its contract is "skip read but DO
+    # write" -- without this, a valid cache hit returned early and a permanent
+    # COMPLETED campaign could never be refreshed at all).
     # ---------------------------------------------------------------------------
-    if (-not $NoCache -and $script:_ItemMemCache.ContainsKey($campId)) {
+    if (-not $NoCache -and -not $RefreshCache -and $script:_ItemMemCache.ContainsKey($campId)) {
         $memEntry = $script:_ItemMemCache[$campId]
         $memValid = $memEntry.IsPermanent -or
                     ((Get-Date) - $memEntry.CachedAt).TotalMinutes -lt $effectiveTtl
@@ -7173,9 +7176,9 @@ function Get-SPCachedCampaignItems {
     }
 
     # ---------------------------------------------------------------------------
-    # Layer 2: disk cache check
+    # Layer 2: disk cache check (-RefreshCache skips reads here too; see layer 1)
     # ---------------------------------------------------------------------------
-    if (-not $NoCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
+    if (-not $NoCache -and -not $RefreshCache -and $isCacheable -and (Test-Path $itemsFile) -and (Test-Path $metaFile)) {
         try {
             $meta = Get-Content $metaFile -Raw | ConvertFrom-Json
             # Parse with RoundtripKind to handle both old 'Z'-suffixed and new 'o'-format timestamps correctly on PS 5.1
@@ -7287,7 +7290,11 @@ function Get-SPCachedCampaignItems {
     # interrupted long pull resumes where it left off instead of restarting.
     $doneCertIds = @{}
     $resuming    = $false
-    if ($isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) {
+    # Resume only applies to a DEFAULT fetch. -NoCache promises fully fresh data
+    # (a leftover partial must not be silently blended in) and -RefreshCache
+    # promises a full re-pull that replaces whatever is on disk.
+    if (-not $NoCache -and -not $RefreshCache -and
+        $isCacheable -and (Test-Path $itemsFile) -and -not (Test-Path $metaFile)) {
         try {
             Get-Content $itemsFile | ForEach-Object {
                 if ([string]::IsNullOrWhiteSpace($_)) { return }
@@ -7417,15 +7424,19 @@ function Get-SPCachedCampaignItems {
     # When -NoCache was specified, skip writing back so the existing cache is preserved
     # for comparison or rollback. The fresh data is only used for this run.
     # ---------------------------------------------------------------------------
-    if ($NoCache) {
-        if ($RefreshCache) {
-            Write-Host "  [Cache] RefreshCache mode -- fresh data will overwrite existing cache." -ForegroundColor Cyan
-        }
-        else {
-            Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
-        }
+    if ($NoCache -and -not $RefreshCache) {
+        # Pure -NoCache: fresh data is used for this run only; disk cache untouched.
+        # (-NoCache -RefreshCache falls through to the write branches below so the
+        # meta sidecar is rewritten alongside the streamed items -- previously the
+        # combo left the OLD meta paired with the NEW items file, and the stale
+        # Status=ACTIVE meta made the seal-on-transition path stamp freshly fetched
+        # post-completion data as CapturedWhileActive.)
+        Write-Host "  [Cache] NoCache mode -- existing cache preserved (not overwritten)." -ForegroundColor DarkYellow
     }
     elseif ($writeToCache -and $allItems.Count -gt 0) {
+        if ($RefreshCache) {
+            Write-Host "  [Cache] RefreshCache mode -- fresh data overwrote existing cache." -ForegroundColor Cyan
+        }
         try {
             # WI-4 (G1): stamp capture-provenance onto the items meta. Recover a STICKY
             # first-seen status from any prior meta still on disk (metaFile is only
@@ -7533,13 +7544,19 @@ function Get-SPCachedCampaignItems {
         try { [System.IO.File]::Delete($itemsFile) } catch { }
     }
 
-    $memEntry3 = @{
-        Items       = $allItems.ToArray()
-        CachedAt    = Get-Date
-        CertCount   = $certs.Count
-        IsPermanent = $isPermanent
+    # Pure -NoCache promises the fresh data is "only used for this run" -- do not
+    # store it in the session memory cache either, or the next default call would
+    # serve this bypass fetch (marked permanent for COMPLETED campaigns) instead of
+    # the preserved honest disk cache.
+    if (-not ($NoCache -and -not $RefreshCache)) {
+        $memEntry3 = @{
+            Items       = $allItems.ToArray()
+            CachedAt    = Get-Date
+            CertCount   = $certs.Count
+            IsPermanent = $isPermanent
+        }
+        $script:_ItemMemCache[$campId] = $memEntry3
     }
-    $script:_ItemMemCache[$campId] = $memEntry3
 
     return @{
         Success   = $true
