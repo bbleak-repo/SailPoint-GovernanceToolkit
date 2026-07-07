@@ -549,13 +549,20 @@ function Get-SPAuthToken {
         #    this guard covers the same-process corner case.
         if (-not $Force) {
             try {
-                # Determine the configured tenant URL for this toolkit instance
+                # Determine the configured tenant URL for this toolkit instance.
+                # The config must be loaded HERE: the main `$config = Get-SPConfig`
+                # assignment happens further down, AFTER the cache checks. This block
+                # previously read the not-yet-assigned $config, so $configTenantUrl was
+                # always '' -- the mismatch eviction below could never fire and
+                # TenantUrl was never stored with the token (the guard was dead code).
                 $configTenantUrl = ''
-                if ($null -ne $config -and
-                    $null -ne $config.PSObject.Properties['Authentication'] -and
-                    $null -ne $config.Authentication.PSObject.Properties['ConfigFile'] -and
-                    $null -ne $config.Authentication.ConfigFile.PSObject.Properties['TenantUrl']) {
-                    $configTenantUrl = [string]$config.Authentication.ConfigFile.TenantUrl
+                $guardConfig = $null
+                try { $guardConfig = Get-SPConfig } catch { }
+                if ($null -ne $guardConfig -and
+                    $null -ne $guardConfig.PSObject.Properties['Authentication'] -and
+                    $null -ne $guardConfig.Authentication.PSObject.Properties['ConfigFile'] -and
+                    $null -ne $guardConfig.Authentication.ConfigFile.PSObject.Properties['TenantUrl']) {
+                    $configTenantUrl = [string]$guardConfig.Authentication.ConfigFile.TenantUrl
                 }
 
                 # If a cached token exists for a DIFFERENT tenant, evict it now
@@ -608,6 +615,16 @@ function Get-SPAuthToken {
 
         $config = Get-SPConfig
         $mode   = $config.Authentication.Mode
+
+        # (Re)compute the tenant URL for the cache-store step at the bottom -- the
+        # guard-scope value above is not populated on -Force calls, and storing
+        # TenantUrl alongside the token is what arms the isolation guard.
+        $configTenantUrl = ''
+        if ($null -ne $config.PSObject.Properties['Authentication'] -and
+            $null -ne $config.Authentication.PSObject.Properties['ConfigFile'] -and
+            $null -ne $config.Authentication.ConfigFile.PSObject.Properties['TenantUrl']) {
+            $configTenantUrl = [string]$config.Authentication.ConfigFile.TenantUrl
+        }
 
         # Resolve credentials based on mode
         $creds = $null
@@ -781,7 +798,11 @@ function Set-SPBrowserToken {
         # guard can evict this entry when switching to a different tenant.
         $browserTenantUrl = ''
         try {
-            $payloadB64 = $segments[1].PadRight(($segments[1].Length + 3) -band -bnot 3, '=')
+            # JWT segments are base64URL-encoded: map the URL-safe alphabet back to
+            # standard base64 before padding, or FromBase64String throws on any
+            # payload containing '-' / '_' (i.e. most real tokens).
+            $payloadB64 = $segments[1].Replace('-', '+').Replace('_', '/')
+            $payloadB64 = $payloadB64.PadRight((($payloadB64.Length + 3) -band -bnot 3), '=')
             $payloadJson = [System.Text.Encoding]::UTF8.GetString(
                 [System.Convert]::FromBase64String($payloadB64))
             $payloadObj  = $payloadJson | ConvertFrom-Json
