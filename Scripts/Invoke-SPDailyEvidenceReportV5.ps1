@@ -629,6 +629,16 @@ if ($trendRecords.Count -eq 0) {
     exit 5
 }
 
+# Detect mode BEFORE resolving metadata: cross-campaign (multiple campaignIds) or
+# within-campaign (same campaign, multiple captures). This must run before the
+# $isCrossCampaign branch below -- under Set-StrictMode reading it unassigned throws.
+$distinctCampIds = @{}
+foreach ($rec in $trendRecords) {
+    $cid = [string]$rec.campaignId
+    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
+}
+$isCrossCampaign = ($distinctCampIds.Count -gt 1)
+
 # Resolve campaign metadata from the latest record
 $latestRecord = $trendRecords[$trendRecords.Count - 1]
 if ($isCrossCampaign) {
@@ -662,14 +672,8 @@ Write-Host ''
 
 Write-Host '  Step 4: Build daily data from trend records' -ForegroundColor Cyan
 
-# Detect mode: cross-campaign (multiple campaignIds) or within-campaign (same campaign, multiple captures)
-$distinctCampIds = @{}
-foreach ($rec in $trendRecords) {
-    $cid = [string]$rec.campaignId
-    if (-not [string]::IsNullOrWhiteSpace($cid)) { $distinctCampIds[$cid] = $true }
-}
-$isCrossCampaign = ($distinctCampIds.Count -gt 1)
-
+# Mode ($isCrossCampaign / $distinctCampIds) was detected in Step 3 before
+# campaign-metadata resolution, which consumes it.
 if ($isCrossCampaign) {
     Write-Host "    Mode: Cross-campaign ($($distinctCampIds.Count) campaigns -> 1 data point each)" -ForegroundColor DarkGray
 }
