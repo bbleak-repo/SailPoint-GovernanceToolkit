@@ -1396,14 +1396,22 @@ function Export-SPAuditHtml {
         # Sanitize and truncate campaign name for the filename component.
         # Full campaign names (e.g. "Daily Attestation Manager Campaign - Monday, June 08, 2026")
         # exceed MAX_PATH (260) when combined with the containing directory path.
-        # Cap at 35 chars: prefix "campaign-audit-" (15) + 35 + "-YYYYMMDD-HHMMSS.html" (21) = 71-char filename.
+        # Cap at 35 chars: prefix "campaign-audit-" (15) + 35 + id suffix (9) + "-YYYYMMDD-HHMMSS.html" (21) = 80-char filename.
         $safeName  = ($campName -replace '[\\/:*?"<>|\s,.]', '-' -replace '-{2,}', '-').Trim('-')
         if ($safeName.Length -gt 35) { $safeName = $safeName.Substring(0, 35).TrimEnd('-') }
         if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = 'campaign' }
-        $fileName  = "campaign-audit-${safeName}-${timestamp}.html"
+        # Disambiguate with the campaign id: truncated daily-campaign names
+        # ("Daily Attestation Manager Campaign - <weekday>...") collapse to the SAME
+        # 35-char prefix, and $timestamp is computed once per run -- without a unique
+        # suffix each campaign's file overwrites the previous one (and TOC anchors collide).
+        $campIdRaw = if ($audit.ContainsKey('CampaignId')) { [string]$audit['CampaignId'] } else { '' }
+        $idSuffix  = ($campIdRaw -replace '[^A-Za-z0-9]', '')
+        if ($idSuffix.Length -gt 8) { $idSuffix = $idSuffix.Substring($idSuffix.Length - 8) }
+        if ([string]::IsNullOrWhiteSpace($idSuffix)) { $idSuffix = '{0:D3}' -f $writtenFiles.Count }
+        $fileName  = "campaign-audit-${safeName}-${idSuffix}-${timestamp}.html"
         $filePath  = Join-Path -Path $OutputPath -ChildPath $fileName
 
-        $anchorId  = "campaign-$safeName"
+        $anchorId  = "campaign-$safeName-$idSuffix"
         $bodyHtml  = Build-SingleCampaignHtml -CampaignAudit $audit -AnchorId $anchorId -DetailLevel $DetailLevel
 
         $perCampaignHtml = $htmlOpen + $bodyHtml + $metaSection + $footerHtml + $htmlClose
@@ -1709,7 +1717,12 @@ function Export-SPAuditText {
         $safeName = ($campName -replace '[\\/:*?"<>|\s,.]', '-' -replace '-{2,}', '-').Trim('-')
         if ($safeName.Length -gt 35) { $safeName = $safeName.Substring(0, 35).TrimEnd('-') }
         if ([string]::IsNullOrWhiteSpace($safeName)) { $safeName = 'campaign' }
-        $fileName = "campaign-audit-${safeName}-${timestamp}.txt"
+        # Same campaign-id disambiguation as the HTML export: truncated daily-campaign
+        # names collapse to one 35-char prefix and would overwrite each other.
+        $idSuffix = ($campId -replace '[^A-Za-z0-9]', '')
+        if ($idSuffix.Length -gt 8) { $idSuffix = $idSuffix.Substring($idSuffix.Length - 8) }
+        if ([string]::IsNullOrWhiteSpace($idSuffix)) { $idSuffix = '{0:D3}' -f $writtenFiles.Count }
+        $fileName = "campaign-audit-${safeName}-${idSuffix}-${timestamp}.txt"
         $filePath = Join-Path -Path $OutputPath -ChildPath $fileName
 
         $content = $lines -join "`r`n"
