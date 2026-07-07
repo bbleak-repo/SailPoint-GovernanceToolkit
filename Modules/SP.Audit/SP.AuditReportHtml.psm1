@@ -1346,7 +1346,7 @@ function Export-SPAuditHtml {
     $metaRowsHtml = ''
     if ($null -ne $RunMetadata) {
         foreach ($key in $RunMetadata.Keys) {
-            $metaRowsHtml += "<tr><td style=""padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $key)</td><td style=""padding:6px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe [string]$RunMetadata[$key])</td></tr>`n"
+            $metaRowsHtml += "<tr><td style=""padding:6px 10px; font-weight:bold; width:200px; background:#f4f4f4; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe $key)</td><td style=""padding:6px 10px; border-bottom:1px solid #e0e0e0;"">$(ConvertTo-SPHtmlSafe ([string]$RunMetadata[$key]))</td></tr>`n"
         }
     }
 
@@ -2988,7 +2988,7 @@ function Export-SPLeadershipLevelHtml {
 <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
 <thead>
 <tr>
-    <th $thStyle>$(ConvertTo-SPHtmlSafe [string]($lowerLevelLabel -replace 's$', ''))</th>
+    <th $thStyle>$(ConvertTo-SPHtmlSafe ([string]($lowerLevelLabel -replace 's$', '')))</th>
     <th $thStyle>Total</th>
     <th $thStyle>Approved</th>
     <th $thStyle>Revoked</th>
@@ -11044,9 +11044,9 @@ function _Render-SPHierarchyNodeHtml {
                     'revoke'  { '#CC3333' }
                     default   { '#FF8800' }
                 }
-                $accessName  = ConvertTo-SPHtmlSafe [string]$item.AccessName
-                $accessType  = ConvertTo-SPHtmlSafe [string]$item.AccessType
-                $sourceName  = ConvertTo-SPHtmlSafe [string]$item.SourceName
+                $accessName  = ConvertTo-SPHtmlSafe ([string]$item.AccessName)
+                $accessType  = ConvertTo-SPHtmlSafe ([string]$item.AccessType)
+                $sourceName  = ConvertTo-SPHtmlSafe ([string]$item.SourceName)
                 $decDate     = [string]$item.DecisionDate
                 $decDisplay  = $dec
                 $rowsHtml += @"
@@ -11454,7 +11454,7 @@ function Export-SPMasterLeadershipHtml {
         New-Item -Path $runDir -ItemType Directory -Force | Out-Null
         $topNodes  = @($HierarchyData.TopNodes)
         $files     = [System.Collections.Generic.List[string]]::new()
-        $enc       = { param($s) ConvertTo-SPHtmlSafe [string]$s }
+        $enc       = { param($s) ConvertTo-SPHtmlSafe ([string]$s) }
 
         # DFS collect every node in a subtree.
         $collectNodes = {
