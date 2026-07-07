@@ -401,9 +401,12 @@ function Invoke-SPApiRequest {
                 ErrorAction = 'Stop'
             }
 
-            # Attach body for mutating methods
+            # Attach body for mutating methods.
+            # -InputObject (not pipeline): piping unrolls a single-element array, so a
+            # one-operation RFC 6902 JSON Patch would serialize as {...} instead of
+            # [{...}] and ISC rejects it with 400.
             if ($Method -in @('POST', 'PUT', 'PATCH') -and $null -ne $Body) {
-                $invokeParams['Body']        = $Body | ConvertTo-Json -Depth 20
+                $invokeParams['Body']        = ConvertTo-Json -InputObject $Body -Depth 20
                 $invokeParams['ContentType'] = $ContentType
             }
 

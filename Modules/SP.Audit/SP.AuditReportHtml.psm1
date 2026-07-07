@@ -4157,7 +4157,11 @@ function Export-SPAuditCsv {
             if ($null -ne $rubberStampRisk -and $rubberStampRisk -is [hashtable] -and
                 $rubberStampRisk.ContainsKey('ReviewerRisks') -and $null -ne $rubberStampRisk['ReviewerRisks']) {
                 foreach ($rr in @($rubberStampRisk['ReviewerRisks'])) {
-                    $rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }
+                    # Measure-SPAuditRubberStampRisk emits .ReviewerName (not .Name);
+                # accept both shapes like Export-SPCampaignCompletionReport does.
+                $rrName = if ($null -ne $rr.ReviewerName) { [string]$rr.ReviewerName }
+                          elseif ($null -ne $rr.Name)     { [string]$rr.Name }
+                          else { '' }
                     if (-not [string]::IsNullOrWhiteSpace($rrName)) {
                         $riskLookup[$rrName] = if ($null -ne $rr.Severity) { [string]$rr.Severity } else { 'None' }
                     }
@@ -6864,7 +6868,11 @@ function Export-SPGovernanceBIData {
         if ($null -ne $rubberStampRisk -and $rubberStampRisk -is [hashtable] -and
             $rubberStampRisk.ContainsKey('ReviewerRisks') -and $null -ne $rubberStampRisk['ReviewerRisks']) {
             foreach ($rr in @($rubberStampRisk['ReviewerRisks'])) {
-                $rrName = if ($null -ne $rr.Name) { [string]$rr.Name } else { '' }
+                # Measure-SPAuditRubberStampRisk emits .ReviewerName (not .Name);
+                # accept both shapes like Export-SPCampaignCompletionReport does.
+                $rrName = if ($null -ne $rr.ReviewerName) { [string]$rr.ReviewerName }
+                          elseif ($null -ne $rr.Name)     { [string]$rr.Name }
+                          else { '' }
                 if (-not [string]::IsNullOrWhiteSpace($rrName)) {
                     $riskLookup[$rrName] = if ($null -ne $rr.Severity) { [string]$rr.Severity } else { 'None' }
                 }

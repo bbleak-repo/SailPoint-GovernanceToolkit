@@ -377,8 +377,11 @@ function Get-SPIdentityDetail {
             -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {
-            # Transient miss -- cache in memory only, do not persist to disk
-            Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
+            # Transient miss -- cache in memory only with a SHORT per-item TTL, do not
+            # persist to disk. The store itself never expires (TtlMinutes=0), so caching
+            # a 429/timeout without a TTL used to poison the identity as Found=$false
+            # (blank name/manager in every report) for the entire session.
+            Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist -TtlMinutes 15
             return $emptyResult
         }
 
@@ -477,8 +480,8 @@ function Get-SPIdentityDetail {
             -Message "Get-SPIdentityDetail failed for '$IdentityId': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Get-SPIdentityDetail' `
             -CorrelationID $CorrelationID
-        # Transient miss -- cache in memory only, do not persist to disk
-        Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist
+        # Transient miss -- cache in memory only with a SHORT per-item TTL (see above)
+        Set-SPCachedItem -Store 'SPIdentity' -Key $IdentityId -Value $emptyResult -NoPersist -TtlMinutes 15
         return $emptyResult
     }
 }
@@ -550,7 +553,9 @@ function Search-SPIdentityByEmail {
             -Body $searchBody -CorrelationID $CorrelationID
 
         if (-not $result.Success -or $null -eq $result.Data) {
-            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+            # API failure (not a genuine zero-hit search): short TTL so a transient
+            # 429/timeout doesn't pin Found=$false for the whole session.
+            Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult -TtlMinutes 15
             return $emptyResult
         }
 
@@ -598,7 +603,8 @@ function Search-SPIdentityByEmail {
         Write-SPLog -Message "Search-SPIdentityByEmail failed for '$AttributeValue': $($_.Exception.Message)" `
             -Severity WARN -Component 'SP.IdentityService' -Action 'Search-SPIdentityByEmail' `
             -CorrelationID $CorrelationID
-        Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult
+        # Exception path: short TTL (see the failure branch above)
+        Set-SPCachedItem -Store 'SPEmailLookup' -Key $cacheKey -Value $emptyResult -TtlMinutes 15
         return $emptyResult
     }
 }

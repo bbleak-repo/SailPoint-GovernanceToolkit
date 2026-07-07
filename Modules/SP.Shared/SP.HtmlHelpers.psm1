@@ -251,6 +251,7 @@ function Write-SPHtmlFile {
         [string]$Path,
 
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string]$Content
     )
 
