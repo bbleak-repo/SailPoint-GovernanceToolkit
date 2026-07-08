@@ -48,14 +48,15 @@ Companion document: <code>REVIEW-FINDINGS.md</code> (full 35-finding review); th
 </div>
 
 <div>
-<span class="kpi"><span class="n">48</span><span class="l">Findings catalogued</span></span>
-<span class="kpi"><span class="n">34</span><span class="l">Findings fixed</span></span>
-<span class="kpi"><span class="n">15</span><span class="l">Fix commits</span></span>
-<span class="kpi"><span class="n">14</span><span class="l">Files changed</span></span>
+<span class="kpi"><span class="n">49</span><span class="l">Findings catalogued</span></span>
+<span class="kpi"><span class="n">40</span><span class="l">Findings fixed</span></span>
+<span class="kpi"><span class="n">19</span><span class="l">Fix commits</span></span>
+<span class="kpi"><span class="n">20</span><span class="l">Files changed</span></span>
 </div>
-<p class="note">Two remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
-Round 2 (section 8) fixed the remaining confirmed-defect mediums plus most lows. Fourteen lower-risk /
-judgment-call findings remain open with reasons (<a href="#remaining">Remaining</a>).</p>
+<p class="note">Three remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
+Round 2 (section 8) fixed the remaining confirmed-defect mediums plus most lows; Round 3 (section 9) delivered the
+reassignment-stable scope key and the four user-decided semantics changes. Nine lower-risk findings remain open
+with reasons (<a href="#remaining">Remaining</a>).</p>
 
 <h2>How the review was performed</h2>
 <p>
@@ -77,6 +78,7 @@ Each fix below states how it was verified.
 <li><a href="#c6">Auth: dead tenant-isolation guard; JWT base64url decode</a></li>
 <li><a href="#c7">Quick wins: rubber-stamp CSV columns, JSON Patch, identity failure TTL, empty-file writes</a></li>
 <li><a href="#c8">Round 2: twenty further fixes (evidence scripts, remediation counting, orchestrator, cache, API, scraper)</a></li>
+<li><a href="#c9">Round 3: reassignment-stable scope key + four user-decided semantics changes</a></li>
 <li><a href="#remaining">Remaining findings (not yet fixed)</a></li>
 </ol>
 </div>
@@ -346,23 +348,70 @@ expired (e.g. the first run of a new day past the 24h TTL), the stale file was n
 </table>
 
 <!-- ================================================================ -->
+<h2 id="c9">9. Round 3 &mdash; reassignment-stable scope key + four user-decided semantics changes</h2>
+<p>The scope-key change was driven by a user-reported requirement; the four semantics changes (D4/D5/E4/C3) were
+decided interactively &mdash; each option was presented with its headline-KPI consequences and the recommended choice was approved.</p>
+
+<h3>9a. Reassignment-stable scope key (finding F1) &mdash; <span class="commit">758f707</span> <span class="sev-high">HIGH</span></h3>
+<div class="impact"><strong>The requirement:</strong> campaigns and "newly approved" items must be linked to the real cache and the user's
+primary key &mdash; an entitlement reassigned to a new reviewer must NOT report as newly approved.
+<strong>The defect:</strong> every scope key in the toolkit (snapshot <code>Key</code>, diff maps, series <code>ItemKey</code>, V3's
+<code>Get-V3Key</code>, entitlement-history timelines) was AccessId-first &mdash; but ISC regenerates access ids when a certification is
+reassigned (already detected by <code>Invoke-SPCacheDiagnostic</code>'s cross-campaign check, which called out exactly this false-"newly added"
+mechanism). A reassigned grant changed keys between captures: the diff engine classified it Removed+Added ("newly in scope"), the series
+engine NewlyInScope/NewlyAttested, and a decision on it reported as "newly approved".</div>
+<div class="lbl b">Before</div>
+<pre class="before">Key = IdentityId | AccessId (regenerated on reassignment) | SourceId
+&rarr; reassignment: old key vanishes (Removed), new key appears (Added/"newly approved")</pre>
+<div class="lbl a">After</div>
+<pre class="after">Key = IdentityId | AccessName (lowercased; AccessId only when name blank) | SourceId-else-name
+&rarr; reassignment: key unchanged; decisions carry over
+# shared Get-SPStableScopeKey (SP.CampaignDelta, exported); the diff maps, entitlement-history
+# timelines, scope CSV, and V3 RECOMPUTE the key from persisted fields at load time, so old
+# (AccessId-keyed) snapshots stay comparable with new ones -- no avalanche diff on upgrade.</pre>
+<p>Accepted trade-off (user-approved): an entitlement RENAME churns once as removed+added; same-named entitlements on one source
+for one identity collapse to one key. <span class="verified">VERIFIED: simulated reassignment (new cert id + regenerated AccessId, same
+grant) through Build-SPCampaignSnapshotData + Compare-SPCampaignSnapshots yields Added=0 / Removed=0 (was 1/1); CD-06 rewritten as a
+reassignment-stability regression test; 121/121 delta/diff/series/trend/V3 tests pass</span></p>
+
+<h3>9b. D4 &mdash; honest pending decision dates + decided-only rubber-stamp metrics &mdash; <span class="commit">444be5f</span></h3>
+<p>Pending items no longer get the modified/created fallback as a fabricated DecisionDate (undecided rows render blank instead of
+"decided at campaign creation"). Rubber-stamp metrics analyze decided items only: the approval-rate denominator now matches its own
+documentation ("% of decisions that are APPROVE") &mdash; reviewers previously masked by pending items in their denominator will now
+correctly flag &mdash; and shared fallback timestamps can no longer fabricate bulk-decision clusters.</p>
+
+<h3>9c. D5 &mdash; distinct-reviewer executive KPIs &mdash; <span class="commit">444be5f</span></h3>
+<p>The exec summary's "X / Y Reviewers Signed Off" and Reviewer Completion % now count each reviewer once ("signed" = ALL their
+certs signed &mdash; same definition as <code>Get-SPDistinctReviewerSignOff</code>); reassigned entries arrive one-per-cert and previously
+inflated both figures. <code>Group-SPReviewerActions</code> aggregation fixed alongside: Phase is SIGNED only when every cert is signed
+(was first-enumerated-cert-wins) and SignOffDate is the most recent (was first-non-blank-kept-forever).</p>
+
+<h3>9d. E4 &mdash; V4e coverage counts the independent undecided fact &mdash; <span class="commit">f73f208</span></h3>
+<p>"Series attestation coverage" now subtracts items whose independent <code>IsPersistentlyUndecided</code> flag is set (never genuinely
+decided anywhere in the series) instead of the masked <code>Classification</code> &mdash; brand-new undecided entitlements no longer count
+as "genuinely attested" (10 new undecided items could previously render "100% genuinely attested").</p>
+
+<h3>9e. C3 &mdash; leadership level-report drill-down/nav links &mdash; <span class="commit">444be5f</span></h3>
+<p>Subordinate drill-down and parent nav links now mirror the actual filename scheme
+(<code>prefix-name-id-runStamp.html</code>): <code>Export-SPLeadershipLevelHtml</code> takes a <code>-RunStamp</code> shared across every
+level of a report set (threaded by the band-filtered wrapper), links embed the target's id + stamp, and the dead
+<code>executive-summary.html</code> fallback link was removed. Every up/down link in the generated set now resolves.
+<span class="verified">VERIFIED: 252/252 report/leadership/reviewer/V4e tests pass</span></p>
+
+<!-- ================================================================ -->
 <h2 id="remaining">Remaining findings (documented, not yet fixed)</h2>
-<p>After Round 2, the following remain open &mdash; all are lower-risk or judgment-call items, catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>:</p>
+<p>After Round 3, the following remain open &mdash; all are lower-risk or judgment-call items, catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>:</p>
 <table>
 <tr><th>Sev</th><th>Finding</th><th>Ref</th><th>Why deferred</th></tr>
 <tr><td class="sev-low">LOW</td><td><code>Get-SPConfig</code> returns a shared mutable reference</td><td>B8</td><td>A deep-clone changes object identity for every caller; no in-repo caller mutates the config today. Revisit if a mutation appears.</td></tr>
 <tr><td class="sev-low">LOW</td><td>Concurrent-process identity-cache compaction append-loss window</td><td>B12</td><td>Needs a cross-process mutex (pattern exists in Add-SPItemCacheLines); orchestrator currently runs steps sequentially.</td></tr>
 <tr><td class="sev-low">LOW</td><td><code>Test-SPCacheValid</code> lazy-load asymmetry</td><td>B13</td><td>Latent &mdash; no production caller.</td></tr>
 <tr><td class="sev-low">LOW</td><td><code>TrimStart('.\')</code> charset corruption of <code>..\</code>-style vault paths</td><td>B14</td><td>Only misconfigured relative parent paths are affected; error message names the resolved path.</td></tr>
-<tr><td class="sev-medium">MED</td><td>Fabricated DecisionDate on pending items + rubber-stamp metrics over pending items</td><td>D4</td><td>Semantics change to two report sections; wants a deliberate decision on how Pending rows should render (Resolve-SPDecisionDateDisplay exists for exactly this).</td></tr>
-<tr><td class="sev-medium">MED</td><td>Exec summary double-counts reassigned reviewers; first-cert Phase/SignOffDate kept</td><td>D5</td><td>Same: the distinct-reviewer counting helper exists (Get-SPDistinctReviewerSignOff); adopting it changes headline KPIs and deserves a focused pass.</td></tr>
 <tr><td class="sev-low">LOW</td><td>Orphan-account include-switches only apply to the Uncorrelated category</td><td>D10</td><td>Behavioral choice: Terminated/Dangling categories arguably should always show disabled/service accounts.</td></tr>
 <tr><td class="sev-low">LOW</td><td><code>ReviewerCount</code> metric counts certifications, not distinct reviewers</td><td>D12</td><td>Metric-schema change; consumers may expect the current definition.</td></tr>
 <tr><td class="sev-low">LOW</td><td>Comparison report colors slower response times green</td><td>D13</td><td>Cosmetic; fix pattern exists at Export-SPCampaignCompletionReport:6017.</td></tr>
 <tr><td class="sev-low">LOW</td><td>BI export leadership columns read keys that never exist</td><td>D14</td><td>Needs the leadership-data shape reconciled with Group-SPAuditByLeadership first.</td></tr>
 <tr><td class="sev-low">LOW</td><td>RC03 expanded tree labels unknown-Enabled members "enabled"</td><td>D15</td><td>Cosmetic 3-state badge.</td></tr>
-<tr><td class="sev-medium">MED</td><td>Leadership level-report drill-down links point to unwritten filenames</td><td>C3</td><td>Cross-level link scheme needs a shared run-stamp design, not a spot fix.</td></tr>
-<tr><td class="sev-medium">MED</td><td>V4e coverage counts undecided NewlyInScope as attested</td><td>E4</td><td>Definition question on the just-merged series-attestation stat &mdash; flagging for your call on intended semantics.</td></tr>
 <tr><td class="sev-low">LOW</td><td>Scraper reads only the first table per Pending collapsible</td><td>E11</td><td>Latent format hazard; the current report generator emits one table.</td></tr>
 </table>
 
@@ -384,10 +433,19 @@ expired (e.g. the first run of a new day past the 24h TTL), the stale file was n
 <tr><td><span class="commit">8f14436</span></td><td>fix(api): method-aware retries; null-safe query params</td></tr>
 <tr><td><span class="commit">6c044b0</span></td><td>fix(evidence): stop CUMULATIVE/TOTALS rows multiply-counting multi-day campaigns</td></tr>
 <tr><td><span class="commit">b0e8311</span></td><td>fix: quick-wins batch 2 — sort no-op, loop leak, UTC skew, escalation noise, ACL gap, scraper day-counting</td></tr>
+<tr><td><span class="commit">758f707</span></td><td>fix(scope-key): key grants by identity + access NAME + source, not churn-prone AccessId</td></tr>
+<tr><td><span class="commit">444be5f</span></td><td>fix(reports): honest pending dates, decided-only rubber-stamp metrics, distinct reviewer KPIs (+ level-report link fix)</td></tr>
+<tr><td><span class="commit">f73f208</span></td><td>fix(evidence-v4e): coverage counts the independent undecided fact</td></tr>
+<tr><td><span class="commit">7561e61</span></td><td>test(series): update key literals and stability semantics to the name-based scope key</td></tr>
 </table>
 
 <h2>Verification summary</h2>
 <ul>
+<li><strong>Final full battery after Round 3 (all 49 non-GUI suites, Pester 5.7.1 on Windows PowerShell 5.1): 2192 passed / 3 failed / 13 skipped.</strong>
+The 3 failures (DE-03, TQ-01, TQ-04 &mdash; governance dashboard trend direction) fail <em>identically on master</em> (verified via a clean
+baseline worktree) &mdash; pre-existing, unrelated to this branch. Round 3 verification also includes: the reassignment diff simulation
+(0 added / 0 removed, was 1/1), 121/121 key-suite tests, 252/252 report/leadership/reviewer/V4e tests, and the series suites re-run
+green (47/47) after their fixtures were updated to the new key semantics.</li>
 <li><strong>Round 2 full battery (Pester 5.7.1, Windows PowerShell 5.1): 553 passed / 0 failed / 0 skipped</strong> across 22 test files covering every touched module,
 adding SP.CampaignDiff, SP.DailyEvidenceV6, SP.DailyOrchestrator, SP.CampaignSeriesKey, SP.ReviewerIdentity, SP.CompletionConsistency, SP.ApiResilience to the Round 1 set.
 Per-theme runs during Round 2: cache suites 61/61, API 36/36, V6 19/19, diff/queries/identity 102/102.</li>

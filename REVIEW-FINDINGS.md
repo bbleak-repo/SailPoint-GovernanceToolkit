@@ -45,7 +45,7 @@ integrity), **M** = medium, **L** = low.
 |---|-----|---------|----------|
 | C1 | H | **Argument-mode `ConvertTo-SPHtmlSafe [string]$x`** renders literal `[string]…` garbage: Audit Metadata table in every audit HTML (`[string]System.Collections.Hashtable[Tenant]`), master leadership rollup (every name/date), hierarchical report Access Name/Type (full object dump), level-report `<th>` (binding error → blank). **[FIXED]** | `SP.AuditReportHtml.psm1:1349, 2991, 11047-11049, 11457` |
 | C2 | H | **Per-campaign HTML/text reports overwrite each other** when campaign names share a 35-char prefix (all "Daily Attestation …" campaigns) — same truncated filename + same run timestamp; TOC anchors collide too. **[FIXED — campaign-id suffix]** | `SP.AuditReportHtml.psm1:1400, 1406, 1709` |
-| C3 | M | Leadership level-report drill-down/nav links point to filenames that are never written (missing `-$safeId-$runStamp` suffix). | `SP.AuditReportHtml.psm1:2967, 3277-3287` |
+| C3 | M | Leadership level-report drill-down/nav links point to filenames that are never written (missing `-$safeId-$runStamp` suffix). **[FIXED — Links now mirror the real filename scheme (prefix-name-id-runStamp) with a shared per-set RunStamp; dead fallback link removed.]** | `SP.AuditReportHtml.psm1:2967, 3277-3287` |
 
 ## D. Reporting — wrong numbers
 
@@ -54,8 +54,8 @@ integrity), **M** = medium, **L** = low.
 | D1 | H | **`RubberStampRisk` always "None"** in reviewers CSV and BI export — lookup reads `$rr.Name`; objects carry `ReviewerName`. **[FIXED]** | `SP.AuditReportHtml.psm1:4147, 6854` |
 | D2 | M | Remediation proof only matches literal `REVOKE` — `REVOKED`/`DENY`/`REJECT`/`EXCEPTION` and nested `{value:...}` shapes dropped; Section 4 vs Section 6 totals contradict. **[FIXED — Canonical decision unwrap/variants in all three surfaces.]** | `SP.AuditReportCore.psm1:1609`; also `:928`, `Get-SPRevocationDisposition:83` |
 | D3 | M | `Get-SPRemediationStatus` accepts source-only match → unrelated revocations marked "Provisioned", failed revokes hidden. **[FIXED — Events with items require entitlement match; source-only fallback only when the event has no items.]** | `SP.AuditQueries.psm1:2896` |
-| D4 | M | Pending items get fabricated `DecisionDate` (modified/created fallback) rendered as a real decision time; also feeds false "bulk decision cluster" rubber-stamp flags and a pending-inclusive approval-rate denominator. | `SP.AuditReportCore.psm1:966, 2050` |
-| D5 | M | Exec summary double-counts reassigned reviewers (one entry per cert) in "Reviewers Signed Off" / completion %; `Group-SPReviewerActions` keeps first cert's Phase/SignOffDate. | `SP.AuditReportHtml.psm1:226`; `SP.AuditReportCore.psm1:1117` |
+| D4 | M | Pending items get fabricated `DecisionDate` (modified/created fallback) rendered as a real decision time; also feeds false "bulk decision cluster" rubber-stamp flags and a pending-inclusive approval-rate denominator. **[FIXED — Pending rows render blank dates; rubber-stamp metrics decided-only (user-approved).]** | `SP.AuditReportCore.psm1:966, 2050` |
+| D5 | M | Exec summary double-counts reassigned reviewers (one entry per cert) in "Reviewers Signed Off" / completion %; `Group-SPReviewerActions` keeps first cert's Phase/SignOffDate. **[FIXED — Distinct-reviewer exec counting; Phase=all-signed; SignOffDate=most recent (user-approved).]** | `SP.AuditReportHtml.psm1:226`; `SP.AuditReportCore.psm1:1117` |
 | D6 | M | `Sort-Object -Property` on hashtable elements is a no-op on PS 5.1 → `LastCampaign`/`LastCampaignDate` wrong in source-coverage report. **[FIXED — Scriptblock sort key.]** | `SP.AuditQueries.psm1:2568` |
 | D7 | M | Reviewer-delegation metric uses loop-leaked `$campaignCreated` (last campaign only) for all reviewers' `AvgHoursBeforeDelegation`. **[FIXED — Lead-times computed at collection against each delegation’s own campaign.]** | `SP.AuditQueries.psm1:6466` |
 | D8 | M | `Get-SPSourceAggregationHealth` mixes `[datetime]::UtcNow` with local-Kind parse — freshness off by the UTC offset (false/missed staleness). **[FIXED — RoundtripKind parse + ToUniversalTime.]** | `SP.AuditQueries.psm1:5471, 5563` |
@@ -74,7 +74,7 @@ integrity), **M** = medium, **L** = low.
 | E1 | C | **V5 crashes on every run with data** — `$isCrossCampaign`/`$distinctCampIds` read ~40 lines before assignment under `Set-StrictMode -Version 1` + `EAP=Stop`. **[FIXED]** | `Invoke-SPDailyEvidenceReportV5.ps1:634 / 666-671` |
 | E2 | H | V5 baseline scope-added reads the wrong trend record when a day has multiple captures (`$trendRecords[$dailyData.IndexOf($d)]` misalignment). **[FIXED — scope.added read from the same record the day entry is built from.]** | `Invoke-SPDailyEvidenceReportV5.ps1:799` |
 | E3 | H | V7 "suspect" filter silently drops every legitimately 100%-completed day by default; all-complete window → exit 5 "No calendar days resolved". **[FIXED — Suspect records dropped only when the day has an honest capture; suspect-only days kept flagged.]** | `Invoke-SPDailyEvidenceReportV7.ps1:421, 441` |
-| E4 | M | V4e "series attestation coverage" counts undecided NewlyInScope items as attested (can print "100% genuinely attested" with zero decisions). | `Invoke-SPDailyEvidenceReportV4e.ps1:807` |
+| E4 | M | V4e "series attestation coverage" counts undecided NewlyInScope items as attested (can print "100% genuinely attested" with zero decisions). **[FIXED — Coverage subtracts the independent IsPersistentlyUndecided fact (user-approved).]** | `Invoke-SPDailyEvidenceReportV4e.ps1:807` |
 | E5 | M | Series chrono-key parses period tokens with current culture — wrong instance ordering (wrong baseline/newest) on dd/MM locales; whole V4c/V4d/V4e delta engine misclassifies. **[FIXED — InvariantCulture-first parse.]** | `SP.AuditQueries.psm1:7726` |
 | E6 | M | Orchestrator Steps 8/9 swallow `Success=$false` results — green "Success" line, exit 0, audit JSONL certifies a run that collected nothing. **[FIXED — Returned Success=$false now counted as errors.]** | `Invoke-SPDailyOrchestrator.ps1:1075, 1136` |
 | E7 | M | Step 11 stalled-reviewer warnings never recorded in step results/audit trail; Step 11/12 warnings never raise the exit code. **[FIXED — Step 11 recorded in step results/audit trail; Step 11/12 warnings raise exit code.]** | `Invoke-SPDailyOrchestrator.ps1:1266, 1310, 1354` |
@@ -82,6 +82,12 @@ integrity), **M** = medium, **L** = low.
 | E9 | M | Scraper `-Until` excludes reports from the Until day when filenames carry timestamps (time-of-day vs midnight comparison). **[FIXED — Dates day-normalized at parse; -Until inclusive again.]** | `Invoke-SPPendingReviewerScrape.ps1:255` |
 | E10 | L | Scraper `-MinMisses` / chronic-pending denominator count per report file, not per calendar day — regenerated reports skew both. **[FIXED — Per-calendar-day counting for -MinMisses/Pct/heatmap.]** | `Invoke-SPPendingReviewerScrape.ps1:282` |
 | E11 | L | Scraper takes only the first `<table>` per Pending/Undecided collapsible (latent multi-table format hazard). | `Invoke-SPPendingReviewerScrape.ps1:124` |
+
+## F. Scope-key stability (user-reported, 2026-07-07 second session)
+
+| # | Sev | Finding | Location |
+|---|-----|---------|----------|
+| F1 | H | **Reassignment-driven AccessId churn fabricated "newly approved"/"newly in scope" items.** Every scope key (snapshot `Key`, diff maps, series `ItemKey`, V3's `Get-V3Key`, entitlement-history timelines) was AccessId-first, but ISC regenerates access ids when a certification is reassigned to a new reviewer (already detected by `Invoke-SPCacheDiagnostic`'s cross-campaign check). A reassigned grant changed keys between captures: diff classified it Removed+Added, the series engine as NewlyInScope/NewlyAttested, and its decision reported as "newly approved". **[FIXED — grants keyed by IdentityId + entitlement NAME (lowercased) + SourceId-else-name via shared `Get-SPStableScopeKey`; AccessId only when the name is blank; diff/timelines/V3 recompute at load so old snapshots stay comparable. Verified: simulated reassignment now diffs 0 added / 0 removed (was 1/1).]** | `SP.CampaignDelta.psm1` (new `Get-SPStableScopeKey` + snapshot Key), `SP.CampaignDiff.psm1` (map/timeline/CSV recompute), `SP.CampaignSeries.psm1:484` (name-first precedence), `Invoke-SPDailyEvidenceReportV3.ps1` |
 
 ---
 
