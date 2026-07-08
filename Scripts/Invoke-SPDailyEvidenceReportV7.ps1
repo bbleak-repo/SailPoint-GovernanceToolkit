@@ -430,20 +430,44 @@ foreach ($rec in $allRecords) {
 # Step 2b: Calendar-day grouping
 # Group all records by calendar date (captureDate)
 # Resolution: prefer ACTIVE over COMPLETED, then latest captureTimestamp
-$dateGroups = [ordered]@{}
+#
+# Suspect handling: a suspect (post-completion inflated) record is dropped only
+# when the SAME calendar day also has a non-suspect capture -- the honest record
+# wins. A day whose ONLY evidence is suspect keeps its records, flagged
+# IsSuspect (rendered dashed in charts), instead of silently vanishing. The
+# COMPLETED+pending=0+~100% signature is indistinguishable from a campaign that
+# genuinely finished, so unconditionally skipping those records deleted every
+# legitimately-completed day from the report -- and when ALL days in the window
+# had completed, the run died with 'No calendar days resolved' (exit 5).
+$allDateGroups = [ordered]@{}
 foreach ($rec in $allRecords) {
     $calDate = [string]$rec.captureDate
     if ([string]::IsNullOrWhiteSpace($calDate)) { continue }
-
-    # Skip suspect records unless -IncludeSuspect is set
-    $isSusp = $false
-    try { $isSusp = [bool]$rec._isSuspect } catch { }
-    if ($isSusp -and -not $IncludeSuspect) { continue }
-
-    if (-not $dateGroups.Contains($calDate)) {
-        $dateGroups[$calDate] = [System.Collections.Generic.List[object]]::new()
+    if (-not $allDateGroups.Contains($calDate)) {
+        $allDateGroups[$calDate] = [System.Collections.Generic.List[object]]::new()
     }
-    $dateGroups[$calDate].Add($rec)
+    $allDateGroups[$calDate].Add($rec)
+}
+
+$dateGroups = [ordered]@{}
+$suspectOnlyDays = 0
+foreach ($dateKey in $allDateGroups.Keys) {
+    $recs = $allDateGroups[$dateKey]
+    $kept = $recs
+    if (-not $IncludeSuspect) {
+        $nonSuspect = [System.Collections.Generic.List[object]]::new()
+        foreach ($r in $recs) {
+            $isSusp = $false
+            try { $isSusp = [bool]$r._isSuspect } catch { }
+            if (-not $isSusp) { $nonSuspect.Add($r) }
+        }
+        if ($nonSuspect.Count -gt 0) { $kept = $nonSuspect }
+        else { $suspectOnlyDays++ }   # keep the suspect records; day stays flagged
+    }
+    if ($kept.Count -gt 0) { $dateGroups[$dateKey] = $kept }
+}
+if ($suspectOnlyDays -gt 0) {
+    Write-Host "    NOTE: $suspectOnlyDays day(s) have only suspect (post-completion) captures -- kept and flagged IsSuspect." -ForegroundColor Yellow
 }
 
 # Step 2c: Resolve one record per calendar day

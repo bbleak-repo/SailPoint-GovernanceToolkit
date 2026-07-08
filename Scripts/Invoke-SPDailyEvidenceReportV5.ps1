@@ -779,6 +779,15 @@ foreach ($dayKey in $filteredKeys) {
     $revoked  = [int](Get-V5MetricVal $m 'counts.revoked' 0)
     $pending  = [int](Get-V5MetricVal $m 'counts.pending' 0)
 
+    # Baseline detection: when scope.added >= total items, it's a first capture (no
+    # prior snapshot), not real scope growth -- suppress the misleading "+N newly
+    # added". Read scope.added from THIS day's record ($m): the previous post-loop
+    # pass re-indexed $trendRecords by $dailyData position, which misaligned as soon
+    # as a day had multiple captures (dayMap dedup) or the cutoff filter dropped a
+    # key -- crediting one day's scope growth to a different day.
+    $rawScopeAdded = [int](Get-V5MetricVal $m 'scope.added' 0)
+    $scopeAdded = if ($rawScopeAdded -ge $total -and $total -gt 0) { 0 } else { $rawScopeAdded }
+
     $dailyData += @{
         Date          = $ts.ToString('yyyy-MM-dd')
         DayLabel      = $ts.ToString('MM/dd')
@@ -788,25 +797,10 @@ foreach ($dayKey in $filteredKeys) {
         Revoked       = $revoked
         Pending       = $pending
         CompletionPct = [double](Get-V5MetricVal $m 'completion.byDecisionPct' 0)
-        ScopeAdded    = $null  # set below after baseline detection
+        ScopeAdded    = $scopeAdded
         ScopeRemoved  = [int](Get-V5MetricVal $m 'scope.removed' 0)
         PrivPending   = [int](Get-V5MetricVal $m 'counts.privPending' 0)
         PrivTotal     = [int](Get-V5MetricVal $m 'risk.privilegedTotal' 0)
-    }
-}
-
-# Baseline detection: when scope.added equals total items, it's a first capture (no prior
-# snapshot), not real scope growth. Suppress misleading "99 newly added" counts by setting
-# ScopeAdded to 0 for baseline captures. This handles the scenario where a failed run
-# (e.g., reassignment error) causes the retry to have no valid prior snapshot.
-foreach ($d in $dailyData) {
-    $rawScopeAdded = [int](Get-V5MetricVal ($trendRecords[$dailyData.IndexOf($d)].metrics) 'scope.added' 0)
-    if ($rawScopeAdded -ge $d.Total -and $d.Total -gt 0) {
-        # Scope.added >= total items = baseline capture (no valid prior snapshot)
-        $d.ScopeAdded = 0
-    }
-    else {
-        $d.ScopeAdded = $rawScopeAdded
     }
 }
 
