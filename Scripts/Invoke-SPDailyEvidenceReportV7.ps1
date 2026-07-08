@@ -1332,14 +1332,21 @@ if ($dayCount -ge 2) {
         [void]$sb.AppendLine("<th style='text-align:right;'>Decided +/-</th><th style='text-align:right;'>Completion +/-</th>")
         [void]$sb.AppendLine("</tr></thead><tbody>")
 
-        $cumAppr = 0; $cumRev = 0; $cumPend = 0; $cumTotal = 0
+        # Total/Approved/Revoked/Pending are SNAPSHOT totals per day. The TOTALS row
+        # aggregates the LATEST snapshot per distinct campaign -- summing every day's
+        # snapshot multiply-counted items whenever one campaign spanned several days
+        # (a 100-item campaign observed 5 days rendered 'TOTALS: 500 items' with a %
+        # computed over the inflated denominator).
+        $latestByCampaign = [ordered]@{}
         foreach ($d in $dailyData) {
             $dAppr = [int]$d.Approved
             $dRev  = [int]$d.Revoked
             $dPend = [int]$d.Pending
             $dTotal = [int]$d.Total
             $dComp = [double]$d.CompletionPct
-            $cumAppr += $dAppr; $cumRev += $dRev; $cumPend += $dPend; $cumTotal += $dTotal
+            $cumCid = [string]$d.CampaignId
+            if ([string]::IsNullOrWhiteSpace($cumCid)) { $cumCid = [string]$d.CampaignName }
+            $latestByCampaign[$cumCid] = $d   # dailyData is date-ascending; last write wins
 
             $campFull = ConvertTo-SPHtmlSafe $d.CampaignName
             $statusLabel = [string]$d.CampaignStatus
@@ -1382,10 +1389,17 @@ if ($dayCount -ge 2) {
             [void]$sb.AppendLine("</tr>")
         }
 
-        # Totals row
+        # Totals row: latest snapshot per distinct campaign (see above)
+        $cumAppr = 0; $cumRev = 0; $cumPend = 0; $cumTotal = 0
+        foreach ($cd in $latestByCampaign.Values) {
+            $cumAppr  += [int]$cd.Approved
+            $cumRev   += [int]$cd.Revoked
+            $cumPend  += [int]$cd.Pending
+            $cumTotal += [int]$cd.Total
+        }
         $cumDecPct = if ($cumTotal -gt 0) { [math]::Round(($cumAppr + $cumRev) / $cumTotal * 100, 0) } else { 0 }
         [void]$sb.AppendLine("<tr style='background:#edf2f7;font-weight:700;border-top:2px solid $($colors.Dark);'>")
-        [void]$sb.AppendLine("<td colspan='3'>TOTALS ($dayCount days)</td>")
+        [void]$sb.AppendLine("<td colspan='3'>TOTALS ($dayCount days, $($latestByCampaign.Count) campaign(s))</td>")
         [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumTotal)</td>")
         [void]$sb.AppendLine("<td style='text-align:right;'>$('{0:N0}' -f $cumAppr)</td>")
         [void]$sb.AppendLine("<td style='text-align:right;color:$($colors.Red);'>$('{0:N0}' -f $cumRev)</td>")
