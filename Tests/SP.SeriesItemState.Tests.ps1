@@ -84,8 +84,9 @@ Describe 'SIS-02 cross-instance key join' {
         $kb = Get-SPSeriesItemKey -Item $script:entB
         $ka | Should -Not -BeNullOrEmpty
         $ka | Should -Be $kb
-        # the key is keyed on the entitlement id + source id, not the item id
-        $ka | Should -Be 'id-jdoe|ent-9001|src-ad'
+        # keyed on identity + access NAME (lowercased) + source id -- the name wins over
+        # the churn-prone AccessId so reviewer reassignment does not change the key
+        $ka | Should -Be 'id-jdoe|finance-rw|src-ad'
     }
 }
 
@@ -118,9 +119,9 @@ Describe 'SIS-04 wrapper vs raw' {
     }
 }
 
-Describe 'SIS-05 name fallback casing + rename stability' {
-    It 'lower-cases name-derived fallback parts but leaves id parts verbatim, and is rename-stable' {
-        # No access id -> falls back to access NAME (lower-cased); source id present (verbatim).
+Describe 'SIS-05 name casing + reassignment stability' {
+    It 'lower-cases name-derived parts but leaves id parts verbatim, and is reassignment-stable' {
+        # Access NAME is the primary discriminator (lower-cased); source id verbatim.
         $named = New-SISItem -ItemId 'n1' -IdentityId 'ID-Mixed' -IdentityName 'M' `
             -AccessId '' -AccessName 'Payroll-Admin' -AccessType 'ENTITLEMENT' `
             -NativeIdentity 'CN=M' -SourceId 'src-AD' -SourceName 'Active Directory' -Decision 'APPROVE' -Comment '' -ReviewedBy $null -DecisionDate ''
@@ -128,14 +129,17 @@ Describe 'SIS-05 name fallback casing + rename stability' {
         # identity id verbatim (case preserved), access name lower-cased, source id verbatim
         $k | Should -Be 'ID-Mixed|payroll-admin|src-AD'
 
-        # Rename the entitlement NAME and SOURCE NAME but keep the ids -> key with ids is unchanged.
-        $renamed = New-SISItem -ItemId 'n2' -IdentityId 'id-r' -IdentityName 'R' `
+        # REASSIGNMENT stability: ISC regenerates the AccessId when a certification is
+        # reassigned to a new reviewer. Same identity + name + source with DIFFERENT
+        # access ids must produce the SAME key, or the grant diffs as newly-in-scope /
+        # newly approved on every reassignment.
+        $reassignedA = New-SISItem -ItemId 'n2' -IdentityId 'id-r' -IdentityName 'R' `
             -AccessId 'ent-5' -AccessName 'Finance-RW' -AccessType 'ENTITLEMENT' `
             -NativeIdentity 'CN=R' -SourceId 'src-5' -SourceName 'Active Directory' -Decision 'APPROVE' -Comment '' -ReviewedBy $null -DecisionDate ''
-        $renamed2 = New-SISItem -ItemId 'n3' -IdentityId 'id-r' -IdentityName 'R' `
-            -AccessId 'ent-5' -AccessName 'Finance-ReadWrite (renamed)' -AccessType 'ENTITLEMENT' `
-            -NativeIdentity 'CN=R' -SourceId 'src-5' -SourceName 'AD (renamed)' -Decision 'APPROVE' -Comment '' -ReviewedBy $null -DecisionDate ''
-        (Get-SPSeriesItemKey -Item $renamed) | Should -Be (Get-SPSeriesItemKey -Item $renamed2)
+        $reassignedB = New-SISItem -ItemId 'n3' -IdentityId 'id-r' -IdentityName 'R' `
+            -AccessId 'ent-5-REGENERATED' -AccessName 'Finance-RW' -AccessType 'ENTITLEMENT' `
+            -NativeIdentity 'CN=R' -SourceId 'src-5' -SourceName 'Active Directory' -Decision 'APPROVE' -Comment '' -ReviewedBy $null -DecisionDate ''
+        (Get-SPSeriesItemKey -Item $reassignedA) | Should -Be (Get-SPSeriesItemKey -Item $reassignedB)
     }
 }
 
@@ -161,7 +165,7 @@ Describe 'SIS-07 honest clean approve' {
         $s.IsGenuineDecision | Should -BeTrue
         $s.IsAutoApproved    | Should -BeFalse
         $s.RawDecision       | Should -Be 'APPROVE'
-        $s.ItemKey           | Should -Be 'id-jdoe|ent-9001|src-ad'
+        $s.ItemKey           | Should -Be 'id-jdoe|finance-rw|src-ad'
     }
 }
 
