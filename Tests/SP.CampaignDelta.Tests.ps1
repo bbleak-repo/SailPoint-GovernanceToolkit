@@ -183,19 +183,25 @@ Describe "CD-05: KPI rates, denominators, reviewer rollup" {
     }
 }
 
-Describe "CD-06: stable ID-based scope key" {
-    It "Keys on entitlement/source IDs so a rename does not churn" {
+Describe "CD-06: reassignment-stable scope key" {
+    It "Keys on identity + access NAME + source so reviewer reassignment (AccessId churn) does not churn" {
+        # ISC regenerates access ids when a certification is reassigned; the grant's
+        # identity/name/source stay the same, so the key must too (Get-SPStableScopeKey).
         $campaign = [PSCustomObject]@{ id='ck'; name='Key'; status='ACTIVE' }
-        $day1 = @{ Approved=@([PSCustomObject]@{ CertificationId='c'; IdentityId='i1'; AccessName='Old Name'; AccessId='ent-99'; SourceName='AD'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
-        $day2 = @{ Approved=@([PSCustomObject]@{ CertificationId='c'; IdentityId='i1'; AccessName='Renamed Entitlement'; AccessId='ent-99'; SourceName='Active Directory'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $day1 = @{ Approved=@([PSCustomObject]@{ CertificationId='c';  IdentityId='i1'; AccessName='Domain Admins'; AccessId='ent-99'; SourceName='AD'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $day2 = @{ Approved=@([PSCustomObject]@{ CertificationId='c2'; IdentityId='i1'; AccessName='Domain Admins'; AccessId='ent-77'; SourceName='AD'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
         $s1 = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @() -Decisions $day1
         $s2 = Build-SPCampaignSnapshotData -Campaign $campaign -Certifications @() -Decisions $day2
-        $s1.Items[0].Key | Should -Be 'i1|ent-99|src-1'
-        $s2.Items[0].Key | Should -Be 'i1|ent-99|src-1'   # identical despite both names changing
+        $s1.Items[0].Key | Should -Be 'i1|domain admins|src-1'
+        $s2.Items[0].Key | Should -Be 'i1|domain admins|src-1'   # identical despite the AccessId regenerating
     }
-    It "Falls back to names when IDs are absent" {
+    It "Falls back to AccessId only when the access name is blank" {
+        $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{ id='ck2'; name='K2'; status='ACTIVE' }) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName=''; AccessId='ent-99'; SourceName='AD'; SourceId='src-1'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
+        $s.Items[0].Key | Should -Be 'i1|ent-99|src-1'
+    }
+    It "Falls back to names when IDs are absent (name components lowercased)" {
         $s = Build-SPCampaignSnapshotData -Campaign ([PSCustomObject]@{ id='cn'; name='N'; status='ACTIVE' }) -Certifications @() -Decisions @{ Approved=@([PSCustomObject]@{ IdentityId='i1'; AccessName='Domain Admins'; SourceName='AD'; Decision='APPROVE' }); Revoked=@(); Pending=@() }
-        $s.Items[0].Key | Should -Be 'i1|Domain Admins|AD'
+        $s.Items[0].Key | Should -Be 'i1|domain admins|ad'
     }
 }
 

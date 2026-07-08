@@ -239,6 +239,7 @@
         'Export-SPRemediationTickets'
 
         # SP.CampaignDelta - Dated campaign snapshots (diff/trend foundation)
+        'Get-SPStableScopeKey'
         'Build-SPCampaignSnapshotData'
         'Save-SPCampaignSnapshot'
         'Get-SPCampaignSnapshot'
