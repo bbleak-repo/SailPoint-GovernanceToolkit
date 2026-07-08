@@ -7738,8 +7738,15 @@ function ConvertTo-SPSeriesChronoKey {
 
     # 1. Direct parse first (ISO date / datetime / month-year / numeric year-month).
     #    Skip for Quarterly/Weekly tokens which would mis-parse (e.g. 'Q1 2026' partials).
+    #    InvariantCulture FIRST: this key orders series instances (which instance is the
+    #    baseline / the newest), and campaign-name tokens like '6/7/2026' must sort the
+    #    same on every host. A current-culture parse on a dd/MM machine swaps month/day,
+    #    reorders the series, and the delta engine misclassifies the whole series.
+    #    Host culture remains as a fallback for locale-formatted names invariant can't read.
     if ($PeriodType -ne 'Quarterly' -and $PeriodType -ne 'Weekly') {
         $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($tok, [System.Globalization.CultureInfo]::InvariantCulture,
+                                 [System.Globalization.DateTimeStyles]::None, [ref]$dt)) { return $dt }
         if ([datetime]::TryParse($tok, [ref]$dt)) { return $dt }
     }
 
