@@ -47,7 +47,7 @@ function Get-SPConfigDefaults {
                 CredentialKey    = 'sailpoint-isc'
             }
             DpapiCredential = @{ Path = '.\Data\sp-dpapi-credential.xml' }
-            ScheduledVault  = @{ KeyPath = '.\Data\sp-scheduled-key.enc' }
+            ScheduledVault  = @{ KeyPath = '.\Data\sp-scheduled-key.enc'; KeyProtection = 'Dpapi' }   # KeyProtection shipped in the template (mac-validation) but was missing here, tripping the unknown-key warning (DIST-06)
         }
         Logging = @{
             Path             = '.\Logs'
