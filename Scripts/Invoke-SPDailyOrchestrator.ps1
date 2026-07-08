@@ -436,6 +436,7 @@ $stepResults = [ordered]@{
     DADecisions   = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     DARemediation = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     Retention     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
+    StalledReviewers = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
     Dashboard     = @{ Status = 'Skipped'; Detail = ''; Duration = 0 }
 }
 
@@ -1079,6 +1080,15 @@ if (-not $SkipDisconnectedApps -and $daRegisteredApps.Count -gt 0) {
                         $totalRevoked += $decResult.Data.Decisions.Revoked
                     }
                 }
+                else {
+                    # A returned Success=$false is a failure too -- without this branch
+                    # an all-apps-failed run printed a green '0 campaign(s) checked'
+                    # Success line and the audit JSONL certified a clean day.
+                    $decisionErrors++
+                    $decErrMsg = if ($null -ne $decResult -and $null -ne $decResult.Error) { [string]$decResult.Error } else { 'no result returned' }
+                    Write-SPLog -Message "Decision collection returned failure for '$($daApp.Name)': $decErrMsg" `
+                        -Severity WARN -Component 'DailyOrchestrator' -Action 'DecisionCollection' -CorrelationID $correlationID
+                }
             }
             catch {
                 $decisionErrors++
@@ -1151,6 +1161,13 @@ if (-not $SkipDisconnectedApps -and $daRegisteredApps.Count -gt 0) {
                     $totalConfirmed += $remResult.Data.Confirmed
                     $totalOverdue   += $remResult.Data.Overdue
                     $totalPending   += $remResult.Data.Pending
+                }
+                else {
+                    # Count returned Success=$false as an error (see Step 8).
+                    $remErrors++
+                    $remErrMsg = if ($null -ne $remResult -and $null -ne $remResult.Error) { [string]$remResult.Error } else { 'no result returned' }
+                    Write-SPLog -Message "Remediation check returned failure for '$($daApp.Name)': $remErrMsg" `
+                        -Severity WARN -Component 'DailyOrchestrator' -Action 'RemediationCheck' -CorrelationID $correlationID
                 }
             }
             catch {
@@ -1277,15 +1294,24 @@ try {
         $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
         $detail = "$stalledCount stalled reviewer(s) ($multiCount multi-campaign)"
         if ($htmlResult.Success) { $detail += " -- report: $($htmlResult.Data)" }
+        # Record the warning in the step results / audit trail and raise the exit
+        # code like every other step -- previously this finding left the run as
+        # 'Result: SUCCESS', exit 0, with no trace in orchestrator-audit.jsonl.
+        Set-StepResult -Step 'StalledReviewers' -Status 'Warning' -Detail $detail -Duration $stepDuration
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
         Write-Host "  Step 11: WARNING - $detail" -ForegroundColor Yellow
         Write-SPLog -Message "Stalled reviewer accountability: $detail" -Severity WARN -Component 'DailyOrchestrator' -Action 'StalledReviewers' -CorrelationID $correlationID
     }
     else {
         $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+        Set-StepResult -Step 'StalledReviewers' -Status 'Success' -Detail 'All reviewers making progress' -Duration $stepDuration
         Write-Host '  Step 11: All reviewers making progress' -ForegroundColor Green
     }
 }
 catch {
+    $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
+    Set-StepResult -Step 'StalledReviewers' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+    if ($worstExitCode -lt 1) { $worstExitCode = 1 }
     Write-Host "  Step 11: WARN - Stalled reviewer check failed: $($_.Exception.Message)" -ForegroundColor Yellow
     Write-SPLog -Message "Stalled reviewer check failed: $($_.Exception.Message)" -Severity WARN -Component 'DailyOrchestrator' -Action 'StalledReviewerError' -CorrelationID $correlationID
 }
@@ -1309,7 +1335,8 @@ if ($IncludeDashboard) {
             $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
             Set-StepResult -Step 'Dashboard' -Status 'Warning' `
                 -Detail "Dashboard data build failed: $($dashboardResult.Error)" -Duration $stepDuration
-            Write-Host "  Step 11: WARN - $($dashboardResult.Error)" -ForegroundColor Yellow
+            if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+            Write-Host "  Step 12: WARN - $($dashboardResult.Error)" -ForegroundColor Yellow
         }
         else {
             # Optionally build month-over-month comparison
@@ -1348,18 +1375,20 @@ if ($IncludeDashboard) {
                 $dashPath = $dashExportResult.Data
                 $detail = "Dashboard: $dashPath"
                 Set-StepResult -Step 'Dashboard' -Status 'Success' -Detail $detail -Duration $stepDuration
-                Write-Host "  Step 11: $detail" -ForegroundColor Green
+                Write-Host "  Step 12: $detail" -ForegroundColor Green
             }
             else {
                 $detail = "Dashboard export failed: $($dashExportResult.Error)"
                 Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $detail -Duration $stepDuration
-                Write-Host "  Step 11: WARN - $detail" -ForegroundColor Yellow
+                if ($worstExitCode -lt 1) { $worstExitCode = 1 }
+                Write-Host "  Step 12: WARN - $detail" -ForegroundColor Yellow
             }
         }
     }
     catch {
         $stepDuration = ((Get-Date) - $stepStart).TotalSeconds
         Set-StepResult -Step 'Dashboard' -Status 'Warning' -Detail $_.Exception.Message -Duration $stepDuration
+        if ($worstExitCode -lt 1) { $worstExitCode = 1 }
         Write-Host "  Step 12: WARN - Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-SPLog -Message "Dashboard generation exception: $($_.Exception.Message)" `
             -Severity WARN -Component 'DailyOrchestrator' -Action 'DashboardError' -CorrelationID $correlationID
