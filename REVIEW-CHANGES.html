@@ -48,11 +48,14 @@ Companion document: <code>REVIEW-FINDINGS.md</code> (full 35-finding review); th
 </div>
 
 <div>
-<span class="kpi"><span class="n">35</span><span class="l">Findings identified</span></span>
-<span class="kpi"><span class="n">14</span><span class="l">Findings fixed</span></span>
-<span class="kpi"><span class="n">7</span><span class="l">Commits</span></span>
-<span class="kpi"><span class="n">8</span><span class="l">Files changed</span></span>
+<span class="kpi"><span class="n">48</span><span class="l">Findings catalogued</span></span>
+<span class="kpi"><span class="n">34</span><span class="l">Findings fixed</span></span>
+<span class="kpi"><span class="n">15</span><span class="l">Fix commits</span></span>
+<span class="kpi"><span class="n">14</span><span class="l">Files changed</span></span>
 </div>
+<p class="note">Two remediation rounds on 2026-07-07: Round 1 (sections 1&ndash;7) fixed all critical/high items;
+Round 2 (section 8) fixed the remaining confirmed-defect mediums plus most lows. Fourteen lower-risk /
+judgment-call findings remain open with reasons (<a href="#remaining">Remaining</a>).</p>
 
 <h2>How the review was performed</h2>
 <p>
@@ -73,6 +76,7 @@ Each fix below states how it was verified.
 <li><a href="#c5">Cache: <code>-RefreshCache</code> never refreshed; stale meta poisoned provenance</a></li>
 <li><a href="#c6">Auth: dead tenant-isolation guard; JWT base64url decode</a></li>
 <li><a href="#c7">Quick wins: rubber-stamp CSV columns, JSON Patch, identity failure TTL, empty-file writes</a></li>
+<li><a href="#c8">Round 2: twenty further fixes (evidence scripts, remediation counting, orchestrator, cache, API, scraper)</a></li>
 <li><a href="#remaining">Remaining findings (not yet fixed)</a></li>
 </ol>
 </div>
@@ -326,20 +330,40 @@ expired (e.g. the first run of a new day past the 24h TTL), the stale file was n
 <p><span class="verified">VERIFIED: empty-content write now succeeds (0-byte file)</span></p>
 
 <!-- ================================================================ -->
-<h2 id="remaining">Remaining findings (documented, not yet fixed)</h2>
-<p>21 further findings are catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>. The highest-value ones to tackle next:</p>
+<h2 id="c8">8. Round 2 &mdash; twenty further fixes</h2>
+<p>Each verified the same way as Round 1 (source re-read, empirical checks where behavior is reproducible, Pester suites per theme). Commits in order:</p>
+
 <table>
-<tr><th>Sev</th><th>Finding</th><th>Ref</th></tr>
-<tr><td class="sev-high">HIGH</td><td>V7 "suspect" filter silently drops every legitimately 100%-completed day (all-complete window &rarr; exit 5)</td><td>E3</td></tr>
-<tr><td class="sev-high">HIGH</td><td>V5 baseline scope-added reads the wrong trend record when a day has multiple captures</td><td>E2</td></tr>
-<tr><td class="sev-medium">MED</td><td>Series chrono-key parses period tokens with current culture &mdash; wrong baseline/newest ordering on dd/MM locales (whole V4c/V4d/V4e delta engine)</td><td>E5</td></tr>
-<tr><td class="sev-medium">MED</td><td>Remediation only matches literal <code>REVOKE</code>; variants/nested shapes make Section 4 vs Section 6 totals contradict</td><td>D2</td></tr>
-<tr><td class="sev-medium">MED</td><td><code>Get-SPRemediationStatus</code> source-only match hides failed revocations ("Provisioned")</td><td>D3</td></tr>
-<tr><td class="sev-medium">MED</td><td>Interrupted TTL-refresh can permanently seal a partial item set (stale meta + deleted items window)</td><td>B5</td></tr>
-<tr><td class="sev-medium">MED</td><td>Orchestrator Steps 8/9 swallow <code>Success=$false</code>; Step 11 warnings never reach the audit trail or exit code</td><td>E6/E7</td></tr>
-<tr><td class="sev-medium">MED</td><td>Pending items get fabricated DecisionDate; rubber-stamp metrics computed over pending items</td><td>D4</td></tr>
-<tr><td class="sev-medium">MED</td><td>Retry loop re-sends non-idempotent POST/PATCH/DELETE on timeout/5xx</td><td>A4</td></tr>
-<tr><td class="sev-medium">MED</td><td>V6/V7 CUMULATIVE/TOTALS rows sum daily snapshots, not deltas</td><td>E8</td></tr>
+<tr><th>Commit</th><th>Refs</th><th>What changed and why</th></tr>
+<tr><td><span class="commit">079d515</span></td><td>E3, E2</td><td><strong>V7 suspect filter:</strong> a COMPLETED/pending=0/&ge;99.5% record is indistinguishable from a genuinely finished campaign, so unconditional exclusion deleted every legitimately-completed day (and an all-complete window died with exit 5). Suspect records are now dropped only when the same calendar day also has an honest capture; suspect-only days are kept, flagged <code>IsSuspect</code> (rendered dashed), with a console note. <strong>V5 scope-added:</strong> the baseline pass re-indexed <code>$trendRecords[$dailyData.IndexOf($d)]</code> &mdash; positional alignment that breaks with multi-capture days or cutoff-filtered keys, crediting one day's scope growth to another. Now read from the same record the day entry is built from.</td></tr>
+<tr><td><span class="commit">b10c2ad</span></td><td>E5</td><td><strong>Series chrono-key culture:</strong> period tokens parsed with the host culture &mdash; on a dd/MM host, '6/7/2026' parsed as July 6 (verified under en-GB), reordering series instances so the wrong one became baseline/newest and the V4c/V4d/V4e delta engine misclassified the whole series. InvariantCulture is tried first; host culture remains a fallback.</td></tr>
+<tr><td><span class="commit">96a0ddd</span></td><td>D2, D3, D11</td><td><strong>Remediation decision matching:</strong> three surfaces matched the literal string 'REVOKE' only, dropping REVOKED/DENY/REJECT/EXCEPTION and nested <code>{value:'REVOKE'}</code> shapes &mdash; the remediation-proof section could show 0 revoked while the decisions section showed N. All now unwrap nested shapes and use <code>ConvertTo-SPCanonicalDecision</code> (verified: all five variants classify Removed/Queued/Pending instead of NA). <code>Measure-SPCampaignMetrics</code> got the same nested unwrap (KPI path no longer reports 0% on nested-shape tenants). <strong>Event matching:</strong> a REVOKE account-activity event with items now requires the entitlement name to match &mdash; a source-only match let one executed revoke mark unrelated same-source revocations "Provisioned", hiding failed revokes from Overdue/Failed.</td></tr>
+<tr><td><span class="commit">6ba63c4</span></td><td>E6, E7</td><td><strong>Orchestrator accounting:</strong> Steps 8/9 counted only thrown exceptions; returned <code>Success=$false</code> envelopes fell through silently, so an all-apps-failed collection printed a green "0 campaign(s) checked" and exit 0. Step 11 (stalled reviewers) never recorded a step result or raised the exit code &mdash; warnings left no trace in orchestrator-audit.jsonl; Step 12's warning paths never raised the exit code and two lines were mislabeled "Step 11:". All fixed; scheduled-task monitoring keyed on exit codes / the audit JSONL now sees these.</td></tr>
+<tr><td><span class="commit">343686f</span></td><td>B5, B9</td><td><strong>Interrupted-refresh sealing:</strong> a refetch deleted the items file at fetch start but left the old meta until finalize; killed mid-fetch, the next run loaded the partial set through the valid-looking meta and (if the campaign had completed) sealed it permanent. The stale meta is now removed at fetch start &mdash; sticky FirstSeenStatus/CapturedWhileActive provenance captured first and reused at finalize &mdash; leaving the standard items-without-meta partial signature the resume path already handles. <strong>Memory-cache keying:</strong> keys are now <code>campaignId|cachePath</code> so mixed <code>-CachePath</code> sessions can't serve one directory's items for another; per-campaign clear removes all paths. Cache suites: 61/61.</td></tr>
+<tr><td><span class="commit">8f14436</span></td><td>A4, A5</td><td><strong>Method-aware retries:</strong> status-0 (incl. client TimeoutSec expiry) and 5xx can occur after the server processed the call, so blind re-sends risked duplicate campaigns / re-submitted decision batches. 429 (rejected before processing) still retries every method; 5xx/status-0 retry only idempotent methods. <strong>Query params:</strong> null values are skipped instead of NRE-ing outside the normalized error envelope. API suites: 36/36.</td></tr>
+<tr><td><span class="commit">6c044b0</span></td><td>E8</td><td><strong>V6/V7 window aggregates:</strong> CUMULATIVE/TOTALS rows summed daily snapshots, multiply-counting any campaign spanning several days (3-day campaign with revoked 5&rarr;7&rarr;8 rendered 20; a 100-item campaign over 5 days rendered "TOTALS: 500 items" with an inflated %-denominator). Aggregates now take the latest snapshot per distinct campaign (V6: the Revoked column; its other columns are genuine per-day deltas), and labels disclose the campaign count. V6 suite: 19/19.</td></tr>
+<tr><td><span class="commit">b0e8311</span></td><td>D6, D7, D8, D9, B11, E9, E10</td><td><strong>Quick-wins batch 2:</strong> coverage report sorted hashtables with <code>Sort-Object -Property</code> (a PS 5.1 no-op &mdash; LastCampaign was insertion-order); delegation lead-times were differenced against the loop-leaked last campaign's created date (now computed at collection, both sides UTC); aggregation freshness mixed local-Kind parses with UtcNow (skewed by the UTC offset); signed empty certs were classified NotStarted and escalated to leadership; the PII ACL warning missed FullControl/Modify; the scraper's <code>-Until</code> excluded same-day timestamped reports and counted per report file instead of per calendar day (regenerated reports survived <code>-MinMisses 2</code>, deflated percentages, duplicated heatmap columns). Suites: 102/102.</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="remaining">Remaining findings (documented, not yet fixed)</h2>
+<p>After Round 2, the following remain open &mdash; all are lower-risk or judgment-call items, catalogued with locations and failure scenarios in <code>REVIEW-FINDINGS.md</code>:</p>
+<table>
+<tr><th>Sev</th><th>Finding</th><th>Ref</th><th>Why deferred</th></tr>
+<tr><td class="sev-low">LOW</td><td><code>Get-SPConfig</code> returns a shared mutable reference</td><td>B8</td><td>A deep-clone changes object identity for every caller; no in-repo caller mutates the config today. Revisit if a mutation appears.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Concurrent-process identity-cache compaction append-loss window</td><td>B12</td><td>Needs a cross-process mutex (pattern exists in Add-SPItemCacheLines); orchestrator currently runs steps sequentially.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>Test-SPCacheValid</code> lazy-load asymmetry</td><td>B13</td><td>Latent &mdash; no production caller.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>TrimStart('.\')</code> charset corruption of <code>..\</code>-style vault paths</td><td>B14</td><td>Only misconfigured relative parent paths are affected; error message names the resolved path.</td></tr>
+<tr><td class="sev-medium">MED</td><td>Fabricated DecisionDate on pending items + rubber-stamp metrics over pending items</td><td>D4</td><td>Semantics change to two report sections; wants a deliberate decision on how Pending rows should render (Resolve-SPDecisionDateDisplay exists for exactly this).</td></tr>
+<tr><td class="sev-medium">MED</td><td>Exec summary double-counts reassigned reviewers; first-cert Phase/SignOffDate kept</td><td>D5</td><td>Same: the distinct-reviewer counting helper exists (Get-SPDistinctReviewerSignOff); adopting it changes headline KPIs and deserves a focused pass.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Orphan-account include-switches only apply to the Uncorrelated category</td><td>D10</td><td>Behavioral choice: Terminated/Dangling categories arguably should always show disabled/service accounts.</td></tr>
+<tr><td class="sev-low">LOW</td><td><code>ReviewerCount</code> metric counts certifications, not distinct reviewers</td><td>D12</td><td>Metric-schema change; consumers may expect the current definition.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Comparison report colors slower response times green</td><td>D13</td><td>Cosmetic; fix pattern exists at Export-SPCampaignCompletionReport:6017.</td></tr>
+<tr><td class="sev-low">LOW</td><td>BI export leadership columns read keys that never exist</td><td>D14</td><td>Needs the leadership-data shape reconciled with Group-SPAuditByLeadership first.</td></tr>
+<tr><td class="sev-low">LOW</td><td>RC03 expanded tree labels unknown-Enabled members "enabled"</td><td>D15</td><td>Cosmetic 3-state badge.</td></tr>
+<tr><td class="sev-medium">MED</td><td>Leadership level-report drill-down links point to unwritten filenames</td><td>C3</td><td>Cross-level link scheme needs a shared run-stamp design, not a spot fix.</td></tr>
+<tr><td class="sev-medium">MED</td><td>V4e coverage counts undecided NewlyInScope as attested</td><td>E4</td><td>Definition question on the just-merged series-attestation stat &mdash; flagging for your call on intended semantics.</td></tr>
+<tr><td class="sev-low">LOW</td><td>Scraper reads only the first table per Pending collapsible</td><td>E11</td><td>Latent format hazard; the current report generator emits one table.</td></tr>
 </table>
 
 <h2>Commit log</h2>
@@ -352,13 +376,26 @@ expired (e.g. the first run of a new day past the 24h TTL), the stale file was n
 <tr><td><span class="commit">29d9982</span></td><td>fix(cache): make -RefreshCache actually refresh and keep meta honest</td></tr>
 <tr><td><span class="commit">d253c8d</span></td><td>fix(auth): arm the dead tenant-isolation guard; decode JWT as base64url</td></tr>
 <tr><td><span class="commit">4b2b410</span></td><td>fix: rubber-stamp CSV columns, JSON Patch arrays, identity failure TTL, empty-file writes</td></tr>
+<tr><td><span class="commit">079d515</span></td><td>fix(evidence): stop V7 deleting completed days; align V5 scope-added to its own day</td></tr>
+<tr><td><span class="commit">b10c2ad</span></td><td>fix(series): parse period tokens with InvariantCulture first</td></tr>
+<tr><td><span class="commit">96a0ddd</span></td><td>fix(remediation): recognize decision variants; require entitlement match on events</td></tr>
+<tr><td><span class="commit">6ba63c4</span></td><td>fix(orchestrator): count returned failures; record Step 11 in audit trail</td></tr>
+<tr><td><span class="commit">343686f</span></td><td>fix(cache): remove stale meta at refetch start; key memory cache by cache path</td></tr>
+<tr><td><span class="commit">8f14436</span></td><td>fix(api): method-aware retries; null-safe query params</td></tr>
+<tr><td><span class="commit">6c044b0</span></td><td>fix(evidence): stop CUMULATIVE/TOTALS rows multiply-counting multi-day campaigns</td></tr>
+<tr><td><span class="commit">b0e8311</span></td><td>fix: quick-wins batch 2 — sort no-op, loop leak, UTC skew, escalation noise, ACL gap, scraper day-counting</td></tr>
 </table>
 
 <h2>Verification summary</h2>
 <ul>
-<li><strong>Pester suite (5.7.1, Windows PowerShell 5.1): 341 passed / 0 failed / 0 skipped</strong> across the 15 test files covering every touched module:
+<li><strong>Round 2 full battery (Pester 5.7.1, Windows PowerShell 5.1): 553 passed / 0 failed / 0 skipped</strong> across 22 test files covering every touched module,
+adding SP.CampaignDiff, SP.DailyEvidenceV6, SP.DailyOrchestrator, SP.CampaignSeriesKey, SP.ReviewerIdentity, SP.CompletionConsistency, SP.ApiResilience to the Round 1 set.
+Per-theme runs during Round 2: cache suites 61/61, API 36/36, V6 19/19, diff/queries/identity 102/102.</li>
+<li><strong>Round 1 battery: 341 passed / 0 failed / 0 skipped</strong> across the 15 test files covering the Round 1 modules:
 SP.CacheService, SP.CacheProvenance, SP.CacheRobustness, SP.CacheStaleness, SP.CacheCountLabel, SP.CacheValidate, SP.CachedCampaignSeries,
 SP.IdentityService, SP.HtmlHelpers, SP.ApiClient, SP.Auth, SP.Config, SP.AuditQueries, SP.AuditReport, SP.SharedIntegration.</li>
+<li><strong>Round 2 empirical checks:</strong> chrono-key culture swap reproduced under en-GB (old: July 6; new: June 7); all five revoke variants
+classify Removed/Queued/Pending instead of NA after the canonical-decision change.</li>
 <li><strong>End-to-end smoke run of V5</strong> with synthetic trend data (3 daily records, <code>-NoCapture</code>): the script now runs past the former
 crash point, resolves campaign metadata, and writes both the HTML (30&nbsp;KB) and JSON outputs; exit code 5 was the <em>documented health verdict</em>
 for the fixture's 0% completion, not an error. All smoke fixtures were removed afterward.</li>
