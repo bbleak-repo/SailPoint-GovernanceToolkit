@@ -218,12 +218,26 @@ function Build-ExecutiveSummaryHtml {
     $pendingCount  = if ($null -ne $decisions['Pending'])  { @($decisions['Pending']).Count  } else { 0 }
     $totalItems    = $approvedCount + $revokedCount + $pendingCount
 
-    # --- Reviewer sign-off counts ---
+    # --- Reviewer sign-off counts (DISTINCT reviewers) ---
+    # Primary entries are already aggregated by name, but Reassigned carries one entry
+    # PER CERT -- raw counting inflated both the 'X / Y Reviewers Signed Off' fraction
+    # and the Reviewer Completion %% for every delegate holding multiple certs. Count
+    # each reviewer once; 'signed' means ALL of their entries are Phase=='SIGNED'
+    # (same distinct-by-reviewer definition as Get-SPDistinctReviewerSignOff).
     $primaryList    = if ($null -ne $reviewers['Primary'])    { @($reviewers['Primary'])    } else { @() }
     $reassignedList = if ($null -ne $reviewers['Reassigned']) { @($reviewers['Reassigned']) } else { @() }
     $allReviewers   = @($primaryList) + @($reassignedList)
-    $totalReviewers = $allReviewers.Count
-    $signedCount    = @($allReviewers | Where-Object { $null -ne $_ -and $_.Phase -eq 'SIGNED' }).Count
+    $reviewerPhaseMap = [ordered]@{}   # name -> $true while every entry seen is SIGNED
+    foreach ($rv in $allReviewers) {
+        if ($null -eq $rv) { continue }
+        $rvName = [string]$rv.Name
+        if ([string]::IsNullOrWhiteSpace($rvName)) { $rvName = '(Unknown)' }
+        $rvSigned = ([string]$rv.Phase -eq 'SIGNED')
+        if (-not $reviewerPhaseMap.Contains($rvName)) { $reviewerPhaseMap[$rvName] = $rvSigned }
+        elseif (-not $rvSigned) { $reviewerPhaseMap[$rvName] = $false }
+    }
+    $totalReviewers = $reviewerPhaseMap.Count
+    $signedCount    = @($reviewerPhaseMap.Values | Where-Object { $_ }).Count
 
     # --- Status badge color ---
     $statusColor = switch ($status.ToUpperInvariant()) {
@@ -2778,7 +2792,14 @@ function Export-SPLeadershipLevelHtml {
         [string]$DetailLevel = 'Verbose',
 
         [Parameter()]
-        [hashtable]$BandData
+        [hashtable]$BandData,
+
+        # Run timestamp shared by EVERY level of one report set. Cross-level links
+        # (subordinate drill-downs, parent nav) embed the target file's stamp, so all
+        # level invocations must agree on it -- pass the same value for each level.
+        # When omitted, a per-invocation stamp is generated (single-level use).
+        [Parameter()]
+        [string]$RunStamp = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($CorrelationID)) {
@@ -2832,9 +2853,10 @@ function Export-SPLeadershipLevelHtml {
         $filePrefix.Substring(0, $filePrefix.Length - 1)
     } else { $filePrefix }
 
-    # Run-level timestamp -- computed ONCE here so all files in this level share the
-    # same stamp (consistent cross-linking) but each leader is still unique by name+id.
-    $runStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    # Run-level timestamp: prefer the caller-supplied -RunStamp (shared across ALL
+    # levels of a report set so cross-level links resolve); fall back to a fresh
+    # stamp for single-level invocations.
+    $runStamp = if (-not [string]::IsNullOrWhiteSpace($RunStamp)) { $RunStamp } else { (Get-Date).ToString('yyyyMMdd-HHmmss') }
 
     # Determine if this is the top generated level (executive summary)
     $isTopLevel = ($Level -eq $StartLevel)
@@ -2974,10 +2996,15 @@ function Export-SPLeadershipLevelHtml {
 
                     $safeSubName = ConvertTo-SafeHtml $sr.Name
 
-                    # Generate link to subordinate report (only if not at lowest generated level)
+                    # Generate link to subordinate report (only if not at lowest generated
+                    # level). The link must mirror the ACTUAL filename scheme below
+                    # (prefix-name-id-runStamp.html) -- the old prefix-name-only form
+                    # pointed at files that are never written (every drill-down was dead).
                     $subFileName = ($sr.Name -replace '[^a-zA-Z0-9_-]', '').Trim()
                     if ([string]::IsNullOrWhiteSpace($subFileName)) { $subFileName = $sr.Id -replace '[^a-zA-Z0-9_-]', '' }
-                    $subLink = "$lowerFilePrefixSingular-$subFileName.html"
+                    $subSafeId = ([string]$sr.Id -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($subSafeId)) { $subSafeId = 'leader' }
+                    $subLink = "$lowerFilePrefixSingular-$subFileName-$subSafeId-$runStamp.html"
 
                     $nameCell = if (($Level - 1) -ge $LowestLevel) {
                         "<a href=""$subLink"" style=""color:#336699; text-decoration:none;"">$safeSubName</a>"
@@ -3286,18 +3313,21 @@ $detailSectionsHtml
                         $parentFilePrefix.Substring(0, $parentFilePrefix.Length - 1)
                     } else { $parentFilePrefix }
 
-                    # If parent is at StartLevel, link to executive-summary.html
+                    # Parent nav link mirrors the ACTUAL filename scheme (see the
+                    # filename block below) -- the old name-only/executive-summary.html
+                    # forms pointed at files that are never written.
+                    $parentSafeId = ([string]$parentId -replace '[^a-zA-Z0-9_-]', '').Trim()
+                    if ([string]::IsNullOrWhiteSpace($parentSafeId)) { $parentSafeId = 'leader' }
                     if ($parentLevel -eq $StartLevel) {
-                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
+                        $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary-$parentSafeId-$runStamp.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
                     } else {
-                        $parentFile = "$parentFilePrefixSingular-$parentSafeName.html"
+                        $parentFile = "$parentFilePrefixSingular-$parentSafeName-$parentSafeId-$runStamp.html"
                         $navHtml = "<p style=""margin-bottom:20px;""><a href=""$parentFile"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to $(ConvertTo-SPHtmlSafe $parentName)</a></p>"
                     }
                 }
             }
-            if ([string]::IsNullOrWhiteSpace($navHtml)) {
-                $navHtml = "<p style=""margin-bottom:20px;""><a href=""executive-summary.html"" style=""font-family:$fontFamily; font-size:13px; color:#336699; text-decoration:none;"">&larr; Back to Executive Summary</a></p>"
-            }
+            # No resolvable parent: omit the nav link rather than emitting a dead
+            # 'executive-summary.html' href that is never written.
         }
 
         # --- Title (with optional band designation from BandData) ---
@@ -3609,6 +3639,10 @@ function Export-SPLeadershipBandHtml {
     # --- Generate reports per level ---
     $allFiles = [System.Collections.Generic.List[string]]::new()
 
+    # One stamp for the WHOLE report set: cross-level drill-down/nav links embed the
+    # target file's run stamp, so every level invocation must share it.
+    $sharedRunStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+
     for ($lvl = $effectiveStartLevel; $lvl -ge $effectiveLowestLevel; $lvl--) {
         if (-not $filteredLevels.ContainsKey($lvl)) { continue }
 
@@ -3624,7 +3658,8 @@ function Export-SPLeadershipBandHtml {
             -OutputPath $OutputPath `
             -CorrelationID $CorrelationID `
             -DetailLevel $DetailLevel `
-            -BandData $BandData
+            -BandData $BandData `
+            -RunStamp $sharedRunStamp
 
         foreach ($p in @($lvlPaths)) {
             $allFiles.Add($p)
