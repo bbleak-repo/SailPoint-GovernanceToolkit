@@ -2618,10 +2618,19 @@ function Group-SPAuditByLeadership {
 
             if (-not $buckets.ContainsKey($directorId)) { $buckets[$directorId] = @{} }
             if (-not $buckets[$directorId].ContainsKey($managerId)) {
-                $buckets[$directorId][$managerId] = @{ Approved = 0; Revoked = 0; Pending = 0 }
+                $buckets[$directorId][$managerId] = @{
+                    Approved   = 0; Revoked = 0; Pending = 0
+                    # Distinct identity names under this manager -- consumed by the BI
+                    # export's leadership enrichment (OrgDirector/OrgExecutive columns),
+                    # which was written against this shape but the field never existed.
+                    Identities = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                }
             }
 
             $buckets[$directorId][$managerId][$category]++
+            if (-not [string]::IsNullOrWhiteSpace($identityName)) {
+                [void]$buckets[$directorId][$managerId]['Identities'].Add($identityName)
+            }
         }
     }
 
@@ -2669,11 +2678,13 @@ function Group-SPAuditByLeadership {
             }
 
             $managersMap[$mgrId] = @{
-                Name     = $mgrName
-                Approved = $c.Approved
-                Revoked  = $c.Revoked
-                Pending  = $c.Pending
-                AvgHours = $avgHours
+                Name       = $mgrName
+                Approved   = $c.Approved
+                Revoked    = $c.Revoked
+                Pending    = $c.Pending
+                AvgHours   = $avgHours
+                # Identity records for BI leadership enrichment (shape the BI export reads).
+                Identities = @(@($c.Identities) | ForEach-Object { @{ IdentityName = $_ } })
             }
         }
 
@@ -2682,9 +2693,24 @@ function Group-SPAuditByLeadership {
             [Math]::Round(($totalApproved + $totalRevoked) / $totalItems * 100, 1)
         } else { 0.0 }
 
+        # Executive above this director (one level up the org tree) -- consumed by the
+        # BI export's OrgExecutive column, which read this key but it never existed.
+        $execName = ''
+        if ($dirId -ne $unmanagedKey -and $nodes.ContainsKey($dirId)) {
+            $execId = $nodes[$dirId].ManagerId
+            if (-not [string]::IsNullOrWhiteSpace($execId) -and $nodes.ContainsKey($execId)) {
+                $execNode = $nodes[$execId]
+                if ($null -ne $execNode.Identity -and
+                    -not [string]::IsNullOrWhiteSpace($execNode.Identity.Name)) {
+                    $execName = $execNode.Identity.Name
+                }
+            }
+        }
+
         $directors[$dirId] = @{
             Name          = $dirName
             Email         = $dirEmail
+            ExecutiveName = $execName
             TotalItems    = $totalItems
             Approved      = $totalApproved
             Revoked       = $totalRevoked
@@ -3143,7 +3169,22 @@ function Measure-SPCampaignMetrics {
             # only includes certs with a sign-off timestamp -- so for ACTIVE campaigns
             # (zero completions) it returns an empty set, which previously made
             # ReviewerCount = 0 even though reviewers ARE assigned.
-            $reviewerCount = @($certs | Where-Object { $null -ne $_ }).Count
+            # DISTINCT reviewers, not certifications: with reassignments (counted by
+            # ReassignmentCount below) or multi-cert reviewers, the cert count
+            # overstated the number of people reviewing. Distinct by reviewer id,
+            # falling back to name; certs with no reviewer info count once each
+            # (unknown reviewers cannot be collapsed).
+            $reviewerIdSet = @{}
+            $reviewerCount = 0
+            foreach ($rcCert in @($certs | Where-Object { $null -ne $_ })) {
+                $rcKey = ''
+                if ($null -ne $rcCert.PSObject.Properties['reviewer'] -and $null -ne $rcCert.reviewer) {
+                    if ($null -ne $rcCert.reviewer.PSObject.Properties['id'] -and -not [string]::IsNullOrWhiteSpace([string]$rcCert.reviewer.id)) { $rcKey = [string]$rcCert.reviewer.id }
+                    elseif ($null -ne $rcCert.reviewer.PSObject.Properties['name'] -and -not [string]::IsNullOrWhiteSpace([string]$rcCert.reviewer.name)) { $rcKey = 'name:' + ([string]$rcCert.reviewer.name).ToLowerInvariant() }
+                }
+                if ([string]::IsNullOrWhiteSpace($rcKey)) { $reviewerCount++ }         # unknown reviewer: count the cert
+                elseif (-not $reviewerIdSet.ContainsKey($rcKey)) { $reviewerIdSet[$rcKey] = $true; $reviewerCount++ }
+            }
 
             if ($null -ne $reviewerMetrics.ReviewerMetrics -and $reviewerMetrics.ReviewerMetrics.Count -gt 0) {
 

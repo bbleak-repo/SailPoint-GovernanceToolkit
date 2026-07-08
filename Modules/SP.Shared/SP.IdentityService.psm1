@@ -153,6 +153,39 @@ function Get-SPIdentityCacheInfo {
     return @{ File = $file; TtlMin = $ttl }
 }
 
+function _InvokeWithSPIdentityCacheMutex {
+    <#
+    .SYNOPSIS
+        Runs a scriptblock while holding the cross-process identity-cache mutex.
+    .DESCRIPTION
+        Mirrors the proven Add-SPItemCacheLines (G10) pattern: a named mutex keyed off
+        a SHA256 of the cache file path serializes per-entry appends AND the warm-load
+        compaction rewrite across processes. Without it, a concurrent process's appends
+        landing between this session's Get-Content and Move-Item during compaction were
+        silently lost. On acquisition timeout the body still runs WITHOUT the mutex --
+        the identity cache is advisory and blocking resolution entirely is worse than
+        the rare lost-append the mutex exists to prevent.
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [scriptblock]$Body
+    )
+    $hashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant()))
+    $mutexName = 'SP.IdentityCache.' + (([System.BitConverter]::ToString($hashBytes) -replace '-').Substring(0, 40))
+    $mutex = $null; $acquired = $false
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+        try { $acquired = $mutex.WaitOne(5000) }
+        catch [System.Threading.AbandonedMutexException] { $acquired = $true }
+        & $Body
+    }
+    finally {
+        if ($acquired -and $null -ne $mutex) { try { $mutex.ReleaseMutex() } catch { } }
+        if ($null -ne $mutex) { $mutex.Dispose() }
+    }
+}
+
 function _WarnIfCacheDirectoryInsecure {
     <#
     .SYNOPSIS
@@ -221,46 +254,51 @@ function Import-SPIdentityCacheFromDisk {
     _WarnIfCacheDirectoryInsecure -DirPath $cacheDir
 
     try {
-        $now = Get-Date
-        $latest = @{}
-        Get-Content $info.File | ForEach-Object {
-            if ([string]::IsNullOrWhiteSpace($_)) { return }
-            try {
-                $rec = $_ | ConvertFrom-Json
-                $rid = [string]$rec.IdentityId
-                $rat = [datetime]::Parse([string]$rec.CachedAt)
-                if (-not [string]::IsNullOrWhiteSpace($rid) -and ($now - $rat).TotalMinutes -lt $info.TtlMin) {
-                    if (-not $latest.ContainsKey($rid) -or $rat -gt $latest[$rid].CachedAt) {
-                        $latest[$rid] = @{ Detail = $rec.Detail; CachedAt = $rat }
+        # Mutex-guarded (B12): the whole read -> dedup -> rewrite -> replace sequence
+        # holds the cross-process cache mutex so appends from a concurrent toolkit
+        # process cannot land between our Get-Content and Move-Item and be lost.
+        _InvokeWithSPIdentityCacheMutex -Path $info.File -Body {
+            $now = Get-Date
+            $latest = @{}
+            Get-Content $info.File | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_)) { return }
+                try {
+                    $rec = $_ | ConvertFrom-Json
+                    $rid = [string]$rec.IdentityId
+                    $rat = [datetime]::Parse([string]$rec.CachedAt)
+                    if (-not [string]::IsNullOrWhiteSpace($rid) -and ($now - $rat).TotalMinutes -lt $info.TtlMin) {
+                        if (-not $latest.ContainsKey($rid) -or $rat -gt $latest[$rid].CachedAt) {
+                            $latest[$rid] = @{ Detail = $rec.Detail; CachedAt = $rat }
+                        }
                     }
-                }
-            } catch { }
-        }
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        $sb = New-Object System.Text.StringBuilder
-        foreach ($id in $latest.Keys) {
-            $d = $latest[$id].Detail
-            $detail = @{
-                IdentityId          = $id
-                DisplayName         = [string]$d.DisplayName
-                ManagerId           = [string]$d.ManagerId
-                ManagerName         = [string]$d.ManagerName
-                IsActive            = [bool]$d.IsActive
-                Found               = [bool]$d.Found
-                CloudLifecycleState = [string]$d.CloudLifecycleState
-                Email               = [string]$d.Email
-                JobLevel            = [string]$d.JobLevel
+                } catch { }
             }
-            # Store in SP.CacheService (NoPersist -- we handle disk compaction below)
-            Set-SPCachedItem -Store 'SPIdentity' -Key $id -Value $detail -NoPersist
-            [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            $sb = New-Object System.Text.StringBuilder
+            foreach ($id in $latest.Keys) {
+                $d = $latest[$id].Detail
+                $detail = @{
+                    IdentityId          = $id
+                    DisplayName         = [string]$d.DisplayName
+                    ManagerId           = [string]$d.ManagerId
+                    ManagerName         = [string]$d.ManagerName
+                    IsActive            = [bool]$d.IsActive
+                    Found               = [bool]$d.Found
+                    CloudLifecycleState = [string]$d.CloudLifecycleState
+                    Email               = [string]$d.Email
+                    JobLevel            = [string]$d.JobLevel
+                }
+                # Store in SP.CacheService (NoPersist -- we handle disk compaction below)
+                Set-SPCachedItem -Store 'SPIdentity' -Key $id -Value $detail -NoPersist
+                [void]$sb.AppendLine((@{ IdentityId = $id; CachedAt = $latest[$id].CachedAt.ToString('o'); Detail = $detail } | ConvertTo-Json -Depth 6 -Compress))
+            }
+            # Atomic write: write to .tmp file, then replace original to avoid
+            # corruption if the process crashes mid-compaction.
+            $tmpFile = "$($info.File).tmp"
+            Write-SPHtmlFile -Path $tmpFile -Content $sb.ToString()
+            if (Test-Path $info.File) { Remove-Item $info.File -Force }
+            Move-Item -Path $tmpFile -Destination $info.File -Force
         }
-        # Atomic write: write to .tmp file, then replace original to avoid
-        # corruption if the process crashes mid-compaction.
-        $tmpFile = "$($info.File).tmp"
-        Write-SPHtmlFile -Path $tmpFile -Content $sb.ToString()
-        if (Test-Path $info.File) { Remove-Item $info.File -Force }
-        Move-Item -Path $tmpFile -Destination $info.File -Force
     } catch { }
 }
 
@@ -297,10 +335,14 @@ function Save-SPIdentityCacheEntry {
         if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path $dir)) {
             New-Item -Path $dir -ItemType Directory -Force -WhatIf:$false | Out-Null
         }
-        # Legacy JSONL format for backward compatibility
+        # Legacy JSONL format for backward compatibility. Mutex-guarded (B12): appends
+        # from a concurrent toolkit process must not interleave with (or be lost to)
+        # another session's compaction rewrite.
         $rec = @{ IdentityId = $IdentityId; CachedAt = $now.ToString('o'); Detail = $Detail }
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::AppendAllText($info.File, (($rec | ConvertTo-Json -Depth 6 -Compress) + "`r`n"), $utf8NoBom)
+        _InvokeWithSPIdentityCacheMutex -Path $info.File -Body {
+            [System.IO.File]::AppendAllText($info.File, (($rec | ConvertTo-Json -Depth 6 -Compress) + "`r`n"), $utf8NoBom)
+        }
     } catch { }
 }
 
